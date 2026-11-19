@@ -67,7 +67,7 @@ def main():
 
     timeout = int(os.environ.get("PLAYWRIGHT_RUNCODE_TIMEOUT", "30"))
     cdp_endpoint = os.environ.get("PLAYWRIGHT_CDP_ENDPOINT", "http://127.0.0.1:8080")
-    session_id = os.environ.get("CLAUDE_SESSION_ID", "default")
+    session_id = str(data.get("session_id") or "default").replace("/", "_")  # the CLI never exports CLAUDE_SESSION_ID
     pid_file = f"{harness_state_dir()}/.runcode-watchdog-{session_id}.pid"
 
     # Kill stale watchdog if any

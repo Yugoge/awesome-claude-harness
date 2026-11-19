@@ -418,7 +418,7 @@ def _scratch_overlaps_harness(scratch: str, data: dict) -> bool:
     transcript = data.get("transcript_path")
     if isinstance(transcript, str) and os.path.isabs(transcript):
         tree.append(os.path.dirname(transcript))
-    flat = [harness_state_dir(), os.environ.get("CLAUDE_TMPDIR"), os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_DIR"),
+    flat = [harness_state_dir(), os.environ.get("CLAUDE_TMPDIR"), os.environ.get("CLAUDE_DAEMON_RESTART_SENTINEL_DIR"),
             os.environ.get("CLAUDE_DOC_SYNC_STATE_ROOT")]
     for root in filter(None, map(_real_abs, tree)):
         if _inside(root, scratch) or _inside(scratch, root):

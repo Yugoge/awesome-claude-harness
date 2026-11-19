@@ -55,8 +55,9 @@ Never raises into the tool pipeline: callers wrap in try/except and exit 0, and
 `autoseal_hook_trigger()` (run by posttool-attribution-post.py after record_post)
 too. It seals via scripts/seal-attribution-journal.py at most once per interval
 (600 s), each attempt logged to <dest>/seal-log.jsonl; <dest> is
-$ATTRIBUTION_SEAL_DEST, else $CLAUDE_CONFIG_DIR/attribution-seals for a config dir
-outside the harness tree, else <harness>/state/attribution-seals; a volatile
+$ATTRIBUTION_SEAL_DEST, else $CLAUDE_CONFIG_DIR/attribution-seals (through its
+settings.json link) for a config dir outside the harness tree, else
+<harness>/state/attribution-seals; a volatile
 (tmpfs) <dest> is refused and the refusal logged.
 """
 
@@ -149,8 +150,8 @@ def extract_targets(tool_name: str, tool_input: dict, cwd: str) -> List[str]:
         from lib import shell_parse
         cmd = (tool_input or {}).get("command")
         if isinstance(cmd, str) and cmd:
-            raw.extend(t.path for t in shell_parse.write_targets(cmd, env=os.environ)
-                       if t.mode != shell_parse.DELETE and t.path is not None)
+            raw.extend(p for t in shell_parse.write_targets(cmd, env=os.environ)
+                       if t.mode != shell_parse.DELETE and t.path is not None for p in t.placed())
     seen, out = set(), []
     for r in raw:
         if not r or "$" in r:                            # unresolved vars

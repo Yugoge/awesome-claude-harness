@@ -237,7 +237,17 @@ def _now_iso_z():
 
 
 def _project_dir():
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+    """The hooks' project root: CLAUDE_PROJECT_DIR; a Bash call has none and may `cd` below the root, so
+    the nearest directory from the cwd up to the repository's top holding a .claude directory, else the cwd."""
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        return Path(os.environ["CLAUDE_PROJECT_DIR"])
+    cwd = Path.cwd()
+    for d in (cwd, *cwd.parents):
+        if (d / ".claude").is_dir():
+            return d
+        if (d / ".git").exists():
+            break
+    return cwd
 
 
 def _cp_dir(spec_id):

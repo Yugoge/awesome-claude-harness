@@ -459,7 +459,7 @@ def sandbox(tmp_path):
         "HOME": str(tmp_path / "home"),
         "CLAUDE_CONFIG_DIR": str(tmp_path / "config"),
         "CLAUDE_STATE_DIR": str(tmp_path / "state"),
-        "CLAUDE_DAEMON_RESTART_GRANT_DIR": str(tmp_path / "grants"),
+        "CLAUDE_DAEMON_RESTART_SENTINEL_DIR": str(tmp_path / "grants"),
         "CLAUDE_PROTECTED_RUNTIME_FILE": str(runtime),
         "PYTHONDONTWRITEBYTECODE": "1",
         "GIT_CONFIG_NOSYSTEM": "1",

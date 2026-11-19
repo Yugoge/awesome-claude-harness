@@ -28,14 +28,14 @@ def _known() -> dict:
 
 # A command whose name is computed counts as a copy only when an operand is spelled after cp or mv
 # (`"$CP" cp-01 dest`); otherwise its last operand (`"$PY" script.py`) is no write.
-_COPY_MOVE_WORD = re.compile(r"(?:cp|mv)(?!\w)")
+_COPY_MOVE_WORD = _sp._COPY_MOVE_WORD_RE
 
 
 def _targets(command: str) -> list:
     if not isinstance(command, str) or not command.strip():
         return []
     script = _sp.parse(command)
-    found = _sp.write_targets(script, env=_known())
+    found = _sp.write_targets(script, env=_known(), raw=command, reached=lambda d: os.path.isdir(os.path.expanduser(d)))
     if not any(t.mechanism == "computed-command" for t in found):
         return found
     copies = set()
@@ -60,6 +60,11 @@ def _render(t, command: str) -> str:
     return os.path.expanduser(text) if text.startswith("~") else text
 
 
+def _placed(t, command: str) -> list:
+    """_render's text where the write lands: at each directory its command may run in (WriteTarget.placed)."""
+    return t.placed(_render(t, command))
+
+
 def extract_bash_write_targets_with_modes(command: str) -> list:
     """The parser's WriteTargets that leave a path holding new content (every mode but delete)."""
     return [t for t in _targets(command) if t.mode != _sp.DELETE]
@@ -67,7 +72,7 @@ def extract_bash_write_targets_with_modes(command: str) -> list:
 
 def extract_bash_write_paths(command: str) -> List[str]:
     """The path text of every target a command writes, first-seen order, without duplicates."""
-    found = (_render(t, command) for t in extract_bash_write_targets_with_modes(command))
+    found = (p for t in extract_bash_write_targets_with_modes(command) for p in _placed(t, command))
     return list(dict.fromkeys(p for p in found if p))
 
 
@@ -82,22 +87,20 @@ def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
     found = _targets(command)
     out: List[Tuple[str, bool]] = _computed_command_operands(command)
     for k, t in enumerate(found):
-        path = _render(t, command)
-        if not path:
-            continue
-        if t.mechanism not in ("mv", "git-mv"):
-            out.append((path, t.mode == _sp.DELETE))
-            continue
         sources = []
-        for s in found[k + 1:]:
+        for s in found[k + 1:] if t.mechanism in ("mv", "git-mv") else ():
             if s.mechanism != t.mechanism + "-source":
                 break
             sources.append(s)
         plain = t.decidable and all(w.word.value() is not None and not w.word.quoted() for w in [t] + sources)
-        out.append((path, not plain))
-        if plain:
-            out.extend((os.path.join(path, os.path.basename(_render(s, command).rstrip("/"))), True)
-                       for s in sources)
+        for path in _placed(t, command):
+            if t.mechanism not in ("mv", "git-mv"):
+                out.append((path, t.mode == _sp.DELETE))
+                continue
+            out.append((path, not plain))
+            if plain:
+                out.extend((os.path.join(path, os.path.basename(_render(s, command).rstrip("/"))), True)
+                           for s in sources)
     return out
 
 

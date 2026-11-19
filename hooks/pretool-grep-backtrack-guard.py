@@ -123,10 +123,10 @@ _FUNCTION_PRESERVING_WRAPPERS = {"time"}
 
 # A shell started by bare name inherits the function shadow; one started by path
 # does not, and the search inside it runs the system grep.
-_SHELL_INTERP_NAMES = {"bash", "sh", "zsh", "dash", "ksh"}
+_SHELL_INTERP_NAMES = shell_parse.COMMON_SHELLS
 
 # Only `command`/`builtin` may stand between `eval` or a shell and the payload it runs.
-_PAYLOAD_WRAPPERS = {"command", "builtin"}
+_PAYLOAD_WRAPPERS = set(shell_parse.LOOKUP_BUILTINS)
 
 # Nested code walked as the same shell: substitution bodies.
 _SUBSTITUTIONS = ("cmdsub", "backtick", "procsub")
@@ -139,13 +139,7 @@ _MAX_DESCENT = 6
 
 # Flags (for grep/egrep/ugrep) that CONSUME a following value token, so the value
 # is not mistaken for the pattern.
-_VALUE_FLAGS = {
-    "-e", "--regexp", "-f", "--file", "-m", "--max-count", "-A", "--after-context",
-    "-B", "--before-context", "-C", "--context", "--color", "--colour",
-    "-d", "--directories", "--exclude", "--exclude-dir", "--exclude-from",
-    "--include", "--label", "--binary-files", "-D", "--devices", "--group-separator",
-    "--jobs", "-J",
-}
+_VALUE_FLAGS = set(shell_parse.GREP_VALUE_OPTS) | {"--jobs", "-J"}  # and ugrep's --jobs
 
 
 # Short option letters that CONSUME the rest of their cluster (or the next token)
@@ -237,15 +231,15 @@ def _extract_patterns(tokens):
             explicit.append(t.split("=", 1)[1])
             i += 1
             continue
-        if t.startswith("--file=") or t == "-f" or t == "--file":
+        if t.startswith("--file=") or t in shell_parse.GREP_PATTERN_FILE_OPTS:
             # pattern read from a file: cannot statically inspect -> skip this one
             from_file = True
-            if t == "-f" or t == "--file":
+            if t in shell_parse.GREP_PATTERN_FILE_OPTS:
                 i += 2
             else:
                 i += 1
             continue
-        if t in ("-e", "--regexp"):
+        if t in shell_parse.GREP_PATTERN_OPTS:
             if i + 1 < n:
                 explicit.append(tokens[i + 1])
             i += 2
@@ -257,6 +251,9 @@ def _extract_patterns(tokens):
                 i += 1
             else:
                 i += 2
+            continue
+        if t.startswith("--"):  # any other long option is a flag (--color[=WHEN] included), never the pattern
+            i += 1
             continue
         # SHORT option cluster (e.g. -niE, -Ee'PAT', -inef FILE). Walk letters
         # left-to-right; the FIRST value-consuming letter (e/f/m/A/B/C/d/D) takes

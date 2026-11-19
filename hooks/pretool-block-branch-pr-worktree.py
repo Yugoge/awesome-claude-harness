@@ -80,7 +80,7 @@ def _spells(text, word):
             own = low == word[k] and (k == m - 1 or reach[k + 1][p + 1])
             reach[k][p] = (own
                            or ((ch.isspace() or ch in '\\\'"') and reach[k][p + 1])
-                           or (ch == '$' and text[p + 1:p + 2] in ('\'', '"') and reach[k][p + 1])
+                           or (ch == '$' and text[p + 1:p + 2] in QUOTE_CHARS and reach[k][p + 1])
                            or (ch in '\'"' and later[ch][k])
                            or (ch == '#' and later['\n'][k]))
         if ch in '\'"':
@@ -208,7 +208,7 @@ from lib.allowlist import (  # noqa: E402
     match_sentinel_grant_for_bash_command,
 )
 from lib.overnight import is_overnight_active  # noqa: E402
-from lib.shell_parse import git_invocations  # noqa: E402
+from lib.shell_parse import QUOTE_CHARS, git_invocations  # noqa: E402
 
 
 def _detect(command):

@@ -173,6 +173,7 @@ def _service_unit_re(unit: str):
 # Recursive / all-workspace flags that fan a build into EVERY workspace (incl.
 # the protected one) — their presence VOIDS any non-protected-selector exemption.
 _RECURSIVE_WS_FLAGS = frozenset({"-r", "--recursive"})
+_WS_SELECT_KEYWORDS = ("workspace", "workspaces")  # `yarn workspace <name>`, `npm workspaces`
 
 
 def _anchor_nonprotected_workspace_selector(tokens: list, cfg: dict) -> bool:
@@ -187,7 +188,6 @@ def _anchor_nonprotected_workspace_selector(tokens: list, cfg: dict) -> bool:
     prot = set(cfg.get("protected_build_workspaces", []))
     if not non_prot:
         return False
-    sel_keywords = ("workspace", "workspaces")
     sel_flags = ("-w", "--workspace", "--filter", "-F")
     found_nonprot = False
     sel_count = 0
@@ -198,7 +198,7 @@ def _anchor_nonprotected_workspace_selector(tokens: list, cfg: dict) -> bool:
             return False
         sel = None
         sel_raw = None
-        if st in sel_keywords and i + 1 < len(tokens):
+        if st in _WS_SELECT_KEYWORDS and i + 1 < len(tokens):
             sel_raw = _strip_quotes(tokens[i + 1])
         elif st in sel_flags and i + 1 < len(tokens):
             sel_raw = _strip_quotes(tokens[i + 1])

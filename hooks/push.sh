@@ -363,36 +363,6 @@ if [ "$STAGED_COUNT" = "0" ]; then
   fi
 fi
 
-# Step 8.5: Write Scheme 6 grant manifest for guard validation
-# The privilege-guard (pretool-git-privilege-guard.py) is always-on and rejects
-# every agent-issued `git push`. This wrapper emits a single-use grant file
-# (binding branch+expected_head+remote+sid+ppid+nonce) and exports the
-# wrapper-set env-var so the guard admits exactly THIS push and no other.
-# Inline-env injection (e.g., `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push ...` typed
-# by the agent on a single Bash call) is rejected by the guard's literal-
-# substring defense — only env-vars set by a parent process (this wrapper) are
-# admitted.
-SID="${CLAUDE_SESSION_ID:-default}"
-NONCE=$(python3 -c "import secrets; print(secrets.token_hex(16))")
-GRANT_PATH="$(harness_state_dir)/claude-push-grant-${SID}-${NONCE}.json"
-CURRENT_HEAD=$(git rev-parse HEAD)
-CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-python3 - <<PYEOF
-import json
-data = {
-    "branch": "$BRANCH",
-    "expected_head": "$CURRENT_HEAD",
-    "remote": "$REMOTE",
-    "nonce": "$NONCE",
-    "sid": "$SID",
-    "ppid": $$,
-    "created_at": "$CREATED_AT",
-}
-with open("$GRANT_PATH", "w") as f:
-    json.dump(data, f, indent=2)
-PYEOF
-
 # Step 8.6: Export env-var so guard sees the authorized context
 export CLAUDE_PUSH_COMMAND_ACTIVE=1
 
@@ -428,13 +398,8 @@ if [ $PUSH_STATUS -ne 0 ]; then
   echo "  • Pull first: git pull --rebase"
   echo "  • Check network connection"
   echo "  • Verify remote access: git remote -v"
-  # AC-iter2-9: leave the grant in place on failure — operator may retry, and
-  # the grant is nonce-bound so retries are safe.
   exit 1
 fi
-
-# AC-iter2-9: wrapper unlinks grant on success path (guard never fires on subprocess)
-rm -f "$GRANT_PATH"
 
 # Delete push-gate token after successful push
 rm -f "$_TOKEN_PATH"

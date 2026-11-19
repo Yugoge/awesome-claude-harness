@@ -463,7 +463,7 @@ def _transcript_path(data: dict, session_id: str) -> Path | None:
 
     matches = {
         path.resolve()
-        for path in (Path.home() / '.codex' / 'sessions').glob(
+        for path in (Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex') / 'sessions').glob(
             f'**/*-{session_id}.jsonl'
         )
         if belongs_to_session(path)

@@ -89,8 +89,8 @@ WORKTREE_CHOICE=""
 # unverified. It is NOT a second implementation: it is the same lines, with
 # the isolation-creating region skipped.
 EMIT_RECORD_ONLY=0
-# Override the state directory via env var or CLI
-STATE_SUBDIR="${OVERNIGHT_STATE_SUBDIR:-.claude}"
+# The one state directory: hooks/lib/overnight.py state_path() reads only <project>/.claude
+STATE_SUBDIR=".claude"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --end-time)  END_TIME="$2"; shift 2 ;;
@@ -98,14 +98,13 @@ while [[ $# -gt 0 ]]; do
         --spec)      SPEC_PATH="$2"; shift 2 ;;
         --session-id) SESSION_ID="$2"; shift 2 ;;
         --project-dir) PROJECT_DIR="$2"; shift 2 ;;
-        --state-subdir) STATE_SUBDIR="$2"; shift 2 ;;
         --codex)     CODEX_REQUIRED=true; shift ;;
         --worktree)    WORKTREE_FLAG_SEEN=1; shift ;;
         --no-worktree) NO_WORKTREE_FLAG_SEEN=1; shift ;;
         --emit-record-only) EMIT_RECORD_ONLY=1; shift ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--codex] [--worktree|--no-worktree] [--emit-record-only]" >&2
+            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--codex] [--worktree|--no-worktree] [--emit-record-only]" >&2
             exit 1
             ;;
     esac

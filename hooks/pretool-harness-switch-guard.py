@@ -61,6 +61,7 @@ import shlex  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
 import shell_parse  # noqa: E402 -- the one reading of a Bash command
+import bash_read_only  # noqa: E402 -- the one list of the programs that only read
 import git_facts  # noqa: E402 -- what git's subcommands do to the files they name
 from bash_read_only import _git as _git_reads  # noqa: E402 -- the one proof that a git command only reads
 sys.path.pop(0)
@@ -69,9 +70,6 @@ HOME = harness_switch.harness_home()
 STATE_DIR = os.path.join(HOME, harness_switch.DIR_NAME)
 SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json")
 SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
-READ_ONLY = {"cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "wc", "ls", "stat",
-             "file", "jq", "diff", "cmp", "md5sum", "sha256sum", "test", "[", "echo", "printf", "realpath",
-             "readlink", "basename", "dirname", "find"}
 GIT_READ_ONLY = git_facts.GIT_KEEPS_NAMED_FILES  # git calls that write no file they name
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
@@ -174,7 +172,12 @@ def _commands(command: str, bodies: str, every_word: bool = False, depth: int = 
         yield words, [m.group(1) or nxt for w, nxt in zip(words, words[1:] + [""]) for m in [FALLBACK_REDIRECT.match(w)] if m]
 
 
+REDIRECT_OP = re.compile(r"(?:\d*|&|\{\w+\})[<>][<>&|-]*\Z")  # an operator _commands appends with its target
+
+
 def _read_only(words: list) -> bool:
+    """The command writes no file a word of it names: a reader of hooks/lib/bash_read_only.py
+    (its pagers included) whose arguments pass that program's check, or a reading git call."""
     while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
         words = words[1:]  # the command's prefix assignments (`-c a=b` keeps its value word)
     if not words:
@@ -184,7 +187,13 @@ def _read_only(words: list) -> bool:
         k = shell_parse.git_subcommand_index(words[1:])
         sub = "" if k is None else words[1 + k]
         return (sub in GIT_READ_ONLY or _git_reads(words[1:])) and "-delete" not in words
-    return head in READ_ONLY and "-delete" not in words and "-exec" not in words
+    args, it = [], iter(words[1:])
+    for w in it:
+        if REDIRECT_OP.match(w):
+            next(it, None)  # a redirection's target is a written path of its own (write_targets)
+        else:
+            args.append(w)
+    return bash_read_only.reads_only(head, args, pagers=True)
 
 
 def _written_words(words: list, written: list, everything=None) -> list:
@@ -265,7 +274,7 @@ def _operands(plain: list, moves: bool) -> list:
     each source (moved away); cp's sources are only read."""
     sources, dest, it = [], None, iter(plain[1:])
     for w in it:
-        if w in ("-t", "--target-directory"):
+        if w in shell_parse.TARGET_DIR_OPTS:
             dest = next(it, None)
         elif w.startswith("--target-directory="):
             dest = w.split("=", 1)[1]
@@ -287,7 +296,7 @@ def settings_writes(command: str, cwd: str) -> list:
     Each directory, and each word with its kind, is read once: a command padded with repeated
     `cd .` costs what its distinct words cost, not their count times its segments'."""
     segments = list(_commands(command, "shell"))
-    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd"))
+    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in shell_parse.CD_TARGET_BUILTINS)
     dirs = list(dict.fromkeys([cwd] + [_resolve(w, cwd) for w in cds]))
     out, seen, home = [], set(), _settings_files()
     for words, written in segments:
@@ -296,7 +305,7 @@ def settings_writes(command: str, cwd: str) -> list:
             continue
         head = os.path.basename(plain[0])
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
-        message, moves = _message(plain), head in ("cp", "mv")
+        message, moves = _message(plain), head in shell_parse.CP_MV
         named = [(w, head in ("rm", "rmdir", "rsync")) for w in
                  _written_words(words, written, False if (interpreter or message or moves) else None)]
         named += _operands(plain, head == "mv") if moves else []

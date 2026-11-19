@@ -498,3 +498,126 @@ def test_a_search_of_another_dispatchs_file_names_no_write_target():
     assert bash_write_targets.extract_bash_write_targets_with_modes(command) == []
     written = bash_write_targets.extract_bash_write_targets_with_modes("install -m 644 notes.md docs/dev/ticket-c.md")
     assert written and "docs/dev/ticket-c.md" in {bash_write_targets._render(t, "") for t in written}
+
+
+# ── A relative write target is judged where the command is at that point ─────
+# 26 of 166 recorded write-location refusals had a relative target after a `cd`: tool-policy joined it to the project
+# root. The shared parser now gives each write target the directories its command may run in
+# (hooks/lib/shell_parse.CdScopes), and hooks/lib/bash_write_targets.py renders the path there.
+def _write_paths(command):
+    import sys
+    sys.path.insert(0, str(HOOKS))
+    try:
+        from lib import bash_write_targets
+    finally:
+        sys.path.pop(0)
+    return bash_write_targets.extract_bash_write_paths(command)
+
+
+def test_a_relative_target_is_rendered_at_the_directory_in_effect(tmp_path, monkeypatch):
+    (tmp_path / "there").mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert _write_paths("echo x > plain.txt") == ["plain.txt"]
+    assert _write_paths("cd /srv/scratch/ba/r00 && jq . a.json > t.json && cat t.json > a.json") == [
+        "/srv/scratch/ba/r00/t.json", "/srv/scratch/ba/r00/a.json"]
+    assert _write_paths("cd /srv/elsewhere && echo x > docs/codex/a.txt") == ["/srv/elsewhere/docs/codex/a.txt"]
+    assert _write_paths("cd there; sed -i 1d ticket.md") == ["there/ticket.md"]        # the directory is there
+    assert _write_paths("cd there && grep -c x t.md | head; sed -i s/a/b/ t.md") == ["there/t.md"]
+    assert _write_paths("(cd there && echo x > in.txt); echo y > after.txt") == ["there/in.txt", "after.txt"]
+    assert _write_paths("cd there && cp a.md ../reg/b.md") == ["there/../reg/b.md"]
+    # a cd that may have failed leaves both directories; one that cannot be read leaves the target unresolved
+    assert _write_paths("cd missing; sed -i 1d ticket.md") == ["ticket.md", "missing/ticket.md"]
+    assert _write_paths("rm -rf there; cd there; echo x > f") == ["f", "there/f"]
+    assert _write_paths('cd "$SOMEWHERE" && echo x > out.txt') == ["$(pwd)/out.txt"]
+    assert _write_paths("for d in a b; do cd $d; echo x > h; done") == ["h", "$(pwd)/h"]
+    assert _write_paths('cd "$SOMEWHERE" && echo x > /srv/abs/out.txt') == ["/srv/abs/out.txt"]
+
+
+def tool_policy(tmp_path, project, command, caller=("a1b2c3d4e5f60718", "ba")):
+    payload = {"session_id": "5e6f7a8b-1c2d-4e3f-9a0b-1c2d3e4f5a6b", "cwd": str(project), "hook_event_name": "PreToolUse",
+               "tool_name": "Bash", "tool_input": {"command": command}}
+    if caller:
+        payload.update(agent_id=caller[0], agent_type=caller[1], subagent_type=caller[1])
+    home = tmp_path / "home"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), CLAUDE_PROJECT_DIR=str(project),
+               CLAUDE_STATE_DIR=str(tmp_path / "state"), PYTHONDONTWRITEBYTECODE="1")
+    return subprocess.run(["python3", str(HOOKS / "pretool-tool-policy.py")], input=json.dumps(payload),
+                          capture_output=True, text=True, cwd=str(project), env=env, timeout=120)
+
+
+@pytest.fixture()
+def repo_project(tmp_path):
+    project = tmp_path / "proj"
+    for d in ("docs/codex", "src"):
+        (project / d).mkdir(parents=True)
+    return project
+
+
+@pytest.mark.parametrize("command", [
+    "cd /tmp/claude-scratch/ba/rev1 && jq '.forms' forms.json > t_forms.json && cat t_forms.json > forms.json",
+    "cd {P}/docs/codex; sed -i '2,4d' note-r05.md && sed -n '1,3p' note-r05.md | cut -c1-80",
+    "cd {P}/docs/codex && grep -n x note-r04.md | cut -c1-80; sed -i 's/17/18/' note-r04.md; grep -c 18 note-r04.md",
+])
+def test_a_write_after_cd_into_the_roles_own_directory_passes(tmp_path, repo_project, command):
+    r = tool_policy(tmp_path, repo_project, command.replace("{P}", str(repo_project)))
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command,caller,reason", [
+    # judged at the project root these read as the role's own docs/codex, or as no protected file at all
+    ("cd {P}/src && echo x > docs/codex/a.py", ("a1b2c3d4e5f60718", "ba"), "denied_write_path_prefixes"),
+    ("cd {P}/src; mkdir -p docs/codex; echo x > docs/codex/a.py", ("a1b2c3d4e5f60718", "ba"), "denied_write_path_prefixes"),
+    ("cd {H} && echo '{}' > settings.machine.json", None, "no agent writes, deletes or renames it"),
+    ("cd {H} && echo '{}' > settings.machine.json", ("a1b2c3d4e5f60718", "ba"), "no agent writes, deletes or renames it"),
+])
+def test_a_write_after_cd_out_of_the_roles_directories_is_refused(tmp_path, repo_project, command, caller, reason):
+    r = tool_policy(tmp_path, repo_project, command.replace("{P}", str(repo_project)).replace("{H}", str(REPO)), caller)
+    assert r.returncode == 2 and reason in r.stderr, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", [
+    "cd {P}/docs/codex-typo; echo x > note.md",          # the cd may fail: the write may land in the project root
+    'cd "$SOMEWHERE" && echo x > note.md',               # an unknown directory: an unresolved target, as `> $D/note.md` is
+    "cd /tmp/probe-r13 && printf '%s\\n' x > t.md",       # system temp that is not the role's own
+])
+def test_a_write_whose_directory_is_not_the_roles_stays_refused(tmp_path, repo_project, command):
+    r = tool_policy(tmp_path, repo_project, command.replace("{P}", str(repo_project)))
+    assert r.returncode == 2 and "BLOCKED by tool-policy.v1" in r.stderr, (command, r.stderr)
+
+
+# ── Only a word that can be the source of the redirect is judged ─────────────
+# 1 recorded refusal: `docker exec <c> sh -c '<greps>' > file`, where token, password and cookie stand only in a
+# quoted grep pattern. The command line a shell or a runner is handed is read as the commands it holds; a search
+# pattern and echo's text are no files.
+RUNNER_GREP = ("cd /srv/work/reports && docker exec app-api sh -c 'cd /app && grep -rn --include=*.py -i -E "
+               '"stale|expire|max_age|closed_at" app pipeline/worker.py | grep -v -i -E '
+               '"jwt|token|cookie|session|oauth|redis|password|verify|reset|lock|ttl"\' > container__grep_staleness.txt; '
+               "wc -l container__grep_staleness.txt; cut -c1-230 container__grep_staleness.txt")
+
+
+@pytest.mark.parametrize("command", [
+    RUNNER_GREP,
+    "ssh build-host 'grep -v -i password /var/log/app.log | tail -5' > /srv/work/app-tail.txt",
+    "sh -c 'grep -c token src/auth.py' > /srv/work/count.txt",
+])
+def test_a_pattern_inside_a_command_line_handed_to_a_runner_passes(sandbox, command):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command,label", [
+    ("docker exec app-api sh -c 'cat /app/.env' > /srv/work/out.txt", SENSITIVE_READ),          # the file it reads
+    ("docker exec app-api cat /app/.env > /srv/work/out.txt", SENSITIVE_READ),
+    ("docker exec app-api sh -c 'grep -rn KEY /app/.env | grep -v -E \"jwt|token\"' > /srv/work/out.txt", SENSITIVE_READ),
+    ("docker exec app-api sh -c 'echo KEY=1 > /app/.env' > /srv/work/out.txt", SENSITIVE_WRITE),
+    ("ssh build-host 'cat ~/.aws/credentials' > /srv/work/out.txt", SENSITIVE_READ),
+    ("sh -c 'cat .env' > /srv/work/out.txt", SENSITIVE_READ),
+    ("grep -n token /srv/app/.env > /srv/work/hits.txt", SENSITIVE_READ),
+    ('echo "$(cat /srv/app/.env)" > /srv/work/out.txt', SENSITIVE_READ),                        # computed text
+    ("python3 -c 'print(open(\".env\").read())' > /srv/work/out.txt", SENSITIVE_READ),           # code, not a shell line
+    ("sometool password > /srv/work/out.txt", SENSITIVE_READ),    # a program with no table: any word may be a file it reads
+])
+def test_a_secret_file_read_into_a_kept_output_is_still_refused(sandbox, command, label):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)

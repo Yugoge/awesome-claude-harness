@@ -225,7 +225,7 @@ def pushgrant(rp) -> None:
     with rp.acting("driver"):
         with open(os.path.join(lay.harness, "hooks", "push.sh"), encoding="utf-8") as fh:
             text = fh.read()
-    block = text[text.index("# Step 8.5"):text.index("# Step 8.6")]
+    block = text[text.index("# Step 8.5"):text.index("# Step 8.6")] if "# Step 8.5" in text else ""  # S21: removed
     script = (". ~/.claude/hooks/lib/harness_state_dir.sh\n"
               f"BRANCH={shlex.quote(branch)}\nREMOTE=origin\n" + block + 'printf "%s\\n" "$GRANT_PATH"\n')
     rp.step("script", "push.sh Step 8.5", {})

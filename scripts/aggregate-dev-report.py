@@ -139,7 +139,7 @@ COUNT_SUMMARY_RE = re.compile(r"^\s*(\d+)\b")
 # ---------------------------------------------------------------------------
 
 def _resolve_project_root(project_dir: str | None = None) -> Path:
-    """Derive project root from --project-dir, CLAUDE_PROJECT_DIR or script location.
+    """Derive project root from --project-dir, CLAUDE_PROJECT_DIR or the cwd.
 
     --project-dir has the resolver's meaning (resolve-dev-artifact-chain.py
     --project-dir; an empty value is the cwd). Its callers run the harness's
@@ -149,11 +149,9 @@ def _resolve_project_root(project_dir: str | None = None) -> Path:
     """
     if project_dir is not None:
         return Path(project_dir).resolve()
-    env_root = os.environ.get("CLAUDE_PROJECT_DIR", "")
-    if env_root:
-        return Path(env_root)
-    # Fall back: this script lives at <project-root>/scripts/aggregate-dev-report.py
-    return Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "lib"))
+    import locations  # noqa: E402 -- the one project-root resolution
+    return locations.project_root(bash=True)
 
 
 def _resolve_dev_dir(project_root: Path) -> Path:

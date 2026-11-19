@@ -66,16 +66,14 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
-        PKG_MANAGERS,
+        INPLACE_EDITORS,
+        PKG_LINK_WORDS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
         SERVICE_VERBS,
-        _EXEC_OPTS_WITH_ARG,
         _GIT_READONLY_SUBCMDS,
-        _RUNTIME_OPTS_WITH_ARG,
         _RUNTIME_SUBCOMMANDS,
         _WRAPPER_LEADING_POSITIONAL,
-        _WRAPPER_OPTS_WITH_ARG,
         _WRAPPER_POSITIONAL_OPTIONAL,
     )
 except ImportError:  # executed as a top-level script (no package context)
@@ -88,16 +86,14 @@ except ImportError:  # executed as a top-level script (no package context)
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
-        PKG_MANAGERS,
+        INPLACE_EDITORS,
+        PKG_LINK_WORDS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
         SERVICE_VERBS,
-        _EXEC_OPTS_WITH_ARG,
         _GIT_READONLY_SUBCMDS,
-        _RUNTIME_OPTS_WITH_ARG,
         _RUNTIME_SUBCOMMANDS,
         _WRAPPER_LEADING_POSITIONAL,
-        _WRAPPER_OPTS_WITH_ARG,
         _WRAPPER_POSITIONAL_OPTIONAL,
     )
 
@@ -273,6 +269,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         _LAUNCH_SUBCMDS,
         _RECURSIVE_WS_FLAGS,
         _SERVICE_MANAGER_PROGRAMS,
+        _WS_SELECT_KEYWORDS,
         _anchor_exec_tokens,
         _anchor_in_launch_position,
         _anchor_nonprotected_workspace_selector,
@@ -286,6 +283,7 @@ except ImportError:  # executed as a top-level script (no package context)
         _LAUNCH_SUBCMDS,
         _RECURSIVE_WS_FLAGS,
         _SERVICE_MANAGER_PROGRAMS,
+        _WS_SELECT_KEYWORDS,
         _anchor_exec_tokens,
         _anchor_in_launch_position,
         _anchor_nonprotected_workspace_selector,
@@ -735,7 +733,7 @@ def _effective_cwd_after(simple_cmds: list, upto_index: int, cwd_base: Optional[
         if not toks:
             continue
         base = os.path.basename(_strip_quotes(toks[0]))
-        if base in ("cd", "pushd"):
+        if base in _sp.CD_TARGET_BUILTINS:
             target = _cd_target(toks[1:])
             if target is None:
                 continue
@@ -782,7 +780,7 @@ def _is_inplace_editor_args(head: str, args: list) -> bool:
     contain `i` (`-Ei`, `-ri`, `-nei`), and Perl `-i`/`-iSUFFIX`/clustered
     `-pi`/`-0pi`/`-Tpi`. A plain `sed s/a/b/ file` (stream to stdout, no -i) is
     NOT in-place and must not match (it reads, does not mutate)."""
-    if head not in ("sed", "perl"):
+    if head not in INPLACE_EDITORS:
         return False
     for a in args:
         if a == "--in-place" or a.startswith("--in-place"):
@@ -804,23 +802,8 @@ def _is_inplace_editor_args(head: str, args: list) -> bool:
 # by the bareword `startswith("-")` filter), so only the SEPARATED forms need the
 # next-token skip. This is the GENERAL fix for the flag-value-collision class: a
 # trailing `cp SRC <protected-dest> -S .bak` must not let `.bak` become the dest.
-_VALUE_OPTS = {
-    "cp": {"-S", "--suffix", "-t", "--target-directory", "--preserve",
-           "-Z", "--context", "--sparse", "--reflink"},
-    "mv": {"-S", "--suffix", "-t", "--target-directory"},
-    "rename": {"-S", "--suffix", "-t", "--target-directory"},
-    "install": {"-S", "--suffix", "-t", "--target-directory", "-m", "--mode",
-                "-o", "--owner", "-g", "--group", "-Z", "--context",
-                "--strip-program", "-D"},
-    "ln": {"-S", "--suffix", "-t", "--target-directory"},
-    "rsync": {"-e", "--rsh", "--files-from", "--include", "--exclude",
-              "--include-from", "--exclude-from", "--filter", "--log-file",
-              "--password-file", "--backup-dir", "--temp-dir", "--partial-dir",
-              "--compare-dest", "--copy-dest", "--link-dest", "--rsync-path",
-              "--chmod", "--out-format", "--bwlimit", "--timeout",
-              "--modify-window", "--max-size", "--min-size", "--block-size",
-              "--sockopts", "--protocol", "--checksum-choice", "--info", "--debug"},
-}
+_VALUE_OPTS = {name: frozenset(_sp.VERBS[name][0]["val"]) for name in ("cp", "mv", "install", "ln", "rsync")}
+_VALUE_OPTS["rename"] = _VALUE_OPTS["mv"]  # read with mv's options (tdir_verbs)
 
 
 def _operands_and_tdir(head: str, args: list):
@@ -840,7 +823,7 @@ def _operands_and_tdir(head: str, args: list):
     Unknown single-dash tokens are treated as no-arg flags (dropped) — the fail-safe
     direction: a flag we do not model never STEALS an operand slot, so a real
     protected operand is never dropped because of an unmodeled flag."""
-    tdir_verbs = ("cp", "mv", "install", "rename", "ln")
+    tdir_verbs = _sp.TARGET_DIR_VERBS + ("rename",)  # and rename, read here with mv's options
     val_opts = _VALUE_OPTS.get(head, set())
     operands = []
     tdir = None
@@ -870,7 +853,7 @@ def _operands_and_tdir(head: str, args: list):
             continue
         # exact long/short option taking a SEPARATED value.
         if a in val_opts and i + 1 < n:
-            if a in ("-t", "--target-directory") and head in tdir_verbs:
+            if a in _sp.TARGET_DIR_OPTS and head in tdir_verbs:
                 tdir = args[i + 1]
             i += 2
             continue
@@ -909,7 +892,7 @@ def _dest_entries(dest: str, srcs: list, args: list) -> list:
     st = _strip_quotes(dest)
     norm = _normalize_path(st)
     into_dir = (st.endswith("/") or (os.path.isabs(norm) and os.path.isdir(norm))) and not any(
-        a in ("-T", "--no-target-directory")
+        a in _sp.NO_TARGET_DIR_OPTS
         or (a.startswith("-") and not a.startswith("--") and "T" in a[1:]) for a in args)
     if not into_dir or not srcs:
         return [dest]
@@ -957,7 +940,7 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
     # coreutils that define it ({cp, mv, install, ln}); for every other verb it is
     # None and the verb's own last-operand-is-dest logic runs unchanged.
     barewords, tdir = _operands_and_tdir(head, args)
-    if head in ("cp", "install"):
+    if head in _sp.COPY_VERBS:
         # `install -d DIR…` / `install --directory DIR…` (incl. clustered `-Dd`)
         # CREATES every named directory (there is NO source operand). So EVERY
         # operand is a target — creating/`mkdir -p`-ing a protected ancestor/config
@@ -965,7 +948,7 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
         # logic below would only flag the last operand (dest), dropping a protected
         # dir that appears earlier in a multi-dir `install -d A B <protecteddir>`.
         if head == "install" and any(
-            a == "-d" or a == "--directory"
+            a in _sp.INSTALL_DIR_OPTS
             or (a.startswith("-") and not a.startswith("--") and "d" in a[1:])
             for a in args
         ):
@@ -1075,7 +1058,7 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
         # no -d: members extracted into cwd; with no explicit members the whole
         # archive is unpacked into cwd (caller's cwd resolution handles relative).
         return members
-    if head in ("sed", "perl") and _is_inplace_editor_args(head, args):
+    if head in INPLACE_EDITORS and _is_inplace_editor_args(head, args):
         return barewords
     if head in ("chmod", "chown", "chgrp"):
         # chmod MODE FILE… / chown OWNER FILE… / chgrp GROUP FILE… — the first
@@ -1642,7 +1625,7 @@ def _step0_self_protection(ctx: "Context") -> Optional[Verdict]:
         # `perl -i` MUTATE the file in place — the inspection gate would wrongly skip
         # them. (Behind a wrapper the head is the wrapper, so the head-agnostic
         # anchor below also catches it; this branch covers the bare head form.)
-        if head in ("sed", "perl") and _is_inplace_editor_args(head, list(rest)):
+        if head in INPLACE_EDITORS and _is_inplace_editor_args(head, list(rest)):
             for tgt in [t for t in rest if not t.startswith("-")]:
                 for cand in _resolve_rel(tgt, cwd, cwd_det):
                     if _path_matches_any(cand, list(_config_path_variants())):
@@ -1695,7 +1678,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
         _, head, rest = cw[0]
         rest_bases = [os.path.basename(_strip_quotes(t)) for t in rest]
         # service control
-        if head in ("systemctl", "service", "initctl"):
+        if head in _SERVICE_MANAGER_PROGRAMS:
             if any(v in rest_bases for v in SERVICE_VERBS) or any(v in tokens for v in SERVICE_VERBS):
                 return _block("STEP1", "indeterminate policy: service-control verb")
         # kill / proc control
@@ -1717,7 +1700,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
         if head in RUNTIMES:
             return _block("STEP1", "indeterminate policy: runtime launch")
         # package runners
-        if head in ("npx", "bunx"):
+        if head in _PM_EXEC_RUNNERS:
             return _block("STEP1", "indeterminate policy: package runner")
         # ── HEAD-AGNOSTIC fail-closed tail scan ──────────────────────────────
         # Behind a novel exec front-end (an undocumented process/exec wrapper) the
@@ -1742,12 +1725,12 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
                 _fi = next((i for i, t in enumerate(tokens)
                             if os.path.basename(_strip_quotes(t)) == "fuser"), None)
                 if _fi is not None and any(
-                        _strip_quotes(t) in ("-k", "--kill") or
+                        _strip_quotes(t) in _KILL_FLAG_HEADS["fuser"] or
                         (_strip_quotes(t).startswith("-") and not _strip_quotes(t).startswith("--")
                          and "k" in _strip_quotes(t)[1:])
                         for t in tokens[_fi + 1:]):
                     return _block("STEP1", "indeterminate policy: fuser -k process-kill (tail)")
-            if any(b in ("systemctl", "service", "initctl") for b in exec_bases) and (
+            if any(b in _SERVICE_MANAGER_PROGRAMS for b in exec_bases) and (
                     any(v in [os.path.basename(_strip_quotes(t)) for t in tokens] for v in SERVICE_VERBS)):
                 return _block("STEP1", "indeterminate policy: service-control verb (tail)")
             if any(b in PKG_MANAGERS for b in exec_bases):
@@ -1756,7 +1739,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
                 return _block("STEP1", "indeterminate policy: build tool (tail)")
             if any(b in RUNTIMES for b in exec_bases):
                 return _block("STEP1", "indeterminate policy: runtime launch (tail)")
-            if any(b in ("npx", "bunx") for b in exec_bases):
+            if any(b in _PM_EXEC_RUNNERS for b in exec_bases):
                 return _block("STEP1", "indeterminate policy: package runner (tail)")
     return ALLOW
 
@@ -1901,7 +1884,7 @@ def _exec_subcommand_after_selector(head: str, rest: list):
     # already consumed by _explicit_workspace_selector, so scan all of rest.
     i = 0
     while i < len(rest):
-        if rest[i] in ("exec", "dlx", "x"):
+        if rest[i] in _PM_EXEC_SUBCMDS:
             toks = rest[i + 1:]
             j = 0
             while j < len(toks):
@@ -1982,7 +1965,7 @@ def _p1_launch(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None,
             # `node --run <script>` (Node script runner) routes to the package
             # script of the effective cwd — treat as a bare script-run via P9/P8.
             nrun = _node_run_script(rest)
-            if nrun is not None and head in ("node", "nodejs"):
+            if nrun is not None and head in _sp.NODE_NAMES:
                 if _cwd_in_protected_build_scope(cwd, cwd_det, cfg) or cwd is None or not cwd_det:
                     return _block("P1", "node --run in a protected/indeterminate cwd")
         # direct path execution (./...mjs) — the head IS the path
@@ -2063,11 +2046,7 @@ def _xargs_target(rest: list):
     (-I/-n/-P/-d/-E/-s/--max-args/etc.). Returns (None, None) if no target
     command word follows (then xargs defaults to echo — not a launch).
     """
-    opts_with_arg = frozenset({
-        "-I", "-i", "--replace", "-n", "--max-args", "-L", "--max-lines",
-        "-P", "--max-procs", "-d", "--delimiter", "-E", "-e", "--eof",
-        "-s", "--max-chars", "-a", "--arg-file",
-    })
+    opts_with_arg = _sp.XARGS_VALUES
     i = 0
     n = len(rest)
     while i < n:
@@ -2136,16 +2115,16 @@ def _package_runner_invocation(head: str, rest: list):
     (not 'typescript'). Returns (None, []) if not a runner form / no target.
     """
     toks = None
-    if head in ("npx", "bunx"):
+    if head in _PM_EXEC_RUNNERS:
         toks = rest
     elif head in PKG_MANAGERS:
         i = 0
         while i < len(rest):
             t = rest[i]
-            if t in ("exec", "dlx", "x"):
+            if t in _PM_EXEC_SUBCMDS:
                 toks = rest[i + 1:]
                 break
-            if t in ("run", "run-script"):
+            if t in _PM_RUN_SUBCMDS:
                 return (None, [])
             i += 1
     if toks is None:
@@ -2196,7 +2175,7 @@ def _p2_service(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
         if not cw:
             continue
         _, head, rest = cw[0]
-        if head not in ("systemctl", "service", "initctl"):
+        if head not in _SERVICE_MANAGER_PROGRAMS:
             continue
         if not (any(v in rest for v in SERVICE_VERBS)):
             continue
@@ -2275,7 +2254,7 @@ def _p4_statefile(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None) 
 
 # ── P5 ENDPOINT_GUARD ────────────────────────────────────────────────────────
 
-LOOPBACK_RE = re.compile(r"(127\.0\.0\.1|localhost|\[::1\]|::1)", re.IGNORECASE)
+LOOPBACK_RE = re.compile("(%s)" % "|".join(map(re.escape, _sp.LOOPBACK_HOSTS)), re.IGNORECASE)
 # Raw byte-stream clients: the request line (incl. the control path) is supplied
 # on STDIN, so the path legitimately arrives from an UPSTREAM pipeline segment.
 RAW_SOCKET_HEADS = frozenset({"nc", "ncat", "netcat", "socat", "telnet"})
@@ -2624,10 +2603,29 @@ def _pm_global_setting(name: str, value: Optional[str]) -> bool:
     return False
 
 
-_PM_EXEC_SUBCMDS = frozenset({"exec", "x", "dlx"})
-"""Package-manager subcommands that run another command: their argv after `--`
-(and npm's `-c` / `--call` string) is a nested invocation, not a script's args."""
-_PM_EXEC_RUNNERS = frozenset({"npx", "pnpx", "bunx"})
+# Each front-end's options that take the next word (and the options whose value is its
+# shell code) come from the parser's option spec of the program, where it has one.
+_FRONTEND_SPECS = {"su": _sp._SU_SPEC, **{n: (_sp.WRAPPERS.get(n) or _sp.PEEL.get(n) or (None,))[0]
+                                        for n in EXEC_FRONTEND_PROFILES if n != "su"}}
+_FRONTEND_PAYLOAD_OPTS = {"flock": _sp.COMMAND_OPTS, "su": _sp.SU_COMMAND_OPTS, "runuser": _sp.SU_COMMAND_OPTS}
+EXEC_FRONTEND_PROFILES = {
+    n: p if _FRONTEND_SPECS.get(n) is None else {
+        **p, "payload_opts": frozenset(_FRONTEND_PAYLOAD_OPTS.get(n, ())),
+        "opts_with_arg": frozenset(o for o in _FRONTEND_SPECS[n]["val"] if _FRONTEND_SPECS[n]["nargs"].get(o, 1))
+        - frozenset(_FRONTEND_PAYLOAD_OPTS.get(n, ()))}
+    for n, p in EXEC_FRONTEND_PROFILES.items()}
+# Wrapper -> the options that take the next word as their value: read from the
+# shared parser's option specs (shell_parse.WRAPPERS / PEEL), one per wrapper.
+_WRAPPER_OPTS_WITH_ARG = {name: frozenset((_sp.WRAPPERS.get(name) or _sp.PEEL[name])[0]["val"])
+                          for name in ENV_WRAPPERS}
+# Runtime flags that consume one following value (so the script positional is
+# not mistaken for the value, and a value is not mistaken for the script): node's
+# (shell_parse.NODE_VALUE_OPTIONS and the short -r, -C) and tsx's --tsconfig.
+_RUNTIME_OPTS_WITH_ARG = _sp.NODE_VALUE_OPTIONS | {"-r", "-C", "--tsconfig"}
+PKG_MANAGERS = _sp.NODE_PKG_MANAGERS
+_PM_EXEC_SUBCMDS = _sp.PM_EXEC_SUBCMDS
+_PM_EXEC_RUNNERS = _sp.PM_EXEC_RUNNERS
+_PM_RUN_SUBCMDS = ("run", "run-script")  # the subcommands that run a package.json script
 _PM_SUBCMDS = frozenset({
     "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add",
     "ci", "clean-install", "install-clean", "install-test", "it", "install-ci-test", "cit",
@@ -2873,7 +2871,7 @@ def _pm_global_args(args: list, depth: int = 0, pm: Optional[str] = None) -> boo
             k = next((j for j, t in enumerate(head) if t in _PM_EXEC_SUBCMDS or t == "run"), None)
             if k is not None:
                 nested = head[k + 1:] + nested
-        calls = [args[i + 1] for i, t in enumerate(args[:-1]) if t in ("-c", "--call")]
+        calls = [args[i + 1] for i, t in enumerate(args[:-1]) if t in _sp.PM_CALL_OPTS]
         calls += [t.split("=", 1)[1] for t in args if t.startswith(("--call=", "-c="))]
         if _pm_nested_global(nested, depth) or any(_pm_nested_global(_safe_shlex(c), depth + 1) for c in calls):
             return True
@@ -2908,7 +2906,7 @@ def _pm_global_args(args: list, depth: int = 0, pm: Optional[str] = None) -> boo
     return False
 
 
-_PM_ENV_SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+_PM_ENV_SETTERS = _sp.DECLARATION_BUILTINS
 
 
 def _p7_global_env(command: str) -> Optional[Verdict]:
@@ -2956,7 +2954,7 @@ def _p7_global_env(command: str) -> Optional[Verdict]:
             lead = None
             if _pm_word(name)[0]:
                 lead = [name] + [a or "" for a in args]
-            elif name in ("node", "nodejs"):
+            elif name in _sp.NODE_NAMES:
                 k = next((j for j, a in enumerate(args) if a and not a.startswith("-")), None)
                 if k is not None and _pm_word(args[k])[0]:
                     lead = [a or "" for a in args[k:]]
@@ -2987,7 +2985,7 @@ def _p7_globalbin(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
         _, head, rest = cw[0]
         if head in PKG_MANAGERS:
             is_global = _pm_global_args([_strip_quotes(t) for t in rest], pm=head)
-            is_link = any(t in ("link", "unlink") for t in rest)
+            is_link = any(t in PKG_LINK_WORDS for t in rest)
             if is_global or is_link:
                 return _block("P7", "global package install/link")
         # writes to protected global bin paths (any mutation head)
@@ -3104,7 +3102,7 @@ def _strip_selector_tokens(rest: list) -> list:
     sel_flags = ("-w", "--workspace", "--filter", "-F", "--prefix", "-C", "--dir", "--cwd")
     while i < len(rest):
         t = rest[i]
-        if t in ("workspace", "workspaces") and i + 1 < len(rest):
+        if t in _WS_SELECT_KEYWORDS and i + 1 < len(rest):
             i += 2
             continue
         if t in sel_flags and i + 1 < len(rest):
@@ -3152,12 +3150,12 @@ def _p8_explicit_protected_path(simple_cmds: list, cfg: dict, cwd_base: Optional
 def _tokens_after_runner_target(head: str, rest: list) -> list:
     """Tokens following the package-runner's target command word (e.g. after
     `tsc` in `pnpm exec tsc -p <path>`)."""
-    if head in ("npx", "bunx"):
+    if head in _PM_EXEC_RUNNERS:
         toks = rest
     elif head in PKG_MANAGERS:
         toks = None
         for i, t in enumerate(rest):
-            if t in ("exec", "dlx", "x"):
+            if t in _PM_EXEC_SUBCMDS:
                 toks = rest[i + 1:]
                 break
         if toks is None:
@@ -3251,7 +3249,7 @@ def _explicit_workspace_selector(pm_head: str, rest: list) -> Optional[str]:
             return _classify_filter_value(_strip_quotes(t.split("=", 1)[1]))
         if t in ("--workspaces", "-ws"):
             return "<MULTI>"
-        if t in ("-r", "--recursive"):
+        if t in _RECURSIVE_WS_FLAGS:
             return "<MULTI>"
         i += 1
     return None
@@ -3404,7 +3402,7 @@ def _p9_pkgscript(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None) 
         # runner form, NOT a bare script-run — P9 abstains so it is not
         # mis-classified as a protected-cwd script (the `-c` payload is
         # recursively evaluated separately).
-        if _first_subcommand(head, rest) in ("exec", "dlx", "x"):
+        if _first_subcommand(head, rest) in _PM_EXEC_SUBCMDS:
             continue
 
         # compute effective cwd from cd/pushd in the chain, then fold a leading
@@ -3461,7 +3459,7 @@ def _p9_pkgscript(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None) 
             return _resolve_bare_script(sub, cwd, cwd_det, cfg, safe_allow, protected_cmds)
         # explicit run / run-script keyword
         script_tok = None
-        if sub in ("run", "run-script"):
+        if sub in _PM_RUN_SUBCMDS:
             script_tok = _token_after(rest, sub)
         elif sub is not None and sub not in DEP_BUILTINS and not sub.startswith("-"):
             # bare form: `yarn <script>` / `pnpm <script>` / `bun <script>`
@@ -3579,10 +3577,10 @@ def _classify_post_selector(post: list, scripts: set, safe_allow: set, protected
         return _block("P9", "runtime/exec token after a workspace selector (P1)")
     # consume optional run/run-script keyword
     script_tok = first
-    if first in ("run", "run-script"):
+    if first in _PM_RUN_SUBCMDS:
         script_tok = None
         for t in post:
-            if t in ("run", "run-script"):
+            if t in _PM_RUN_SUBCMDS:
                 continue
             if t.startswith("-"):
                 continue
@@ -3774,11 +3772,11 @@ def _runner_call_payloads(simple_cmds: list, cfg: Optional[dict] = None,
         _, head, rest = cw[0]
         # locate the runner argv (after npx/bunx, or after exec/dlx/x for a PM)
         runner_args = None
-        if head in ("npx", "bunx"):
+        if head in _PM_EXEC_RUNNERS:
             runner_args = rest
         elif head in PKG_MANAGERS:
             for i, t in enumerate(rest):
-                if t in ("exec", "dlx", "x"):
+                if t in _PM_EXEC_SUBCMDS:
                     runner_args = rest[i + 1:]
                     break
         if runner_args is None:
@@ -3791,7 +3789,7 @@ def _runner_call_payloads(simple_cmds: list, cfg: Optional[dict] = None,
         i = 0
         while i < len(runner_args):
             t = runner_args[i]
-            if t in ("-c", "--call") and i + 1 < len(runner_args):
+            if t in _sp.PM_CALL_OPTS and i + 1 < len(runner_args):
                 payloads.append((_strip_quotes(runner_args[i + 1]), cwd, cwd_det))
                 i += 2
                 continue
@@ -3844,7 +3842,7 @@ def _peel_exec_frontend(toks: list):
     leading_pos = profile.get("leading_positionals", 0)
     consume_user = profile.get("consume_user_positional", False)
     # options that SUPPLY the user (so no leading user positional is expected).
-    _USER_OPTS = frozenset({"-u", "--user"})
+    _USER_OPTS = _sp.RUNUSER_USER_OPTS
     n = len(toks)
     i = head_idx + 1  # consume the front-end head
     consumed_pos = 0
@@ -4441,7 +4439,7 @@ def _p0_anchor(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None,
             # `fuser -k` is a kill executor too (not in KILL_VERBS). Behind a novel
             # wrapper its head is the wrapper, so detect a fuser + -k in the tail.
             if not kill_in_tail and any(os.path.basename(st) == "fuser" for _i, st in exec_toks):
-                if any(_strip_quotes(t) in ("-k", "--kill") or
+                if any(_strip_quotes(t) in _KILL_FLAG_HEADS["fuser"] or
                        (_strip_quotes(t).startswith("-") and "k" in _strip_quotes(t).lstrip("-")) for t in tokens):
                     kill_in_tail = True
             if kill_in_tail:
@@ -4695,7 +4693,7 @@ def _anchor_globalbin_hits(sc: str, tokens: list, exec_toks: list,
         # is matched (mirrors P7 reading the pm's `rest`).
         own = [_strip_quotes(t) for t in tokens[pm_pos + 1:]]
         is_global = _pm_global_args(own, pm=os.path.basename(_strip_quotes(tokens[pm_pos])))
-        is_link = any(t in ("link", "unlink") for t in own)
+        is_link = any(t in PKG_LINK_WORDS for t in own)
         if is_global or is_link:
             return True
     # write to a protected global-bin path via a mutation verb / redirect.
@@ -4717,7 +4715,7 @@ def _anchor_build_hits_protected(tokens: list, exec_toks: list, cfg: dict,
     bases = [os.path.basename(st) for _i, st in exec_toks]
     pm_present = any(b in PKG_MANAGERS for b in bases)
     buildtool_present = any(b in BUILD_TOOL_BASENAMES for b in bases)
-    runner_present = any(b in ("npx", "bunx") for b in bases)
+    runner_present = any(b in _PM_EXEC_RUNNERS for b in bases)
     has_build_verb = any(st == "build" for _i, st in exec_toks)
     # A build is indicated by: a bare build tool, OR a pm/runner with a 'build'
     # verb, OR a package-runner invoking a build tool.

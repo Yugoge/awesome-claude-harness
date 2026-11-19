@@ -13,7 +13,7 @@
 //       captured provider.usage.list.response envelope file (no network)
 //
 // Config (documented defaults, overridable — no secrets ever printed):
-//   PASEO_CONFIG_DIR        default: $HOME/.paseo
+//   PASEO_HOME        default: $HOME/.paseo
 //     <dir>/config.json     daemon.listen (host:port) -> ws://<listen>/ws
 //     <dir>/daemon-password.txt   WS subprotocol paseo.bearer.<password>
 //   PASEO_USAGE_TIMEOUT_MS  default: 10000
@@ -82,7 +82,7 @@ if (envelopeIdx !== -1) {
   }
 }
 
-const configDir = process.env.PASEO_CONFIG_DIR || join(homedir(), ".paseo");
+const configDir = process.env.PASEO_HOME || join(homedir(), ".paseo");
 const timeoutMs = Number(process.env.PASEO_USAGE_TIMEOUT_MS || 10000);
 
 let listen;

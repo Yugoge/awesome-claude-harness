@@ -542,7 +542,7 @@ class _Read:
         self.script = sp.parse(command)
         self.unreadable = bool(self.script.errors())
         self.resolved = [(site, sp.resolve(site.cmd)) for site in sp.walk(self.script)]
-        self.targets = sp.write_targets(self.script, env=env)
+        self.targets = sp.write_targets(self.script, env=env, raw=command)
 
 
 @functools.lru_cache(maxsize=8)
@@ -596,8 +596,8 @@ def _target_text(t) -> str:
 def _bash_write_paths(command: str, skip=frozenset()) -> list[str]:
     """The path of each file the command writes or creates (a deletion is not one), first seen order.
     ``skip`` holds the ids of target words not to report."""
-    found = (_target_text(t) for t in _read(command).targets
-             if t.mode != sp.DELETE and id(t.word) not in skip)
+    found = (p for t in _read(command).targets if t.mode != sp.DELETE and id(t.word) not in skip
+             for p in t.placed(_target_text(t)))  # at each directory a `cd` before it may have left
     return list(dict.fromkeys(p for p in found if p))
 
 
@@ -670,7 +670,7 @@ def _git_runs(command: str, payload_cwd: str) -> list:
     out = []
     cwd, known = None, True
     for site, res in _read(command).resolved:
-        if res.name in ('cd', 'pushd'):
+        if res.name in sp.CD_TARGET_BUILTINS:
             cwd, known = _cd_target(res, cwd or payload_cwd)
         moved = any(v is not None for _name, opts in res.wrappers for _o, v in opts)
         out.extend((inv, cwd, known and not moved) for inv in _git_of(site, res))
@@ -1804,13 +1804,13 @@ def _block_git_config(tool_name: str, target: str) -> None:
            f'leaves both as they are.\nBlocked: {tool_name} to {target}\n')
 
 
-def _emit_command_rewrite(new_command: str) -> None:
-    """Emit the Claude Code PreToolUse command-rewrite and exit 0. The runtime
-    replaces tool_input.command with `new_command` (the bwrap re-exec)."""
+def _emit_command_rewrite(new_command: str, tool_input: dict) -> None:
+    """Emit the Claude Code PreToolUse command-rewrite and exit 0. updatedInput replaces the whole
+    tool input, so it is `tool_input` with only its command replaced (the bwrap re-exec)."""
     out = {
         'hookSpecificOutput': {
             'hookEventName': 'PreToolUse',
-            'updatedInput': {'command': new_command},
+            'updatedInput': {**tool_input, 'command': new_command},
         }
     }
     sys.stdout.write(json.dumps(out))
@@ -1849,7 +1849,7 @@ def _raw_git_metadata_write_into_main(command: str, main_root: str,
 
 
 def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
-                          journal: tuple = ()) -> None:
+                          journal: tuple = (), tool_input: dict | None = None) -> None:
     """For the overnight actor's Bash command: re-exec it inside the bwrap RO-bind
     boundary (emit updatedInput.command) when the boundary is available; FAIL-CLOSED
     (deny non-worktree-local commands) when bwrap is unavailable. No-op only for an
@@ -1877,7 +1877,7 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
         if argv:
             # shlex-quote the argv into a single re-exec command string.
             import shlex
-            _emit_command_rewrite(' '.join(shlex.quote(a) for a in argv))
+            _emit_command_rewrite(' '.join(shlex.quote(a) for a in argv), tool_input or {})
         # boundary requested but argv could not be built -> fall through to the
         # fail-closed deny below (do not silently allow).
     # FAIL-CLOSED: bwrap unavailable OR argv unbuildable. The write guarantee
@@ -1991,7 +1991,7 @@ def main():
             # its journal bound writable: a check of the helper against its blobs at the harness's
             # HEAD cannot see what it runs (its hooks/lib modules load from untracked __pycache__
             # bytecode, and the untracked venv runs any .pth in it).
-            _apply_write_boundary(command, gov_state, main_git_dir, _restart_journal(payload))
+            _apply_write_boundary(command, gov_state, main_git_dir, _restart_journal(payload), tool_input)
         elif classification == 'worktree_context':
             # No governing state: the main_root cannot be derived to scope a targeted
             # block, so any git / interpreter command is refused; any other command is

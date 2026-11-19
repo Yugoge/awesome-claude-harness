@@ -1347,7 +1347,7 @@
   {
    "id": "output-file-options",
    "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "curl's and sort's output options and sort's two forbidden options; the hook-level difference on `sort -o` is recorded under writer-programs.",
+   "reason": "curl's and sort's output options and sort's two forbidden options; the tool policy's own sort -o reading is gone: sort -o is the parser's write target (writer-programs).",
    "sides": [
     [
      {
@@ -1359,18 +1359,13 @@
       "name": "_dg_kubectl_output:in",
       "fingerprint": "e6c6b8721ef594dc",
       "at": "hooks/lib/bash_safety_rules.py:5210"
-     },
-     {
-      "name": "_operand_writes:in",
-      "fingerprint": "e6c6b8721ef594dc",
-      "at": "hooks/pretool-tool-policy.py:866"
      }
     ],
     [
      {
       "name": "<module>._SORT_FORBIDDEN",
-      "fingerprint": "df6b027d2a14fb20",
-      "at": "hooks/lib/bash_read_only.py:131"
+      "fingerprint": "a1e47531a093c8f0",
+      "at": "hooks/lib/bash_read_only.py:133"
      }
     ]
    ]
@@ -1572,14 +1567,9 @@
    "sides": [
     [
      {
-      "name": "_pm_global_args:in",
+      "name": "<module>.PM_CALL_OPTS",
       "fingerprint": "1d20b55c6355c5bd",
-      "at": "hooks/lib/runtime_guard/_core.py:2876"
-     },
-     {
-      "name": "_runner_call_payloads:in",
-      "fingerprint": "1d20b55c6355c5bd",
-      "at": "hooks/lib/runtime_guard/_core.py:3790"
+      "at": "hooks/lib/shell_parse.py:464"
      }
     ],
     [
@@ -2317,11 +2307,6 @@
    "sides": [
     [
      {
-      "name": "_uniq_operands:in",
-      "fingerprint": "2d1d8f5b133924eb",
-      "at": "hooks/lib/bash_safety_rules.py:590"
-     },
-     {
       "name": "_arg_write_targets:in",
       "fingerprint": "2d1d8f5b133924eb",
       "at": "hooks/lib/bash_safety_rules.py:1298"
@@ -2630,9 +2615,9 @@
     ],
     [
      {
-      "name": "_peel_exec_frontend._USER_OPTS",
+      "name": "<module>.RUNUSER_USER_OPTS",
       "fingerprint": "3146bf8f288336af",
-      "at": "hooks/lib/runtime_guard/_core.py:3843"
+      "at": "hooks/lib/shell_parse.py:458"
      }
     ]
    ]
@@ -3123,6 +3108,272 @@
       "name": "<module>._GIT_SUBCOMMANDS",
       "fingerprint": "022827c06019fae2",
       "at": "hooks/lib/git_command_classifier.py:243"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "cd-builtins",
+   "source": "defs-shell lane, audit f199dfb1e family cd-builtins (undecided)",
+   "reason": "shell_parse.CWD_BUILTINS names the builtins that change the working directory of what follows (cd, pushd, popd); runtime_guard._NAV_OPERAND_HEADS names heads whose trailing words are a directory operand and so data, never a command to launch, and holds chdir, which bash does not have (`chdir /tmp` is command not found and moves nothing), so it cannot join the first.",
+   "sides": [
+    [
+     {
+      "name": "<module>.CWD_BUILTINS",
+      "fingerprint": "a403866ae5cecc8d",
+      "at": "hooks/lib/shell_parse.py:428"
+     }
+    ],
+    [
+     {
+      "name": "<module>._NAV_OPERAND_HEADS",
+      "fingerprint": "436dbf43d0786dad",
+      "at": "hooks/lib/runtime_guard/_core.py:4121"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "package-managers",
+   "source": "defs-shell lane, audit f199dfb1e family package-managers (undecided)",
+   "reason": "runtime_guard._PM_AT_VERSION_RE names the package managers corepack proxies (corepack yarn|pnpm|npm[@version]; corepack has no bun shim), shell_parse.NODE_PKG_MANAGERS the node package managers the runtime guard reads, bun included.",
+   "sides": [
+    [
+     {
+      "name": "<module>:re",
+      "fingerprint": "6092f667d082bd7c",
+      "at": "hooks/lib/runtime_guard/_core.py:4034"
+     }
+    ],
+    [
+     {
+      "name": "<module>.NODE_PKG_MANAGERS",
+      "fingerprint": "44c99a4901e66f30",
+      "at": "hooks/lib/shell_parse.py:461"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "shell-set-options",
+   "source": "defs-shell lane, audit f199dfb1e family shell-set-options (undecided)",
+   "reason": "bash_safety_rules._HB_INERT_SET lists the -o values a shell invocation (bash -o X -c ...) may carry and stay readable, noexec and posix included because that reader follows noexec and needs no later word read differently; the degraded set reader's value_ok list (_DG_SET_OPTS) accepts on a later `set -o` only the four that change nothing a later word means, so noexec (later commands not run) and posix (parsing changes) are out.",
+   "sides": [
+    [
+     {
+      "name": "<module>._HB_INERT_SET",
+      "fingerprint": "a5e37477665a6369",
+      "at": "hooks/lib/bash_safety_rules.py:3385"
+     }
+    ],
+    [
+     {
+      "name": "<module>:in",
+      "fingerprint": "677de015dea86fa5",
+      "at": "hooks/lib/bash_safety_rules.py:5243"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "shell-long-bool-options",
+   "source": "defs-shell lane, audit f199dfb1e family shell-long-bool-options (undecided)",
+   "reason": "bash_execution_boundary.SHELL_LONG_BOOL is bash's long options that take no value (for splitting a shell's options); bash_safety_rules._HB_SHELL_LONG the long options the harmless-bash reader can read at all (others make the reading None); _HB_INERT_LONG the subset that leaves the run inert (not --login, which reads profile files, nor --verbose, which echoes the script). Three questions; bash --help decides only the first.",
+   "sides": [
+    [
+     {
+      "name": "<module>.SHELL_LONG_BOOL",
+      "fingerprint": "e492c1875a7a2ccd",
+      "at": "hooks/lib/bash_execution_boundary.py:742"
+     }
+    ],
+    [
+     {
+      "name": "<module>._HB_SHELL_LONG",
+      "fingerprint": "04d85930163341a1",
+      "at": "hooks/lib/bash_safety_rules.py:3377"
+     }
+    ],
+    [
+     {
+      "name": "<module>._HB_INERT_LONG",
+      "fingerprint": "6e88ad672964cb97",
+      "at": "hooks/lib/bash_safety_rules.py:3383"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "wrapper-cwd-options",
+   "source": "defs-shell lane, audit f199dfb1e family wrapper-cwd-options (undecided)",
+   "reason": "runtime_guard._WRAPPER_CWD_OPTS is the union of the cwd options of every wrapper (env -C/--chdir, sudo -D/--chdir, doas -C, systemd-run --working-directory) and _WRAPPER_CWD_SHORT_FUSABLE its short ones that fuse a value; the config guard's (-C, --chdir) are env's own, read on an env wrapper only; _mutation_targets_for_verb's (-C, --directory) are tar's archive directory, not a wrapper option.",
+   "sides": [
+    [
+     {
+      "name": "<module>._WRAPPER_CWD_OPTS",
+      "fingerprint": "4dde60fb1b0d7911",
+      "at": "hooks/lib/runtime_guard/_core.py:510"
+     }
+    ],
+    [
+     {
+      "name": "_CdScopes.run_cmd:in",
+      "fingerprint": "2dd39aa98b5a6867",
+      "at": "hooks/pretool-claude-config-guard.py:634"
+     }
+    ],
+    [
+     {
+      "name": "_mutation_targets_for_verb:in",
+      "fingerprint": "25977e8c8c2ab9f5",
+      "at": "hooks/lib/runtime_guard/_core.py:1169"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "container-exec-subcommands",
+   "source": "defs-shell lane, audit f199dfb1e family container-exec-subcommands (undecided)",
+   "reason": "The removal analyzer's _h_kubectl reads kubectl's subcommands that run a command in a pod (exec, run, debug); _docker_sub reads docker's that run one in a container (exec, run, create: docker create takes the command it later starts). Two programs, two subcommand sets.",
+   "sides": [
+    [
+     {
+      "name": "Analyzer._h_kubectl:in",
+      "fingerprint": "bf9c336c29d28450",
+      "at": "hooks/lib/bash_execution_boundary.py:2831"
+     }
+    ],
+    [
+     {
+      "name": "Analyzer._docker_sub:in",
+      "fingerprint": "e453c14c53c6458b",
+      "at": "hooks/lib/bash_execution_boundary.py:3463"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "container-launchers",
+   "source": "defs-shell lane, audit f199dfb1e family container-launchers (undecided)",
+   "reason": "git_command_classifier._EXEC_LAUNCHERS names the container launchers whose exec/run arguments may run git (docker, podman, kubectl); bash_safety_rules._DG_READ_HANDLERS names the commands the degraded reader has its own subcommand handler for (git, docker, kubectl, find, hash, ssh). A launcher set and a dispatch table.",
+   "sides": [
+    [
+     {
+      "name": "<module>._EXEC_LAUNCHERS",
+      "fingerprint": "bb35e013ddb182ab",
+      "at": "hooks/lib/git_command_classifier.py:1041"
+     }
+    ],
+    [
+     {
+      "name": "<module>._DG_READ_HANDLERS",
+      "fingerprint": "f2262a747587f24d",
+      "at": "hooks/lib/bash_safety_rules.py:4686"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "pm-builtin-subcommands",
+   "source": "defs-shell lane, audit f199dfb1e family pm-builtin-subcommands (undecided)",
+   "reason": "constants.DEP_BUILTINS is the dependency-management subcommands common to npm, yarn, pnpm and bun (install, add, remove ...), the guard's P9 dependency-op rule; _core._PM_SUBCMDS is npm's full builtin list with its typo aliases (install-test, isntall, ...), read to find npm's subcommand word past its options, and holds words (build, test, start) that yarn and pnpm run as package scripts; DEP_SHORTHAND_NPM is npm's four lifecycle shorthands (start, stop, restart, test) that RUN a script. Three questions.",
+   "sides": [
+    [
+     {
+      "name": "<module>.DEP_BUILTINS",
+      "fingerprint": "e92f930970d8b9a2",
+      "at": "hooks/lib/runtime_guard/constants.py:63"
+     }
+    ],
+    [
+     {
+      "name": "<module>._PM_SUBCMDS",
+      "fingerprint": "861138375a3cc5e4",
+      "at": "hooks/lib/runtime_guard/_core.py:2632"
+     }
+    ],
+    [
+     {
+      "name": "<module>.DEP_SHORTHAND_NPM",
+      "fingerprint": "c6d77fed157003a5",
+      "at": "hooks/lib/runtime_guard/constants.py:84"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "programs-tar-archive-vs-grep-pattern-file",
+   "source": "lane defs-programs reading",
+   "reason": "tar's -f/--file names the archive it reads or writes; grep's -f/--file names a file of patterns: two programs' options spelled alike.",
+   "sides": [
+    [
+     {
+      "name": "_mutation_targets_for_verb:in",
+      "fingerprint": "06d0e39aa823d723",
+      "at": "hooks/lib/runtime_guard/_core.py:1167"
+     }
+    ],
+    [
+     {
+      "name": "<module>.GREP_PATTERN_FILE_OPTS",
+      "fingerprint": "06d0e39aa823d723",
+      "at": "hooks/lib/shell_parse.py:3373"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "programs-find-words-by-rule",
+   "source": "lane defs-programs reading",
+   "reason": "The disk guard's _DG_FIND_WORDS is the whole find grammar it admits; the userintent rule's two sets are the words it skips before reading -exec and those of them that take a value; the runtime guard's _FIND_PREPATH_ARG_OPTS the depth options (find's and fd's) that may come before the start paths. Each is a different reading of find.",
+   "sides": [
+    [
+     {
+      "name": "<module>._DG_FIND_WORDS",
+      "fingerprint": "60af0ddeb92cbce2",
+      "at": "hooks/lib/bash_safety_rules.py:5427"
+     }
+    ],
+    [
+     {
+      "name": "_Scan._find:in",
+      "fingerprint": "8db66104d5368c0c",
+      "at": "hooks/pretool-wrapper-userintent.py:1422"
+     }
+    ],
+    [
+     {
+      "name": "_Scan._find:in",
+      "fingerprint": "08041fc82686a949",
+      "at": "hooks/pretool-wrapper-userintent.py:1424"
+     }
+    ],
+    [
+     {
+      "name": "<module>._FIND_PREPATH_ARG_OPTS",
+      "fingerprint": "50a5363381132d05",
+      "at": "hooks/lib/runtime_guard/find_cmds.py:48"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "programs-python-reader-vs-safe-modules",
+   "source": "lane defs-programs reading",
+   "reason": "_PY_READER_MODULES are modules that, run with python -m, only read the files named; _PY_SAFE_MODULES are modules whose import in -c code loads no other code and runs nothing. A module can be either without the other (json.tool vs math).",
+   "sides": [
+    [
+     {
+      "name": "<module>._PY_READER_MODULES",
+      "fingerprint": "a84e766485b3b9b2",
+      "at": "hooks/pretool-wrapper-userintent.py:137"
+     }
+    ],
+    [
+     {
+      "name": "<module>._PY_SAFE_MODULES",
+      "fingerprint": "e94c5dc8f1a0e1b7",
+      "at": "hooks/pretool-wrapper-userintent.py:139"
      }
     ]
    ]

@@ -231,6 +231,19 @@ def project_dir() -> Path:
     return Path.cwd()
 
 
+def config_home() -> Path:
+    """Where harness records that must not split by configuration directory live (score log, logs,
+    restart state). The configuration directory (CLAUDE_CONFIG_DIR, else ~/.claude) as written; when
+    its settings.json is a link, the directory that link resolves into, so configuration directories
+    linking to one harness home share its records. Shell twin: claude_config_home."""
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    settings = config / _SENTINEL_FILE
+    try:
+        return settings.resolve(strict=True).parent if settings.is_symlink() else config
+    except (OSError, RuntimeError):
+        return config
+
+
 def settings_env(*keys: str, any_session: bool = False) -> dict[str, str]:
     """P7b R7: a Claude Code process (CLAUDECODE or CLAUDE_PROJECT_DIR set) whose env lacks
     CLAUDE_HOME started before its settings carried the overlay: the keys it lacks come from the
