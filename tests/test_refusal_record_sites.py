@@ -161,7 +161,19 @@ class Scratch:
                     target.with_name(target.name + ".kept").rename(target)
         lines = [json.loads(x) for f in (self.root / "home").glob(".local/state/claude-harness/*/refusals/*.jsonl")
                  for x in f.read_text().splitlines()]
-        return done.returncode, done.stderr, lines
+        return _refused_status(event, done), done.stderr, lines
+
+
+def _refused_status(event: str, done) -> int:
+    """The exit status, with a PermissionRequest hook's deny decision read as the refusal it is (exit 2 at that event
+    leaves the request to a person, so the hook refuses with exit 0 and the decision)."""
+    if event == "PermissionRequest" and done.returncode == 0:
+        try:
+            decision = json.loads(done.stdout)["hookSpecificOutput"]["decision"]["behavior"]
+        except (ValueError, KeyError, TypeError):
+            decision = None
+        return 2 if decision == "deny" else 0
+    return done.returncode
 
 
 @pytest.fixture(scope="module")

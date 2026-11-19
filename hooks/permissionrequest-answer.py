@@ -48,14 +48,16 @@ def answer(behavior: str, message: str = "") -> None:
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}))
 
 
-def bash_rules(payload: dict) -> str | None:
-    """The Bash rules' refusal text for the call's command, or None when they let it run."""
+def bash_rules(payload: dict) -> tuple[str, bool] | None:
+    """(the Bash rules' refusal text, whether they refused themselves: exit 2, which they record) for the call's
+    command, or None when they let it run."""
     probe = dict(payload, tool_name="Bash")
     run = subprocess.run([sys.executable, os.path.join(HOOKS, "lib", "bash_safety_rules.py"), HOOKS],
                          input=json.dumps(probe), capture_output=True, text=True, timeout=DEADLINE - 5)
     if run.returncode == 0 and run.stdout.split()[:1] in (["ALLOW"], ["CONSENT"], ["SENTINEL"]):
         return None
-    return run.stderr.strip() or f"the harness's Bash rules gave no verdict (exit {run.returncode})"
+    return (run.stderr.strip() or f"the harness's Bash rules gave no verdict (exit {run.returncode})",
+            run.returncode == 2)
 
 
 def denied_in_text(command: str) -> str | None:
@@ -95,7 +97,7 @@ def decide(payload: dict) -> tuple[str, str, bool] | None:
     if isinstance(command, str):  # a call that runs a shell command: Bash, Monitor
         refusal, rule = bash_rules(payload), denied_in_text(command)
         if refusal is not None:
-            return "deny", refusal, False
+            return "deny", refusal[0], not refusal[1]
         if rule is not None:
             return "deny", f"BLOCKED: the command holds what the deny rule {rule} of settings.json refuses.", True
         if bypass or names_removal(command):
