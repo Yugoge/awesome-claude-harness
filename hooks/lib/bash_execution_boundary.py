@@ -2232,7 +2232,7 @@ class Analyzer:
 
     DROP = {"if", "then", "else", "elif", "fi", "while", "until", "do", "done",
             "esac", "!", "{", "}", "in", ";;"}
-    HEADER = {"for", "case", "select", "function"}
+    HEADER = {"for", "case", "select"}
 
     def eval_command(self, words, redirs, env, piped):
         while words:
@@ -2243,6 +2243,9 @@ class Analyzer:
             if lit in self.HEADER:
                 self._shell_state(lit, words[1:])  # `for`/`select` assign their variable
                 return  # loop/case header: its words are patterns, not commands
+            if lit == "function":  # `function NAME` heads a body of commands, read as `NAME() { ...; }` is
+                words = words[2:]
+                continue
             if lit == "coproc":
                 words = words[1:]
                 if len(words) >= 2 and words[0].literal() and \
