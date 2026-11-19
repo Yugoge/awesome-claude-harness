@@ -441,7 +441,8 @@ def test_l4s_whole_registration_change():
     PostToolUseFailure) make 55; #27's P2-4 and P2-3 make 57: prompt-workflow.py at SessionStart and at
     SubagentStart, each a rule of its event's launcher, after the event's hook registered before it;
     OB-L02's two make 59: posttool-orchestrator-ran.py on every tool at PostToolUse and at
-    PostToolUseFailure, each a rule of its event's launcher; T4's Monitor rule makes 60."""
+    PostToolUseFailure, each a rule of its event's launcher; T4's Monitor rule makes 60; the
+    PermissionRequest answer makes 61."""
     w = write_gate_settings
     regs = _registrations(_settings())
     gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
@@ -466,8 +467,9 @@ def test_l4s_whole_registration_change():
     # - 2: P13-3's two, the SubagentStart injector and the codex ledger on PostToolUseFailure;
     # - 2: #27's two, prompt-workflow.py at SessionStart (P2-4) and at SubagentStart (P2-3);
     # - 2: OB-L02's two, posttool-orchestrator-ran.py at PostToolUse and at PostToolUseFailure;
-    # - 1: T4's Monitor rule (pretool-monitor-command.py, a rule of pretool-launch.py)
-    assert len(regs) - 2 - 2 - 2 - 1 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
+    # - 1: T4's Monitor rule (pretool-monitor-command.py, a rule of pretool-launch.py);
+    # - 1: the PermissionRequest answer (permissionrequest-answer.py, the rule of permissionrequest-launch.py)
+    assert len(regs) - 2 - 2 - 2 - 1 - 1 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
         - len(w.DISPATCH) + len(w.GATES) + 1 == 53
     for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')
