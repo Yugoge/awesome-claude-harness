@@ -333,27 +333,23 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
         return (True, "ok")
     status = _scratch_status(role, target, data)
     if status == "sibling":
-        return (False, "sibling scratch target denied: actor-exact namespace" + _own_scratch_hint(role, data))
+        return (False, "sibling scratch target denied: actor-exact namespace" + _own_scratch_hint(role, data, target))
     if status == "system_temp":
         if _matches_role_exception(role, target):
             return (True, "ok")
-        return (False, "arbitrary /tmp and /var/tmp are denied for every role" + _own_scratch_hint(role, data))
+        return (False, "arbitrary /tmp and /var/tmp are denied for every role" + _own_scratch_hint(role, data, target))
     return (True, "ok")
 
 
-def _own_scratch_hint(role: str, data: dict, target=True) -> str:
-    """'; <the caller's own scratch directory, literal>' for a refusal of a
-    write to system temp or to scratch (``target``, when one is given), or ''.
-
-    The directory is the one _scratch_status judges "owner" for this caller:
-    the provisioned resource session's when one resolves, else
-    <project>/.claude/scratch/<session_id>/<role>/<agent_id>/. A program that
-    writes under $TMPDIR is pointed there by setting TMPDIR for its command.
-    """
+def _own_scratch_hint(role: str, data: dict, target) -> str:
+    """'; <the caller's own scratch directory, literal>' for a refused write of
+    ``target`` to system temp or scratch, else ''. It is the directory
+    _scratch_status judges "owner": the resource session's when one resolves,
+    else <project>/.claude/scratch/<session_id>/<role>/<agent_id>/."""
     from pathlib import Path
 
     try:
-        if target is not True and _scratch_status(role, target, data) not in ("sibling", "system_temp"):
+        if _scratch_status(role, target, data) not in ("sibling", "system_temp"):
             return ""
         binding = _owner_binding(role, data)
         if binding is not None:
