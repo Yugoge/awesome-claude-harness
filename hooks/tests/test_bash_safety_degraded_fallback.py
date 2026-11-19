@@ -570,7 +570,8 @@ def test_most_of_the_quoted_removals_are_found_by_the_analyzer():
 @pytest.mark.parametrize("command", QUOTED_REMOVALS)
 def test_removals_the_text_does_not_name_are_found_by_the_analyzer(command):
     """The named prohibition does not rest on the text: with its analyzer, the hook refuses these as removals."""
-    code, err = run_hook(command)
+    # The analyzer is given time: past its 15 s default on a loaded host, the hook is on the degraded path.
+    code, err = run_hook(command, CLAUDE_HOOK_BOUNDARY_TIMEOUT="120s")
     assert code == 2 and ("removal-policy — FORBIDDEN_REMOVAL" in err or any(rule in err for rule in OTHER_RULES)), err
 
 

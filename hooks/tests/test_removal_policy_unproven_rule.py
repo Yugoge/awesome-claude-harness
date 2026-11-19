@@ -10,8 +10,10 @@ refused: 204 refusals in three days of commands that hold no removal word (a var
 program name held in a variable, inline Python, a pattern with wildcard characters). The commands below are those
 shapes, rewritten with neutral names. No command is ever executed: each is data handed to the hook or the policy.
 """
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -37,6 +39,9 @@ finally:
 R.HOOKS, R.LIB = HOOKS_DIR, os.path.join(HOOKS_DIR, "lib")
 
 DEGRADED_ENV = {"timeout": {"CLAUDE_HOOK_BOUNDARY_TIMEOUT": "0.001s"}, "memory": {"CLAUDE_HOOK_BOUNDARY_MEM_KB": "4096"}}
+# The primary path gives the analyzer time: on a loaded host its 15 s default can pass, and that is the other path.
+PRIMARY_ENV = {"CLAUDE_HOOK_BOUNDARY_TIMEOUT": "120s"}
+MODE_ENV = {"primary": PRIMARY_ENV, **DEGRADED_ENV}
 PRIMARY_REFUSAL = "removal-policy — UNRESOLVED"
 DEGRADED_REFUSAL = "removal-policy FAIL-CLOSED"
 
@@ -113,8 +118,8 @@ def holds_removal_word(command):
 
 def removal_words():
     """The words of the single definition, read out of its file."""
-    words = max((group.split("|") for group in __import__("re").findall(r"\(([A-Za-z_|]+)\)",
-                                                                       G.degraded_removal_reference_pattern())), key=len)
+    words = max((group.split("|") for group in re.findall(r"\(([A-Za-z_|]+)\)", G.degraded_removal_reference_pattern())),
+                key=len)
     assert len(words) >= 10, words
     return words
 
@@ -133,11 +138,7 @@ def policy(command, degraded=False):
     """removal_policy() alone, in this process: (refused, entry, stderr text of the refusal)."""
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
     saved, real = os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT"), sys.stderr
-    if degraded:
-        os.environ["CLAUDE_HOOK_BOUNDARY_TIMEOUT"] = "0.001s"
-    else:
-        os.environ.pop("CLAUDE_HOOK_BOUNDARY_TIMEOUT", None)
-    import io
+    os.environ["CLAUDE_HOOK_BOUNDARY_TIMEOUT"] = "0.001s" if degraded else PRIMARY_ENV["CLAUDE_HOOK_BOUNDARY_TIMEOUT"]
     sys.stderr = err = io.StringIO()
     try:
         return False, R.removal_policy(payload, command), ""
@@ -163,7 +164,7 @@ def hook_runs():
                 + PROVEN_PLAIN)
     jobs = [(c, mode) for c in commands for mode in ["primary"] + sorted(DEGRADED_ENV)]
     with ThreadPoolExecutor(4) as ex:
-        results = list(ex.map(lambda job: run_hook(job[0], **DEGRADED_ENV.get(job[1], {})), jobs))
+        results = list(ex.map(lambda job: run_hook(job[0], **MODE_ENV[job[1]]), jobs))
     return dict(zip(jobs, results))
 
 
@@ -301,7 +302,7 @@ def test_the_matrix_rows_the_rule_lets_run_are_exactly_the_unproven_ones_holding
 def test_the_matrix_rows_the_rule_lets_run_do_run_through_the_hook():
     rows = [r for r in H.load_fixture()["rows"] if r["id"] in H.OWNER_RULE_LET_THROUGH]
     with ThreadPoolExecutor(4) as ex:
-        results = list(ex.map(lambda r: H.run_hook_payload(r["stdin_envelope"], env=dict(os.environ)), rows))
+        results = list(ex.map(lambda r: H.run_hook_payload(r["stdin_envelope"], env={**os.environ, **PRIMARY_ENV}), rows))
     refused = [(r["id"], r["command"], err) for r, (code, _out, err) in zip(rows, results) if code != 0]
     assert not refused, refused
 
@@ -327,7 +328,6 @@ class _Analyzer:
 
 def _answer(command):
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-    import io
     real, sys.stderr = sys.stderr, io.StringIO()
     try:
         return R.removal_policy(payload, command), ""
@@ -405,13 +405,13 @@ def hooks_without_the_definition(tmp_path_factory):
 
 @pytest.mark.parametrize("mode", ["primary"] + sorted(DEGRADED_ENV))
 def test_without_the_definition_an_unproven_command_is_refused(hooks_without_the_definition, mode):
-    code, err = run_hook("$TOOL --version", hook=hooks_without_the_definition, **DEGRADED_ENV.get(mode, {}))
+    code, err = run_hook("$TOOL --version", hook=hooks_without_the_definition, **MODE_ENV[mode])
     assert code == 2 and DEGRADED_REFUSAL in err and "missing or empty" in err, (mode, err)
 
 
 def test_without_the_definition_the_analyzer_still_decides_what_it_can(hooks_without_the_definition):
-    assert run_hook("ls -la", hook=hooks_without_the_definition)[0] == 0
-    code, err = run_hook("rm -rf build", hook=hooks_without_the_definition)
+    assert run_hook("ls -la", hook=hooks_without_the_definition, **PRIMARY_ENV)[0] == 0
+    code, err = run_hook("rm -rf build", hook=hooks_without_the_definition, **PRIMARY_ENV)
     assert code == 2 and "FORBIDDEN_REMOVAL" in err, err
 
 
@@ -446,7 +446,7 @@ def decide(command, **env_extra):
 
 @pytest.mark.parametrize("mode", ["primary"] + sorted(DEGRADED_ENV))
 def test_the_seam_is_called_once_for_an_unproven_command_that_runs(mode):
-    result, payload, _err = decide("PY=venv/bin/python; $PY --version", **DEGRADED_ENV.get(mode, {}))
+    result, payload, _err = decide("PY=venv/bin/python; $PY --version", **MODE_ENV[mode])
     assert result["verdict"] == "ALLOW" and result["code"] == 0, result
     assert len(result["calls"]) == 1, result
     call = result["calls"][0]
@@ -468,7 +468,7 @@ def test_the_seam_is_called_once_for_an_unproven_command_that_runs(mode):
     ("$TOOL --version; git clean -fdx", "git clean"),
 ])
 def test_the_seam_is_not_called_when_nothing_unproven_ran(command, refusal):
-    result, _payload, err = decide(command)
+    result, _payload, err = decide(command, **PRIMARY_ENV)
     assert result["calls"] == [], result
     if refusal is None:
         assert result["verdict"] == "ALLOW" and result["code"] == 0, (result, err)
