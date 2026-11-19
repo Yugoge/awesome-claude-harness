@@ -6349,6 +6349,9 @@ def _git_clean_base(command, stripped, view):
     return verdict, fail_closed
 
 
+_ALLOW_VERDICTS = ("", "ALLOW")  # the runtime guard's verdicts that let the command run
+
+
 def git_clean_rule(command, stripped, view, invs, shape=False):
     """BS-43: `git clean` passes only as a provable dry run. The invocations come from lib/shell_parse.py; a clean
     they do not account for (an exec-taking git subcommand, a launcher the parser does not read) is found by the
@@ -6364,9 +6367,9 @@ def git_clean_rule(command, stripped, view, invs, shape=False):
             verdict = "BLOCK:trust"
     # The shape lifts a base refusal only where no clean runs: a real clean beside a mention keeps the base count.
     lift = invs is not None and shape and not any(i.subcommand == "clean" for i, _ctx in invs)
-    if verdict in ("", "ALLOW") and not lift:
+    if verdict in _ALLOW_VERDICTS and not lift:
         base_verdict, base_fc = _git_clean_base(command, stripped, view)
-        if base_fc or base_verdict not in ("", "ALLOW"):
+        if base_fc or base_verdict not in _ALLOW_VERDICTS:
             verdict, fail_closed = ("" if base_fc else base_verdict), base_fc
     has_inv = bool(verdict)
     detail = {
