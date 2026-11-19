@@ -489,6 +489,8 @@ class PushRun:
         the configured remotes its facts), asked once as the Refusals rule says, the push to Step 0's own
         remote recommended: that remote when the owner picks it, else ''."""
         m = re.search(r"remote '([^']+)' not found", out)
+        if mergedrv.REPORTED in " ".join(self.o.text.split()):
+            return ""  # reported in the turn's text, nobody asked
         other = re.search(r'\(Recommended\), and "([^"]+)"', self.o.text)
         if not m or m.group(1) != self.o.values.get("RESOLVED_REMOTE") or self.own_remote in ("", m.group(1)):
             return ""
