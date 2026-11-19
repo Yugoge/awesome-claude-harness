@@ -1,0 +1,123 @@
+"""Facts about git that several hooks need are stated once, and every hook that reads them agrees.
+
+Each class is one fact. Before these merges each hook carried its own copy, the copies differed,
+and two hooks gave different answers about the same git command: the config guard read `HEAD` as
+the subcommand of `git --attr-source HEAD diff`, the harness-switch rule read `.` as the
+subcommand of `git -C . diff` and refused a plain diff of a settings file, and so on. The inputs
+are those on which the copies disagreed.
+
+The in-process checks import the hooks from this tree with a scratch HOME, state directory and
+TMPDIR; the hook runs use the same scratch environment and a scratch project.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+HOOKS = ROOT / "hooks"
+for _p in (str(HOOKS), str(HOOKS / "lib")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from lib import shell_parse as sp  # noqa: E402
+from lib import git_command_classifier as gc  # noqa: E402
+from lib.runtime_guard import git_cmds  # noqa: E402
+
+
+def _load(rel: str):
+    path = HOOKS / rel
+    name = "defs_git_" + path.stem.replace("-", "_")
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(scope="module")
+def scratch(tmp_path_factory):
+    root = tmp_path_factory.mktemp("defs-git")
+    home, project, state, tmp = root / "home", root / "proj", root / "state", root / "tmp"
+    for d in (home / ".claude", project / ".claude" / "hooks", project / "src", state, tmp):
+        d.mkdir(parents=True, exist_ok=True)
+    (project / ".claude" / "settings.json").write_text("{}\n")
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
+           "CLAUDE_CONFIG_DIR": str(home / ".claude"), "CLAUDE_STATE_DIR": str(state),
+           "TMPDIR": str(tmp), "CLAUDE_PROJECT_DIR": str(project), "PYTHONDONTWRITEBYTECODE": "1",
+           "LANG": "C.UTF-8"}
+    return env, project
+
+
+def run_hook(scratch, hook: str, command: str) -> int:
+    env, project = scratch
+    payload = {"session_id": "sess-defs-git", "transcript_path": str(project / "none.jsonl"),
+               "cwd": str(project), "hook_event_name": "PreToolUse", "permission_mode": "default",
+               "tool_name": "Bash", "tool_input": {"command": command}, "tool_use_id": "toolu_defsgit"}
+    proc = subprocess.run([sys.executable, str(HOOKS / hook)], input=json.dumps(payload),
+                          capture_output=True, text=True, cwd=str(project), env=env, timeout=60)
+    return proc.returncode
+
+
+# The argument lists on which the subcommand finders disagreed (audit f13): every global option of
+# git, each before `diff`.
+GLOBAL_OPTION_FORMS = [
+    [], ["-C", "."], ["-c", "a=b"], ["--git-dir", ".git"], ["--git-dir=.git"], ["--work-tree", "."],
+    ["--namespace", "x"], ["--super-prefix", "x/"], ["--attr-source", "HEAD"], ["--shallow-file", "x"],
+    ["--config-env", "a.b=HOME"], ["--exec-path=/usr/lib/git-core"], ["--no-pager"], ["-P"], ["-p"],
+    ["--paginate"], ["--bare"], ["--no-replace-objects"], ["--literal-pathspecs"],
+    ["--no-optional-locks"], ["--no-lazy-fetch"], ["--no-advice"], ["--icase-pathspecs"],
+]
+
+
+class TestGitCommandParsing:
+    """git-command-parsing, git-global-value-options, git-global-flags: which word is the subcommand."""
+
+    @pytest.mark.parametrize("opts", GLOBAL_OPTION_FORMS, ids=lambda o: " ".join(o) or "plain")
+    def test_every_finder_reads_diff(self, opts):
+        args = opts + ["diff"]
+        cg = _load("pretool-claude-config-guard.py")
+        hs = _load("pretool-harness-switch-guard.py")
+        found = {
+            "shared parser": [i.subcommand for i in sp.git_invocations(sp.parse("git " + " ".join(args)))],
+            "classifier": [gc._git_subcommand(list(args))[0]],
+            "runtime guard": [git_cmds._git_subcommand_index(["git"] + args, 0)[0]],
+            "config guard": [cg._git_subcommand(list(args))],
+        }
+        assert all(v == ["diff"] for v in found.values()), found
+        # The harness-switch rule: a diff, whatever global option precedes it, only reads.
+        assert hs._read_only(["git"] + args)
+
+    @pytest.mark.parametrize("opts", [["-C", "."], ["--git-dir", ".git"], ["--work-tree", "."],
+                                      ["--namespace", "x"], ["--attr-source", "HEAD"],
+                                      ["--config-env", "a.b=HOME"]], ids=" ".join)
+    def test_harness_switch_rule_passes_a_diff_behind_a_global_option(self, scratch, opts):
+        """audit f05 part 2: `git -C . diff -- .claude/settings.json` was refused, `git diff -- ...` not."""
+        cmd = "git " + " ".join(opts + ["diff", "--", ".claude/settings.json"])
+        assert run_hook(scratch, "pretool-harness-switch-guard.py", cmd) == 0
+
+    def test_harness_switch_rule_keeps_the_value_of_dash_c(self):
+        """`-c a=b` is git's option and its value, not a prefix assignment of the shell."""
+        hs = _load("pretool-harness-switch-guard.py")
+        assert hs._read_only(["git", "-c", "a=b", "diff", "--", ".claude/settings.json"])
+        assert hs._read_only(["LC_ALL=C", "git", "diff"])
+        assert not hs._read_only(["git", "-c", "a=b", "checkout", "--", ".claude/settings.json"])
+
+    def test_one_table_of_global_options(self):
+        """The removal policy, the bulk and disk rules, userintent and the read-only gate read shell_parse's."""
+        from lib import bash_execution_boundary as beb, bash_safety_rules as bsr
+        ui = _load("pretool-wrapper-userintent.py")
+        assert beb.GIT_GLOBAL["bool"] == set(sp.GIT_GLOBAL_FLAGS)
+        assert beb.GIT_GLOBAL["val"] == set(sp.GIT_GLOBAL_VALUE_OPTS)
+        assert ui._GIT_GLOBAL_VALUE == sp.GIT_GLOBAL_VALUE_OPTS
+        assert sp.GIT_INERT_FLAGS <= sp.GIT_GLOBAL_FLAGS and sp.GIT_LOCATION_OPTS <= sp.GIT_GLOBAL_VALUE_OPTS
+        assert bsr._SD_GIT_GLOBAL_FLAGS == sp.GIT_INERT_FLAGS | {"-p", "--paginate"}
+        assert bsr._DG_GIT_GLOBAL_OK == sp.GIT_INERT_FLAGS | {"--version", "--help"}

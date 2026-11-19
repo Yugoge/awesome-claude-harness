@@ -173,12 +173,14 @@ def _commands(command: str, bodies: str, every_word: bool = False, depth: int = 
 
 
 def _read_only(words: list) -> bool:
-    words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+    while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        words = words[1:]  # the command's prefix assignments (`-c a=b` keeps its value word)
     if not words:
         return True
     head = os.path.basename(words[0])
     if head == "git":
-        sub = next((w for w in words[1:] if not w.startswith("-")), "")
+        k = shell_parse.git_subcommand_index(words[1:])
+        sub = "" if k is None else words[1 + k]
         return sub in GIT_READ_ONLY and "-delete" not in words
     return head in READ_ONLY and "-delete" not in words and "-exec" not in words
 

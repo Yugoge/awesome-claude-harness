@@ -35,9 +35,11 @@ except ImportError:  # executed under the top-level-script shim (no package)
 
 try:
     from ..git_command_classifier import GIT_GLOBAL_VALUE_OPTS
+    from ..shell_parse import git_subcommand_index
 except ImportError:  # executed under the top-level-script shim: hooks/lib is the parent
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # type: ignore[no-redef]
+    from shell_parse import git_subcommand_index  # type: ignore[no-redef]
 
 # git GLOBAL options (before the subcommand) that consume the FOLLOWING token as
 # their argument (`git -C <dir> status`, `git -c k=v log`): the classifier's git
@@ -61,28 +63,17 @@ _GIT_DESTRUCTIVE_SUBCMDS = frozenset({"clean", "restore", "checkout", "reset"})
 def _git_subcommand_index(tokens: list, git_idx: int):
     """Return (subcmd, subcmd_token_index) for a git invocation whose head/exec
     token is at `git_idx`, skipping git GLOBAL options and their operands
-    (`git -C <dir> clean …`). Returns (None, None) when no subcommand follows."""
-    i = git_idx + 1
-    n = len(tokens)
-    skip_next = False
-    while i < n:
-        st = _strip_quotes(tokens[i])
-        if skip_next:
-            skip_next = False
-            i += 1
-            continue
-        if not st:
-            i += 1
-            continue
-        if st in _GIT_GLOBAL_OPTS_WITH_ARG:
-            skip_next = True
-            i += 1
-            continue
-        if st.startswith("-"):
-            i += 1  # bare/fused global flag
-            continue
-        return (st, i)
-    return (None, None)
+    (`git -C <dir> clean …`), as shell_parse.git_subcommand_index reads them; an empty
+    word in subcommand position is passed over. Returns (None, None) when no subcommand follows."""
+    vals = [_strip_quotes(t) for t in tokens[git_idx + 1:]]
+    start = 0
+    while True:
+        k = git_subcommand_index(vals[start:])
+        if k is None:
+            return (None, None)
+        if vals[start + k]:
+            return (vals[start + k], git_idx + 1 + start + k)
+        start += k + 1
 
 
 def _git_effective_cwd(tokens: list, git_idx: int, cwd: Optional[str], cwd_det: bool):

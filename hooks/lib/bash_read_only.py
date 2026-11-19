@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402
 from shell_parse import (  # noqa: E402
     SimpleCommand, active_parts, parse, resolve, walk, write_targets)
+from shell_parse import GIT_INERT_FLAGS  # noqa: E402
 sys.path.pop(0)
 
 MAX_COMMAND_LEN = 8192
@@ -255,11 +256,6 @@ def _awk(args) -> bool:
 
 # --- git -------------------------------------------------------------------
 
-_GIT_GLOBAL_FLAGS = frozenset({
-    "-P", "--no-pager", "--no-optional-locks", "--literal-pathspecs", "--no-literal-pathspecs",
-    "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-replace-objects", "--no-advice",
-})
-
 # Long options that write a file, run a program, or start a pager, refused (or
 # any abbreviation of them) on every git subcommand.
 _GIT_FORBIDDEN = ("--output", "--output-directory", "--ext-diff", "--textconv", "--open-files-in-pager",
@@ -344,7 +340,7 @@ def _git(args) -> bool:
                 return False
             i += 2
             continue
-        if a in _GIT_GLOBAL_FLAGS:
+        if a in GIT_INERT_FLAGS:
             i += 1
             continue
         if a.startswith("-"):

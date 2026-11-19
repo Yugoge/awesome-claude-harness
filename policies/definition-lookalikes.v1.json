@@ -3063,6 +3063,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "git-grant-skippable-vs-location-options",
+   "source": "lane defs-git (git-global-value-options)",
+   "reason": "allowlist._GRANT_SKIPPABLE_GIT_VALUE_OPTS is what a short grant authorizes reading past (a policy, narrower on purpose and pinned as a subset of the parser tables by test_allowlist_git_global_opts; the core install profile ships allowlist.py without shell_parse, so it cannot import them); shell_parse.GIT_LOCATION_OPTS is which git options move the repository or work tree.",
+   "sides": [
+    [
+     {
+      "name": "<module>._GRANT_SKIPPABLE_GIT_VALUE_OPTS",
+      "fingerprint": "ab2d2270785dd616",
+      "at": "hooks/lib/allowlist.py:363"
+     }
+    ],
+    [
+     {
+      "name": "<module>.GIT_LOCATION_OPTS",
+      "fingerprint": "c17a550b6c6921c4",
+      "at": "hooks/lib/shell_parse.py:3652"
+     }
+    ]
+   ]
   }
  ]
 }

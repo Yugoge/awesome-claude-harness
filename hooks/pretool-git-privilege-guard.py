@@ -178,7 +178,7 @@ GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 # one -C directory, where the grant's repo/branch/HEAD binding is checked. No
 # committer uses them, so a commit under a grant that carries one is refused.
 _GIT_REDIRECT_ENV_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')
-_GIT_REDIRECT_FLAGS = ('--git-dir', '--work-tree', '--namespace')
+_GIT_REDIRECT_FLAGS = shell_parse.GIT_REDIRECT_OPTS
 # Builtins that move a later commit to another cwd than the guard probes.
 _CWD_CHANGE_CMDS = ('cd', 'pushd', 'popd')
 

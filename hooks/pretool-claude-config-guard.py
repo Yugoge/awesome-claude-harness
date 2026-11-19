@@ -198,7 +198,6 @@ _GIT_READS = frozenset({
     'shortlog', 'describe', 'cat-file', 'commit', 'add', 'grep', 'whatchanged', 'reflog',
     'check-ignore', 'show-ref',
 })
-_GIT_VALUE_GLOBALS = frozenset({'-C', '--git-dir', '--work-tree', '--namespace'})
 
 
 def _protected_kind(text: str) -> str:
@@ -237,13 +236,12 @@ def _git_settled(res, raw) -> bool:
     """A git call naming a protected folder is settled when it reads (log, diff, a commit message)
     with no `-c` setting, no config or alias, no pager, editor or output option."""
     vals = [w.value() for w in res.args]
-    k = 0
-    while k < len(vals) and (vals[k] or '').startswith('-'):
-        v = vals[k]
-        if v in ('-c', '--config-env', '--exec-path') or (v or '').startswith(('-c', '--config-env', '--exec-path=')):
+    opts, k = _shell_parse().git_global_options(vals)
+    for i, _value in opts:
+        v = vals[i]
+        if v in ('-c', '--config-env', '--exec-path') or v.startswith(('-c', '--config-env', '--exec-path=')):
             return False
-        k += 2 if v in _GIT_VALUE_GLOBALS else 1
-    if k >= len(vals) or vals[k] not in _GIT_READS:
+    if k is None or vals[k] not in _GIT_READS:
         return False
     for v in vals[k + 1:]:
         if v is None or v.startswith(('--output', '--ext-diff', '-O', '--open-files-in-pager', '--exec')):
@@ -537,11 +535,9 @@ def _site_writes(sp, raw: str, res) -> list:
     elif name == 'sort':
         out += _sort_outputs(args, vals)
     elif name == 'git':
-        k, cdir = 0, None
-        while k < len(vals) and vals[k].startswith('-'):
-            if vals[k] == '-C' and k + 1 < len(args):
-                cdir = args[k + 1]
-            k += 2 if vals[k] in _GIT_VALUE_GLOBALS else 1
+        opts, k = sp.git_global_options(vals)
+        cdir = next((args[j] for i, j in reversed(opts) if vals[i] == '-C' and j is not None), None)
+        k = len(vals) if k is None else k
         sub = vals[k] if k < len(vals) else ''
         if sub in ('checkout', 'restore', 'apply', 'reset', 'stash', 'clean', 'switch', 'am', 'merge',
                    'pull', 'cherry-pick', 'revert', 'rm', 'mv'):
@@ -985,10 +981,8 @@ def _rg_proof(vals) -> bool:
 
 def _git_subcommand(vals):
     """The subcommand word of a git call (after its global options), or None."""
-    k = 0
-    while k < len(vals) and (vals[k] or '').startswith('-'):
-        k += 2 if vals[k] in _GIT_VALUE_GLOBALS else 1
-    return vals[k] if k < len(vals) else None
+    k = _shell_parse().git_subcommand_index(vals)
+    return None if k is None else vals[k]
 
 
 def _copy_links(name: str, vals) -> tuple:
@@ -1168,8 +1162,8 @@ def _proven_harmless(command: str, start: str) -> bool:
             if not _sort_reads(vals):
                 return False
         elif name == 'git':
-            if not _git_settled(res, command) or 'add' in vals or any(
-                    v.startswith(('--git-dir', '--work-tree', '--namespace')) for v in vals):
+            redirect = tuple(_shell_parse().GIT_REDIRECT_OPTS)
+            if not _git_settled(res, command) or 'add' in vals or any(v.startswith(redirect) for v in vals):
                 return False  # another git directory or work tree (git writes its index there), an add
             if _git_subcommand(vals) not in _PROOF_GIT_READS:
                 return False  # commit, add, status: they run hooks or filters

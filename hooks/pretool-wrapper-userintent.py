@@ -203,8 +203,7 @@ _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 
                             'check-attr', 'count-objects', 'reflog', 'stash', 'restore',
                             'branch', 'tag', 'remote', 'fetch', 'push', 'pull', 'switch',
                             'checkout', 'mv', 'rm', 'init', 'clone', 'version', 'help'))
-_GIT_GLOBAL_VALUE = frozenset(('-C', '-c', '--git-dir', '--work-tree', '--namespace',
-                               '--config-env', '--super-prefix', '--exec-path'))
+_GIT_GLOBAL_VALUE = _sp.GIT_GLOBAL_VALUE_OPTS if _sp is not None else frozenset()  # read by _Scan, which needs _sp
 _GH_MESSAGE_SUBS = frozenset(('pr', 'issue', 'release'))
 _RC_FILES = frozenset(('.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_logout',
                        '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.kshrc', '.mkshrc',

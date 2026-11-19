@@ -64,6 +64,7 @@ import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -775,13 +776,7 @@ OUTPUT_SINKS = {
     "STDOUT.puts", "STDERR.puts", "process.stdout.write",
 }
 
-GIT_GLOBAL = _spec(
-    ("--paginate", "-p", "--no-pager", "-P", "--bare", "--literal-pathspecs",
-     "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
-     "--no-optional-locks", "--no-replace-objects", "--html-path", "--man-path",
-     "--info-path", "--version", "--help", "-v", "-h", "--no-lazy-fetch"),
-    ("-C", "-c", "--exec-path", "--git-dir", "--work-tree", "--namespace",
-     "--super-prefix", "--config-env", "--attr-source"))
+GIT_GLOBAL = _spec(GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS)
 
 GIT_RM = _spec(
     ("-n", "--dry-run", "-r", "--cached", "-f", "--force", "-q", "--quiet",
@@ -792,9 +787,8 @@ GIT_RM = _spec(
 # can hand prove_git_rm the repository it runs in: written at the top level as its command's own head
 # (no wrapper, nested shell or assignment), only these git options before `rm`, literal pathspecs, and
 # no shell state a later command inherits other than `cd`/`pushd` to a literal absolute directory.
-_GIT_RM_LOCATION_OPTS = ("-C", "--git-dir", "--work-tree")
-_GIT_RM_PATHSPEC_OPTS = ("--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
-                         "--icase-pathspecs")
+_GIT_RM_LOCATION_OPTS = GIT_LOCATION_OPTS
+_GIT_RM_PATHSPEC_OPTS = GIT_PATHSPEC_FLAGS
 _SHELL_STATE_BUILTINS = {"export", "declare", "typeset", "local", "readonly", "unset", "source",
                          ".", "enable", "read", "readarray", "mapfile", "getopts", "trap", "for",
                          "select"}
@@ -3414,8 +3408,8 @@ class Analyzer:
             unproven = unproven or "f" in lit
             i += 1
         loc = [w.literal() for w in git_opts]  # kept only if they just locate the repository
-        if None in loc or not all(x in _GIT_RM_LOCATION_OPTS + _GIT_RM_PATHSPEC_OPTS or "=" in x and x.split(
-                "=", 1)[0] in _GIT_RM_LOCATION_OPTS[1:] or loc[j - 1:j] and loc[j - 1] in _GIT_RM_LOCATION_OPTS
+        if None in loc or not all(x in _GIT_RM_LOCATION_OPTS | _GIT_RM_PATHSPEC_OPTS or "=" in x and x.split(
+                "=", 1)[0] in _GIT_RM_LOCATION_OPTS - {"-C"} or loc[j - 1:j] and loc[j - 1] in _GIT_RM_LOCATION_OPTS
                 for j, x in enumerate(loc)):
             loc = None
         if cached:

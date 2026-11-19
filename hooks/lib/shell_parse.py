@@ -3648,6 +3648,45 @@ GIT_GLOBAL_FLAGS = frozenset({
     "--no-lazy-fetch", "--no-advice", "--html-path", "--man-path", "--info-path",
     "-v", "--version", "-h", "--help", "--exec-path", "--list-cmds",
 })
+# The global options that move where git finds the repository or the working tree.
+GIT_LOCATION_OPTS = frozenset({"-C", "--git-dir", "--work-tree"})
+# The global options that point git at another repository, work tree or ref namespace than the
+# directory it runs in (-C only changes that directory).
+GIT_REDIRECT_OPTS = (GIT_LOCATION_OPTS - {"-C"}) | {"--namespace"}
+# The global flags that change only how a pathspec matches.
+GIT_PATHSPEC_FLAGS = frozenset({
+    "--literal-pathspecs", "--no-literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
+    "--icase-pathspecs",
+})
+# The global flags after which a subcommand reads the same repository and runs the same programs, and
+# still runs: not -p/--paginate (they start the pager), --bare (the repository moves), --exec-path (it
+# moves git's programs, or alone prints and exits) or the flags that print and exit (--version ...).
+GIT_INERT_FLAGS = GIT_PATHSPEC_FLAGS | {
+    "-P", "--no-pager", "--no-optional-locks", "--no-replace-objects", "--no-lazy-fetch", "--no-advice"}
+
+
+def git_global_options(args):
+    """git's reading of its arguments up to the subcommand, for a list of strings (None where
+    computed): ([(option index, its value's index or None)], the subcommand's index or None).
+    A GIT_GLOBAL_VALUE_OPTS option takes the next word; any other word that starts with '-' is
+    one option word; the first other word (or a computed one) is the subcommand."""
+    opts, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a is None or not a.startswith("-"):
+            return opts, i
+        if a in GIT_GLOBAL_VALUE_OPTS:
+            opts.append((i, i + 1 if i + 1 < len(args) else None))
+            i += 2
+            continue
+        opts.append((i, None))
+        i += 1
+    return opts, None
+
+
+def git_subcommand_index(args):
+    """The index of the subcommand among git's arguments (see git_global_options), or None."""
+    return git_global_options(args)[1]
 
 # Long options of the git subcommands whose options the hooks read, so an
 # abbreviation git accepts (`--har` for `--hard`) resolves to its full name.
