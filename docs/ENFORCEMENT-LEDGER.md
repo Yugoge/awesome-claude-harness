@@ -735,9 +735,14 @@ no per-rule budget exists.
     the stub never exits 2.
   - **S-006 `auto_commit`** (`auto-commit.sh`): writes a `refs/checkpoints/<branch>` snapshot when
     the working tree is dirty. It runs before `completion`, so a Stop the gate blocks still writes
-    its snapshot. A snapshot the library refuses (the private-literal rule, the settings check or
-    the settings clean filter; nothing written) is reported as the one line
-    `Checkpoint snapshot refused by <rule>: nothing written, see logs/checkpoint.log` in a JSON
+    its snapshot. A file the private-literal rule names is left out of the snapshot (a tracked one
+    at HEAD's version) and the rest is written; a snapshot the library refuses (the settings check,
+    the settings clean filter, or a named file it cannot leave out; nothing written) or one that
+    left a file out is reported as the one line
+    `Checkpoint snapshot refused by <rule>: nothing written, see logs/checkpoint.log; <run>` or
+    `Checkpoint snapshot left out N file(s) holding a private literal: <paths>, see
+    logs/checkpoint.log; <run>`, where `<run>` is `no complete snapshot of <ref> since <time>
+    (<n> in a row)` from the per-repository, per-ref counter in the git dir, in a JSON
     `systemMessage` the coordinator shows as its own (the launcher relays its stdout), and the
     Stop is allowed; the PostToolUse checkpoint hook (H-057) reports its own refused snapshot the
     same way. That the host shows this notice to the user is documented
