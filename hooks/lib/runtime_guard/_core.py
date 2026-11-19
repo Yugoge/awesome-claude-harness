@@ -145,7 +145,7 @@ except ImportError:  # executed as a top-level script (no package context)
 # ── Config-loading cluster → config.py ────────────────────────────
 # The config-file loader + STEP0 self-protection cluster (DATA_FILE_PATH,
 # REQUIRED_KEYS, _load_config, _home_tilde_variant, _config_path_variants,
-# _ANCESTOR_STOP_ROOTS, _config_ancestor_dirs, _config_or_ancestor_variants,
+# _config_ancestor_dirs, _config_or_ancestor_variants,
 # _targets_config_file) re-imported here. Dual-context import
 # (INV-3, see the first import block above).
 #
@@ -165,7 +165,6 @@ try:  # noqa: F401  — names re-exported for backward compatibility
     from .config import (
         DATA_FILE_PATH,
         REQUIRED_KEYS,
-        _ANCESTOR_STOP_ROOTS,
         _config_ancestor_dirs,
         _config_or_ancestor_variants,
         _config_path_variants,
@@ -177,7 +176,6 @@ except ImportError:  # executed as a top-level script (no package context)
     from config import (  # type: ignore[no-redef]
         DATA_FILE_PATH,
         REQUIRED_KEYS,
-        _ANCESTOR_STOP_ROOTS,
         _config_ancestor_dirs,
         _config_or_ancestor_variants,
         _config_path_variants,
@@ -1533,7 +1531,7 @@ def _container_glob_too_broad(parent: str) -> bool:
     # dir and is kept; a deep absolute dir (depth ≥ 3) is specific enough to keep.
     if parent.startswith("/") and "*" not in parent:
         norm = os.path.normpath(parent)
-        if _config.locations.is_broad_root(norm):
+        if _config._locations().is_broad_root(norm):
             return True
         depth = len([s for s in norm.split("/") if s])
         if depth < 3:
@@ -2271,7 +2269,7 @@ def _endpoint_path_in(text: str, paths: list) -> bool:
 def _http_reads_stdin_body(sc: str) -> bool:
     """True if an HTTP client is told to read its request body from stdin, so a
     control path piped in upstream would actually be sent."""
-    return bool(re.search(r"(--data-binary|--data|-d)\s+@-|--data-binary\s+@" + _config.locations.STDIN_DEVICE, sc))
+    return bool(re.search(r"(--data-binary|--data|-d)\s+@-|--data-binary\s+@" + _config._locations().STDIN_DEVICE, sc))
 
 
 def _p5_endpoint(ctx: "Context") -> Optional[Verdict]:
