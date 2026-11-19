@@ -453,6 +453,7 @@ SUBST_OPENERS = ("$(", "<(", ">(")  # open a command or process substitution (so
 COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
 SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
+LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
 # Environment variables whose VALUE is executed by the command that follows
 # them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
 # a fixture-pinned safe row -- but these named vectors are documented command
@@ -2558,7 +2559,7 @@ def resolve(cmd, depth=None):
                     return _merge(r, resolve(cmds[0].cmd, depth))
             words = rest
             continue
-        if name in ("command", "builtin") and len(words) > 1:
+        if name in LOOKUP_BUILTINS and len(words) > 1:
             first = words[1].value()
             if name == "command" and first in COMMAND_LOOKUP_OPTS:
                 r.head = head
