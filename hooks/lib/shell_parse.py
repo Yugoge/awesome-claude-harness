@@ -49,7 +49,10 @@ QUOTES = (BARE, SINGLE, DOUBLE, ANSI_C, LOCALE, ESCAPED)
 MAX_DEPTH = 24
 MAX_LEN = 262_144
 
-_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+# A subscript runs to its ], quoted text and escapes in it included (`m["a]b"]=1`).
+_SUBSCRIPT = r"""\[(?:[^\]'"\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")*\]"""
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:%s)?\+?=" % _SUBSCRIPT, re.S)
+_SUBSCRIPT_START_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\[")
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _FD_VAR_RE = re.compile(r"^\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
@@ -723,7 +726,34 @@ def _span(src, a, b):
     return (src.off(a), src.off(b - 1) + 1 if b > a else src.off(a))
 
 
-def _lex_word(src, i, depth=0):
+def _open_subscript(raw):
+    """True when ``raw`` is NAME[ followed by an unclosed subscript (quotes and $( ) skipped)."""
+    m = _SUBSCRIPT_START_RE.match(raw)
+    if not m:
+        return False
+    level, j = 1, m.end()
+    while j < len(raw):
+        c = raw[j]
+        if c == "\\":
+            j += 1
+        elif c in QUOTE_CHARS:
+            k = raw.find(c, j + 1)
+            j = len(raw) if k < 0 else k
+        elif raw.startswith("$(", j):
+            k = _match_pair(raw, j + 1, "(", ")")
+            j = len(raw) if k < 0 else k - 1
+        elif c == "[":
+            level += 1
+        elif c == "]":
+            level -= 1
+        j += 1
+    return level > 0
+
+
+def _lex_word(src, i, depth=0, assign=False):
+    """One word from ``src`` at ``i``. ``assign``: the word stands where an assignment may
+    (before a command's name), so a NAME[ subscript runs to its ] across blanks and
+    operators, as bash reads `m[a b]=c`."""
     t = src.text
     n = len(t)
     start = i
@@ -771,6 +801,10 @@ def _lex_word(src, i, depth=0):
     while i < n:
         c = t[i]
         if c in " \t\n" or c in _OP_CHARS:
+            if assign and _open_subscript(t[start:i]):
+                keep(i)
+                i += 1
+                continue
             if c == "(" and lit_chars and _ASSIGN_RE.match("".join(lit_chars)):
                 # NAME=( ... ) array assignment: the parens belong to the word.
                 end = _match_pair(t, i, "(", ")")
@@ -912,7 +946,7 @@ def _lex_word(src, i, depth=0):
             continue
         if c == "[":
             j = t.find("]", i + 1)
-            if j > 0 and not any(x in " \t\n" + _OP_CHARS + "$`" for x in t[i:j]):
+            if j > 0 and not any(x in " \t\n" + _OP_CHARS + "$`'\"" for x in t[i:j]):
                 flush()
                 segs.append(("glob", src.slice(i, j + 1), src.off(i)))
                 parts.append(Part("glob", t[i:j + 1], BARE, _span(src, i, j + 1)))
@@ -938,6 +972,8 @@ def _lex_word(src, i, depth=0):
         keep(i)
         i += 1
 
+    if assign and _open_subscript(t[start:i]):
+        raise LexError("unterminated_subscript", src.off(start))  # bash: looking for matching `]'
     flush()
     return Word(segs, src.off(start), src.slice(start, i), parts), i
 
@@ -1141,7 +1177,7 @@ def _lex_into(src, toks, depth=0, comments=None):
                 r.end = r.target.raw.end_off()
             toks.append(("R", r))
             continue
-        w, i = _lex_word(src, i, depth)
+        w, i = _lex_word(src, i, depth, _assignment_position(toks))
         if not w.segs and not w.parts:
             i += 1
             continue
@@ -1151,6 +1187,19 @@ def _lex_into(src, toks, depth=0, comments=None):
     if pending_heredocs:
         raise LexError("unterminated_heredoc", pending_heredocs[0][0].off)
     return toks
+
+
+def _assignment_position(toks):
+    """True when a word lexed after ``toks`` stands where bash accepts an assignment: first in
+    a command (after an operator, a reserved prefix word or an assignment; redirections aside)."""
+    for tok in reversed(toks):
+        if tok[0] == "R":
+            continue
+        if tok[0] == "OP":
+            return True
+        text = tok[1].raw.text
+        return bool(_ASSIGN_RE.match(text)) or text in COMMAND_PREFIX_WORDS
+    return True
 
 
 def _expansion_word(body, depth=0):
@@ -1468,7 +1517,7 @@ class Assignment:
         return "Assignment(%s=%r)" % (self.name, self.value.text if self.value else self.array)
 
 
-_ASSIGN_PARTS_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=")
+_ASSIGN_PARTS_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(%s)?(\+?)=" % _SUBSCRIPT, re.S)
 
 
 class SimpleCommand:
