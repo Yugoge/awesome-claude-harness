@@ -21,7 +21,6 @@ import importlib
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -1722,16 +1721,11 @@ def _print_disposition(project_dir: str, task_id: str, stage: str | None) -> int
 
 
 def _default_project_dir() -> str:
-    """The working directory's git top level, else the working directory: the
-    CLI is run from inside the project, and a Bash call's environment carries
-    no CLAUDE_PROJECT_DIR."""
-    try:
-        top = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10
-        )
-    except (OSError, subprocess.SubprocessError):
-        return os.getcwd()
-    return top.stdout.strip() if top.returncode == 0 and top.stdout.strip() else os.getcwd()
+    """The hooks' project root: CLAUDE_PROJECT_DIR, else the working directory (a Bash call's
+    environment carries no CLAUDE_PROJECT_DIR; its cwd is the session's directory)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "lib"))
+    import locations  # noqa: E402 -- the one project-root resolution
+    return str(locations.project_root(bash=True))
 
 
 def do_report_gaps(

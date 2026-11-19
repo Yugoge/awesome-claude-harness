@@ -7,10 +7,10 @@ reboot. This copies:
   * every session journal  -> <dest>/journals/<session>.jsonl   (atomic replace)
   * every blob referenced by any event's pre_sha/post_sha
                            -> <dest>/objects.git  (bare repo, same blob ids)
-Default dest: $CLAUDE_CONFIG_DIR/attribution-seals when that directory is
-outside the harness tree, else attribution-seals/ beside the journal's own
-state dir (<harness>/state/attribution-seals, ignored like the rest of state/)
--- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
+Default dest: $CLAUDE_CONFIG_DIR/attribution-seals (taken through its settings.json
+link, claude_home.config_home) when that directory is outside the harness tree, else
+attribution-seals/ beside the journal's own state dir (<harness>/state/attribution-seals,
+ignored like the rest of state/) -- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
 destination unless --allow-volatile.
 
 Idempotent; safe to re-run (journals are append-only, blobs content-addressed).
@@ -66,10 +66,14 @@ def default_dest() -> Path:
     if env:
         return Path(env)
     # A config dir apart from the harness tree keeps the seals off a volatile checkout (a tree on
-    # tmpfs); else beside the journal's state, which the harness .gitignore ignores.
-    config = os.environ.get("CLAUDE_CONFIG_DIR")
-    if config and not Path(config).resolve().is_relative_to(aj.harness_root().resolve()):
-        return Path(config) / "attribution-seals"
+    # tmpfs); else beside the journal's state, which the harness .gitignore ignores. The config dir
+    # is taken through its settings.json link (claude_home.config_home): configuration directories
+    # linking to one harness home share one store.
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        from lib.locations import config_home
+        config = config_home()
+        if not config.resolve().is_relative_to(aj.harness_root().resolve()):
+            return config / "attribution-seals"
     return aj.state_dir().parent / "attribution-seals"
 
 

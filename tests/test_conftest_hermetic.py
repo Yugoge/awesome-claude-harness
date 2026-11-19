@@ -1,11 +1,11 @@
 """The root conftest drops the inherited variables that point a run at the runner's own project or home.
 
-conftest.py removes CLAUDE_PROJECT_DIR, PASEO_CONFIG_DIR, CLAUDE_HOME, CODEX_HOME,
+conftest.py removes CLAUDE_PROJECT_DIR, PASEO_HOME, CLAUDE_HOME, CODEX_HOME,
 CLAUDE_RESTART_ACCOUNTS_ROOT and CLAUDECODE at import, before any test module is
 collected, and removes its scratch root (harness-tests-*) when the session
 ends. Inherited, CLAUDE_PROJECT_DIR made tests/test_prompt_workflow_liveness_tz.py
 create 30 paths (.claude/dev-registry/ and docs/dev) under the runner's
-project, and PASEO_CONFIG_DIR made tests/test_paseo_usage_read.py run the live
+project, and PASEO_HOME made tests/test_paseo_usage_read.py run the live
 paseo adapter against the runner's config. CLAUDECODE, which Claude Code sets in
 every tool process, made the hooks and libraries a run spawns read the harness
 home's settings.json once CLAUDE_HOME was gone (P7b R7): in a landed home,
@@ -27,7 +27,7 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
-INHERITED = ("CLAUDE_PROJECT_DIR", "PASEO_CONFIG_DIR", "CLAUDE_HOME",
+INHERITED = ("CLAUDE_PROJECT_DIR", "PASEO_HOME", "CLAUDE_HOME",
              "CODEX_HOME", "CLAUDE_RESTART_ACCOUNTS_ROOT")
 # Set by Claude Code in every hook and tool process; it names no directory.
 MARKERS = ("CLAUDECODE",)
@@ -59,7 +59,7 @@ def test_a_run_that_inherits_the_variables_writes_nothing_into_them(tmp_path):
         inherited[name] = target
     # A config the live adapter cannot use: had the variable reached
     # tests/test_paseo_usage_read.py, its live case would run on it and fail.
-    (inherited["PASEO_CONFIG_DIR"] / "config.json").write_text("{}\n")
+    (inherited["PASEO_HOME"] / "config.json").write_text("{}\n")
     before = {name: _contents(path) for name, path in inherited.items()}
     child_tmp = tmp_path / "tmp"
     child_tmp.mkdir()

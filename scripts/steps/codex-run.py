@@ -64,14 +64,15 @@ def resolve_wrapper(env) -> str:
 
 
 def _project_root(env) -> str:
+    """CLAUDE_PROJECT_DIR, else the cwd (the hooks' root, R1) inside a repository; elsewhere "" (the fallback)."""
     if env.get("CLAUDE_PROJECT_DIR"):
         return env["CLAUDE_PROJECT_DIR"]
     try:
-        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                             check=False, env=env).stdout.strip()
+        inside = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True,
+                                check=False, env=env).stdout.strip() == "true"
     except OSError:
-        top = ""
-    return top
+        inside = False
+    return os.getcwd() if inside else ""
 
 
 def resolve_output_path(env) -> Path:

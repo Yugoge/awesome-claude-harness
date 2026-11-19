@@ -28,7 +28,7 @@ def _known() -> dict:
 
 # A command whose name is computed counts as a copy only when an operand is spelled after cp or mv
 # (`"$CP" cp-01 dest`); otherwise its last operand (`"$PY" script.py`) is no write.
-_COPY_MOVE_WORD = re.compile(r"(?:cp|mv)(?!\w)")
+_COPY_MOVE_WORD = _sp._COPY_MOVE_WORD_RE
 
 
 def _targets(command: str) -> list:

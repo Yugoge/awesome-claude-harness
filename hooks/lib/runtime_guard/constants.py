@@ -8,6 +8,10 @@ ZERO project identifiers.
 """
 
 # ── Generic verb / keyword vocabularies (no project names) ───────────────────
+# The package-manager words that link or unlink a package into the global bin (P7).
+PKG_LINK_WORDS = ("link", "unlink")
+# The programs that edit a file in place by a script under -i (_is_inplace_editor_args).
+INPLACE_EDITORS = ("sed", "perl")
 # Generic command wrappers that prefix the real command. After consuming a
 # wrapper (and its own operands) the real command word follows. Includes
 # process-handoff wrappers (setsid/systemd-run/daemonize) so a launch through
