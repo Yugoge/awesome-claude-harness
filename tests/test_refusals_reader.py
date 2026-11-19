@@ -40,6 +40,7 @@ POLICY = ("hooks/pretool-tool-policy.py", 'BLOCKED by tool-policy.v1: {"role":"b
 REMOVAL = ("hooks/lib/bash_safety_rules.py", "BLOCKED: removal-policy — UNRESOLVED dynamic_command_head:x=$(date)")
 STOPGATE = ("hooks/subagentstop-artifact-contract-enforce.py", "OBLIGATION_STOPGATE_BLOCKED: agent a1 (role=ba) declared:\n"
             "  - docs/dev/ba-panel-1.md: artifact_missing")
+GATE = ("hooks/stop-workflow-coordinator.py", "COMMAND_GATE /dev: not complete\n- todo: not completed: Step 10")
 
 
 def call(tool, tool_input, tool_id, event="PreToolUse", **more) -> dict:
@@ -120,8 +121,9 @@ def test_the_period_bounds_what_is_counted_and_split_reports_count_once():
 
 def transcripts(cli_record, root: Path, refused: dict, stops: list, denied: str) -> Path:
     """A session's transcript and one subagent's, built from the recorded CLI fixture: a refused call per
-    (tool-call id, text) of `refused`, a blocked subagent stop per (uuid, time) of `stops`, and one call
-    the CLI's own permission rules denied."""
+    (tool-call id, text) of `refused`, a blocked stop per (uuid, time, the agent's or the session's) of
+    `stops`, and one call the CLI's own permission rules denied. A blocked stop reads "Stop hook feedback:"
+    in either transcript: the CLI writes an agent's blocked stop into that agent's transcript under the same words."""
     results = [r for r in cli_record("user") if isinstance(r["message"]["content"], list)
                and r["message"]["content"][0].get("type") == "tool_result"]
     typed = next(r for r in cli_record("user") if isinstance(r["message"]["content"], str))
@@ -131,10 +133,11 @@ def transcripts(cli_record, root: Path, refused: dict, stops: list, denied: str)
         record.update(sessionId=SID, timestamp=now, uuid=f"00000000-0000-4000-8000-{n:012d}")
         record["message"]["content"][0].update(tool_use_id=tool_id, content=text, is_error=True)
         (sub if n % 2 else main).append(record)
-    for uuid, stamp in stops:
+    for uuid, stamp, of_agent in stops:
         record = dict(json.loads(json.dumps(typed)), sessionId=SID, timestamp=stamp, uuid=uuid, isMeta=True)
-        record["message"]["content"] = "SubagentStop hook feedback:\n[python3 \"x/hooks/subagentstop-producer-gate.py\"]: " + STOPGATE[1]
-        sub.append(record)
+        hook = "subagentstop-producer-gate.py" if of_agent else "stop-launch.py"
+        record["message"]["content"] = f"Stop hook feedback:\n[python3 \"x/hooks/{hook}\"]: " + (STOPGATE[1] if of_agent else GATE[1])
+        (sub if of_agent else main).append(record)
     project = root / "projects" / "-work-app"
     (project / SID / "subagents").mkdir(parents=True)
     (project / f"{SID}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in main))
@@ -149,13 +152,15 @@ def test_reconcile_is_zero_and_every_removed_or_added_line_is_a_difference(monke
     hook = 'PreToolUse:{} hook error: [python3 "/h/hooks/pretool-launch.py"]: {}'
     refused = {"toolu_1": hook.format("TodoWrite", POLICY[1]), "toolu_6": hook.format("Bash", "BLOCKED: agent git push"),
                **{f"toolu_{i}": hook.format("Bash", REMOVAL[1]) for i in (2, 3, 4)}}
+    R.write(call(None, None, None, "Stop"), [GATE], "hooks/stop-launch.py")
     now = time.time()
-    stops = [("5a5a5a5a-0000-4000-8000-000000000001", time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(now + 2)))]
+    stops = [("5a5a5a5a-0000-4000-8000-000000000001", time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(now + 2)), True),
+             ("5a5a5a5a-0000-4000-8000-000000000002", time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(now + 3)), False)]
     projects = transcripts(cli_record, tmp_path, refused, stops, "toolu_denied")
     # an account's copy of the same session counts once
     out = reader("reconcile", "--transcripts", str(projects), str(projects))
     assert out.returncode == 0, out.stdout + out.stderr
-    assert "hook refusals in the transcripts: 6    in the record: 6    differences: 0" in out.stdout
+    assert "hook refusals in the transcripts: 7    in the record: 7    differences: 0" in out.stdout
     assert "{'no transcript line': 2, 'codex': 1, 'unproven': 1}, CLI permission-rule denials 1" in out.stdout
 
     day = next(Path(R.directory()).glob("*.jsonl"))

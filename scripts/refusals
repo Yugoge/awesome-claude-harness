@@ -147,7 +147,8 @@ def transcript_refusals(roots, since: str) -> tuple[list, int]:
     """(the hook refusals the transcripts under `roots` hold, once each however many accounts keep a copy;
     the CLI permission-rule denials among them, which no hook made). A tool result whose text is the CLI's
     "<Event>:<Tool> hook error: [" is a refused call (its id: the tool-call id); a meta user message
-    "<Stop|SubagentStop> hook feedback:" is a blocked stop (its id: the line's uuid)."""
+    "Stop hook feedback:" is a blocked stop (its id: the line's uuid): the session's, and in an agent's own
+    transcript, where the CLI writes it under the same words, that agent's (SubagentStop)."""
     found, denials, oldest = {}, set(), _seconds(since) - 86400
     for root in roots:
         for folder, _dirs, names in os.walk(root):
@@ -185,7 +186,8 @@ def transcript_refusals(roots, since: str) -> tuple[list, int]:
                                 denials.add(block.get("tool_use_id"))
                         hit = _FEEDBACK.match(content) if isinstance(content, str) and d.get("isMeta") else None
                         if hit:
-                            found.setdefault(d.get("uuid"), dict(base, id=d.get("uuid"), event=hit.group(1), tool=None))
+                            event = STOPS[bool(base["agent_id"]) or hit.group(1) == STOPS[1]]
+                            found.setdefault(d.get("uuid"), dict(base, id=d.get("uuid"), event=event, tool=None))
     return list(found.values()), len(denials)
 
 
