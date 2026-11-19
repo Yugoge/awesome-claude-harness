@@ -145,3 +145,52 @@ def test_the_owners_own_session_is_not_taken_for_a_nested_one(monkeypatch, sessi
 def test_bash_cannot_type_harness_into_the_npm_binary(guard_home, proj, command):
     proc = gate(guard_home, proj, "Bash", {"command": command})
     assert proc.returncode == 2 and "types /harness into a Claude Code session" in proc.stderr, proc.stderr
+
+
+# ---------------------------------------------------------------------------------- finding 7
+
+SETTINGS = ".claude/settings.json"
+WRITES_THE_RULE_TOOK_FOR_READS = [
+    "git stash push -- " + SETTINGS,
+    "git stash -- " + SETTINGS,
+    "git stash push --include-untracked -- .claude/settings.local.json",
+    "find %s -execdir rm {} +" % SETTINGS,
+    "find %s -ok rm {} ;" % SETTINGS,
+    "find %s -okdir rm {} ;" % SETTINGS,
+    "find %s -execdir truncate -s 0 {} ;" % SETTINGS,
+    "find . -maxdepth 0 -fprint " + SETTINGS,
+    "find . -maxdepth 0 -fprint0 " + SETTINGS,
+    "find . -maxdepth 0 -fprintf %s '{}'" % SETTINGS,
+    "find . -maxdepth 0 -fls " + SETTINGS,
+]
+READS = [  # the legitimate neighbours: an ordinary find and git's reads of the same file
+    "find .claude -name settings.json",
+    "find %s -newer README.md -print" % SETTINGS,
+    "find . -name 'settings*.json' -type f",
+    "ls -fls " + SETTINGS,
+    "git diff -- " + SETTINGS,
+    "git log --oneline -- " + SETTINGS,
+    "git show HEAD:" + SETTINGS,
+    "git status --short " + SETTINGS,
+    "git blame " + SETTINGS,
+    "git stash list",
+    "git stash show -p stash@{0} -- " + SETTINGS,
+    "cat " + SETTINGS,
+]
+
+
+@pytest.mark.parametrize("command", WRITES_THE_RULE_TOOK_FOR_READS)
+@pytest.mark.parametrize("actor", ["main", "subagent"])
+def test_a_stash_or_a_find_action_on_a_settings_file_is_a_write(guard_home, proj, command, actor):
+    (proj / ".claude" / "settings.json").write_text('{"permissions": {"allow": []}}\n')
+    (proj / ".claude" / "settings.local.json").write_text('{"env": {"A": "1"}}\n')
+    proc = gate(guard_home, proj, "Bash", {"command": command}, actor)
+    assert proc.returncode == 2 and "harness-switch: this Bash command may change env, hooks, disableAllHooks " \
+        "or permissions" in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("command", READS)
+def test_an_ordinary_find_and_a_git_read_of_a_settings_file_pass(guard_home, proj, command):
+    (proj / ".claude" / "settings.json").write_text('{"permissions": {"allow": []}}\n')
+    proc = gate(guard_home, proj, "Bash", {"command": command})
+    assert "harness-switch" not in proc.stderr, proc.stderr

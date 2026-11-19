@@ -188,8 +188,12 @@ def _read_only(words: list) -> bool:
         return True
     head = os.path.basename(words[0])
     if head == "git":
-        sub = next((w for w in words[1:] if not w.startswith("-")), "")
+        sub, *rest = [w for w in words[1:] if not w.startswith("-")] or [""]
+        if sub == "stash" and rest[:1] not in (["list"], ["show"]):
+            return False  # push, pop, apply, or no word at all: the working tree's changes move
         return sub in GIT_READ_ONLY and "-delete" not in words
+    if head == "find" and set(words).intersection(shell_parse.FIND_ACTIONS):
+        return False  # an action that runs a program, writes a file or deletes
     return head in READ_ONLY and "-delete" not in words and "-exec" not in words
 
 
