@@ -27,6 +27,8 @@ from pathlib import Path
 
 # The status values a checklist step may hold.
 TODO_STATUSES = frozenset({'pending', 'in_progress', 'completed'})
+# The fields that carry a step's text (a step matches another by either).
+STEP_TEXT_FIELDS = ('content', 'activeForm')
 
 
 def _find_todo_script(cmd_name):
@@ -261,7 +263,7 @@ def _ok_lists(calls):
 def step_texts(*lists):
     """The contents and activeForms of the steps of ``lists``."""
     return {t.get(k) for steps in lists for t in steps or () if isinstance(t, dict)
-            for k in ('content', 'activeForm') if t.get(k)}
+            for k in STEP_TEXT_FIELDS if t.get(k)}
 
 
 def shares_text(todos, texts):

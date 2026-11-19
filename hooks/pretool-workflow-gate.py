@@ -50,7 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import COMPAT_RUNTIME_ENV as CODEX_RUNTIME_ENV, is_subagent  # noqa: E402
-from lib.todo_canonical import TODO_STATUSES  # noqa: E402
+from lib.todo_canonical import STEP_TEXT_FIELDS, TODO_STATUSES  # noqa: E402
 
 CODEX_PLAN_TOOLS = {'update_plan', 'UpdatePlan', 'functions.update_plan'}
 # Tools that only read, which the checklist-not-started lock lets through (OB-L39).
@@ -274,7 +274,7 @@ def codex_plan_to_todos(plan: list, canonical: list, last: list | None = None) -
     if not isinstance(plan, list):
         return [], ['Codex plan payload is not a list']
     if isinstance(last, list) and len(last) == len(plan):
-        texts = {normalize_step_text(str(c.get(k, ''))): c for c in canonical for k in ('content', 'activeForm')}
+        texts = {normalize_step_text(str(c.get(k, ''))): c for c in canonical for k in STEP_TEXT_FIELDS}
         canonical = [texts.get(normalize_step_text(str(item.get('step') or item.get('content') or item.get('title')
                                                        or '')) if isinstance(item, dict) else '', {}) for item in plan]
     elif len(plan) != len(canonical):
