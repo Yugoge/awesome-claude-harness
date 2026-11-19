@@ -1636,6 +1636,7 @@ def _consent_compounds(script, sp, depth=0):
 
 # The consent view's lattice: a token's origin is lit, glob, state (the state directory itself) or unk (a value
 # not known here); a variable's kind is static, word, text, state or any.
+_CONSENT_UNKNOWN = ("unk", "state")  # an origin that is no known literal
 _CONSENT_STATEFUL = ("state", "any")  # a variable kind that depends on what ran before
 
 
@@ -1924,14 +1925,14 @@ class _ConsentView:
         base, dtoks = self.split(toks)
         if CONSENT_TOKEN in "".join(t[1] for t, _ in base if t[0] == "c").lower():
             return "its target is named like the consent flag"
-        if named and any(o in ("unk", "state") for _, o in toks):
+        if named and any(o in _CONSENT_UNKNOWN for _, o in toks):
             return "its target is computed in a command that names the consent flag"
         if not base or not _consent_name_may_match([t for t, _ in base]):
             return None
         where = self.dir_state(dtoks)
         if where is None:
             return None
-        if any(o in ("unk", "state") and t[0] != "c" for t, o in base):
+        if any(o in _CONSENT_UNKNOWN and t[0] != "c" for t, o in base):
             return "its computed target can be the consent flag in the state directory"
         if where == "explicit":
             return "its target can match the consent flag in the state directory"
@@ -1953,7 +1954,7 @@ class _ConsentView:
             return True
         if not base or not _consent_name_may_match([t for t, _ in base]):
             return False
-        if any(o in ("unk", "state") and t[0] != "c" for t, o in base):
+        if any(o in _CONSENT_UNKNOWN and t[0] != "c" for t, o in base):
             return True  # a name not known here
         return where == "explicit"  # a glob: refused into an explicitly named state dir
 
@@ -2423,7 +2424,7 @@ def _consent_git_tree(view, sp, r):
             vlead = "".join(t[1] for t, _ in val[:m])
             key, has_eq, _ = vlead.partition("=")
             if not has_eq or len(key) + 1 > len(val):
-                if any(o in ("state", "unk") for _, o in val):
+                if any(o in _CONSENT_UNKNOWN for _, o in val):
                     return why + " (a computed git config key)"
                 continue
             if key.strip().lower() == "core.worktree":
@@ -2500,7 +2501,7 @@ def _consent_git_tree(view, sp, r):
     def at(d):
         """Can directory tokens d ([]: git's own directory) read from git's directory (-C, else the cwd) be the
         state directory?"""
-        if d and (d[0][0] == ("c", "/") or d[0][1] in ("state", "unk") or any(o == "state" for _, o in d)):
+        if d and (d[0][0] == ("c", "/") or d[0][1] in _CONSENT_UNKNOWN or any(o == "state" for _, o in d)):
             return view.into_dir(toks=d)
         if here:
             return any(h and view.into_dir(toks=list(h) + [slash] + list(d)) for h in here)
