@@ -50,7 +50,7 @@ class Refusal(Exception):
 
 
 def _safe_name(value: str) -> bool:
-    return SAFE_NAME.fullmatch(value) is not None and value not in (".", "..")
+    return SAFE_NAME.fullmatch(value) is not None and value not in (os.curdir, os.pardir)
 
 
 def resolve_wrapper(env) -> str:

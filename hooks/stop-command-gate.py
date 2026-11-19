@@ -17,6 +17,8 @@ payload on stdin and decides, in order:
       (overnight.open_wakes), naming its id; a time-lock it cannot read
       blocks the same way until the human's /stop;
   (5) no gated span (stop-commands.json's GATED_COMMANDS) and no /spec or /dev-family span: allow;
+  (5b) a /close or /commit that bound no task and dispatched none, ending on a NO_TARGET: line (no_target_end:
+      "Which task?" and refused flag combinations end with the candidates, nobody asked): allow;
   (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question: a last line
       ending in "?" with a question the span neither asked with an AskUserQuestion the owner answered
       nor recorded in a spec it wrote through spec-write.py; /spec has no other gap); in a gated span the todo half and the command's predicate, each held to the
@@ -29,8 +31,8 @@ payload on stdin and decides, in order:
       a /close that stalled at Step 0 as close.md says (close_stalled) while
       the predicate's own reading fails too ends its turn (D25: no agent
       action in the span clears an instrument both read); likewise /push and
-      /merge end on Step 5's refusal met again after the owner's answer
-      (refusal_met_again), while git still meets it: no remote the push is
+      /merge end on Step 5's refusal, reported and never asked about
+      (step5_refused), while git still meets it: no remote the push is
       judged on reads, or the source's merge stands in conflict;
   (7) no gap: allow; advisory: `would block` and the gaps on stderr, exit 0;
       else the block text on stderr, exit 2.
@@ -71,8 +73,8 @@ if str(HOOKS) not in sys.path:
     sys.path.insert(0, str(HOOKS))
 
 from lib import command_span  # noqa: E402  (the one transcript reader)
+from lib.harness_vocabulary import GATE_MODES as MODES  # noqa: E402
 
-MODES = ("block", "advisory", "off")
 _SCRIPTS: dict = {}
 
 
@@ -375,6 +377,39 @@ def _targets(span, root, action: str) -> tuple[list[str] | None, list[str]]:
     return sorted({task for arg, task in typed if arg not in held} | families), []
 
 
+# close.md's and commit.md's "Which task?": with no task bound and none dispatched, the run lists the candidates in
+# one NO_TARGET: line and ends; the owner types the command again with an id. Nobody is asked.
+NO_TARGET_LINE = re.compile(r"^NO_TARGET: \S", re.M)
+
+
+def _flags_refused(span) -> bool:
+    """The typed flags combine as close.md and commit.md refuse before any action (dev-lifecycle's
+    validate_auto_flag_combination: --auto with a task, --force or --bulk; close.md: --late-repair with --force)."""
+    try:
+        words = shlex.split(span.args)
+    except ValueError:
+        return False
+    named = [w for k, w in enumerate(words) if not w.startswith("-") and (k == 0 or words[k - 1] not in ("--reason", "-m"))]
+    return ("--auto" in words and bool(named or {"--force", "--bulk"} & set(words))) or (
+        "--late-repair" in words and "--force" in words)
+
+
+def no_target_end(span, root) -> bool:
+    """A /close or /commit that bound no task and dispatched none ends on its NO_TARGET: line (close.md's and
+    commit.md's "Which task?" and refused flag combinations; nobody is asked): the span's last main-agent text holds
+    the line, the span dispatched no task, and its flags are refused or _targets binds no task it resolves. A run
+    that worked on a task is never released by it."""
+    if span.command not in ("close", "commit") or span.session_families() \
+            or not NO_TARGET_LINE.search(span.last_text() or ""):
+        return False
+    if _flags_refused(span):
+        return True
+    if "--bulk" in span.args.split():  # a legal --bulk binds no task by design: its own predicate holds it
+        return False
+    targets, unresolved = _targets(span, root, span.command)
+    return bool(unresolved) or targets is None
+
+
 def _resolves(root, arg: str, task: str) -> bool:
     """A typed task names a task or chain file: a path that exists (close.md
     verifies it), or an id a file under docs/dev holds as a path names it (its
@@ -510,8 +545,8 @@ def _json(raw: bytes) -> dict:
     return record if isinstance(record, dict) else {}
 
 
-# push.md's dispatch protocol and merge.md's Refusals: a refusal is asked ONE AskUserQuestion; "a refusal met again
-# after it is reported in the reply, not asked again". Step 5's call, by the script it runs.
+# push.md's dispatch protocol and merge.md's Refusals: a refusal is reported in the reply, never asked about.
+# Step 5's call, by the script it runs.
 PUSH_CALL, MERGE_CALL = "execute-push.py", "merge.sh"
 _INTERPRETERS = {"python", "python3", "bash", "sh"}
 _PUSH_FLAGS = ("--repo-hash", "--branch", "--remote", "--request-id", "--repo-root")  # push.md Step 5's call
@@ -521,10 +556,11 @@ _STEP5_PATHS = {PUSH_CALL: HARNESS / "scripts" / PUSH_CALL, MERGE_CALL: HOOKS / 
 def step5_call(command: str, call: str, ref: str | None = None) -> bool:
     """``command`` runs Step 5's script ``call`` as push.md / merge.md write it, alone: one simple command (no
     list, pipe, subshell, second line or VAR=value prefix) whose command word, after an interpreter, is this
-    harness's own script (<HARNESS_ROOT>/scripts/execute-push.py, <HARNESS_ROOT>/hooks/merge.sh, by an absolute
-    path); no --help or -h; execute-push.py with each of its required flags, merge.sh with one ref (and
+    harness's own script (<HARNESS_ROOT>/scripts/execute-push.py, <HARNESS_ROOT>/hooks/merge.sh, by a path that
+    is absolute once ~, $HOME and ${CLAUDE_HOME:-$HOME/.claude} are expanded; line continuations joined); no --help or -h; execute-push.py with each of its required flags, merge.sh with one ref (and
     --no-commit), ``ref`` where given. Arguments end at a redirect (`2>&1`). A command that only mentions the
     script (`echo merge.sh; false`), another file of its name, or another ref is none."""
+    command = re.sub(r"\\\n", " ", command)  # a line continuation, as push.md writes the call
     if "\n" in command.strip():
         return False
     try:
@@ -542,7 +578,8 @@ def step5_call(command: str, call: str, ref: str | None = None) -> bool:
         words = words[1:]
         while words and words[0].startswith("-"):
             words = words[1:]
-    path = os.path.expanduser(words[0]) if words else ""
+    # the word as the shell expands it: ~, $HOME, ${CLAUDE_HOME:-$HOME/.claude} (claude_home.known_text)
+    path = (importlib.import_module("lib.claude_home").known_text(words[0]) or "") if words else ""
     if not os.path.isabs(path) or os.path.realpath(path) != os.path.realpath(_STEP5_PATHS[call]):
         return False
     args = next((words[1:k] for k in range(1, len(words)) if operator(words[k])), words[1:])  # up to a redirect
@@ -556,35 +593,36 @@ def step5_call(command: str, call: str, ref: str | None = None) -> bool:
     return len(rest) == 1 and not rest[0].startswith("-") and (ref is None or rest[0] == ref)
 
 
-def refusal_met_again(span, call: str, ref: str | None = None) -> bool:
-    """Step 5's call (a Bash naming the script ``call``) came back as an error, an AskUserQuestion after it came
-    back answered (ok: a rejected question is no answer, and the CLI stops the turn for the owner), and the call,
-    run after that answer, came back as an error again; no later run of it came back ok. The transcript's record
-    only: a predicate ends its turn on it only where its own reading of git meets the same refusal now (a remote
-    git ls-remote cannot read; the source's merge in conflict), as close_stalled does (D25: no agent action in the
-    span clears it)."""
-    state = 0  # 1: refused; 2: refused, then answered; 3: refused again after the answer
-    for use in span.uses("Bash", "AskUserQuestion"):
-        if use.result_at is None:
-            continue
-        if use.name == "AskUserQuestion":
-            state = 2 if state == 1 and use.ok else state
-        elif step5_call(str(use.input.get("command") or ""), call, ref):
-            state = 0 if use.ok else (3 if state >= 2 else 1)
-    return state == 3
+def step5_refused(span, call: str, ref: str | None = None) -> bool:
+    """Step 5's last run (a Bash running the script ``call``) came back as an error, and no later run of it came
+    back ok. The refusal is reported, never asked about. The transcript's record only: a predicate ends its turn on
+    it only where its own reading of git meets the same refusal now (a remote git ls-remote cannot read; the
+    source's merge in conflict), as close_stalled does (D25: no agent action in the span clears it)."""
+    refused = False
+    for use in span.uses("Bash"):
+        if use.result_at is not None and step5_call(str(use.input.get("command") or ""), call, ref):
+            refused = not use.ok
+    return refused
 
 
-def _bulk_block(span):
-    """The status block the analyst of the span's last commit-bulk dispatch
+def _bulk_block(span, profile: str = "commit-bulk"):
+    """The status block the analyst of the span's last ``profile`` dispatch
     reported when it stopped (its obligation's response_block,
     changelog-status.v1, checked at the analyst's own stop), or None: no such
     dispatch ran, or its analyst has not stopped. Its stop and reply are read
     as G1 reads them (lib/agent_returns.py): its Agent call's result, the
     task-notification of a background or resumed analyst, or a cut analyst's
     own recorded stop. A dispatch refused before it ran started no analyst."""
-    returns, found = importlib.import_module("lib.agent_returns").Returns(span), None
+    blocks = _status_blocks(span, profile)
+    return blocks[-1][1] if blocks else None
+
+
+def _status_blocks(span, profile: str) -> list:
+    """(the dispatch's obligation, its analyst's status block or None) for each ``profile`` dispatch whose
+    analyst stopped, in order (_bulk_block's reading)."""
+    returns, out = importlib.import_module("lib.agent_returns").Returns(span), []
     for call, doc in span.dispatches():
-        if doc.get("profile") != "commit-bulk" or not (call.ok or returns.agent(call)):
+        if doc.get("profile") != profile or not (call.ok or returns.agent(call)):
             continue
         block = next((a for a in doc.get("artifacts") or () if a.get("kind") == "response_block"), {})
         begin, end, text = block.get("begin") or "", block.get("end") or "", returns.reply(call)
@@ -592,7 +630,22 @@ def _bulk_block(span):
             found = json.loads(text.split(begin, 1)[1].split(end, 1)[0]) if begin and end and begin in text else None
         except ValueError:
             found = None
-    return found if isinstance(found, dict) else None
+        out.append((doc, found if isinstance(found, dict) else None))
+    return out
+
+
+REFUSED_LINE = re.compile(r"^REFUSED: .* for task (\S+?)\.?$", re.M)
+
+
+def hook_refused_tasks(span) -> set:
+    """commit.md Step 7 (and its --auto walk): the tasks whose last commit-landing analyst reported `hook_blocked`
+    (a hook refused its commit) and that a REFUSED: line of the span's text names (`... for task <id>`). Such a
+    commit is not retried and nobody is asked: that task's landing is no longer owed by this run."""
+    canon, last = importlib.import_module("lib.obligation").canonical_task_id, {}
+    for doc, block in _status_blocks(span, "commit-landing"):
+        last[canon(doc.get("task_id"))] = block
+    named = {canon(t) for t in REFUSED_LINE.findall("\n".join(span.texts()))}
+    return {t for t, block in last.items() if t in named and (block or {}).get("failure_code") == "hook_blocked"}
 
 
 def p_commit(span, root, payload) -> list[str]:
@@ -616,8 +669,10 @@ def p_commit(span, root, payload) -> list[str]:
         return unresolved
     if targets is None:
         return ["commit: no target task resolved"]
-    names = _cycle_names(span)
-    return [g for task in targets for name in _names(names, task) for g in disposition(root, name, "commit")]
+    refused = hook_refused_tasks(span)  # Step 7: reported as refused, nobody asked; the other targets still land
+    canon, names = importlib.import_module("lib.obligation").canonical_task_id, _cycle_names(span)
+    return [g for task in targets if canon(task) not in refused
+            for name in _names(names, task) for g in disposition(root, name, "commit")]
 
 
 # ---------------------------------------------------------------- git facts (merge, push)
@@ -698,7 +753,7 @@ def p_merge(span, root, payload) -> list[str]:
     `blocked` for the source at its tip now (Step 3 refuses; R14 leaves the risks to the owner, and a
     grant that fault() passed binds branch, source_tip and verdict); no source: no merge entry after it. All read in the
     session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup. Step 5's
-    conflicts met again after the owner's answer (refusal_met_again) end it while MERGE_HEAD is at a value
+    conflicts reported as refused (step5_refused) end it while MERGE_HEAD is at a value
     of the source, paths are unmerged and git's merge-tree of the two commits conflicts (_conflicts), the
     record being merge.sh on this source: the merge stands in conflict for the owner (aborted, it is owed
     again)."""
@@ -736,8 +791,8 @@ def p_merge(span, root, payload) -> list[str]:
         gaps.append("merge: unmerged paths remain in the index")
     merging = _git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD")
     if gaps and tips and merging in tips and _git(root, "ls-files", "-u") and _conflicts(
-            root, f"refs/heads/{default}", merging) and refusal_met_again(span, MERGE_CALL, ref):
-        return []  # Step 5: the source's merge stands in conflict; merge.sh refused again after the owner's answer
+            root, f"refs/heads/{default}", merging) and step5_refused(span, MERGE_CALL, ref):
+        return []  # Step 5: the source's merge stands in conflict; merge.sh refused, reported
     return gaps
 
 
@@ -782,7 +837,7 @@ def p_push(span, root, payload) -> list[str]:
     the URL, tracking ref and upstream from the repository). BRANCH's tip is
     published when a remote (the typed one, else any the opener recorded: a
     typed name that is no remote of the repository, which push.sh refuses,
-    yields to the remote the push on the owner's answer took) took it or a value
+    ends the run: reported, nobody asked) took it or a value
     the branch had from the opener on; or it is at or behind the typed remote's
     branch (none typed: BRANCH's upstream at the opener; none for such a name);
     or push.md refuses the
@@ -794,8 +849,8 @@ def p_push(span, root, payload) -> list[str]:
     is published where that branch holds it or a remote took it. The token and
     the grant are protected
     for every caller but their producers (pretool-tool-policy.py), and a detach,
-    reset or rewrite after the opener is no refusal: no agent's act makes one true. Step 5 met again
-    after the owner's answer (refusal_met_again: push.sh's exit 1) ends it too while git ls-remote reads
+    reset or rewrite after the opener is no refusal: no agent's act makes one true. Step 5 refused
+    (step5_refused: push.sh's exit 1) ends it too while git ls-remote reads
     none of the remotes judged at the URLs the opener's remote lines recorded, also with no system or global
     configuration (_unreachable); one that lists, a URL changed since, or an opener without remote lines
     holds it."""
@@ -804,7 +859,7 @@ def p_push(span, root, payload) -> list[str]:
     since, now = _since(span), _git(root, "symbolic-ref", "--short", "-q", "HEAD")
     heads = span.opener_heads()
     opened = [(b, c) for b, c in heads if b] or [((None if heads else _opener_branch(root, since)) or now, None)]
-    again = refusal_met_again(span, PUSH_CALL)
+    again = step5_refused(span, PUSH_CALL)
     return [gap for branch, commit in dict.fromkeys(opened) if branch  # none: Step 2, "HEAD is detached"
             for gap in _push_gaps(root, payload, typed, since, now, branch, commit, span.opener_remotes(), again)]
 
@@ -849,7 +904,7 @@ def _unreachable(top: str, url: str, ref: str) -> bool:
 
 def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=False) -> list[str]:
     """p_push's gaps for BRANCH at its tip and at the opener's commit (``opened``, None: none recorded);
-    ``pinned``: the opener's remote lines (None: none printed); ``again``: refusal_met_again for Step 5."""
+    ``pinned``: the opener's remote lines (None: none printed); ``again``: step5_refused for Step 5."""
     head = _git(root, "rev-parse", "--verify", "-q", f"refs/heads/{branch}^{{commit}}")
     if not head:
         return [f"push: {branch}, the branch HEAD was on at the /push opener, names no commit; nothing of it "
@@ -890,6 +945,8 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=F
 
     values = {head, _value_at(local, since)} | {sha for sha, t, _m in local if t >= since}
     for commit in [head] + ([opened] if opened and not _ancestor(root, opened, head) else []):
+        if unknown:
+            continue  # push.sh refuses a typed name git lists as no remote; reported, nobody asked (push.md)
         if (up and tip(*up) and _ancestor(root, commit, tip(*up))) or any(
                 took(value, remote) for remote in considered for value in (values if commit == head else {commit})
                 if value):
@@ -910,12 +967,11 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=F
         if again and pinned is not None and considered and all(
                 tip(r, f"refs/heads/{branch}") is None and r in unread
                 and _unreachable(top, urls[r], f"refs/heads/{branch}") for r in considered):
-            continue  # Step 5: push.sh's exit 1 met again after the owner's answer; no remote it judges reads now
+            continue  # Step 5: push.sh's exit 1, reported; no remote it judges reads now
         ref = up and f"refs/remotes/{up[0]}/{up[1].removeprefix('refs/heads/')}"
         fix = ("" if now == branch else f"; HEAD is not on it: check out {branch}") + (
             "" if commit == head else f"; {branch} is at {head}, which does not hold it: put {branch} back at it")
         gaps.append(f"push: {branch} at {commit} is not published on {ref or 'a remote'} since the /push opener"
-                    + (f"; the typed name {unknown} is no remote of this repository" if unknown else "")
                     + "".join(f"; {remote}: {why}" for remote, why in errors.items())
                     + (fix and fix + ", then push it"))
     return gaps
@@ -930,7 +986,7 @@ def p_text_question(span, payload) -> list[str]:
     text = span.last_text() if text is None else text
     if not _lib_round().ends_with_question(text) or _settled(span, payload, text):
         return []
-    return [f"{span.command}: the turn ends with a question in text; ask it with AskUserQuestion, or end without it."]
+    return [f"{span.command}: the turn ends with a question in text; end without it (the owner is asked only in a requirement round)."]
 
 
 SPEC_WRITER = HARNESS / "scripts" / "spec-write.py"
@@ -938,7 +994,7 @@ SPECS_DIR = "docs/dev/specs"
 _RECORD_LIMIT = 4 << 20  # a spec larger than this is not read for a recorded question
 _SHELL_OPS = frozenset(("&&", "||", ";", "|", "&"))
 _INTERPRETER = re.compile(r"(?:\S*/)?python3?(?:\.[0-9]+)?")
-_WRITER_LINE = re.compile(r"^spec-write: (?:create|append) (/\S.*)$", re.M)
+_WRITER_LINE = command_span.SPEC_WRITER_LINE
 _ITEM = re.compile(r"^(?:(?:[-*+]|[0-9]+[.)])\s+)?(?:\[[ xX]\]\s+)?")
 _EDIT_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path"}
 _UNANSWERED = re.compile(r"rejected|doesn't want to proceed|did not answer|skipped", re.I)
@@ -1136,7 +1192,7 @@ def _mode(argv) -> str:
 def _block_text(command: str, gaps: list[str]) -> str:
     finish = ("Decide each open question yourself (an experiment, else the default) and record the decision."
               if command == "dev-overnight" else
-              "Ask with AskUserQuestion only for a real decision the user must make.")
+              "What a rule refuses is reported as refused, with the hook's output; nobody is asked about it.")
     return (f"COMMAND_GATE /{command}: not complete\n" + "".join(f"- {gap}\n" for gap in gaps)
             + f"Finish the gaps above. {finish}\n")
 
@@ -1171,6 +1227,11 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if not gated and not asking:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
+    try:
+        if gated and no_target_end(span, root):  # nothing bound, nothing run: the NO_TARGET: line ends it
+            return 0, "", terminal
+    except Exception:  # an unread record releases nothing: the gaps below decide
+        pass
     gaps, unread = [], False
     for predicate, part in (((False, lambda: todo_gaps(span)),
                              (True, lambda: PREDICATES[span.command](span, root, payload))) if gated else ()) \

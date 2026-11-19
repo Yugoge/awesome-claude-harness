@@ -21,10 +21,9 @@ import os
 import re
 from typing import Optional
 
-try:
-    from ..shell_parse import QUOTE_CHARS
-except ImportError:  # loaded beside _core run as a script: hooks/lib is on sys.path
-    from shell_parse import QUOTE_CHARS
+# The characters that open a quoted string. Defined here, in this stdlib-only leaf, because the
+# installer loads this file by path with no other harness module beside it; shell_parse reads it.
+QUOTE_CHARS = ("'", '"')
 
 
 def _strip_quotes(tok: str) -> str:

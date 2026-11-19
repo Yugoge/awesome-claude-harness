@@ -71,15 +71,18 @@ LOCK_FILE="${COUNTER_FILE}.lock"
 # we strip the header with `tail -n +2`. The `Use%` column comes with a trailing
 # percent sign that we strip. PATH-resolved bare `df` per OBJ-5. Wrapped in
 # `timeout 2s` so a hung df cannot block the hook (codex review F2).
+_uint() {  # a non-negative decimal integer
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+}
 pressured=()
 mapfile -t df_pct < <(timeout 2s df --output=pcent /tmp /dev/shm 2>/dev/null | tail -n +2 | tr -d '% ' || true)
 mounts=(/tmp /dev/shm)
 
 for i in 0 1; do
   pct="${df_pct[$i]:-0}"
-  case "$pct" in
-    ''|*[!0-9]*) pct=0 ;;
-  esac
+  _uint "$pct" || pct=0
   if [ "$pct" -gt "$THRESHOLD" ]; then
     pressured+=("${mounts[$i]}")
   fi
@@ -107,9 +110,7 @@ decision=$(
     # the warning rather than waiting — the next prompt re-tries.
     flock -x -w 1 9 || { printf 'skip'; exit 0; }
     n=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
-    case "$n" in
-      ''|*[!0-9]*) n=0 ;;
-    esac
+    _uint "$n" || n=0
     if [ "$n" -ge "$RATE_LIMIT" ]; then
       # F7: refresh saturated counter's mtime so the >7d hook-state sweep
       # cannot delete an actively-saturated counter mid-session and reset

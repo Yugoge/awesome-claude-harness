@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from subagent import DISPATCH_TOOLS  # noqa: E402
 
 
 def _close_rating(payload: dict):
@@ -42,7 +43,7 @@ def main() -> None:
             meta = payload["tool_input"].get("metadata") or {}
             route = ROUTES.get(str(meta.get("source", "")).partition(":")[0])
             out = route(payload) if route else None
-        elif name in ("Agent", "Task"):
+        elif name in DISPATCH_TOOLS:
             import score_events
             out = score_events.observe(payload)
         if isinstance(out, dict) and not {"decision", "continue"} & out.keys() \

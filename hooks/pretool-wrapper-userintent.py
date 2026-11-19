@@ -114,7 +114,7 @@ _SENTINEL_DIR = harness_state_dir()
 _PYTHON_RE = re.compile(r'^(?:python[\d.]*|pypy[\d.]*)$')
 _PY_VALUE_OPTS = 'cmWXQ'
 _STDIN_FILES = locations.STDIN_DEVICES
-_SUBST_KINDS = frozenset(('cmdsub', 'backtick', 'procsub_in', 'procsub_out'))
+_SUBST_KINDS = frozenset(_sp.SUBST_KINDS if _sp else ())
 _UNSAFE_CONTEXTS = frozenset(('cmdsub', 'backtick', 'procsub', 'pipe_shell'))
 # Builtins and keywords that run no file.
 _NO_EXEC = frozenset((
@@ -192,7 +192,9 @@ _CMD_VAR_RE = re.compile(
     r'GIT_SSH|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|SSH_ASKPASS|SUDO_ASKPASS|'
     r'\w*(?:EDITOR|PAGER|_COMMAND|_CMD|ASKPASS|_PROGRAM|_HOOK|_HOOKS))$')
 # git configuration keys whose value runs a command (lib/git_facts.py).
+from lib.git_facts import GH_MESSAGE_SUBCOMMANDS as _GH_MESSAGE_SUBS  # noqa: E402
 from lib.git_facts import GIT_RUN_CONFIG_KEY_RE as _GIT_RUN_KEY  # noqa: E402
+from lib.git_facts import GIT_BOOLEAN_VALUES as _GIT_BOOLEAN_VALUES  # noqa: E402
 _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 'ls-files',
                             'ls-tree', 'status', 'cat-file', 'rev-parse', 'shortlog', 'describe',
                             'show-ref', 'whatchanged', 'rev-list', 'add', 'commit', 'diff-tree',
@@ -204,7 +206,7 @@ _GIT_GLOBAL_VALUE = _sp.GIT_GLOBAL_VALUE_OPTS if _sp is not None else frozenset(
 from lib.git_facts import GIT_CONFIG_READ_OPTIONS as _GIT_CONFIG_READS  # noqa: E402
 from lib.git_facts import GIT_CONFIG_READ_SUBCOMMANDS as _GIT_CONFIG_READ_SUBS  # noqa: E402
 from lib.git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS as _GIT_SHELL_PAYLOAD_SUBS  # noqa: E402
-_GH_MESSAGE_SUBS = frozenset(('pr', 'issue', 'release'))
+_DEFAULT_MAKEFILES = ('GNUmakefile', 'makefile', 'Makefile')  # what make reads with no -f, in its order
 _RC_FILES = frozenset(('.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_logout',
                        '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.kshrc', '.mkshrc',
                        '.cshrc', '.tcshrc', '.inputrc', 'config.fish', 'environment',
@@ -444,6 +446,9 @@ class _Scan:
         self.pager_env = {}        # GIT_PAGER / PAGER the command sets (str or _COMPUTED)
         self.git_config_written = False  # git config the command writes or overrides
         self.computed_targets = []  # run-target words with a part computed at run time
+        self.why = None            # what a fail-closed refusal saw and could not resolve
+        self.loop_unread = False   # a for list item the body runs that the guard cannot read
+        self.waived = None         # a fail-closed reading the wrapper cannot become: let through unproven
         script = _sp.parse(command)
         if script.error is not None:
             self.unsure = True
@@ -474,11 +479,26 @@ class _Scan:
         for site in self.sites:
             self._classify(site)
         self._uncovered()
-        if self.match is None and any(self._names_harness(w) or self._resolves_harness(w)
-                                      for w in self.computed_targets):
-            self.match = 'stop'  # fail closed: a run target computed inside the harness dirs
-        if self.computed_run and self.match is None and self._harness_context():
+        for w in self.computed_targets if self.match is None else ():
+            cands = self._loop_resolved(w)
+            if cands is not None:  # every value the loop list writes out: run only if one is the wrapper
+                if any(self._wrapper_value(c) for c in cands):
+                    self.match = 'stop'
+                continue
+            if self._names_harness(w) or self._resolves_harness(w):
+                self.match = 'stop'  # fail closed: a run target computed inside the harness dirs
+                self.why = 'a run target computed at run time in the harness hooks/ or scripts/ directory: ' + w.text
+        if self.computed_run and self.match is None and self._harness_context(names_only=False):
             self.match = 'stop'  # fail closed: a run built at run time beside the wrapper
+            self.why = 'a run built at run time beside the harness hooks/ or scripts/ directory or a file in one'
+        if self.loop_unread and self.match is None:
+            # a loop list item the guard cannot read: refused only where it can be the wrapper (the list or
+            # the command names the harness directory itself, a glob or a wrapper in it)
+            if self._harness_context():
+                self.match = 'stop'
+                self.why = 'a loop over a list the guard cannot read, beside the harness hooks/ or scripts/ directory'
+            elif self._harness_context(names_only=False):
+                self.waived = 'a loop over a list the guard cannot read; it names harness files, none the wrapper'
 
     # -- structure -----------------------------------------------------------
     def _map_script(self, script, consumer, writes):
@@ -645,8 +665,7 @@ class _Scan:
                 return False
             if name == 'sort' and any(v.startswith('--compress-program') for v in sv):
                 return False
-            if name == 'find' and any(v in ('-exec', '-execdir', '-ok', '-okdir', '-delete',
-                                            '-fprint', '-fprint0', '-fprintf', '-fls') for v in sv):
+            if name == 'find' and any(v in _sp.FIND_ACTIONS for v in sv):
                 return False
             if name == 'hash' and any(v.startswith('-') and 'p' in v for v in sv):
                 return False
@@ -710,7 +729,7 @@ class _Scan:
             if v in _sp.OPTION_ENDS:
                 break
             if v.startswith('--'):
-                if v in ('--rcfile', '--init-file'):
+                if v in _sp.SHELL_FILE_OPTS:
                     k += 2
                     continue
                 k += 1
@@ -751,7 +770,7 @@ class _Scan:
         script operand and every later word is an argument of the script; a word that may
         expand to no field passes only as the last word (`bash -n` then reads stdin, still
         under -n). Never with BASH_ENV / ENV set by the command."""
-        if any(a.name in ('BASH_ENV', 'ENV') for a in
+        if any(a.name in _sp.SHELL_STARTUP_VARS for a in
                list(getattr(cmd, 'assignments', ())) + list(getattr(res, 'assignments', ()))):
             return None
         args = list(args)
@@ -827,7 +846,7 @@ class _Scan:
                     return None
                 out.extend(self._alt_str(alt) for alt in alts)
             return out
-        if p.kind in ('cmdsub', 'backtick'):
+        if p.kind in _sp.CMDSUB_KINDS:
             alts = self._echo_alts(p.text or '', 0)
             if not alts or len(alts) >= self._ALT_CAP:
                 return None
@@ -1018,9 +1037,9 @@ class _Scan:
             v = vals[k]
             if v is None:
                 return False
-            if v in ('-n', '--quiet', '--silent'):
+            if v in _sp.SED_QUIET_OPTS:
                 quiet = True
-            elif v in ('-e', '--expression'):
+            elif v in _sp.SED_SCRIPT_OPTS:
                 if k + 1 >= len(vals) or vals[k + 1] is None:
                     return False
                 scripts.append(vals[k + 1])
@@ -1167,7 +1186,7 @@ class _Scan:
         for red in cmd.redirects:
             if red.fd != 0:
                 continue
-            if red.op in ('<', '<>') and red.target is not None:
+            if red.op in _sp.INPUT_REDIRECT_OPS and red.target is not None:
                 self._path_target(red.target)
                 return
             if red.hd is not None or red.op == '<<<':
@@ -1216,7 +1235,7 @@ class _Scan:
                 k += 1
                 continue
             if v.startswith('--'):
-                if v in ('--rcfile', '--init-file') and k + 1 < len(args):
+                if v in _sp.SHELL_FILE_OPTS and k + 1 < len(args):
                     self._path_target(args[k + 1])
                     k += 2
                     continue
@@ -1224,7 +1243,7 @@ class _Scan:
                 continue
             break
         for a in res.assignments:
-            if a.name in ('BASH_ENV', 'ENV') and a.value is not None:
+            if a.name in _sp.SHELL_STARTUP_VARS and a.value is not None:
                 self._path_target(a.value)
         if has_c:
             code = args[k] if k < len(args) else None
@@ -1359,7 +1378,7 @@ class _Scan:
             self._cwd_changed()
             return
         if self.cdpath and not os.path.isabs(target) and not target.startswith(('./', '../')) \
-                and target not in ('.', '..'):
+                and target not in (os.curdir, os.pardir):
             self.cwd_unknown = True
             self._cwd_changed()
             return
@@ -1399,14 +1418,14 @@ class _Scan:
         while i < len(vals) and vals[i] in _sp.FIND_SYMLINK_OPTS:
             i += 1
         starts = []
-        while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in ('(', '!', ')'))):
+        while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in _sp.FIND_OPERATORS)):
             starts.append(vals[i])
             i += 1
         names, blocks, simple = [], [], True
         j = i
         while j < len(vals):
             p = vals[j]
-            if p in ('-exec', '-execdir', '-ok', '-okdir'):
+            if p in _sp.FIND_EXEC:
                 k = j + 1
                 argv = []
                 while k < len(vals) and vals[k] not in _sp.FIND_EXEC_ENDS:
@@ -1475,7 +1494,7 @@ class _Scan:
                         matches.append(c)
         for kind, argv in risky:
             for m in matches[:200]:
-                if kind in ('-execdir', '-okdir'):
+                if kind in _sp.FIND_EXEC_IN_MATCH_DIR:
                     absm = m if os.path.isabs(m) else os.path.join(sorted(self.cwds)[0], m)
                     rep, cwds = './' + os.path.basename(absm), {os.path.dirname(absm)}
                 else:
@@ -1488,7 +1507,7 @@ class _Scan:
         words = [w.value() for w in cmd.words]
         if words == ['exec']:
             for red in cmd.redirects:
-                if red.fd == 0 and red.op in ('<', '<>') and red.target is not None:
+                if red.fd == 0 and red.op in _sp.INPUT_REDIRECT_OPS and red.target is not None:
                     self.exec_stdin = red.target
         if res.head is None:
             if res.args or (res.unresolved and words):
@@ -1513,7 +1532,7 @@ class _Scan:
         if name in _sp.CD_TARGET_BUILTINS:
             self._cd(args)
             return
-        if name in ('source', '.'):
+        if name in _sp.SOURCE_BUILTINS:
             ops = args[1:] if args and args[0].value() == '--' else args
             if ops:
                 self._operand(site, res, ops[0], shell=True)
@@ -1633,7 +1652,7 @@ class _Scan:
     def _built(word) -> bool:
         """The word is built at run time by a command substitution or backticks."""
         try:
-            return any(p.kind in ('cmdsub', 'backtick') for p in word.parts)
+            return any(p.kind in _sp.CMDSUB_KINDS for p in word.parts)
         except Exception:
             return False
 
@@ -2122,7 +2141,7 @@ class _Scan:
             vals = self._values(w)
             if not vals:
                 self.unsure = True
-                self.computed_run = True
+                self.loop_unread = True  # a loop list item the guard cannot read, run by the body
                 continue
             for v, g in vals:
                 for f in self._existing(v, g) or []:
@@ -2137,7 +2156,7 @@ class _Scan:
             parts = list(word.parts)
         except Exception:
             return False
-        if _mentions(''.join(p.text or '' for p in parts if p.kind in ('lit', 'glob', 'brace'))):
+        if _mentions(''.join(p.text or '' for p in parts if p.kind in _sp.LITERAL_PART_KINDS)):
             return True
         dirs = _harness_dirs()
         # the literal prefix, up to the first part that is computed
@@ -2164,7 +2183,7 @@ class _Scan:
         run = ''
         runs = []
         for p in parts:
-            if p.kind in ('lit', 'glob', 'brace'):
+            if p.kind in _sp.LITERAL_PART_KINDS:
                 run += p.text or ''
             else:
                 runs.append(run)
@@ -2232,7 +2251,7 @@ class _Scan:
                         choices.extend(self._alts(val, depth + 1) if val is not None else [[None]])
                 elif name is None:
                     choices = self._pe_alts(p.text or '', depth)
-            elif p.kind in ('cmdsub', 'backtick'):
+            elif p.kind in _sp.CMDSUB_KINDS:
                 choices = self._echo_alts(p.text or '', depth) or [[None]]
             else:
                 choices = [[None]]
@@ -2749,8 +2768,6 @@ class _Scan:
             return ''
         return out
 
-    _PLAIN_PAGERS = frozenset(('less', 'more', 'cat'))
-
     def _plain_pager(self, prog) -> bool:
         """A pager that only reads the files git hands it: less, more or cat (with options),
         unless the command sets LESSOPEN / LESSCLOSE for less."""
@@ -2761,13 +2778,13 @@ class _Scan:
         if '/' in head and os.path.dirname(head) not in locations.SYSTEM_BIN_DIRS:
             return False
         name = os.path.basename(head)
-        if name not in self._PLAIN_PAGERS or (name in ('less', 'more') and (
+        if name not in _bro.PLAIN_PAGERS or (name in ('less', 'more') and (
                 self.lessopen or re.search(r'\b(?:LESS|MORE)\w*\+?=', self.command))):
             return False  # LESS / LESSKEY* / MORE set by the command may hold commands
         return all(w.startswith('-') and 'k' not in w.lstrip('-')[:1] and 'lesskey' not in w
                    for w in words[1:])
 
-    _GIT_BOOL = frozenset(('true', 'false', 'yes', 'no', 'on', 'off', '1', '0', ''))
+    _GIT_BOOL = _GIT_BOOLEAN_VALUES
 
     def _git_pager_setting(self, gvals, dirs):
         """The pager `git grep -O` with no program opens. git takes GIT_PAGER, then
@@ -2929,11 +2946,11 @@ class _Scan:
                         self.match = self.match or 'stop'
                         return
         texts, unreadable, blind = [], shell_unknown, False
-        if not files and any(os.path.basename(ov or '') in ('GNUmakefile', 'makefile', 'Makefile')
+        if not files and any(os.path.basename(ov or '') in _DEFAULT_MAKEFILES
                              for _ow, ov in self.others):
             texts.append(self.command)  # the default makefile is written by this command
             for _ow, ov in self.others:
-                if ov and os.path.basename(ov) not in ('GNUmakefile', 'makefile', 'Makefile'):
+                if ov and os.path.basename(ov) not in _DEFAULT_MAKEFILES:
                     texts.extend(self._file_texts(ov))
         for v, w in files:
             if v is None:
@@ -3020,7 +3037,7 @@ class _Scan:
         if head is None or any(v is None for v in vals):
             return None
         name = os.path.basename(head)
-        if name in ('printf', 'echo'):
+        if name in _sp.PRINTERS:
             return ['\n'.join(vals)]
         if name != 'cat':
             return None
@@ -3104,19 +3121,24 @@ class _Scan:
                 continue
         return out
 
-    def _harness_context(self) -> bool:
+    def _harness_context(self, names_only=True) -> bool:
         """The command runs in the harness home's hooks/ or scripts/ directory, names one of
-        them or a name directly in one, or names a file that is a wrapper."""
+        them, a glob or a wrapper's name in one, or names a file that is a wrapper. With
+        names_only False, any non-directory name in one counts too (the reading before the
+        wrapper's name decided: a named file that is not the wrapper cannot become it)."""
         dirs = _harness_dirs()
 
-        def inside(p):
-            """The directory itself, or a non-directory name directly in it. The harness's own eval
+        def inside(p, is_glob=False):
+            """The directory itself, or a glob or the wrapper's name directly in it. The harness's own eval
             emitters (/commit Phase 3's `eval "$(python3 .../session-index.py init ...)"`) print shell
             assignments, not a run: naming one is no context for the wrapper."""
             for q in (os.path.normpath(p), os.path.realpath(p)):
                 if os.path.basename(q) in _EVAL_EMITTERS and os.path.dirname(q) in dirs:
                     return False
-                if q in dirs or (os.path.dirname(q) in dirs and not os.path.isdir(q)):
+                if q in dirs:
+                    return True
+                if os.path.dirname(q) in dirs and not os.path.isdir(q) and (
+                        not names_only or is_glob or os.path.basename(q) in self.by_name):
                     return True
             return False
 
@@ -3135,12 +3157,40 @@ class _Scan:
                 bases = [''] if os.path.isabs(v) else sorted(self.cwds)
                 for base in bases:
                     cand = os.path.join(base, v) if base else v
-                    if inside(cand):
+                    if inside(cand, g):
                         return True
                 for f in self._existing(v, g) or []:
                     if os.path.isfile(f) and self._wrapper_file(f) is not None:
                         return True
         return False
+
+    def _loop_resolved(self, word):
+        """The values a run target takes when every computed part of it is a for-loop variable whose
+        list the guard reads in full (`scripts/todo/$c.py` over `for c in dev close ...`); None otherwise."""
+        loopvals = self._loop_values()
+        out = ['']
+        try:
+            parts = list(word.parts)
+        except Exception:
+            return None
+        for p in parts:
+            if p.kind == 'lit':
+                choices = [p.text or '']
+            elif p.kind == 'param' and isinstance(loopvals.get((p.text or '').strip('{}')), list):
+                choices = loopvals[(p.text or '').strip('{}')]
+            else:
+                return None
+            out = [a + b for a in out for b in choices]
+            if not out or len(out) > self._ALT_CAP:
+                return None
+        return out
+
+    def _wrapper_value(self, value) -> bool:
+        """A value names the wrapper: its basename is a wrapper's, or it is an existing wrapper file."""
+        if os.path.basename(value) in self.by_name:
+            return True
+        return any(os.path.isfile(f) and self._wrapper_file(f) is not None
+                   for f in self._existing(value, False) or [])
 
     # -- mentions ------------------------------------------------------------
     def _transparent(self, word, site) -> bool:
@@ -3234,23 +3284,32 @@ class _Scan:
             self.unproven = True
 
 
-def _matched_wrapper(command: str, cwd: str | None = None) -> str | None:
+def _matched_wrapper(command: str, cwd: str | None = None, seen: list | None = None) -> str | None:
     """Return the sentinel command-name when the command is a RUN decision: it
     runs a guarded wrapper of the harness home, or the base text rule refuses
     it and the guard cannot prove every mention harmless. A command whose
-    mentions are all proven harmless returns None (and keeps the sentinel)."""
+    mentions are all proven harmless returns None (and keeps the sentinel).
+    ``seen``, when given, receives ('refused', what the guard could not resolve)
+    for a fail-closed refusal and ('unproven', why) for a call let through unproven."""
     cwd = cwd or os.getcwd()
+    seen = [] if seen is None else seen
     base = _base_refuses(command)
     if _sp is None:  # pragma: no cover - the parser is part of the harness
         return base
     try:
         s = _Scan(command, cwd)
     except Exception:  # fail closed on a reader failure over a mention
+        seen.append(('refused', 'a command the guard cannot read that mentions the wrapper'))
         return 'stop' if (base or _dequoted_mentions(command)) else None
     if s.match is not None:
+        if s.why:
+            seen.append(('refused', s.why))
         return s.match
     if s.unproven and (s.unsure or s.persist):
+        seen.append(('refused', 'a mention of the wrapper beside a run the guard cannot read'))
         return 'stop'
+    if s.waived:
+        seen.append(('unproven', s.waived))
     if base is not None and s.unproven:
         return base
     return None
@@ -3320,10 +3379,13 @@ def _consume_sentinel(path: Path) -> bool:
         return False
 
 
-def _block(cmd_name: str, command: str) -> None:
+def _block(cmd_name: str, command: str, why: str | None = None) -> None:
+    head = (f'\nUSER-INTENT GUARD: direct invocation of the /{cmd_name} release wrapper is blocked. '
+            if not why else
+            f'\nUSER-INTENT GUARD: this command may run the /{cmd_name} release wrapper and the guard '
+            f'could not resolve it ({why}), so it is blocked. ')
     sys.stderr.write(
-        f'\nUSER-INTENT GUARD: direct invocation of the /{cmd_name} release '
-        'wrapper is blocked. This wrapper (break-overnight-lock.py / stop.sh) '
+        head + 'This wrapper (break-overnight-lock.py / stop.sh) '
         'is the only sanctioned setter of isolation_released_at and may run '
         f'ONLY via the /{cmd_name} slash command, which writes a single-use '
         'user-intent sentinel. No live sentinel was found for this session, so '
@@ -3342,8 +3404,12 @@ def main() -> None:
         sys.exit(0)
     cwd = data.get('cwd') if isinstance(data.get('cwd'), str) and os.path.isabs(data.get('cwd')) \
         else os.getcwd()
-    cmd_name = _matched_wrapper(command, cwd)
+    seen = []
+    cmd_name = _matched_wrapper(command, cwd, seen)
     if cmd_name is None:
+        for kind, why in seen:
+            if kind == 'unproven':
+                _report_unproven(data, why)
         sys.exit(0)
     sid = _get_session_id(data)
     sentinel = _sentinel_path(cmd_name, sid)
@@ -3352,7 +3418,18 @@ def main() -> None:
         # helper can validate it (defense in depth), then allow.
         _mint_helper_auth(cmd_name, sid)
         sys.exit(0)
-    _block(cmd_name, command)
+    _block(cmd_name, command, next((why for kind, why in seen if kind == 'refused'), None))
+
+
+def _report_unproven(data: dict, why: str) -> None:
+    """One line in the refusal record: the call ran although the guard could not read all of it."""
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lib'))
+        import refusal_record
+        refusal_record.report(data, [(__file__, 'USER-INTENT GUARD: let through unproven: ' + why)], __file__,
+                              refusal_record.UNPROVEN)
+    except Exception:  # a record that cannot be written changes nothing
+        pass
 
 
 if __name__ == '__main__':

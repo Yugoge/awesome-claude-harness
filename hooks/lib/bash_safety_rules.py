@@ -11,6 +11,7 @@ them; every later rule is released by both. A view that cannot be built degrades
 helper refuses more, never less.
 """
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -18,6 +19,7 @@ import resource
 import signal
 import subprocess
 import sys
+import time
 import urllib.parse
 
 HOOKS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -175,9 +177,12 @@ def runtime_guard(payload_text, command):
 
 # ── Commit guard (before /do and /allow) ─────────────────────────────────────
 
+_COMMIT_GUARD_SUBS = ("commit", "config")  # the git subcommands the commit guard judges
+
+
 def commit_guard_applies(command):
     s = re.sub(r"""['"\\]""", "", command)
-    return ("commit" in s or "config" in s) and re.search(r"(^|[^\w])git", s) is not None
+    return any(sub in s for sub in _COMMIT_GUARD_SUBS) and re.search(r"(^|[^\w])git", s) is not None
 
 
 def _no_commit_or_config(command):
@@ -191,7 +196,7 @@ def _no_commit_or_config(command):
         return not script.errors() and not any(
             s.dynamic or s.templated or any(w.value() is None and commit_guard_applies(w.text) for w in s.cmd.words)
             for s in walk(script)) and all(
-            i.unresolved is None and i.subcommand not in (None, "commit", "config") and not (i.config_pairs or i.env)
+            i.unresolved is None and i.subcommand not in (None,) + _COMMIT_GUARD_SUBS and not (i.config_pairs or i.env)
             for i in git_invocations(script, strings=True))
     except Exception:  # noqa: BLE001
         return False
@@ -224,7 +229,7 @@ def commit_guard(payload):
     commits, why, cfg, loc, ex = [], [], [], [], {}
     LONGV = tuple(o[2:] for o in sorted(git_facts.GIT_COMMIT_VALUE_OPTIONS))
     GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
-    CFGW, CFGR = git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS, git_facts.GIT_CONFIG_READ_SUBCOMMANDS
+    CFGW, CFGR = git_facts.GIT_CONFIG_WRITE_VERBS, git_facts.GIT_CONFIG_READ_SUBCOMMANDS
     WRF, RDF = git_facts.GIT_CONFIG_WRITE_OPTIONS, git_facts.GIT_CONFIG_READ_OPTIONS
 
     def prot(k):
@@ -250,7 +255,7 @@ def commit_guard(payload):
 
     def gitish(s):
         s = re.sub(r'[\'"\\]', '', s)
-        return re.search(r'(^|\W)git', s) and re.search('commit|config', s)
+        return re.search(r'(^|\W)git', s) and re.search('|'.join(_COMMIT_GUARD_SUBS), s)
 
     def unread(what):  # text the guard cannot split like the shell: fail closed
         why.append(what)
@@ -336,7 +341,7 @@ def commit_guard(payload):
         al = {kv.strip('\'"').lower().split('=', 1)[0][6:]: (kv.split('=', 1)[1] if '=' in kv else '') if w[:2] == '-c' else None
               for k2, w in enumerate(gr)
               if (kv := (w[2:] if (w.startswith('-c') and len(w) > 2 and w[2] != 'C') else (
-                  gr[k2 + 1] if w in ('-c', '--config-env') and k2 + 1 < len(gr) else (
+                  gr[k2 + 1] if w in GIT_CONFIG_OPTS and k2 + 1 < len(gr) else (
                       w[13:] if w.startswith('--config-env=') else None))))
               and kv.strip('\'"').lower().startswith('alias.')}  # None: --config-env reads the value from the environment
         if sub and sub.lower() in al and al[sub.lower()] is None:
@@ -784,7 +789,7 @@ def _http_out_path_ok(v):
         return True
     if not re.fullmatch(r"[A-Za-z0-9_./][A-Za-z0-9_./-]*", v):
         return False
-    segs = [s for s in v.split("/") if s not in ("", ".")]
+    segs = [s for s in v.split("/") if s not in ("", os.curdir)]
     return bool(segs) and ".." not in segs and segs[0] not in ("dev", "proc")
 
 
@@ -793,7 +798,7 @@ def _http_lift_url_ok(v):
     if not HTTP_LIFT_URL.fullmatch(v) or _http_path_stops(v):
         return False
     path = re.sub(r"^(?:https?://)?[^/?]*", "", v).split("?", 1)[0]
-    return not any(seg in (".", "..") for seg in path.split("/"))
+    return not any(seg in (os.curdir, os.pardir) for seg in path.split("/"))
 
 
 def _http_client_args_ok(name, words):
@@ -1225,7 +1230,13 @@ def _relaxation_shape_ok(command, carries):
         return False
 
 
-_SHAPE_COMPUTED_PARTS = frozenset({"brace", "cmdsub", "backtick", "procsub_in", "procsub_out"})
+from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
+    BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, CMDSUB_KINDS, COMMON_SHELLS, CWD_BUILTINS, DECLARATION_BUILTINS,
+    DEFINER_KINDS, DUP_OPS, FIND_ACTIONS, FIND_NAME_TESTS, GIT_CONFIG_OPTS, GIT_MESSAGE_OPTS,
+    GIT_RESTORE_SOURCE_OPTS, GREP_NAMES, HERE_DOCUMENT_OPS, HEREDOC_OPS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
+    OUTPUT_REDIRECT_OPS, PIPE_OPS, PRINTERS, PYTHON_NAMES, REDIRECT_OPS, SED_QUIET_OPTS, SED_SCRIPT_OPTS,
+    SEQUENCE_OPS, SHELL_FILE_OPTS, SORT_OUTPUT_OPTS, STATIC_PART_KINDS, SUBST_KINDS, TARGET_DIR_VERBS)
+_SHAPE_COMPUTED_PARTS = frozenset(SUBST_KINDS + ("brace",))
 
 
 def _shape_word_computed(cmd):
@@ -1255,12 +1266,11 @@ _SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve
                               "-H", "--set-home"})
 """sudo's options that keep its command as named: -s/--shell and -i/--login run it through `$SHELL -c`, and any
 other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
-_SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
-"""A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
 # The global options that point git at another directory, file, ref namespace or program set (every value option
 # but -c, and --exec-path).
 _GIT_DIR_OPTS = (GIT_GLOBAL_VALUE_OPTS | {"--exec-path"}) - {"-c"}
-_SHAPE_RUNS_FILE = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|busybox|i?python[0-9.]*|pypy[0-9.]*|node(js)?[0-9.]*|deno|bun"
+_SH_NAMES = r"(ba|z|da|k|c|tc|fi|r)?sh"  # the sh-family shells, as a pattern
+_SHAPE_RUNS_FILE = re.compile(r"(" + _SH_NAMES + r"|busybox|i?python[0-9.]*|pypy[0-9.]*|node(js)?[0-9.]*|deno|bun"
                               r"|perl[0-9.]*|ruby[0-9.]*|php[0-9.]*|lua[0-9.]*|tclsh|wish|expect|make|[gmn]?awk|sed"
                               r"|gsed|exec|source|\.|eval|xargs|parallel|watch|script|su|builtin|strace|ltrace)")
 """Commands that run a file or text they are handed: beside a mention of the writer script, the shape refuses them."""
@@ -1396,7 +1406,7 @@ def _shape_strict_ok(command, carries, sites):
             names = {res.name} | {n for n, _o in res.wrappers}
             if any(n is not None and _SHAPE_RUNS_FILE.fullmatch(n) for n in names) or \
                     any("/" in (w.value() or "/") for w in heads) or \
-                    (res.name == "find" and any(w.value() in _BULK_FIND_ACTIONS for w in res.args)) or \
+                    (res.name == "find" and any(w.value() in FIND_ACTIONS for w in res.args)) or \
                     (res.name in _BULK_FILTERS and not _bulk_static_args(res.name, res.args)):
                 return False
     if writer:
@@ -1551,11 +1561,10 @@ def commit_artifact_rules(command, state):
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
 from lib.shell_parse import INTO_DIR_VERBS  # noqa: E402 -- the copy, move and link verbs
-from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
-    BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, COMMON_SHELLS, CWD_BUILTINS,
-    DECLARATION_BUILTINS, DEFINER_KINDS, GIT_RESTORE_SOURCE_OPTS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
-    OUTPUT_REDIRECT_OPS, PIPE_OPS, REDIRECT_OPS)
 from lib import locations  # noqa: E402
+
+_SHAPE_HEAD_RE = re.compile("[^/]+|(?:%s)/[^/]+" % "|".join(locations.BIN_DIRS))
+"""The strict shape's command word (_shape_strict_ok): a bare name found on PATH, or <a plain program directory>/<name>."""
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
 # Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
@@ -1567,7 +1576,6 @@ _CONSENT_READ_ONLY = frozenset({
     "false", ":", "cd", "pushd", "popd", "pwd", "grep", "egrep", "fgrep", "rg", "jq", "find", "echo", "printf",
     "sed", "awk", "gawk", "mawk", "nawk", "sort", "tee", "git"})
 _CONSENT_STRICT_ARGS = frozenset({"find", "rg", "sed", "awk", "gawk", "mawk", "nawk", "sort", "git", "file", "printf"})
-_FIND_ACTIONS = frozenset({"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"})
 _CONSENT_GIT_READS = frozenset({"log", "show", "diff", "grep", "status", "blame", "shortlog", "ls-files", "rev-parse",
                                 "describe"})
 _CONSENT_GIT_COMMIT_OPTS = frozenset({"-a", "--all", "-q", "--quiet", "-s", "--signoff", "-v", "--verbose",
@@ -1812,7 +1820,7 @@ class _ConsentView:
                     state = state or bool(self.dir_state(toks))
                 elif all(t[0] == "c" for t, _ in toks):
                     statics.add("".join(t[1] for t, _ in toks))
-                elif any(p.kind in ("cmdsub", "backtick") and self.marks_state(p.text) for p in d[1].parts):
+                elif any(p.kind in CMDSUB_KINDS and self.marks_state(p.text) for p in d[1].parts):
                     state = True
         if state or any(self.static_dir_state(v) for v in statics):
             return ("state",)
@@ -1880,9 +1888,9 @@ class _ConsentView:
                         out.append((("*",), "state"))
                 else:
                     out.append((("*",), "unk"))
-            elif p.kind in ("cmdsub", "backtick") and self.made(p):
+            elif p.kind in CMDSUB_KINDS and self.made(p):
                 out.extend((("c", ch), "lit") for ch in self.made(p))
-            elif p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") and self.marks_state(p.text):
+            elif p.kind in SUBST_KINDS and self.marks_state(p.text):
                 out.extend((("c", ch), "state") for ch in self.state)
             else:
                 out.append((("*",), "unk"))
@@ -2032,7 +2040,7 @@ _CONSENT_SPEC_TEXT = {
 
 
 def _consent_spec(name):
-    if name in ("cp", "mv", "ln", "install"):  # the copy verbs' getopt tables are the parser's
+    if name in TARGET_DIR_VERBS:  # the copy verbs' getopt tables are the parser's
         from lib import shell_parse as sp
         return sp.VERBS[name][0]
     if name not in _CONSENT_SPECS and name in _CONSENT_SPEC_TEXT:
@@ -2450,7 +2458,7 @@ def _consent_git_tree(view, sp, r):
             trees.append(val)
         elif opt == "--git-dir":
             gitdirs.append(val)
-        elif opt in ("-c", "--config-env"):
+        elif opt in GIT_CONFIG_OPTS:
             m = 0
             while m < len(val) and val[m][0][0] == "c" and val[m][1] == "lit":
                 m += 1
@@ -2515,7 +2523,7 @@ def _consent_git_tree(view, sp, r):
             v = w.value()
             if v is not None and v.lower() == "core.worktree":
                 keyed = True
-            elif v is None and any(p.kind not in ("lit", "glob") for p in w.parts) and "worktree" in w.text.lower():
+            elif v is None and any(p.kind not in STATIC_PART_KINDS for p in w.parts) and "worktree" in w.text.lower():
                 keyed = True
             elif keyed and not (v or "").startswith("-"):
                 cfg_trees.append(view.tokens(w))
@@ -2654,7 +2662,7 @@ def _consent_text_names_state(view, text):
             return True
     if "CLAUDE_STATE_DIR" in text or re.search(r"(?i)worktree[^\n]*\.\.", text):
         return True
-    if view.state_is_tmp and re.search(r"\$\{?(TMPDIR|TMP|TEMP|TEMPDIR|CLAUDE_TMPDIR)\b|\bmktemp\b", text):
+    if view.state_is_tmp and re.search(r"\$\{?(%s)\b|\bmktemp\b" % "|".join(_CONSENT_TMP_VARS), text):
         return True
     if view.cwd_state(".") and re.search(r"\bpwd\b|\$\{?O?L?D?PWD\b|\bdirs\b", text):
         return True
@@ -2669,11 +2677,11 @@ def _consent_read_only(cmd, name, view, named_writes):
     from lib.shell_parse import AWK_DATA_OPTS, AWK_NAMES
     words = list(cmd.words[1:])
     vals = [w.value() for w in words]
-    if name in _CONSENT_STRICT_ARGS and any(v is None and any(p.kind not in ("lit", "glob") for p in w.parts)
+    if name in _CONSENT_STRICT_ARGS and any(v is None and any(p.kind not in STATIC_PART_KINDS for p in w.parts)
                                             for w, v in zip(words, vals)):
         return f"`{name}` takes a computed argument"
     vals = [v if v is not None else "" for v in vals]  # a glob operand: a file name, read only
-    if name == "find" and any(v in _FIND_ACTIONS for v in vals):
+    if name == "find" and any(v in FIND_ACTIONS for v in vals):
         return "`find` runs or writes with an action"
     if name == "rg" and any(v and v.startswith("--pre") for v in vals):
         return "`rg --pre` runs a program"
@@ -2688,7 +2696,7 @@ def _consent_read_only(cmd, name, view, named_writes):
             return "`sed` edits in place or reads its script from a file"
         if err:
             return f"`sed` reads {err}"
-        scripts = [_consent_text(v) for o, v, _ in opts if o in ("-e", "--expression")]
+        scripts = [_consent_text(v) for o, v, _ in opts if o in SED_SCRIPT_OPTS]
         if not scripts:
             scripts = [_consent_text(view.tokens(w)) for w in operands[:1]]
         for s in scripts:
@@ -2725,7 +2733,7 @@ def _consent_read_only(cmd, name, view, named_writes):
         if err:
             return f"`sort` reads {err}"
         for o, v, w in opts:
-            if o in ("-o", "--output") and v is not None:
+            if o in SORT_OUTPUT_OPTS and v is not None:
                 named_writes.append(w if w is not None else ("toks", v))
         return None
     if name == "tee":
@@ -2758,7 +2766,7 @@ def _consent_read_only(cmd, name, view, named_writes):
                 if skip:
                     skip = False
                     continue
-                if v in ("-m", "--message"):
+                if v in GIT_MESSAGE_OPTS:
                     skip = True
                 elif v.startswith("--message=") or (v.startswith("-m") and not v.startswith("--")):
                     continue
@@ -2901,7 +2909,7 @@ def consent_flag_verdict(command, cwd, state):
         why = _consent_read_only(cmd, name, view, named_writes)
         if why:
             return why + ", and the command names the consent flag"
-        if name in ("echo", "printf") and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
+        if name in PRINTERS and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
             emits = True
     for w in named_writes:
         why = (view.target(toks=w[1], named=True) if isinstance(w, tuple) else
@@ -2949,10 +2957,8 @@ _BULK_FILTERS = _BULK_READERS | {"sort", "uniq", "cut", "nl", "less", "more", "c
 _BULK_CODE_ARG = frozenset({"sed", "gsed", "awk", "gawk", "mawk", "nawk", "eval", "source", ".", "trap", "su", "ssh",
                             "watch", "parallel", "flock", "script", "tmux", "screen", "expect", "make"})
 """Commands whose arguments are code: a name anywhere in them is run, not read (sed's `w` writes a file)."""
-_BULK_INTERPRETER = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|i?python[0-9.]*|node(js)?[0-9.]*|perl[0-9.]*|ruby[0-9.]*"
+_BULK_INTERPRETER = re.compile(r"(" + _SH_NAMES + r"|i?python[0-9.]*|node(js)?[0-9.]*|perl[0-9.]*|ruby[0-9.]*"
                                r"|php[0-9.]*|lua[0-9.]*)")
-_BULK_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-delete", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
-                                "-fls"})
 _GIT_PLAIN = frozenset({"diff", "log", "show", "grep", "status", "add", "commit", "rm", "mv", "restore", "checkout",
                         "switch", "reset", "blame", "annotate", "ls-files", "ls-tree", "cat-file", "rev-parse",
                         "rev-list", "shortlog", "whatchanged", "describe", "check-ignore", "check-attr", "diff-tree",
@@ -3004,7 +3010,7 @@ def _bulk_filter_runs(res):
     if name == "file":
         return any(v is None or v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals)
     if name == "find":
-        return any(v is None or v in _BULK_FIND_ACTIONS for v in vals)
+        return any(v is None or v in FIND_ACTIONS for v in vals)
     spec = _BULK_FILTER_OPTS.get(name)
     if spec is None:
         return False
@@ -3068,7 +3074,7 @@ def _bulk_static_args(name, args):
         if v is not None:
             ended = ended or v == "--"
             continue
-        if any(p.kind not in ("lit", "glob") for p in w.parts):
+        if any(p.kind not in STATIC_PART_KINDS for p in w.parts):
             return False
         prefix = w.static_prefix()
         if ended or (prefix and not prefix.startswith("-")) or re.fullmatch(r"--[A-Za-z0-9][A-Za-z0-9-]*=.*", prefix):
@@ -3093,7 +3099,7 @@ def _bulk_standalone(w):
 
 _GIT_INERT_CONFIG_RE = re.compile(
     r"color\.[a-z]+(=(never|always|auto|true|false))?"
-    r"|core\.pager=(cat|less|more)"
+    r"|core\.pager=(%s)" % "|".join(sorted(_bash_read_only.PLAIN_PAGERS)) +
     r"|core\.(quotepath|abbrev)(=[a-z0-9]+)?"
     r"|log\.(abbrevcommit|decorate|follow|showroot|date)(=[a-z0-9:_-]*)?"
     r"|diff\.(renames|context|algorithm|colormoved|colormovedws|noprefix|mnemonicprefix|relative|interhunkcontext"
@@ -3259,7 +3265,7 @@ def _base_bulk_sentinel_decision(cmd):
     keywords = {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', 'select'}
     if any(t in keywords or t in REDIRECT_OPS for t in tokens) or 'xargs' in tokens or 'tee' in tokens:
         return 'DENY'
-    actions = {'-exec', '-execdir', '-delete', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'}
+    actions = FIND_ACTIONS
     for t in tokens:
         decoded = _ansi_decode(t.replace('$', ''))
         if t in actions or t.replace('$', '') in actions or decoded is None or decoded in actions:
@@ -3346,7 +3352,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
                 return 'DENY'
             if name == "file" and any(v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals):
                 return 'DENY'
-            if name == "find" and any(v in _BULK_FIND_ACTIONS for v in vals):
+            if name == "find" and any(v in FIND_ACTIONS for v in vals):
                 return 'DENY'
             if name == "git" and _git_runs_bulk_name(res):
                 return 'DENY'
@@ -3390,7 +3396,7 @@ def bulk_sentinel_rule(command):
 _HB_CMD = (r"""(^|[;&|(`{!]|\$\()\s*(([^\s;&|]*/)?(sudo|env|nohup|exec|command|time|nice|timeout|setsid|xargs|source|\.|"""
            r"""(ba|z|da|k)?sh|if|then|do|else|while|until|[-<]\S*|[0-9]\S*|[A-Za-z_][A-Za-z0-9_]*=\S*)\s+)*["']?([^\s;&|]*/)?""")
 _HB_RUNS_TEXT = re.compile(
-    r"(^|[\s;&|()`])((\S*/)?((ba|z|da|k|c|tc|fi|r)?sh|eval|ssh|watch|trap|su|parallel|tmux|screen|alias|flock|script|xargs"
+    r"(^|[\s;&|()`])((\S*/)?(" + _SH_NAMES + r"|eval|ssh|watch|trap|su|parallel|tmux|screen|alias|flock|script|xargs"
     r"|source|exec|[gmn]?awk|perl|ruby|python[\d.]*|node|php|lua|tclsh|expect|sed|n?vim?|make))"
     r"(?=$|[\s;&|()`])|(^|[;&|()`])\s*\.\s")
 
@@ -3407,7 +3413,7 @@ def executable_view_or_raw(command):
 _HB_NOEXEC_SHELLS = ("bash", "sh", "dash")
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile("(%s)?(%s)" % ("|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS),
+_HB_SHELL_WORD = re.compile("(%s)?(%s)" % ("|".join(d + "/" for d in locations.BIN_DIRS),
                                             "|".join(_HB_NOEXEC_SHELLS)))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
@@ -3437,7 +3443,7 @@ def _hb_shell_options(args):
             k += 1
             break
         if v.startswith("--"):
-            if v in ("--rcfile", "--init-file"):
+            if v in SHELL_FILE_OPTS:
                 k += 2
             elif v in _HB_SHELL_LONG:
                 verbose = verbose or v == "--verbose"
@@ -3532,7 +3538,7 @@ def _hb_inert_redirect(r):
     """True for a redirection that only discards or duplicates: a dup or close, or /dev/null."""
     if r.hd is not None or r.heredoc is not None or r.fd_var is not None:
         return False
-    if r.op in (">&", "<&"):
+    if r.op in DUP_OPS:
         return r.dup is not None or r.close
     return r.op in ("<", ">", ">>") and _hb_plain(r.target) and r.target.literal() == locations.NULL_DEVICE
 
@@ -3697,18 +3703,98 @@ def hard_ban_mask(t):
 
 
 def _hb_only_reads(command):
-    """True when lib/bash_read_only.py proves the whole command read-only, a command word in a system program directory
-    (lib/locations.SYSTEM_BIN_DIRS) read as its bare name: it runs nothing it chooses, so a name in it is only read."""
+    """True when lib/bash_read_only.py proves the whole command read-only, a command word in a plain program directory
+    (lib/locations.BIN_DIRS, as each rule here) read as its bare name: it runs nothing it chooses, so a name is only read."""
     try:
         from lib.bash_read_only import is_read_only
         from lib.shell_parse import parse, walk
         out = list(command)
         for w in filter(None, (site.cmd.head() for site in walk(parse(command), into=()))):
-            if (name := w.text.rpartition("/"))[0] in locations.SYSTEM_BIN_DIRS and name[2]:
+            if (name := w.text.rpartition("/"))[0] in locations.BIN_DIRS and name[2]:
                 out[w.span[0]:w.span[1]] = name[2].rjust(len(w.text))
         return is_read_only("".join(out))
     except Exception:  # noqa: BLE001
         return False
+
+
+def _dry_run_only(name, args):
+    """`npm publish` and `kubectl apply|create`, which act on a registry or a cluster: the refusal text when the
+    call is the real one, None when it is no such call or its dry run (npm `--dry-run`; kubectl `--dry-run=client`
+    or `=server`, or the value as the next word). A word computed at run time proves no dry run."""
+    if name == "npm" and next((a for a in args if a is None or not a.startswith("-")), "") in (None, "publish"):
+        if "--dry-run" in args or "--dry-run=true" in args:
+            return None
+        return "npm publish runs only as its dry run (npm publish --dry-run)"
+    if name == "kubectl" and ("apply" in args or "create" in args):
+        pairs = zip(args, args[1:] + [None])
+        if any(a in ("--dry-run=client", "--dry-run=server") or (a == "--dry-run" and b in ("client", "server"))
+               for a, b in pairs):
+            return None
+        return "kubectl apply and kubectl create run only as their dry run (--dry-run=client or --dry-run=server)"
+    return None
+
+
+def _read_made_to_run(name, args):
+    """A read that one of its words makes run a program or write a file: the option, else None. rg with an option
+    whose value is a program (shell_parse.RG_PROGRAM_OPTS); a git read subcommand (git_facts.GIT_READ_SUBCOMMANDS)
+    with `-c`/`--config-env` naming a key whose value git runs (GIT_RUN_CONFIG_KEY_RE; a pager key set to a plain
+    pager, bash_read_only.PLAIN_PAGERS, only shows; git_facts.git_config_value_names_no_program runs nothing), `--exec-path=`, or an option of GIT_RUN_OR_WRITE_OPTIONS."""
+    from lib.bash_read_only import PLAIN_PAGERS, _long_hits
+    from lib.shell_parse import RG_PROGRAM_OPTS, git_global_options
+    if name == "rg":
+        return next((a for a in args if a is not None and _long_hits(a, RG_PROGRAM_OPTS)), None)
+    if name != "git":
+        return None
+    opts, sub = git_global_options(args)
+    if sub is None or args[sub] not in git_facts.GIT_READ_SUBCOMMANDS:
+        return None
+    for i, v in opts:
+        if args[i] in GIT_CONFIG_OPTS:
+            key, _eq, value = (args[v] if v is not None and args[v] is not None else "").partition("=")
+            if v is None or args[v] is None or (git_facts.GIT_RUN_CONFIG_KEY_RE.match(key) and not (
+                    (key.lower().endswith("pager") and value in PLAIN_PAGERS)
+                    or git_facts.git_config_value_names_no_program(key, value))):
+                return f"{args[i]} {args[v] if v is not None else ''}".strip()
+        elif args[i].startswith("--exec-path="):
+            return args[i]
+    return next((a for a in args[sub + 1:] if a is not None and _long_hits(a, git_facts.GIT_RUN_OR_WRITE_OPTIONS)),
+                None)
+
+
+def outward_rule(command):
+    """What acts beyond this machine with no undo: a real `npm publish`, `kubectl apply` or `kubectl create` (their
+    dry runs run), and code fetched by an HTTP client (HTTP_CLIENTS: curl, wget, ...) piped into a shell
+    (`curl -s URL | bash`). Read through the
+    parser (lib/shell_parse.walk, resolve), so wrappers, `bash -c` and substitutions are seen; a shell fed by a
+    heredoc, a file or another program's output, and `bash script.sh`, are not refused here."""
+    from lib.shell_parse import SHELLS, SimpleCommand, _stdin_redirect, parse, resolve, walk
+    sites = list(walk(parse(command)))
+    scripts = {}
+    for site in sites:
+        scripts.setdefault(id(site.script), site.script)
+        res = resolve(site.cmd) if isinstance(site.cmd, SimpleCommand) else None
+        why = _dry_run_only(res.name, res.argv()) if res is not None else None
+        made = _read_made_to_run(res.name, res.argv()) if res is not None and not why else None
+        if made:
+            refuse(f"BLOCKED: {res.name} reads, but {made} makes it run a program or write a file.",
+                   f"Command: {command}", f"REASON: run the {res.name} read without {made}; to run a program, run it "
+                   "as its own command, where the rules read it.", released_line())
+        if why:
+            refuse(f"BLOCKED: {why}.", f"Command: {command}",
+                   "REASON: a publish or a cluster change acts outside this machine and cannot be taken back; "
+                   "its dry run shows the same result and runs.", released_line())
+    for script in scripts.values():
+        for pl, _sep in script.items:
+            fetched = False
+            for stage in pl.stages:
+                res = resolve(stage) if isinstance(stage, SimpleCommand) else None
+                if fetched and res is not None and res.name in SHELLS and res.payload_kind != "shell_c" \
+                        and res.stdin_shell and _stdin_redirect(stage.redirects) is None:
+                    refuse("BLOCKED: code fetched by curl, wget or another HTTP client is piped into a shell.",
+                           f"Command: {command}",
+                           "REASON: the code that would run is not in the command, so no rule can read it first. "
+                           "Download it to a file, read it, then run the file (bash <file>).", released_line())
+                fetched = fetched or (res is not None and res.name in HTTP_CLIENTS)
 
 
 def hard_ban_rule(command):
@@ -4127,7 +4213,7 @@ def sensitive_redirect(command, kept=False):
                 args = resolve(site.cmd).args
                 texts = [w.text if w.value() is None else w.value() for w in args]
                 spec = {"grep": _SD_GREP, "egrep": _SD_GREP, "fgrep": _SD_GREP, "rg": _SD_RG}.get(name)
-                data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in ("echo", "printf") else ()
+                data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in PRINTERS else ()
                 skip = {id(args[k]) for k in data if k < len(args) and (spec or args[k].value() is not None)}
                 for w in args if name in SHELLS or name in _OPAQUE_RUNNERS else ():
                     if any(c.isspace() for c in w.value() or "") and parse(w.value()).error is None:
@@ -4289,7 +4375,6 @@ _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", 
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
 _SED_PRINT = re.compile(r"^(([0-9]+|\$)(,([0-9]+|\$))?)?p$")
-_PLAIN_HEREDOC_OPS = ("<<", "<<-", "<<<")
 
 
 def _plain_word(w, params=False):
@@ -4323,7 +4408,7 @@ def _plain_redirects(cmd, sv, reads_ok=True):
     for x in cmd.redirects:
         if x.fd_var is not None:
             return False
-        if x.op in _PLAIN_HEREDOC_OPS:
+        if x.op in HEREDOC_OPS:
             if not reads_ok or x.fd != 0:
                 return False
             if x.hd is not None and not (x.hd.quoted or not x.hd.expansions):
@@ -4332,7 +4417,7 @@ def _plain_redirects(cmd, sv, reads_ok=True):
                 return False
         elif x.close:
             continue
-        elif x.op in (">&", "<&") and x.dup is not None:
+        elif x.op in DUP_OPS and x.dup is not None:
             if x.fd not in (1, 2) or x.dup not in (1, 2):
                 return False
         elif x.op == "<":
@@ -4412,7 +4497,7 @@ def _plain_simple(cmd, sv, piped):
     if name == "sed":
         opts = [v for v in vals if v.startswith("-")]
         rest = [v for v in vals if not v.startswith("-")]
-        if not opts or any(v not in ("-n", "--quiet", "--silent") for v in opts) or not rest \
+        if not opts or any(v not in SED_QUIET_OPTS for v in opts) or not rest \
                 or not _SED_PRINT.match(rest[0]):
             return False
     return _plain_redirects(cmd, sv)
@@ -4602,7 +4687,6 @@ def _dd_fd_of(path):
     return int(m.group(2)) if m else None
 
 
-_HEREDOC_OPS = ("<<", "<<-", "<<<")
 
 
 def _dd_redirect_targets(site, fds=(), extra=()):
@@ -4623,7 +4707,7 @@ def _dd_redirect_targets(site, fds=(), extra=()):
     def named(x):
         return bool(fds) and (x.fd in fds or (x.fd is None and x.fd_var is not None))
     return [x.target.value() for x in redirects
-            if x.target is not None and x.dup is None and not x.close and x.op not in _HEREDOC_OPS
+            if x.target is not None and x.dup is None and not x.close and x.op not in HEREDOC_OPS
             and (x.writes() or named(x))]
 
 
@@ -4775,8 +4859,79 @@ def let_through_unproven(entry, payload):
         {"rule": "removal-policy", "kind": "let_through_unproven",
          "path": "primary" (the analyzer answered UNRESOLVED) or "degraded" (it gave no usable verdict),
          "reason": "UNRESOLVED <the analyzer's reason>" or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
-    This module writes no log of its own: the record's writer is called from here.
+    Before the command runs, a snapshot of the repository at the payload's cwd is taken and named in the entry
+    (entry["snapshot"], see snapshot_before()), so what the command removes or overwrites there can be brought back
+    (the owner, 2026-10-04: discard, but recoverably). Then the entry goes to the refusal record (record(), kind
+    "unproven") as one line: what was let through and why, then "snapshot: <ref> <commit>; bring a file back: ..."
+    (and what it left out) or "snapshot: none, <why>".
     """
+    shot = entry["snapshot"] = snapshot_before(payload)
+    lines = [f"{entry.get('rule', 'removal-policy')} let through unproven: {entry.get('reason', '')}"]
+    if "none" in shot:
+        lines.append(f"snapshot: none, {shot['none']}")
+    else:
+        lines.append(f"snapshot: {shot['ref']} {shot['commit']}; bring a file back: {shot['restore']}")
+        lines += [f"snapshot left out: {shot['left_out']}"] if shot.get("left_out") else []
+    record("\n".join(lines), "unproven")
+
+
+def snapshot_before(payload):
+    """lib/checkpoint-core.sh write_checkpoint, run in the payload's cwd within CLAUDE_HOOK_SNAPSHOT_TIMEOUT (10 s:
+    with the analyzer's 15 s it stays inside the CLI's 60 s for this hook, which settings.json leaves at its
+    default), starting no push. A snapshot that is not taken never refuses: the reply says why. A repository whose
+    snapshot ran past that limit gets none for CLAUDE_HOOK_SNAPSHOT_PAUSE (30 min) after it, so a repository too big
+    to snapshot costs one wait per period, not one per command; its mark is a file in the hook state root, named by
+    the repository's real top-level path. Returns {"ref", "commit", "restore"} (and "left_out" when files were left
+    out) or {"none": why}."""
+    cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(cwd):
+        return {"none": "the call names no working directory"}
+    limit = duration(os.environ.get("CLAUDE_HOOK_SNAPSHOT_TIMEOUT", ""), "10s") or 10.0
+    try:
+        top = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                             timeout=limit).stdout.strip()
+    except subprocess.TimeoutExpired:
+        return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
+    except (OSError, subprocess.SubprocessError):
+        top = ""
+    if not top:
+        return {"none": "not inside a git repository"}
+    top = os.path.realpath(top)
+    mark = os.path.join(state_dir(), ".checkpoint-overtime-" + hashlib.sha256(os.fsencode(top)).hexdigest()[:24])
+    pause = duration(os.environ.get("CLAUDE_HOOK_SNAPSHOT_PAUSE", ""), "30m") or 1800.0
+    with contextlib.suppress(OSError):
+        since = os.stat(mark).st_mtime
+        if 0 <= time.time() - since < pause:
+            return {"none": "the last snapshot of this repository ran past its time limit at "
+                    f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(since))}; the next is tried "
+                    f"{pause:g} s after it (CLAUDE_HOOK_SNAPSHOT_PAUSE)"}
+    script = ('. "$2" || exit 90; export CHECKPOINT_NO_PUSH=1; write_checkpoint "$1" "$3" "pre-command snapshot"; '
+              'printf "%s\\n" "$?" "$checkpoint_commit" "$checkpoint_ref" "$checkpoint_left_out$checkpoint_notice"')
+    try:
+        p = subprocess.Popen(["bash", "-c", script, "snapshot", cwd, os.path.join(LIB, "checkpoint-core.sh"),
+                              "an unproven Bash command let through (removal policy)"],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                             start_new_session=True)
+    except OSError as exc:
+        return {"none": f"the snapshot could not start: {exc}"}
+    try:
+        out = p.communicate(timeout=limit)[0]
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            os.killpg(p.pid, signal.SIGKILL)  # git and all; its temp index is swept by a later snapshot
+        p.wait()
+        with contextlib.suppress(OSError), open(mark, "w", encoding="utf-8") as fh:
+            fh.write(top + "\n")
+        return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
+    rc, commit, ref, note = (out.split("\n", 3) + [""] * 4)[:4]
+    note = note.strip()
+    if rc == "0" and commit:
+        shot = {"ref": ref, "commit": commit, "restore": f"git -C {top} restore --source={commit} -- <path>, or "
+                f"git -C {top} show {commit}:<path from the repository's top>"}
+        return {**shot, "left_out": note} if note else shot
+    return {"none": {"0": "write_checkpoint wrote none (/harness off)", "2": "not inside a git repository",
+                     "90": "the snapshot library could not be loaded"}.get(rc) or note
+            or f"write_checkpoint failed (rc={rc or p.returncode}); see the checkpoint log"}
 
 
 def _scratch_owner(payload):
@@ -4838,17 +4993,22 @@ def removal_policy(payload_text, command):
     PROVEN_SAFE_REMOVAL) passes; a filesystem removal it finds (FORBIDDEN_REMOVAL) is refused, unless the analyzer
     knows every file the command removes and each lies inside the calling actor's own scratch directory as the
     write policy defines it (the owner, 2026-11-19: one's own temp folder may be deleted). A command it cannot
-    prove safe, because it answers UNRESOLVED (the primary path) or gives no usable verdict (timeout, memory
-    ceiling, crash, bad JSON: the degraded path), is refused when its text holds a removal word, by the single
-    definition in lib/pol_degraded_removal_reference.ere, and otherwise runs. Both paths ask that one question of the
-    same text, so they give an unproven command the same answer, and the primary path lets through unproven nothing
-    the degraded path denies.
+    prove safe is judged on one of two paths, which are two rules, not one:
+      primary  — the analyzer answers UNRESOLVED. It has already refused every removal it sees where it would be
+                 executed (a removal program in command position, find -delete, git rm/clean, a removal call in
+                 Python it reads with ast). What is left runs, unless the analyzer names residue: a computed
+                 program or command text, or inline code in a language with no reader. Only there is the word list
+                 (lib/pol_degraded_removal_reference.ere) asked, and only of the text that can become that command
+                 (the analyzer's `unresolved_scopes`): never of a heredoc written to a file, another command's
+                 arguments, a variable name or a message.
+      degraded — the analyzer gives no usable verdict (timeout, memory ceiling, crash, bad JSON): nothing has been
+                 read, so the word list is asked of the whole command text.
 
     Returns None for a proven command and, for an unproven one let run, the entry described at
     let_through_unproven().
     """
     analyzer = os.path.join(LIB, "bash_execution_boundary.py")
-    decision, proof = "", None
+    decision, proof, scopes = "", None, None
     limit = duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "15s")
     if os.access(analyzer, os.R_OK) and limit is not None:
         try:
@@ -4875,8 +5035,9 @@ def removal_policy(payload_text, command):
                         and v.get("allowed") is False:
                     decision = "DENY " + verdict + " " + str(v.get("reason", ""))[:200]
                     proof = v.get("removal_targets") if verdict == "FORBIDDEN_REMOVAL" else None
+                    scopes = v.get("unresolved_scopes") if verdict == "UNRESOLVED" else None
         except Exception:  # noqa: BLE001 - timeout, memory ceiling, crash, bad JSON: degraded mode
-            decision, proof = "", None
+            decision, proof, scopes = "", None, None
     if decision == "ALLOW":
         return None
     unproven = not decision or decision.startswith("DENY UNRESOLVED ")
@@ -4891,7 +5052,8 @@ def removal_policy(payload_text, command):
         if not rmref:
             refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
                        f"missing or empty. Denied conservatively.", f"Command: {command}")
-        named = grep(rmref, command)
+        primary = isinstance(scopes, list) and all(isinstance(t, str) for t in scopes)
+        named = any(grep(rmref, t) for t in scopes) if decision and primary else grep(rmref, command)
     own = ()
     if named:
         try:
@@ -4908,8 +5070,8 @@ def removal_policy(payload_text, command):
                    "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. "
                    "git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no "
                    "submodule); this command has a boundary that is none of these."
-                   + (" It could not be proven, and its text holds a removal word (an unproven command that holds none "
-                      "runs)." if unproven else ""), released_line(), *own)
+                   + (" It could not be proven, and the text that can become a command it could not resolve holds a "
+                      "removal word." if unproven else ""), released_line(), *own)
     if named:
         refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
                    "usable verdict, and this command's text holds a removal word. Denied conservatively.",
@@ -4941,7 +5103,7 @@ def kill_pid_rule(command, view, sv=None):
 # a command the parser cannot read takes the base pass alone.
 
 _INTERP_CODE_OPTS = (  # interpreter name pattern, the options whose value is the code, options taking a value
-    (re.compile(r"^(python|pypy)[\d.]*$"), ("-c",), ("-W", "-X")),
+    (re.compile(r"^(%s)[\d.]*$" % "|".join(PYTHON_NAMES)), ("-c",), ("-W", "-X")),
     (re.compile(r"^(node|nodejs|bun|deno)[\d.]*$"), ("-e", "--eval", "-p", "--print"),
      ("-r", "--require", "--import", "--loader", "--experimental-loader", "--input-type", "--env-file")),
     (re.compile(r"^perl[\d.]*$"), ("-e", "-E"), ("-I", "-M", "-m")),
@@ -5046,7 +5208,7 @@ def _doc_path_ok(path):
     if not path or path.startswith(("~", "-", "/")):
         return False
     low = path.lower()
-    parts = [c for c in low.split("/") if c not in ("", ".")]
+    parts = [c for c in low.split("/") if c not in ("", os.curdir)]
     if not parts or any(c == ".." or c.startswith(".") or c.endswith(".git") for c in parts):
         return False
     base = parts[-1]
@@ -5065,7 +5227,7 @@ def _long_prefix_of(arg, names, shortest=3):
 
 
 def _word_is_static(w):
-    return all(p.kind not in ("cmdsub", "backtick", "procsub_in", "procsub_out") for p in w.parts)
+    return all(p.kind not in SUBST_KINDS for p in w.parts)
 
 
 def _shape_redirects(cmd, may_write_doc, state):
@@ -5205,7 +5367,7 @@ def data_shape(command, invs):
             return False
         state = {"writes": False, "git": False}
         for pipeline, sep in script.items:
-            if sep not in (None, "", ";", "&&", "||", "\n") or any(p not in PIPE_OPS for p in pipeline.pipes):
+            if sep is None or sep not in SEQUENCE_OPS or any(p not in PIPE_OPS for p in pipeline.pipes):
                 return False
             if not all(_shape_simple(stage, invs, k, state) for k, stage in enumerate(pipeline.stages)):
                 return False
@@ -5932,7 +6094,7 @@ def _sd_git(args):
                     value = val if eq else (rest[j + 1] if j + 1 < len(rest) else None)
                     if name == "--message":
                         allowed.add(base + value_at)
-                    if name == "--file" and value in ("-", locations.STDIN_DEVICE):
+                    if name == "--file" and value in ("-",) + locations.STDIN_DEVICES:
                         stdin = True
                     j += 1 if eq else 2
                     continue
@@ -5948,7 +6110,7 @@ def _sd_git(args):
                     value = a[c_at + 1:] if attached else (rest[j + 1] if j + 1 < len(rest) else None)
                     if c == "m":
                         allowed.add(base + (j if attached else j + 1))
-                    if c == "F" and value in ("-", locations.STDIN_DEVICE):
+                    if c == "F" and value in ("-",) + locations.STDIN_DEVICES:
                         stdin = True
                     if not attached:
                         j += 1
@@ -5974,7 +6136,7 @@ def _sd_message_doc(word):
     inner = body.items[0][0].stages[0]
     if not isinstance(inner, SimpleCommand) or inner.assignments or [w.value() for w in inner.words] != ["cat"]:
         return None
-    if len(inner.redirects) != 1 or inner.redirects[0].op not in ("<<", "<<-"):
+    if len(inner.redirects) != 1 or inner.redirects[0].op not in HERE_DOCUMENT_OPS:
         return None
     hd = inner.redirects[0].hd
     return hd if hd is not None and (hd.quoted or not hd.expansions) else None
@@ -6008,7 +6170,7 @@ def _sd_allowed(site):
             v = "message"
         args.append(v)
     stdin = False
-    if res.name in ("grep", "egrep", "fgrep"):
+    if res.name in GREP_NAMES:
         found = _sd_scan(args, _SD_GREP)
     elif res.name == "rg":
         found = _sd_scan(args, _SD_RG)
@@ -6022,7 +6184,7 @@ def _sd_allowed(site):
     out = [res.args[i].raw for i in found if i < len(res.args)]  # a message `$(cat <<'EOF' ..)` is inert text
     if stdin:
         for r in cmd.redirects:
-            if r.fd == 0 and r.op in ("<<", "<<-") and r.hd is not None and (r.hd.quoted or not r.hd.expansions):
+            if r.fd == 0 and r.op in HERE_DOCUMENT_OPS and r.hd is not None and (r.hd.quoted or not r.hd.expansions):
                 out.append(r.hd.body_src)
             elif r.fd == 0 and r.op == "<<<" and r.target is not None and r.target.value() is not None \
                     and all(p.kind == "lit" for p in r.target.parts):
@@ -6069,12 +6231,10 @@ _SD_LISTERS = frozenset({"ls", "dir", "vdir", "du", "echo", "printf", "stat", "f
 # What a later word can use to reach an earlier command's last argument (`grep -l session_dirs.txt; cat $_`).
 _SD_LAST_ARG = re.compile(r"\$(_(?![A-Za-z0-9_])|\{_(?![A-Za-z0-9_])|\{?BASH_(ARGV|ARGC|COMMAND|EXECUTION_STRING)|\{!)"
                           r"|!\$")
-_SD_FIND_NAMES = {"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"}
-_SD_FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
 # Interpreters: (short options whose value is code, short options that take the next word, long options whose
 # value is code).
 _SD_CODE_OPTS = (
-    (re.compile(r"(python|pypy)[0-9.]*"), "c", "mWXQ", set()),
+    (re.compile(r"(%s)[0-9.]*" % "|".join(PYTHON_NAMES)), "c", "mWXQ", set()),
     (re.compile(r"node(js)?|bun"), "ep", "r", {"--eval", "--print"}),
     (re.compile(r"deno"), "", "", {"--eval"}),
     (re.compile(r"perl[0-9.]*"), "eE", "", set()),
@@ -6125,8 +6285,8 @@ def _sd_glob_hit(word, env=None):
             elif kind == "glob":
                 pat.append(text)
                 frag.append(text)
-            elif kind in ("brace", "cmdsub", "backtick", "procsub_in", "procsub_out"):
-                if kind in ("cmdsub", "backtick") and _sd_strong_piece(text):
+            elif kind in _SHAPE_COMPUTED_PARTS:
+                if kind in CMDSUB_KINDS and _sd_strong_piece(text):
                     return True
                 pat.append("*")
                 frag.append(text)
@@ -6213,17 +6373,17 @@ def _sd_glob_operand(res, out_safe):
         return found
 
     if name == "find":
-        if res.payload is None and not any(v in _SD_FIND_ACTIONS for v in vals) and out_safe:
+        if res.payload is None and not any(v in FIND_ACTIONS for v in vals) and out_safe:
             return None
         for k, a in enumerate(vals[:-1]):
-            if a in _SD_FIND_NAMES and _sd_pattern_hits(vals[k + 1]):
+            if a in FIND_NAME_TESTS and _sd_pattern_hits(vals[k + 1]):
                 return vals[k + 1]
             if a in ("-regex", "-iregex") and _sd_pattern_hits(vals[k + 1], regex=True):
                 return vals[k + 1]
         return None
     if name == "rg":
         hits = [h for h in opt_values({"--glob", "--iglob"}, "g") if not h.startswith("!")]
-    elif name in ("grep", "egrep", "fgrep"):
+    elif name in GREP_NAMES:
         hits = opt_values({"--include"})
     elif name == "rsync":
         hits = opt_values({"--include"})
@@ -6619,7 +6779,7 @@ def _sd_quiet_redirects(redirects, stdin_doc=False):
     for r in redirects:
         if r.fd_var is not None:
             return False
-        if r.op in ("<<", "<<-"):
+        if r.op in HERE_DOCUMENT_OPS:
             if not (stdin_doc and r.fd == 0 and r.hd is not None and (r.hd.quoted or not r.hd.expansions)):
                 return False
             continue
@@ -6682,7 +6842,7 @@ def _sd_plain_command(cmd):
         return len(vals) == 2 and vals[0] == "-c" and isinstance(res.payload, Script) and \
             _sd_plain_script(res.payload)
     if name == "find":
-        actions = [v for v in vals if v in _SD_FIND_ACTIONS]
+        actions = [v for v in vals if v in FIND_ACTIONS]
         return set(actions) <= {"-exec", "-execdir"} and len(actions) <= 1 and \
             (not actions or (isinstance(res.payload, Script) and _sd_plain_script(res.payload)))
     if res.payload is not None:
@@ -6756,7 +6916,7 @@ def session_dirs_rule(command):
             res, name = None, None
         lister = (out_safe and res is not None and res.payload is None and name in _SD_LISTERS
                   and not (name == "printf" and any(w.value() in (None, "-v") for w in res.args[:1]))
-                  and not (name == "find" and any(w.value() in _SD_FIND_ACTIONS for w in res.args)))
+                  and not (name == "find" and any(w.value() in FIND_ACTIONS for w in res.args)))
         words = [a.word for a in cmd.assignments] + ([] if lister else list(cmd.words))
         words += [r.target for r in cmd.redirects if r.target]
         for w in words:
@@ -6867,6 +7027,7 @@ def decide(payload_text):
     view = GitView(command)
     bulk_sentinel_rule(command)
     hard_ban_rule(command)
+    outward_rule(command)
     executable = executable_view_or_raw(command)
     sv = ServiceView(command, get("cwd"))
     service_rules(command, executable, env, sv)

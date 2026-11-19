@@ -60,25 +60,9 @@ from graphify_lib import (
 # Edge-signature confidence whitelist for the semantic proof-gate (verdict P, codex round-2).
 VALID_CONFIDENCES = {"EXTRACTED", "INFERRED", "AMBIGUOUS"}
 
-
-def _detect_semantic_backend() -> str | None:
-    """Return a semantic backend name reachable in THIS environment, or None.
-
-    Auto-detect honours API-key env vars via graphify's own detect_backend;
-    absent any key, the keyless `claude-cli` backend is usable iff /usr/bin/claude
-    (the `claude` CLI) is on PATH. GRAPHIFY_TRIAGE_BACKEND forces a choice.
-    """
-    forced = os.environ.get("GRAPHIFY_TRIAGE_BACKEND", "").strip()
-    if forced:
-        return forced
-    for env_key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "MOONSHOT_API_KEY",
-                    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
-        if os.environ.get(env_key):
-            return None  # let graphify auto-detect the keyed backend via `extract`
-    import shutil
-    if shutil.which("claude"):
-        return "claude-cli"
-    return None
+# The API-key variables whose presence lets graphify pick a keyed semantic backend itself.
+SEMANTIC_BACKEND_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "MOONSHOT_API_KEY",
+                             "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY")
 
 
 def _canonicalize(value) -> object:
@@ -348,7 +332,7 @@ def cmd_update() -> int:
 def _select_semantic_backend() -> tuple[str, str | None, str]:
     """Resolve the 4-case backend matrix (OBJ-3 / AC13-OBJ3).
 
-    Mirrors _detect_semantic_backend's precedence: forced -> key -> claude -> none.
+    Precedence: forced -> key -> claude -> none.
     Returns (kind, backend_flag, label) where:
       kind == "forced"  -> pass --backend <flag>, label "semantic:<flag>"
       kind == "keyed"   -> NO --backend arg (graphify auto-detects), label "semantic:auto"
@@ -363,8 +347,7 @@ def _select_semantic_backend() -> tuple[str, str | None, str]:
         if forced.lower() in ("none", "null", ""):
             return "none", None, ""
         return "forced", forced, f"semantic:{forced}"
-    for env_key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "MOONSHOT_API_KEY",
-                    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
+    for env_key in SEMANTIC_BACKEND_KEY_VARS:
         if os.environ.get(env_key):
             # Keyed: let graphify auto-detect; do NOT pass --backend (codex #6).
             return "keyed", None, "semantic:auto"

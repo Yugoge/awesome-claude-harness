@@ -270,6 +270,27 @@ def settings_switch(key: str, default: str) -> str:
     return settings_env(key, any_session=True).get(key, default).strip().lower()
 
 
+CLAUDE_HOME_SPELLING = "${CLAUDE_HOME:-$HOME/.claude}"  # the harness home as hooks and commands spell it
+
+
+def known_text(text: str, cwd: Optional[str] = None) -> Optional[str]:
+    """``text`` (a shell word as written) with ~, $HOME, $CLAUDE_PROJECT_DIR, ${CLAUDE_HOME:-$HOME/.claude} and
+    (at the call's start) $PWD expanded and its quotes dropped; None when an expansion stays."""
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    known = {"HOME": home}
+    if cwd:
+        known["PWD"] = cwd
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        known["CLAUDE_PROJECT_DIR"] = os.environ["CLAUDE_PROJECT_DIR"]
+    text = text.replace(CLAUDE_HOME_SPELLING, os.environ.get("CLAUDE_HOME") or os.path.join(home, ".claude"))
+    for name, value in known.items():
+        text = text.replace("${%s}" % name, value).replace("$" + name, value)
+    text = text.replace('"', "").replace("'", "")
+    if any(c in text for c in "$`*?["):
+        return None
+    return os.path.expanduser(text) if text.startswith("~") else text
+
+
 def _main(argv: list[str]) -> int:
     """Tiny CLI so non-python callers/tests can shell out."""
     cmd = argv[1] if len(argv) > 1 else "resolve"

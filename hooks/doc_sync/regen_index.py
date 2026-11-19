@@ -14,7 +14,7 @@ from .tree import build_tree
 # module is loaded standalone via importlib spec_from_file_location (mirrors the
 # regen_readme/tree.py pattern so the git-tracked filter resolves either way).
 try:
-    from .config import tracked_names, tracked_relpaths, is_github_reserved_subtree, work_tree_root
+    from .config import SKIP_FILES, tracked_names, tracked_relpaths, is_github_reserved_subtree, work_tree_root
     from .folder_doc import write_folder_doc
 except ImportError:
     import importlib as _importlib
@@ -24,6 +24,7 @@ except ImportError:
     if _pkg_root not in _sys.path:
         _sys.path.insert(0, _pkg_root)
     _cfg = _importlib.import_module("hooks.doc_sync.config")
+    SKIP_FILES = _cfg.SKIP_FILES  # type: ignore[no-redef]
     tracked_names = _cfg.tracked_names  # type: ignore[no-redef]
     tracked_relpaths = _cfg.tracked_relpaths  # type: ignore[no-redef]
     is_github_reserved_subtree = _cfg.is_github_reserved_subtree  # type: ignore[no-redef]
@@ -52,7 +53,7 @@ def _build_stats(dir_path: Path) -> dict:
     total = 0
     dirs = 0
     for item in dir_path.iterdir():
-        if item.name in ('INDEX.md', 'README.md', '__init__.py', '.DS_Store'):
+        if item.name in SKIP_FILES:
             continue
         if item.name.startswith('.'):
             continue

@@ -27,12 +27,20 @@ try:
     from .pathmatch import _normalize_path, _strip_quotes
 except ImportError:  # executed under the top-level-script shim (no package)
     from pathmatch import _normalize_path, _strip_quotes  # type: ignore[no-redef]
-try:
-    from .. import locations
-except ImportError:  # a top-level package or the script shim: hooks/lib may not be on sys.path
-    import sys
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    import locations  # type: ignore[no-redef]
+
+
+def _locations():
+    """hooks/lib/locations.py, loaded when a location is asked for and never at import: the
+    installer loads this file with pathmatch.py alone beside it (scripts/bootstrap step 4 and
+    scripts/install/render-settings read DATA_FILE_PATH, REQUIRED_KEYS and _read_config from
+    a home that may hold nothing else of hooks/lib)."""
+    try:
+        from .. import locations
+    except ImportError:  # a top-level package or the script shim: hooks/lib may not be on sys.path
+        import sys
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import locations  # type: ignore[no-redef]
+    return locations
 
 
 # ── The single generic data-file path ────────────────────────────────────────
@@ -179,14 +187,13 @@ def _config_path_variants() -> set:
 # parent dir(s) BELOW these roots ARE protected. The roots are lib/locations'
 # (is_broad_root): the system directories, and the user's own home and what lies
 # above it, whoever the user is.
-_ANCESTOR_STOP_ROOTS = locations.SYSTEM_ROOTS
 
 
 def _config_ancestor_dirs() -> set:
     """Proper ancestor DIRECTORIES of the data file that are protected against
     mutation/move/delete — moving or removing any of them neuters the guard's
     config. Yields each ancestor directory up to (but EXCLUDING) the generic
-    too-broad system/home roots in `_ANCESTOR_STOP_ROOTS`, so `/root/.config/claude`
+    too-broad system/home roots (lib/locations is_broad_root), so `/root/.config/claude`
     and `/root/.config` are protected while `/root` and `/` are not (a routine
     `mv /root /backup` must still ALLOW). Includes the `~/`-prefixed variant for a
     `/root/`-rooted path. Generic — no project identity (the path itself is the only
@@ -194,7 +201,7 @@ def _config_ancestor_dirs() -> set:
     out = set()
     norm = os.path.normpath(DATA_FILE_PATH)
     d = os.path.dirname(norm)
-    while d and not locations.is_broad_root(d):
+    while d and not _locations().is_broad_root(d):
         out.add(d)
         # Generic: add the ~/-prefixed variant for ANY ancestor
         # under the real user home, not only /root/.

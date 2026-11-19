@@ -192,8 +192,16 @@ def test_each_rule_sees_the_tools_its_guard_was_registered_for(tmp_path):
     assert registered.pop("pretool-write-guard.sh") == by_file.pop("overwrite.py").tools
     assert registered.pop("pretool-subagent-code-block.py") is not None  # not a rule: see below
     # the harness switch's guard was never a registration of its own: a rule from its start
-    assert by_file.pop("pretool-harness-switch-guard.py").tools == write_gate.WRITE_TOOLS | {
-        "Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"}
+    # (and it sees every tool but the CLI's own that deliver no prompt: a prompt that types /harness is
+    # known by the input, not the tool's name, so no MCP tool and no tool of a later CLI is skipped)
+    switch = by_file.pop("pretool-harness-switch-guard.py")
+    assert switch.tools is None and {"Read", "Grep", "Glob"} <= switch.skips
+    assert all(switch.applies(t) for t in ("Bash", "Write", "Skill", "CronCreate", "ScheduleWakeup", "SendMessage",
+                                           "Agent", "mcp__any__tool", "ALaterTool")) and not switch.applies("Read")
+    assert all(r.skips == frozenset() for r in by_file.values())
+    # the overnight boundary's old matcher left NotebookEdit out; its rule sees every file-writing tool
+    assert registered.pop("pretool-overnight-hook-guard.py") | {"NotebookEdit"} == \
+        by_file.pop("pretool-overnight-hook-guard.py").tools == write_gate.WRITE_TOOLS | {"Bash", "AskUserQuestion"}
     assert {k: v for k, v in registered.items()} == {k: r.tools for k, r in by_file.items()}
     assert [r.name for r in write_gate.RULES] == ["bash-views", "overnight-boundary", "tool-policy",
                                                   "cp-state", "overwrite", "claude-config", "harness-switch"]
@@ -433,7 +441,8 @@ def test_l4s_whole_registration_change():
     PostToolUseFailure) make 55; #27's P2-4 and P2-3 make 57: prompt-workflow.py at SessionStart and at
     SubagentStart, each a rule of its event's launcher, after the event's hook registered before it;
     OB-L02's two make 59: posttool-orchestrator-ran.py on every tool at PostToolUse and at
-    PostToolUseFailure, each a rule of its event's launcher; T4's Monitor rule makes 60."""
+    PostToolUseFailure, each a rule of its event's launcher; T4's Monitor rule makes 60; the
+    PermissionRequest answer makes 61."""
     w = write_gate_settings
     regs = _registrations(_settings())
     gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
@@ -458,8 +467,9 @@ def test_l4s_whole_registration_change():
     # - 2: P13-3's two, the SubagentStart injector and the codex ledger on PostToolUseFailure;
     # - 2: #27's two, prompt-workflow.py at SessionStart (P2-4) and at SubagentStart (P2-3);
     # - 2: OB-L02's two, posttool-orchestrator-ran.py at PostToolUse and at PostToolUseFailure;
-    # - 1: T4's Monitor rule (pretool-monitor-command.py, a rule of pretool-launch.py)
-    assert len(regs) - 2 - 2 - 2 - 1 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
+    # - 1: T4's Monitor rule (pretool-monitor-command.py, a rule of pretool-launch.py);
+    # - 1: the PermissionRequest answer (permissionrequest-answer.py, the rule of permissionrequest-launch.py)
+    assert len(regs) - 2 - 2 - 2 - 1 - 1 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
         - len(w.DISPATCH) + len(w.GATES) + 1 == 53
     for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')
@@ -595,8 +605,9 @@ def test_the_tools_named_one_after_another_run_their_rules_in_the_gates_process(
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     assert gate.ONE_AFTER_ANOTHER == frozenset({"Bash"})
-    from lib import hook_launch
-    assert gate.WARM == hook_launch.WARM
+    from lib import hook_launch, rule_fork
+    # one list of the modules warmed before the forks, read by the gate and the launcher
+    assert not hasattr(gate, "WARM") and not hasattr(hook_launch, "WARM") and rule_fork.WARM
     rules = [(f"s{i}", _timed(tmp_path, f"s{i}", "time.sleep(0.3)\n"), "open", 5.0) for i in range(2)]
     for tool, forked in (("Bash", False), ("Write", True), ("Edit", True), (None, True)):
         code, out, err, pid, _ = _gate_runs(tmp_path, rules, tool=tool)

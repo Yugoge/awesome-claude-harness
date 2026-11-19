@@ -248,7 +248,9 @@ def test_without_a_verdict_a_removal_is_refused_wherever_its_files_lie(project):
 
 
 def test_an_unproven_command_naming_a_removal_is_refused_and_names_the_directory(project):
-    code, err = project.bash("python3 -c 'import os; os.unlink(\"" + project.own + "/a.txt\")'")
+    # A program name held in a variable: unproven, and the words that can become the command name a removal. (The
+    # Python form used here before is now read with ast and found as a removal: FORBIDDEN_REMOVAL.)
+    code, err = project.bash("x=rm; $x '" + project.own + "/a.txt'")
     assert code == 2 and "removal-policy — UNRESOLVED" in err, err
     assert NAMED.search(err).group(1) == project.own
 

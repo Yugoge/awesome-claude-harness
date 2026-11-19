@@ -28,6 +28,8 @@ GIT_CONFIG_WRITE_OPTIONS = frozenset({
     "--add", "--replace-all", "--unset", "--unset-all", "--rename-section", "--remove-section"})
 GIT_CONFIG_READ_SUBCOMMANDS = frozenset({"get", "list"})
 GIT_CONFIG_WRITE_SUBCOMMANDS = frozenset({"set", "unset", "rename-section", "remove-section", "edit"})
+# The words a key-reading guard takes for a write verb: those and the action options' names, which git rejects as keys.
+GIT_CONFIG_WRITE_VERBS = GIT_CONFIG_WRITE_SUBCOMMANDS | {"add", "replace-all", "unset-all"}
 # Options that change only the scope a read looks in or how it prints.
 GIT_CONFIG_READ_MODIFIERS = frozenset({
     "--global", "--local", "--system", "--worktree", "--show-origin", "--show-scope", "--null", "-z",
@@ -50,6 +52,7 @@ GIT_COMMIT_VALUE_OPTIONS = frozenset({
 
 # Subcommands that run a shell command given on their command line (bisect run, submodule foreach,
 # rebase -x, difftool -x, filter-branch's filters).
+GH_MESSAGE_SUBCOMMANDS = frozenset({"issue", "pr", "release"})  # gh: words are a title or body
 GIT_SHELL_PAYLOAD_SUBCOMMANDS = frozenset({"bisect", "difftool", "filter-branch", "rebase", "submodule"})
 
 # Configuration keys whose value makes git run a program or read another config or repository
@@ -62,3 +65,15 @@ GIT_RUN_CONFIG_KEY_RE = re.compile(
     r'remote\..*\.(?:uploadpack|receivepack|vcs)|submodule\..*\.update|'
     r'.*\.(?:pager|editor|command|cmd|textconv|program|helper|external|driver|path|tool|hook|sshcommand|'
     r'difffilter|clean|smudge|process))$', re.IGNORECASE)
+# git's boolean spellings (an empty value reads as false).
+GIT_BOOLEAN_VALUES = frozenset({"true", "false", "yes", "no", "on", "off", "1", "0", ""})
+
+
+def git_config_value_names_no_program(key: str, value: str) -> bool:
+    """Whether a GIT_RUN_CONFIG_KEY_RE key's value names no program (`git help config`, git 2.54): a boolean for
+    core.fsmonitor (false: no monitor; true: git's own built-in daemon) and pager.<cmd> (false: no pager; true: the
+    pager configured elsewhere), "" or cat for core.pager (no pager), "" for diff.external (git's own diff)."""
+    k = key.lower()
+    if k == "core.fsmonitor" or k.startswith("pager."):
+        return value.lower() in GIT_BOOLEAN_VALUES
+    return (k == "core.pager" and value in ("", "cat")) or (k == "diff.external" and value == "")

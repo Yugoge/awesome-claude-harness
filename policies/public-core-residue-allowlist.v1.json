@@ -44,7 +44,7 @@
     },
     {
       "path": "docs/ENFORCEMENT-LEDGER.md",
-      "fingerprint": "24a79e024a3295b7",
+      "fingerprint": "4c79d7bad12a3151",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "H-027 ledger row quoting, verbatim, the synthetic local-file-URL commands the bash-safety sensitive-name tests feed the hook; prose, never read as a path at runtime."
@@ -331,7 +331,7 @@
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
-      "fingerprint": "8efae8045d4a288a",
+      "fingerprint": "3d4ad66a4c6628a8",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
       "rationale": "def _config_ancestor_dirs() — illustrative literal inside documentation/usage text; not executed as a path."

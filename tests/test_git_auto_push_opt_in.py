@@ -10,9 +10,9 @@ variable was unset or even "0":
   1b  hooks/git-hooks/post-commit-auto-push, installed as a post-commit hook:
       background push of refs/backups/claude/<branch>/<sha12>.
   1c  the combined "Git LFS + Auto-Push" post-commit hook body that
-      hooks/install-protection-all.sh writes from its heredoc (the text is
-      extracted from the file; the installer itself is never run): background
-      push of the branch.
+      the retired hooks/install-protection-all.sh installed (its text is kept
+      in tests/fixtures/post-commit-lfs-auto-push): background push of the
+      branch.
   1e  hooks/git-fswatch.sh safe_push: synchronous push of refs/heads/<branch>
       (the watcher is never started; only its functions are loaded).
 
@@ -57,7 +57,9 @@ CHECKPOINT_LIB = HOOKS / "lib" / "checkpoint-core.sh"
 STATE_DIR_LIB = HOOKS / "lib" / "harness_state_dir.sh"
 AUTO_PUSH_LIB = HOOKS / "lib" / "auto_push.sh"
 POST_COMMIT_HOOK = HOOKS / "git-hooks" / "post-commit-auto-push"
-INSTALLER = HOOKS / "install-protection-all.sh"
+# The combined post-commit hook body the retired hooks/install-protection-all.sh wrote from its
+# heredoc; copies of it stay installed in projects and load hooks/lib/auto_push.sh.
+COMBINED_HOOK = ROOT / "tests" / "fixtures" / "post-commit-lfs-auto-push"
 FSWATCH = HOOKS / "git-fswatch.sh"
 CHECKPOINT_CMD = HOOKS / "checkpoint.sh"
 SESSION_GIT_INIT = HOOKS / "session-git-init.sh"
@@ -205,19 +207,10 @@ def _install_post_commit(repo: Path, text: str) -> None:
 
 
 def _combined_hook_body() -> str:
-    """The heredoc text between the line ending in <<'EOF' and the line EOF."""
-    lines = INSTALLER.read_text(encoding="utf-8").splitlines(keepends=True)
-    bodies = []
-    for i, line in enumerate(lines):
-        if line.rstrip("\n").endswith("<<'EOF'"):
-            end = next(j for j in range(i + 1, len(lines))
-                       if lines[j].rstrip("\n") == "EOF")
-            bodies.append("".join(lines[i + 1:end]))
-    combined = [b for b in bodies if "Git LFS + Auto-Push" in b]
-    assert len(combined) == 1, (
-        f"expected one combined LFS + auto-push heredoc in {INSTALLER}, "
-        f"found {len(combined)}")
-    return combined[0]
+    """The combined LFS + auto-push post-commit hook body, as installed copies carry it."""
+    body = COMBINED_HOOK.read_text(encoding="utf-8")
+    assert "Git LFS + Auto-Push" in body, f"{COMBINED_HOOK} is not the combined hook"
+    return body
 
 
 def _fswatch_functions(base: Path) -> Path:

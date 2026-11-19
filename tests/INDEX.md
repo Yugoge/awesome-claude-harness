@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:27:55Z*
-**Total entries**: 313
+*Last updated: 2026-11-19T12:58:00Z*
+**Total entries**: 335
 **Convention**: kebab
 
 ## Tree
@@ -33,6 +33,11 @@ tests/
 │   ├── `test_static_half.py` - Each test builds a small harness-shaped tree under tmp_path and checks the
 │   ├── `test_unreadable_fault.py` - Every form _PRESENCE_TEST matches answers False on a removed file or parent (ENOENT, ENOTDIR) and
 │   └── `values.py` - A value is one of:
+├── defs_registry/
+│   ├── `__main__.py` - python3 -m tests.defs_registry [--tree DIR] [--register FILE] [--count] [--stale]
+│   ├── `check.py` - THE SAMENESS RULE. Two definitions state the same fact when their member sets
+│   ├── `scan.py` - members a decision is written against, in each of the shapes the harness writes them
+│   └── `test_defs_registry.py` - held to the register's ceiling
 ├── differential/
 │   ├── `build_plan_legacy.py` - This is NOT production code. It is ``build_plan`` exactly as it stood at commit
 │   ├── `combine_legacy.py` - copied verbatim as it stood at commit cc22f78, before it was split into helpers
@@ -45,6 +50,8 @@ tests/
 │   │   ├── 2.1.325/
 │   │   ├── 2.1.326/
 │   │   └── `CURRENT` - CURRENT file
+│   ├── cli-request-copies/
+│   │   └── `transcript-2.1.322.jsonl` - jsonl file
 │   ├── cli-todowrite-oldtodos/
 │   │   └── `stream-2.1.326.jsonl` - jsonl file
 │   ├── late_repair_golden/
@@ -54,7 +61,9 @@ tests/
 │   │   └── `qa_only.json` - JSON config: artifact_paths, canonical_dev_report, checks, checks_not_applicable, commit_whitelist_artifacts
 │   ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   ├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
-│   └── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
+│   ├── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
+│   ├── `permissions-ask-until-20261119.json` - JSON config: _comment, ask
+│   └── `post-commit-lfs-auto-push` - post-commit-lfs-auto-push file
 ├── instructions/
 │   ├── `execution-guide.md` - AI Test Execution Guide
 │   └── `validation-guide.md` - AI-Driven Validation Guide
@@ -113,6 +122,7 @@ tests/
 │   ├── `recovery.py` - --arg fault=cut@<label glob>     F5, F5f: after the first step of a subagent whose label matches
 │   ├── `removal.py` - with `git rm`, recoverably, or tries a forced removal that the registered hooks refuse
 │   ├── `replay.py` - A driver gets a Replay and works through Sessions and Actors (the main agent,
+│   ├── `requirements.py` - meets it and wherever the project lies
 │   ├── `roles.py` - Each helper returns an Act.work callable, work(sub, brief, player) -> content,
 │   ├── `routing.py` - No hook blocks here: the gap is what /close's disposition call (Step 0) or /commit's (Step 3) pri...
 │   ├── `sandbox.py` - One scratch root holds everything a replay touches:
@@ -213,9 +223,13 @@ tests/
 ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
 ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
 ├── `test_completeness_span_accounting.py` - halves on one code path
-├── `test_conftest_hermetic.py` - conftest.py removes CLAUDE_PROJECT_DIR, PASEO_CONFIG_DIR, CLAUDE_HOME, CODEX_HOME,
+├── `test_conftest_hermetic.py` - conftest.py removes CLAUDE_PROJECT_DIR, PASEO_HOME, CLAUDE_HOME, CODEX_HOME,
 ├── `test_cycle_records_commit_set.py` - (P10 R8 rules 2 and 3, A25; #27 comment 6737075938 item 3)
 ├── `test_declared_vocab_readers.py` - (P1b row 19 rule 7): the orphan-agent detector asks the command files
+├── `test_defs_shell_cd_scopes.py` - A brace group, a loop, an if and a case body run in the current shell, in the directory in effect,
+├── `test_defs_shell_consumers_agree.py` - Each hook below refuses its own base command. A wrapper, runner, payload option or shell
+├── `test_defs_shell_package_runners.py` - subcommands that run a package binary (or a script) at every decision
+├── `test_defs_shell_subscript_assignments.py` - assignment word where bash accepts an assignment (before a command's name), as bash reads it
 ├── `test_dev_artifact_chain_consumer_contracts.py` - Each command that reads the artifact chain spells one resolver call and names the result fields i...
 ├── `test_dev_commands_no_phases.py` - The frontmatter of the five /dev-family command files must parse as YAML and hold a non-empty `de...
 ├── `test_dev_question_relay_route.py` - re-dispatch carries the answer the same way as Step 5's BA re-dispatch (group 3 findings on #27:
@@ -231,10 +245,11 @@ tests/
 ├── `test_graphify_scripts.py` - tests/test_graphify_scripts.py — smoke tests for scripts/graphify_lib.py
 ├── `test_graphify_workflow_contract.py` - tests/test_graphify_workflow_contract.py — contract tests for graphify agent registration
 ├── `test_harness_switch.py` - Each test builds a harness home the way the full install leaves one: a git checkout of this
+├── `test_harness_switch_holes.py` - - Finding 3: a prompt that types /harness is refused whatever tool carries it. The rule reads every
 ├── `test_hero_advance_cross_check.py` - tools/demo/audit.mjs measures a line's rendered right edge on a fixed monospace grid, using
 ├── `test_hero_demo_state_dir.py` - scripts/capture-hero-run.py writes the demo's single-use grant with allowlist.py's own
 ├── `test_home_secret_denies.py` - OB-L19's Read/Edit secret denies are written `**/<name>`, `<name>` or a relative path, and the CLI
-├── `test_hook_rejection_retry.py` - A hook-rejected operation is never retried on the owner's answer alone: only their /allow grant (dev, paseo-daemon, clean); an operation no grant can let through is withdrawn, never left to the owner's own run.
+├── `test_hook_rejection_retry.py` - A hook-rejected operation is reported, never asked about, and never retried: only the owner's own /allow grant, typed by him, lets it through (dev, paseo-daemon, clean); an operation no grant can let through is withdrawn, never left to the owner's own run.
 ├── `test_interruption_signals.py` - Every banner asserted here was measured in the real transcript corpus under
 ├── `test_iterate_failed_pipelines_compat.py` - It answers the call origin/master's /dev-overnight Step 17 makes (commands/dev-overnight.md:1384 ...
 ├── `test_landing.py` - render-settings land, run from hooks/auto-commit.sh), migrate's push exclusion and the settings
@@ -242,13 +257,16 @@ tests/
 ├── `test_late_repair_driftfree_effective_state.py` - scripts/late-repair-controller.py's ``resolve_effective_report_state`` is the
 ├── `test_late_repair_route.py` - Covers AC-7..AC-10, AC-13, AC-14 (spec-20260907-115508-lawful-commit-channel.md,
 ├── `test_launchdiff_durations.py` - A clock reading a hook prints is not a difference: posttool-overnight-loop.py prints "Time remain...
+├── `test_location_literals.py` - Fails when a comparison or a table names an absolute system directory outside that one file
 ├── `test_merge_analyst_moved_tips_grant.py` - Phase 1 blocks when a tip moved between /merge Step 1 and the analysis, and writes the Phase 8 gr...
+├── `test_no_permission_prompt.py` - hook answering every tool is registered (hooks/permissionrequest-answer.py)."""
 ├── `test_no_phases_agent_prompts.py` - Each agents/*.md (README and INDEX excepted) holds exactly one line starting "**Requirement basel...
 ├── `test_no_phases_spec_command.py` - Parallel lanes inside one cycle stay. A spec or a view never splits a requested outcome into sequ...
 ├── `test_no_phases_spec_template.py` - The nine section headings, each section's `### Cycle 1` (or `### 9.N`) subsections and placeholde...
 ├── `test_overnight_guard_in_place_git.py` - Defect (2026-08-09): `hooks/pretool-overnight-hook-guard.py` blocked EVERY git
 ├── `test_overnight_loop_tz.py` - Verifies the overnight loop hook compares end_time correctly against the
 ├── `test_overnight_state_budget_clock.py` - The launch's start time, its end time (relative: Nm, Nh, the default 8h; or a clock time, rolled
+├── `test_owner_questions.py` - AskUserQuestion calls hooks/pretool-tool-policy.py lets through, for the main agent alone and eac...
 ├── `test_p10_42_hook_bytecode_env.py` - R9 set `"PYTHONDONTWRITEBYTECODE": "1"` in settings.json's env so that hooks stop writing
 ├── `test_p9_parts_of_p10_rows.py` - - R9 (the harness home's .gitignore): the old score store's lines stay under D28. Nothing writes
 ├── `test_pair_check.py` - #44 required every registered hook to ask the harness switch first and #45 registered two hooks
@@ -273,6 +291,8 @@ tests/
 ├── `test_readme_facts.py` - names its input when it is missing
 ├── `test_readme_regions.py` - and the numbers and names in the prose around them
 ├── `test_refusal_record_consumers.py` - This is the module named BY NAME as `check.cli_run.harness` by AC12 and AC14 of
+├── `test_refusal_record_sites.py` - The sites are the replay suite's own enumeration (tests/replay/sites.py), read when the test runs:
+├── `test_refusals_reader.py` - - For a period it gives the totals and the counts by event, rule, hook, role, project, day and
 ├── `test_registry_artifacts_resolved.py` - 761b72c routed every registry-dir site through hooks/lib/obligation.py, and
 ├── `test_registry_dir_one_rule.py` - directory takes it from the one rule (hooks/lib/obligation.py,
 ├── `test_release_pipeline_contract.py` - verifier
@@ -299,6 +319,8 @@ tests/
 ├── `test_spec_write.py` - Each test runs the script as a subprocess against a throw-away project under
 ├── `test_specialist_yield.py` - Tests use a tmp dir for the yield log and the bundled production policy file
 ├── `test_stage_owned_hunks_boundary.py` - content-anchor-retry boundary/coordinate-space defect (task 20260912-015952)
+├── `test_state_item_locations.py` - One row per item of the audit's "can_disagree" verdict (state_items.json): the row runs the code
+├── `test_state_item_orphans.py` - S21  push.sh's grant manifest was written and never read: the writer is gone, and the sweep no lo...
 ├── `test_step8_spec_update_markers.py` - COMMIT_STEP8_TRACE=1 emits the STEP8_* markers on stderr, and stage 4's unlinked spec is printed
 ├── `test_steps_clean_merge_approvals.py` - cleaner's context
 ├── `test_steps_codex_run.py` - Every test runs the real script against a stub wrapper in a temp dir (CODEX_ISO_BIN). No real cod...

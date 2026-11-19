@@ -145,7 +145,7 @@ except ImportError:  # executed as a top-level script (no package context)
 # ── Config-loading cluster → config.py ────────────────────────────
 # The config-file loader + STEP0 self-protection cluster (DATA_FILE_PATH,
 # REQUIRED_KEYS, _load_config, _home_tilde_variant, _config_path_variants,
-# _ANCESTOR_STOP_ROOTS, _config_ancestor_dirs, _config_or_ancestor_variants,
+# _config_ancestor_dirs, _config_or_ancestor_variants,
 # _targets_config_file) re-imported here. Dual-context import
 # (INV-3, see the first import block above).
 #
@@ -165,7 +165,6 @@ try:  # noqa: F401  — names re-exported for backward compatibility
     from .config import (
         DATA_FILE_PATH,
         REQUIRED_KEYS,
-        _ANCESTOR_STOP_ROOTS,
         _config_ancestor_dirs,
         _config_or_ancestor_variants,
         _config_path_variants,
@@ -177,7 +176,6 @@ except ImportError:  # executed as a top-level script (no package context)
     from config import (  # type: ignore[no-redef]
         DATA_FILE_PATH,
         REQUIRED_KEYS,
-        _ANCESTOR_STOP_ROOTS,
         _config_ancestor_dirs,
         _config_or_ancestor_variants,
         _config_path_variants,
@@ -268,6 +266,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         _ANCHOR_LAUNCH_FOLLOW,
         _LAUNCH_SUBCMDS,
         _RECURSIVE_WS_FLAGS,
+        _WS_SELECTOR_FLAGS,
         _SERVICE_MANAGER_PROGRAMS,
         _WS_SELECT_KEYWORDS,
         _anchor_exec_tokens,
@@ -282,6 +281,7 @@ except ImportError:  # executed as a top-level script (no package context)
         _ANCHOR_LAUNCH_FOLLOW,
         _LAUNCH_SUBCMDS,
         _RECURSIVE_WS_FLAGS,
+        _WS_SELECTOR_FLAGS,
         _SERVICE_MANAGER_PROGRAMS,
         _WS_SELECT_KEYWORDS,
         _anchor_exec_tokens,
@@ -753,11 +753,6 @@ def _effective_cwd_after(simple_cmds: list, upto_index: int, cwd_base: Optional[
                 determinate = False
     return cwd, determinate
 
-
-CONFIG_MUTATION_HEADS = frozenset({
-    "cp", "mv", "rm", "tee", "truncate", "dd", "install", "ln", "chmod",
-    "chown", "chgrp", "rename", "rsync", "shred", "unlink",
-})
 
 
 # Config-self-protection mutation-verb basenames recognized in EXECUTABLE
@@ -1536,7 +1531,7 @@ def _container_glob_too_broad(parent: str) -> bool:
     # dir and is kept; a deep absolute dir (depth ≥ 3) is specific enough to keep.
     if parent.startswith("/") and "*" not in parent:
         norm = os.path.normpath(parent)
-        if _config.locations.is_broad_root(norm):
+        if _config._locations().is_broad_root(norm):
             return True
         depth = len([s for s in norm.split("/") if s])
         if depth < 3:
@@ -1655,8 +1650,8 @@ def _step0_self_protection(ctx: "Context") -> Optional[Verdict]:
         # config path — so `<any-wrapper> cp|mv|tee|truncate|dd|install|rsync|ln|
         # sed -i|perl -i|chmod|chown <datafile>` BLOCKS even though the leading head
         # is the wrapper, not the mutation verb. (The bare-head form is the
-        # position-0 special case of the same scan; the legacy head-keyed
-        # CONFIG_MUTATION_HEADS check is subsumed by this and removed.)
+        # position-0 special case of the same scan, which subsumes the former
+        # head-keyed check.)
         if _step0_mutation_anchor_hits(ctx, idx, sc, tokens):
             return _block("STEP0", "config self-protection: mutation of data file")
     return None
@@ -1892,10 +1887,10 @@ def _exec_subcommand_after_selector(head: str, rest: list):
                 if t == "--":
                     j += 1
                     continue
-                if t in ("-w", "--workspace", "--filter", "-F", "--prefix", "-C", "--dir", "--cwd") and j + 1 < len(toks):
+                if t in _PM_FLAGS_WITH_VALUE and j + 1 < len(toks):
                     j += 2
                     continue
-                if any(t.startswith(f + "=") for f in ("--workspace", "--filter", "-F", "--prefix", "-C", "--dir", "--cwd", "-w")):
+                if any(t.startswith(f + "=") for f in _PM_FLAGS_WITH_VALUE):
                     j += 1
                     continue
                 if t in _RUNNER_OPTS_WITH_ARG:
@@ -2138,10 +2133,10 @@ def _package_runner_invocation(head: str, rest: list):
             continue
         # PM selector / cwd flags AFTER exec (`npm exec -w cli -- node …`) take a
         # value and are NOT the runner target — consume the flag and its operand.
-        if t in ("-w", "--workspace", "--filter", "-F", "--prefix", "-C", "--dir", "--cwd") and i + 1 < n:
+        if t in _PM_FLAGS_WITH_VALUE and i + 1 < n:
             i += 2
             continue
-        if any(t.startswith(f + "=") for f in ("--workspace", "--filter", "-F", "--prefix", "-C", "--dir", "--cwd", "-w")):
+        if any(t.startswith(f + "=") for f in _PM_FLAGS_WITH_VALUE):
             i += 1
             continue
         if t in _RUNNER_OPTS_WITH_ARG:
@@ -2274,7 +2269,7 @@ def _endpoint_path_in(text: str, paths: list) -> bool:
 def _http_reads_stdin_body(sc: str) -> bool:
     """True if an HTTP client is told to read its request body from stdin, so a
     control path piped in upstream would actually be sent."""
-    return bool(re.search(r"(--data-binary|--data|-d)\s+@-|--data-binary\s+@" + _config.locations.STDIN_DEVICE, sc))
+    return bool(re.search(r"(--data-binary|--data|-d)\s+@-|--data-binary\s+@" + _config._locations().STDIN_DEVICE, sc))
 
 
 def _p5_endpoint(ctx: "Context") -> Optional[Verdict]:
@@ -2552,8 +2547,8 @@ def _p6_prockill(ctx: "Context") -> Optional[Verdict]:
                 kill_present = True
                 # name/pattern-matching kill verbs select BY NAME — the kill verb
                 # itself is the selector mechanism (head OR exec-position).
-                if (hbase in ("pkill", "killall", "fuser")
-                        or any(b in ("pkill", "killall", "fuser") for b in exec_bases)):
+                if (hbase in _NAME_KILL_HEADS
+                        or any(b in _NAME_KILL_HEADS for b in exec_bases)):
                     has_selector_mechanism = True
                 # `kill $(<pipeline naming ident>)` / `kill $(jq .pid
                 # <statefile>)` — inspect this command's substitutions for a
@@ -3099,16 +3094,15 @@ def _strip_selector_tokens(rest: list) -> list:
     separately)."""
     out = []
     i = 0
-    sel_flags = ("-w", "--workspace", "--filter", "-F", "--prefix", "-C", "--dir", "--cwd")
     while i < len(rest):
         t = rest[i]
         if t in _WS_SELECT_KEYWORDS and i + 1 < len(rest):
             i += 2
             continue
-        if t in sel_flags and i + 1 < len(rest):
+        if t in _PM_FLAGS_WITH_VALUE and i + 1 < len(rest):
             i += 2
             continue
-        if any(t.startswith(f + "=") for f in sel_flags):
+        if any(t.startswith(f + "=") for f in _PM_FLAGS_WITH_VALUE):
             i += 1
             continue
         out.append(t)
@@ -3216,7 +3210,7 @@ def _classify_filter_value(val: str) -> str:
     if val.startswith("@") and val.count("/") == 1 and not val.startswith("@/"):
         return val
     # path-like: contains a slash, or is '.'/'..', or starts with './' or '../'
-    if "/" in val or val in (".", ".."):
+    if "/" in val or val in (os.curdir, os.pardir):
         return _PATH_FILTER_PREFIX + val
     # otherwise a package name (or name with a leading scope '@org/...' which
     # contains '/' and is handled above). A trailing dependency selector ('^'/'~')
@@ -3497,6 +3491,8 @@ def _pm_cwd_flag(head: str, rest: list):
     return (None, True)
 
 
+# The kill programs that pick their victims by name (a selector), not by pid.
+_NAME_KILL_HEADS = ("pkill", "killall", "fuser")
 _PM_FLAGS_WITH_VALUE = frozenset({
     "--prefix", "--cwd", "-C", "--dir", "-w", "--workspace", "--filter", "-F",
 })
@@ -3538,7 +3534,7 @@ def _post_selector_tokens(head: str, rest: list) -> list:
         if t == "workspace" and i + 1 < len(rest):
             out_start = i + 2
             break
-        if t in ("-w", "--workspace", "--filter", "-F") and i + 1 < len(rest):
+        if t in _WS_SELECTOR_FLAGS and i + 1 < len(rest):
             out_start = i + 2
             break
         if t.startswith("--workspace=") or t.startswith("--filter=") or t.startswith("-F="):
@@ -4073,7 +4069,6 @@ def _git_inspection_head(head: str, rest: list) -> bool:
 #   find/fd `-exec`/`-execdir`/`-ok`/`-okdir` run a command per match;
 #   fuser `-k` kills. When present, the head is NOT inspection — its tail must
 #   be scanned for a protected launch/kill.
-_FIND_EXEC_OPTS = frozenset({"-exec", "-execdir", "-ok", "-okdir", "--exec", "--exec-batch", "-x", "-X"})
 _KILL_FLAG_HEADS = {"fuser": frozenset({"-k", "--kill"})}
 
 
@@ -4086,7 +4081,7 @@ def _is_inspection_command(head: str, rest: list) -> bool:
     if head in READ_INSPECT_EDIT_ALLOWLIST:
         # find/fd with an -exec action actually RUN a command -> not inspection.
         if head in ("find", "fd"):
-            if any(_strip_quotes(t) in _FIND_EXEC_OPTS for t in rest):
+            if any(_strip_quotes(t) in _FIND_EXEC_ACTIONS for t in rest):
                 return False
         # fuser -k KILLS -> not inspection (the kill is caught downstream by P6
         # and the W4 anchor); a bare fuser/lsof is read-only.
@@ -4125,7 +4120,7 @@ _DATA_OPERAND_HEADS = (
 )
 
 
-# heads for which `_FIND_EXEC_OPTS` options are genuine command EXECUTORS (run a
+# heads for which `_FIND_EXEC_ACTIONS` options are genuine command EXECUTORS (run a
 # command per match). The same option spellings (`-x`/`-X`/`--exec`) collide with
 # UNRELATED tools' data flags (`tar -x` extract, `tar -X <exclude-file>`), so the
 # executor-boundary interpretation must be SCOPED to a segment that actually
@@ -4139,7 +4134,7 @@ def _find_exec_boundary_at(prev: str, exec_toks: list) -> bool:
     actually present among the segment's exec tokens — so the executor-boundary
     interpretation does not collide with an unrelated tool's identically-spelled
     data flag (`tar -x`/`tar -X`)."""
-    if prev not in _FIND_EXEC_OPTS:
+    if prev not in _FIND_EXEC_ACTIONS:
         return False
     return any(os.path.basename(_strip_quotes(st)) in _FIND_EXEC_HEADS
                for _i, st in exec_toks)
@@ -4154,7 +4149,7 @@ def _anchor_preceded_by_data_head(exec_toks: list, pos: int, tokens: list) -> bo
     named `x` in `cp /tmp/x <name>` — `x` is in EXEC_RUNNER_TOKENS — wrongly
     flagging the operand as a launch).
 
-    A find/fd EXECUTOR option (`_FIND_EXEC_OPTS`, an OPTION token filtered out of
+    A find/fd EXECUTOR option (`_FIND_EXEC_ACTIONS`, an OPTION token filtered out of
     `exec_toks`) between the data head and `pos` CANCELS the data head's
     governance: after `find … -exec <cmd> …` the tokens belong to the EXECUTED
     command, not to find's path operands. So a data head is only counted when NO
@@ -4199,7 +4194,7 @@ def _anchor_in_command_word_position(exec_toks: list, pos: int, tokens: list) ->
         positional command word.
 
     EXCEPTION — a `find`/`fd` EXECUTOR option (`-exec`/`-execdir`/`-ok`/`-okdir`/
-    `--exec`/`-x`/`-X` in `_FIND_EXEC_OPTS`) immediately before the protected token
+    `--exec`/`-x`/`-X` in `_FIND_EXEC_ACTIONS`) immediately before the protected token
     makes that token the COMMAND find/fd RUNS per match (`find . -exec <protected>
     …`) — a real launch. The executor option overrides BOTH discriminators: the
     `find`/`fd` head is a data-operand head for its OWN path args, but the token
@@ -4450,7 +4445,7 @@ def _p0_anchor(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None,
                 # `<wrapper> kill <bareword>` PID/jobspec kill stays ALLOWED while a
                 # `<wrapper> pkill -f <fragment>` BLOCKS. Mirrors P6's gate.
                 exec_bases = [os.path.basename(_strip_quotes(st)) for _i, st in exec_toks]
-                name_kill = any(b in ("pkill", "killall", "fuser") for b in exec_bases)
+                name_kill = any(b in _NAME_KILL_HEADS for b in exec_bases)
                 has_selector = name_kill or bool(_command_substitutions(sc))
                 ident_hit = (_selector_overlaps_protected(sc_text, kill_tokens, cmds)
                              if has_selector
@@ -4734,7 +4729,7 @@ def _anchor_build_hits_protected(tokens: list, exec_toks: list, cfg: dict,
             sel = os.path.basename(_strip_quotes(tokens[i + 1]).rstrip("/"))
             if sel in ws:
                 return True
-        for f in ("--filter", "-F", "-w", "--workspace"):
+        for f in _WS_SELECTOR_FLAGS:
             if st.startswith(f + "="):
                 sel = os.path.basename(st.split("=", 1)[1].rstrip("/"))
                 if sel in ws:

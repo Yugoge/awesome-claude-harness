@@ -37,7 +37,8 @@ from pathlib import Path
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
 ANALYSIS = "docs/test/edge-case-analysis.json"
 SUBDIRS = ("scripts", "instructions", "data/fixtures", "data/mocks", "reports")
-NOT_TEMPLATES = ("README.md", "INDEX.md")
+sys.path.insert(0, str(HARNESS_ROOT / "hooks" / "lib"))
+from command_span import FOLDER_DOCUMENTS as NOT_TEMPLATES  # noqa: E402
 
 
 def emit(**facts: object) -> None:

@@ -23,6 +23,7 @@ Layers, bottom up:
 from __future__ import annotations
 
 import bisect
+import importlib.util
 import json
 import os
 import re
@@ -44,7 +45,6 @@ DOUBLE = "double"
 ANSI_C = "ansi_c"
 LOCALE = "locale"
 ESCAPED = "escaped"
-QUOTES = (BARE, SINGLE, DOUBLE, ANSI_C, LOCALE, ESCAPED)
 
 MAX_DEPTH = 24
 MAX_LEN = 262_144
@@ -258,7 +258,7 @@ class Part:
 
     @property
     def body(self):
-        if self.kind not in ("cmdsub", "backtick", "procsub_in", "procsub_out"):
+        if self.kind not in SUBST_KINDS:
             return None
         if self._body is None:
             self._body = parse_src(self.src, self.depth + 1)
@@ -400,11 +400,11 @@ class Redir:
 
     @property
     def close(self):
-        return self.op in (">&", "<&") and self.target is not None and self.target.literal() == "-"
+        return self.op in DUP_OPS and self.target is not None and self.target.literal() == "-"
 
     @property
     def dup(self):
-        if self.op in (">&", "<&") and self.target is not None:
+        if self.op in DUP_OPS and self.target is not None:
             lit = self.target.literal()
             if lit is not None and lit.endswith("-") and _digits(lit[:-1]):
                 lit = lit[:-1]          # N>&M- moves M onto N
@@ -432,13 +432,19 @@ class Redir:
 # ---------------------------------------------------------------------------
 
 _OP_CHARS = ";&|()"
-_WORD_BREAK = " \t\n" + _OP_CHARS + "<>"
 _OPS = (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")")
 _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
 BOTH_STREAMS_OPS = ("&>>", "&>")  # redirect stdout and stderr together (they take no fd)
 REDIRECT_OPS = BOTH_STREAMS_OPS + _REDIR_OPS  # every redirection operator, longest first
 OUTPUT_REDIRECT_OPS = (">", ">>", ">|") + BOTH_STREAMS_OPS  # send output to their target
 WRITE_REDIRECT_OPS = OUTPUT_REDIRECT_OPS + ("<>",)  # open their target for writing (<> read-write)
+INPUT_REDIRECT_OPS = ("<", "<>")  # open their target for reading (<> read-write)
+HEREDOC_OPS = ("<<", "<<-", "<<<")  # feed a here-document or a here-string
+DUP_OPS = (">&", "<&")  # duplicate a file descriptor (or close one, with `-`)
+AND_OR_OPS = ("&&", "||")  # run what follows depending on what precedes
+STATIC_PART_KINDS = ("lit", "glob")  # word parts the shell does not compute (a glob only expands to names)
+BODY_PART_KINDS = frozenset({"sub", "arith", "procsub"})  # word parts whose body the shell runs
+DYNAMIC_PART_KINDS = BODY_PART_KINDS | {"param"}  # word parts the shell computes
 PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
 OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
 OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (standard input)
@@ -447,7 +453,13 @@ CD_TARGET_BUILTINS = ("cd", "pushd")  # move to the directory their operand name
 CWD_BUILTINS = ("cd", "pushd", "popd")  # change the working directory of what follows
 LOOP_VAR_KINDS = ("for", "select")  # Compound kinds whose header binds a variable to each listed word
 DEFINER_KINDS = ("function", "coproc")  # Compound kinds whose body runs later or apart, not in line
-QUOTE_CHARS = ("'", '"')  # the characters that open a quoted string
+# the characters that open a quoted string: runtime_guard/pathmatch.py's, loaded by path (that leaf
+# imports only the standard library; importing the runtime_guard package would load the guard)
+_PATHMATCH = importlib.util.spec_from_file_location(
+    "_shell_parse_pathmatch", os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_guard", "pathmatch.py"))
+_pathmatch = importlib.util.module_from_spec(_PATHMATCH)
+_PATHMATCH.loader.exec_module(_pathmatch)
+QUOTE_CHARS = _pathmatch.QUOTE_CHARS
 COMMAND_OPTS = ("-c", "--command")  # su, runuser, flock, script: the option whose value is shell code
 ENV_SPLIT_OPTS = ("-S", "--split-string")  # env: the option whose value env splits into the command line
 GIT_RESTORE_SOURCE_OPTS = ("-s", "--source")  # git restore: the tree the files are restored from
@@ -460,11 +472,23 @@ SUBST_OPENERS = ("$(", "<(", ">(")  # open a command or process substitution (so
 # shell the parser knows), and with `source` and `.` the commands that run a script file
 # operand as shell text in this or a new shell.
 COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
-SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
+SOURCE_BUILTINS = ("source", ".")  # run a script file in this shell
+SCRIPT_RUNNERS = COMMON_SHELLS + SOURCE_BUILTINS
+SHELL_VALUE_OPTS = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")  # a shell's options that take a value
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
+PRINTERS = ("echo", "printf")  # print their arguments and run nothing
+FIND_EXEC_IN_MATCH_DIR = ("-execdir", "-okdir")  # find actions that run in each match's directory
+MOVE_MECHANISMS = ("mv", "git-mv")  # WriteTarget mechanisms of a move: its sources follow as <mechanism>-source
 NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
 RUNUSER_USER_OPTS = ("-u", "--user")  # runuser: the option naming the user COMMAND runs as
+SHELL_FILE_OPTS = ("--rcfile", "--init-file")  # bash: the options that read a startup file named by the next word
+HERE_DOCUMENT_OPS = ("<<", "<<-")  # the redirections that open a here-document
+LITERAL_PART_KINDS = ("lit", "glob", "brace")  # word parts whose text is written in the command
+CMDSUB_KINDS = ("cmdsub", "backtick")  # word parts that run a command and splice its output
+SUBST_KINDS = CMDSUB_KINDS + ("procsub_in", "procsub_out")  # word parts whose body runs as a command
+GIT_CONFIG_OPTS = ("-c", "--config-env")  # git: the global options that set a configuration value
+SEQUENCE_OPS = ("", ";", "&&", "||", "\n")  # list operators that run the next pipeline after this one, in the shell
 # Package runners (pnpx is `pnpm dlx`) and the package-manager subcommands that run another
 # command: their argv after `--`, and npm's `-c` / `--call` string, is a nested invocation.
 NODE_PKG_MANAGERS = frozenset({"yarn", "npm", "pnpm", "bun"})  # the node package managers
@@ -1162,7 +1186,7 @@ def _lex_into(src, toks, depth=0, comments=None):
             r = Redir(op, io, src.off(i))
             r.fd_var = fd_var
             i += len(op)
-            if op in ("<<", "<<-"):
+            if op in HERE_DOCUMENT_OPS:
                 while i < n and t[i] in " \t":
                     i += 1
                 delim, quoted, i = _read_heredoc_delim(t, i, r.off)
@@ -1666,7 +1690,7 @@ class _Grammar:
             if self.is_op(tok, *_TERMINATORS):
                 sep = tok[1]
                 self.pos += 1
-                if sep in ("&&", "||"):
+                if sep in AND_OR_OPS:
                     self.skip_newlines()
                     nxt = self.peek()
                     if nxt is None or (self.is_op(nxt) and nxt[1] in _TERMINATORS + end_ops + (")",)) or (
@@ -2150,11 +2174,11 @@ def _feed(cmd, piped):
     for r in cmd.redirects:
         if r.fd != 0:
             continue
-        if r.op in ("<<", "<<-"):
+        if r.op in HERE_DOCUMENT_OPS:
             fed.add("heredoc")
         elif r.op == "<<<":
             fed.add("herestring")
-        elif r.op in ("<", "<>"):
+        elif r.op in INPUT_REDIRECT_OPS:
             fed.add("file")
     return frozenset(fed)
 
@@ -2221,7 +2245,7 @@ def _stage_output(cmd):
                 return red.target.value()
         return None
     vals = [w.value() for w in res.args]
-    if res.name not in ("echo", "printf") or any(v is None for v in vals):
+    if res.name not in PRINTERS or any(v is None for v in vals):
         return None
     while res.name == "echo" and vals and vals[0] in ("-n", "-e", "-E", "-ne", "-en"):
         vals = vals[1:]
@@ -2530,13 +2554,6 @@ SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ksh93", "mksh", "ash", 
 # A command shaped like a shell (`*sh`, `*sh93`) that SHELLS does not name, given
 # a -c option, is read as a shell, and its reading is unresolved.
 _SHELL_LIKE_RE = re.compile(r"[a-z]*sh[0-9.]*")
-SHELL_SPEC = _spec(("-e", "-x", "-u", "-v", "-n", "-f", "-h", "-k", "-m", "-p", "-t",
-                    "-a", "-b", "-B", "-C", "-E", "-H", "-P", "-T", "-i", "-l", "-r", "-s",
-                    "+e", "+x", "+u", "+v", "+f", "+h", "+m", "+B", "+H", "+o", "+O",
-                    "--login", "--noprofile", "--norc", "--posix", "--restricted",
-                    "--noediting", "--verbose", "--debugger", "--dump-strings",
-                    "--dump-po-strings", "--help", "--version", "-c"),
-                   ("-o", "-O", "--rcfile", "--init-file"))
 # su and runuser (util-linux --help): runuser adds -u/--user; -c, --command and
 # --session-command pass the command to the shell.
 SU_COMMAND_OPTS = COMMAND_OPTS + ("--session-command",)
@@ -2713,7 +2730,7 @@ def resolve(cmd, depth=None):
             if len(ops) > 1 and ops[0].value() not in ("-", ""):
                 _set_payload(r, [ops[0]], "eval", depth, "trap_dynamic")
             return r
-        if name in ("source", "."):
+        if name in SOURCE_BUILTINS:
             r.head = head
             r.args = tuple(words[1:])
             ops = list(words[1:])
@@ -2884,9 +2901,17 @@ def resolve(cmd, depth=None):
     return r
 
 
-_FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
+FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")  # find actions that run a command
 FIND_SYMLINK_OPTS = ("-H", "-L", "-P")  # find's symlink options, before the start paths
 FIND_EXEC_ENDS = (";", "+")  # the words that end the command of a find -exec/-ok (every reader reads this one)
+_FIND_FILE = ("-fprint", "-fprint0", "-fprintf", "-fls")  # the next word names a file the action writes
+FIND_ACTIONS = FIND_EXEC + _FIND_FILE + ("-delete",)  # find actions that run a command, write a file or delete
+FIND_OPERATORS = ("(", ")", "!")  # a word of find's expression that is no option: the start paths end before it
+FIND_EXPRESSION_LEADS = ("-", "(", "!")  # a word led by one of these begins find's expression
+SHELL_STARTUP_VARS = ("BASH_ENV", "ENV")  # the environment names a non-interactive shell sources at start
+ROOTED = ("/", "~")  # a path led by one of these does not depend on the working directory
+SED_SCRIPT_GIVEN_OPTS = ("-e", "--expression", "-f", "--file")  # sed's options that give it a script (text or file)
+SED_SCRIPT_ATTACHED = ("--expression=", "--file=")  # the same, value attached
 
 
 def _resolve_find(r, head, words, cmd, depth):
@@ -2896,7 +2921,7 @@ def _resolve_find(r, head, words, cmd, depth):
     items = []
     k = 1
     while k < len(words):
-        if words[k].value() in _FIND_EXEC:
+        if words[k].value() in FIND_EXEC:
             j = k + 1
             while j < len(words) and words[j].value() not in FIND_EXEC_ENDS:
                 j += 1
@@ -3004,11 +3029,11 @@ def _resolve_shell(r, head, words, cmd, depth):
             k += 2 if v[-1] in "oO" else 1
             continue
         if v.startswith("--"):
-            k += 2 if v in ("--rcfile", "--init-file") else 1
+            k += 2 if v in SHELL_FILE_OPTS else 1
             continue
         break
     for a in r.assignments:
-        if a.name in ("BASH_ENV", "ENV") and a.value is not None:
+        if a.name in SHELL_STARTUP_VARS and a.value is not None:
             # the startup file runs before the shell's own code
             _script_operand(r, a.value, cmd, depth)
             if r.payload is not None:
@@ -3082,7 +3107,7 @@ def _stdin_payload(r, cmd, depth, inherited=None):
             by_fd[fd] = red
     red = by_fd.get(0, inherited)
     for red in ([red] if red is not None else []):
-        if red.op in ("<<", "<<-") and red.hd is not None:
+        if red.op in HERE_DOCUMENT_OPS and red.hd is not None:
             if red.hd.quoted:
                 r.payload = parse_src(red.hd.body_src, depth + 1)
             else:
@@ -3424,6 +3449,14 @@ NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the w
 INSTALL_DIR_OPTS = ("-d", "--directory")  # install makes every operand a directory (no source)
 TAR_NAMES = ("tar", "bsdtar", "gtar")  # the program names that are tar
 AWK_NAMES = ("awk", "gawk", "mawk", "nawk")  # the program names that are awk
+GREP_NAMES = ("grep", "egrep", "fgrep")  # the program names that are grep
+PYTHON_NAMES = ("python", "pypy")  # the names a Python interpreter starts with (python3.12, pypy3)
+SED_SCRIPT_OPTS = ("-e", "--expression")  # sed: the option whose value is a script
+SED_QUIET_OPTS = ("-n", "--quiet", "--silent")  # sed: print only what the script prints
+SORT_OUTPUT_OPTS = ("-o", "--output")  # sort: the option whose value is the file it writes
+GIT_REDIRECT_ENV_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")  # move git to another repository
+GIT_MESSAGE_OPTS = ("-m", "--message")  # git commit, tag, stash: the option whose value is the message
+FIND_NAME_TESTS = ("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename")  # find: match a name glob
 # The host names that are the local machine as a network client's destination (0.0.0.0 connects to it on
 # Linux; ::1 is bare in a socket client's arguments and bracketed in a URL).
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0")
@@ -3524,7 +3557,10 @@ class CdScopes:
     a `cd` applied only to what follows it in its own shell (not past a closing subshell, a pipeline
     stage or a background job, replaced by a later cd, `&&` and `||` followed), relative to the
     starting directory ''. A cd that cannot be followed exactly (`cd -` with no known OLDPWD, a
-    computed target, CDPATH, popd, a function body, more than LIMIT possibilities) leaves the unknown directory '?'.
+    computed target, CDPATH, popd, the body of a function the command defines but never calls where it is
+    followed, more than LIMIT possibilities) leaves the unknown directory '?'. A brace group, loop, if or case body
+    runs in the shell's own directory, and so do a compound's own redirections; a function called in the command
+    runs its body where it is called.
     ``spell(word)`` is a cd operand's text (default: its static value, else as written, quotes removed);
     ``reached(dir)`` says a directory is there now, so one `cd` to it cannot fail (default: any cd may fail)."""
 
@@ -3533,6 +3569,7 @@ class CdScopes:
 
     def __init__(self, raw: str, spell=None, reached=None):
         self.raw, self.spans, self.visited, self.unfollowed = raw, [], set(), []
+        self.defs, self.calling = {}, set()  # functions defined in the command; those being followed
         self.cdpath = 'CDPATH' in raw
         self.functions = False  # a function or coprocess defined anywhere it walked
         self.spell = spell or (lambda w: w.text.replace('"', '').replace("'", '') if w.value() is None else w.value())
@@ -3542,11 +3579,12 @@ class CdScopes:
         arg = self.spell(word) if word is not None else '~'
         if any(c in arg for c in '$`*?[') or (self.cdpath and not arg.startswith(('/', '~', './', '../'))):
             return '?'
-        if arg.startswith(('/', '~')):
+        if arg.startswith(ROOTED):
             return os.path.normpath(arg)
         if cwd == '?':
             return '?'
-        return os.path.normpath(os.path.join(cwd, arg)) if cwd else os.path.normpath(arg)
+        target = os.path.normpath(os.path.join(cwd, arg)) if cwd else os.path.normpath(arg)
+        return '' if target == '.' else target
 
     def _cd(self, name: str, args, states) -> tuple:
         """(the states after the cd, the states it may have failed in: all but those whose one operand is reached)."""
@@ -3586,16 +3624,31 @@ class CdScopes:
                     if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
                         here = {(self._target(cwd, val), cwd) for cwd, _old in here}
             self._record(cmd.span, here | set(states))  # its redirections open where the shell is
+            if res.name in self.defs and res.name not in self.calling and res.payload is None:
+                # a function defined in this command runs its body where it is called
+                self.calling.add(res.name)
+                succ, fail = set(), set()
+                for s in self.defs[res.name]:
+                    s_succ, s_fail = self.run_script(s, states)
+                    succ, fail = succ | s_succ, fail | s_fail
+                self.calling.discard(res.name)
+                return succ, fail
+            for r in cmd.redirects:
+                if r.hd is not None:  # an unquoted body's substitutions run where its command does
+                    self._record(r.hd.body_span, set(states))
             if res.name in CWD_BUILTINS and res.payload is None:
                 return self._cd(res.name, res.args, states)
             if res.payload is not None:
                 if res.payload_kind == 'eval':
                     return self.run_script(res.payload, states)
-                self.run_script(res.payload, here)
+                self.run_script(res.payload, {self.UNKNOWN} if _runs_elsewhere(res) else here)
             return set(states), set(states)
         if isinstance(cmd, Compound):
             self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
             self._record(cmd.span, states)
+            for r in cmd.redirects:
+                if r.target is not None:
+                    self._record(r.target.span, states)
             scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, Script)]
             self.functions = self.functions or cmd.kind in DEFINER_KINDS
             if cmd.kind in ('subshell', 'coproc'):
@@ -3608,9 +3661,7 @@ class CdScopes:
                     succ, fail = self.run_script(s, succ)
                 return succ, fail
             if cmd.kind == 'function':
-                for s in scripts:
-                    self._record(s.span, {self.UNKNOWN})
-                    self.run_script(s, {self.UNKNOWN})
+                self.defs[cmd.name] = scripts  # followed where it is called; never called: see run()
                 return set(states), set(states)
             acc = set(states)
             for s in scripts:
@@ -3659,6 +3710,11 @@ class CdScopes:
         """Follow ``script`` from ``start``; a `cd` it did not follow (in a substitution, a re-parsed payload) makes
         the directory of everything written after it unknown."""
         self.run_script(script, {(start, '?')})
+        for name, scripts in self.defs.items():  # a body called nowhere it was followed: run where it may be
+            if not any(s.span[0] <= a < s.span[1] for s in scripts for a, _b, _st in self.spans):
+                for s in scripts:
+                    self._record(s.span, {self.UNKNOWN})
+                    self.run_script(s, {self.UNKNOWN})
         self.unfollowed = [s.cmd.span[0] if self.raw[slice(*s.cmd.span)].startswith(s.cmd.words[0].text) else 0
                            for s in walk(script) if s.cmd.words and s.cmd.span not in self.visited
                            and resolve(s.cmd).name in CWD_BUILTINS]
@@ -3673,11 +3729,12 @@ class CdScopes:
 
     def at(self, offset: int):
         """The possible directories at raw ``offset``: the innermost recorded command around it."""
-        best = None
+        best, found = None, set()
         for a, b, states in self.spans:
-            if a <= offset < b and (best is None or b - a < best[1] - best[0]):
-                best = (a, b, states)
-        return {cwd for cwd, _old in best[2]} if best else {'?'}
+            if a <= offset < b and (best is None or b - a <= best):
+                found = (found if best == b - a else set()) | set(states)
+                best = b - a
+        return {cwd for cwd, _old in found} if best is not None else {'?'}
 
 
 
@@ -3711,11 +3768,14 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None, raw=None, reached=Non
     seed = dict(env or {})
     envs, exported, prefix = {}, set(), {}
     scope = _AssignScope(script)
+    carriers, carrier = {}, None   # target -> the raw command whose payload it was read from
     for site in walk(script, into=into):
         first = len(out)
         env = None
         try:
             cmd = site.cmd
+            if raw is not None:
+                carrier = _payload_carrier(site, raw, carrier)
             # A shell started with -c or fed code sees the caller's variables, the ones exported before
             # it and its own command's prefix assignments; a templated payload's expansions are the
             # outer shell's.
@@ -3765,6 +3825,9 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None, raw=None, reached=Non
             if name == "git":
                 out.extend(_git_write_targets(res, env, site.context))
                 continue
+            if name == "find":
+                out.extend(_find_write_targets(res.args, env, site.context))
+                continue
             verb = VERBS.get(name)
             if verb is None:
                 continue
@@ -3788,12 +3851,38 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None, raw=None, reached=Non
         finally:
             for t in out[first:] if env is not None else ():
                 _carry_word(t, env)
+            for t in out[first:] if raw is not None else ():
+                carriers[id(t)] = carrier
     if raw is not None and out:
         gone = any(t.mode in (DELETE, MOVE_DEST) for t in out)
         scopes = CdScopes(raw, lambda w: _project(w, seed)[0] or w.text, None if gone else reached).run(script)
         for t in out:
             t.dirs = scopes.of(t.word)
+            word = carriers.get(id(t))
+            if t.dirs == {'?'} and word is not None and t.word is not None \
+                    and raw[slice(*t.word.span)] != t.word.text:
+                t.dirs = scopes.of(word)
     return out
+
+
+def _payload_carrier(site, raw, carrier):
+    """The first word of the raw command whose re-read payload (eval, env -S, a here-string or alias
+    a shell reads, find -exec ...) ``site`` belongs to, as long as that code runs in the directory
+    that command runs in; None once it may not: ssh runs it on another host, find -execdir or
+    -okdir in each match's directory, and a cd, pushd or popd read from the payload moves it."""
+    words = site.cmd.words
+    if words and raw[slice(*words[0].span)] == words[0].text:
+        return None if _runs_elsewhere(resolve(site.cmd)) else words[0]
+    if words and resolve(site.cmd).name in CWD_BUILTINS + ("ssh",):
+        return None
+    return carrier
+
+
+def _runs_elsewhere(res):
+    """True when the code ``res`` hands on runs in another directory than its own command: ssh on
+    another host, find's -execdir and -okdir in each match's directory."""
+    return res.name == "ssh" or (res.name == "find" and any(w.value() in FIND_EXEC_IN_MATCH_DIR
+                                                            for w in res.args))
 
 
 _COPY_MOVE_WORD_RE = re.compile(r"(?:%s)(?!\w)" % "|".join(CP_MV))
@@ -3841,7 +3930,7 @@ class _AssignScope:
         before = None
         for pl, sep in site.script.items:
             if any(st is cmd for st in pl.stages):
-                return len(pl.stages) == 1 and sep != "&" and before not in ("&&", "||")
+                return len(pl.stages) == 1 and sep != "&" and before not in AND_OR_OPS
             before = sep
         return False
 
@@ -3969,11 +4058,11 @@ def _verb_targets(name, verb, args, env, context):
                 in_place = True
                 k += 1
                 continue
-            if v in ("-e", "--expression", "-f", "--file", "-l", "--line-length"):
-                script_given = script_given or v in ("-e", "--expression", "-f", "--file")
+            if v in SED_SCRIPT_GIVEN_OPTS + ("-l", "--line-length"):
+                script_given = script_given or v in SED_SCRIPT_GIVEN_OPTS
                 k += 2
                 continue
-            if v is not None and v.startswith(("--expression=", "--file=")):
+            if v is not None and v.startswith(SED_SCRIPT_ATTACHED):
                 script_given = True
                 k += 1
                 continue
@@ -4050,6 +4139,23 @@ def _verb_targets(name, verb, args, env, context):
             for s in sources:
                 sp, sdec = _project(s, env)
                 out.append(WriteTarget(sp, DELETE, name + "-source", None, sdec, s, None, context))
+    return out
+
+
+def _find_write_targets(args, env, context):
+    """The file each -fprint, -fprint0, -fprintf and -fls of one find writes. An -exec's words up to `;` or `+` are
+    another command's (walk reads them); -delete removes the matches, names the command does not hold: no target."""
+    out, k = [], 0
+    while k < len(args):
+        v = args[k].value()
+        if v in FIND_EXEC:
+            while k < len(args) and args[k].value() not in FIND_EXEC_ENDS:
+                k += 1
+        elif v in _FIND_FILE and k + 1 < len(args):
+            k += 1
+            path, dec = _project(args[k], env)
+            out.append(WriteTarget(path, TRUNCATE, "find" + v, None, dec, args[k], None, context))
+        k += 1
     return out
 
 

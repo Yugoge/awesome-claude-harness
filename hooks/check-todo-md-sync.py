@@ -33,6 +33,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from command_span import FOLDER_DOCUMENTS  # noqa: E402
+
 def _harness_home() -> Path:
     """The harness this file belongs to (lib/claude_home), not whatever ~/.claude holds."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -60,7 +63,7 @@ MD_HEADING_RE = re.compile(
 PY_CONTENT_RE = re.compile(r"^(Step\s+\d+[a-z]?):")
 
 # Never treat these as commands with todo scripts.
-SKIP_MD_NAMES = {"INDEX.md", "README.md"}
+SKIP_MD_NAMES = FOLDER_DOCUMENTS
 
 
 def extract_md_steps(md_path: Path) -> list[str]:

@@ -88,7 +88,7 @@ def _fd_positional_roots(tokens: list, fd_idx: int) -> list:
             i += 1
             continue
         # a path-like bareword positional is a search directory.
-        if "/" in st or st in (".", "..") or st.startswith("./") or st.startswith("../") or os.path.isabs(st):
+        if "/" in st or st in (os.curdir, os.pardir) or st.startswith("./") or st.startswith("../") or os.path.isabs(st):
             out.append(st)
         i += 1
     return out
@@ -128,12 +128,12 @@ def _find_path_operands(tokens: list, find_idx: int) -> list:
             if st in _FIND_PREPATH_ARG_OPTS:
                 i += 2  # `-maxdepth N`
                 continue
-            if st.startswith("-") or st in ("(", ")", "!"):
+            if st.startswith("-") or st in _sp.FIND_OPERATORS:
                 # a real predicate / expression begins -> path operands done.
                 break
         else:
             # after `--`: a predicate still terminates the path list.
-            if st.startswith("-") or st in ("(", ")", "!"):
+            if st.startswith("-") or st in _sp.FIND_OPERATORS:
                 break
         if st:
             out.append(st)

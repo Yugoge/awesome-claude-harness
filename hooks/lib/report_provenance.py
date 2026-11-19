@@ -360,8 +360,9 @@ def _previous_main_call_writes(reading: dict, call, root: str, rel: str) -> bool
         return False
     name, tool_input, _ts = reading["calls"][order[-1]]
     want = os.path.normpath(os.path.join(root, rel))
+    from lib.spec_path import EDIT_TOOLS  # the tools that name their target in file_path
     targets = []
-    if name in ("Write", "Edit", "MultiEdit"):
+    if name in EDIT_TOOLS:
         targets = [tool_input.get("file_path")]
     elif name == "NotebookEdit":
         targets = [tool_input.get("notebook_path")]
@@ -447,7 +448,8 @@ def observe_call(data: dict) -> None:
             return
         info = {}
         declared = ()
-        if actor == MAIN and tool in ("Agent", "Task"):
+        from lib.subagent import DISPATCH_TOOLS
+        if actor == MAIN and tool in DISPATCH_TOOLS:
             declared = declared_in_prompt(tool_input.get("prompt"))
             if declared:
                 info["launch"] = {"bg": tool_input.get("run_in_background") is True,
@@ -684,16 +686,6 @@ def verdict(session_id: str, project_dir, rel: str, session_transcript=None, age
             return record.get("actor")
         return None
     return None
-
-
-def held_by_main(session_id: str, project_dir, rel: str, session_transcript=None) -> bool:
-    """verdict() == "main"; an untrustworthy ledger counts as the main agent's."""
-    try:
-        return verdict(session_id, project_dir, rel, session_transcript) == MAIN
-    except LedgerError:
-        return True
-    except Exception:
-        return False
 
 
 def own_write(transcript_path, project_dir, rel: str) -> bool:

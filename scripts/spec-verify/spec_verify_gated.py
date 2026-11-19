@@ -33,15 +33,9 @@ import os
 import re
 
 from spec_verify_mandate import is_strict_guide_mode
-from spec_verify_parsers import parse_front_matter
+from spec_verify_parsers import SKIP_FILES as _VIEW_SKIP_FILES, parse_front_matter
 from spec_verify_summary import CheckResult
 
-
-# Files that are never required-consumer views.
-_VIEW_SKIP_FILES = {
-    "orchestrator.md", "manifest.json", "INDEX.md",
-    "README.md", "checkpoints.json",
-}
 
 # AMBIGUOUS marker grammar -- mirrors the WHITELIST_PATTERNS regex in
 # spec-verify.py + spec_verify_mandate.py. Re-defining locally avoids
@@ -60,7 +54,6 @@ _META_BULLET_RE = re.compile(
     r"(?P<desc>.+?)\s*$"
 )
 _NEXT_H2_RE = re.compile(r"^\s*##\s+\S")
-_HEADING_LINE_RE = re.compile(r"^\s*#{1,6}\s+\S")
 
 # R5.2 recognized operators. Detection is substring-based so authors
 # can phrase rules in prose ("views should cite by line-range, not

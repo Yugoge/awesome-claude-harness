@@ -21,14 +21,15 @@ fi
 temp_file=$(mktemp)
 > "$temp_file"
 
+DEF_RE='^(def |class )'  # a top-level function or class definition
 # For each Python file, find top-level functions/classes
 for pyfile in "$SCRIPTS_DIR"/*.py; do
     [ -f "$pyfile" ] || continue
     basename=$(basename "$pyfile")
 
     # Get top-level function/class definitions (no leading whitespace)
-    grep -nE '^(def |class )' "$pyfile" 2>/dev/null | while IFS=: read -r lineno defline; do
-        name=$(echo "$defline" | sed -E 's/^(def |class )([a-zA-Z_][a-zA-Z0-9_]*).*/\2/')
+    grep -nE "$DEF_RE" "$pyfile" 2>/dev/null | while IFS=: read -r lineno defline; do
+        name=$(echo "$defline" | sed -E "s/${DEF_RE}([a-zA-Z_][a-zA-Z0-9_]*).*/\\2/")
 
         # Skip dunder methods and main()
         if [[ "$name" == __* ]] || [[ "$name" == "main" ]]; then

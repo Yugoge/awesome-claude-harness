@@ -39,15 +39,27 @@ MAX_OUTPUT_CHARS: int = 10000  # documented cap for hook output strings
 # submission); a test keeps the two copies equal.
 INDEX_NOTICE_PREFIX: str = 'doc-sync: INDEX not regenerated'
 
-# Must match posttool-doc-sync.py constants
-WATCHED_DIRS: set[str] = {
-    '.claude/commands',
-    '.claude/agents',
-    '.claude/hooks',
-    '.claude/skills',
-    '.claude/scripts',
-}
-SKIP_FILES: set[str] = {'INDEX.md', 'README.md', '__init__.py', '.DS_Store'}
+
+
+def _doc_sync_config():
+    """hooks/doc_sync/config.py loaded by its path: the names doc-sync leaves out, read without
+    importing the doc_sync package (its __init__ loads every module; an import error there would
+    break every prompt submission), and the directories it watches. None when it cannot be
+    loaded: then nothing is checked."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            '_doc_sync_config', Path(__file__).resolve().parent / 'doc_sync' / 'config.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:
+        return None
+
+
+_DOC_SYNC = _doc_sync_config()
+SKIP_FILES = _DOC_SYNC.SKIP_FILES if _DOC_SYNC is not None else frozenset()
+WATCHED_DIRS = _DOC_SYNC.WATCHED_DIRS if _DOC_SYNC is not None else frozenset()
 
 # Project roots to scan, derived generically (no hardcoded private projects).
 # Sources, in order:
@@ -136,6 +148,8 @@ def main() -> None:
     lines: list[str] = []
     notices: list[str] = []
     try:
+        if _DOC_SYNC is None:
+            sys.exit(0)
         now: float = datetime.now(timezone.utc).timestamp()
 
         # Throttle: only check every CHECK_INTERVAL seconds

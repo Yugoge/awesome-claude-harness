@@ -300,7 +300,7 @@ def _dev_report_has_sibling_shards(dev_dir: Path, task_id: str) -> bool:
 
 
 def _safe_task_id(task_id: str) -> bool:
-    return bool(task_id not in {".", ".."} and TASK_ID_RE.fullmatch(task_id))
+    return bool(task_id not in (os.curdir, os.pardir) and TASK_ID_RE.fullmatch(task_id))
 
 
 def _lane_paths(dev_dir: Path, task_id: str, worker: str) -> dict[str, Path]:
@@ -1723,8 +1723,11 @@ def _print_disposition(project_dir: str, task_id: str, stage: str | None) -> int
 def _default_project_dir() -> str:
     """The hooks' project root: CLAUDE_PROJECT_DIR, else the working directory (a Bash call's
     environment carries no CLAUDE_PROJECT_DIR; its cwd is the session's directory)."""
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "lib"))
-    import locations  # noqa: E402 -- the one project-root resolution
+    try:
+        locations = _harness_lib("locations")  # the one project-root resolution, as the other hooks.lib loads
+    except ImportError as exc:
+        raise SystemExit(f"resolve-dev-artifact-chain.py: hooks/lib/locations.py is missing beside this script "
+                         f"({exc}); pass --project-dir") from exc
     return str(locations.project_root(bash=True))
 
 

@@ -62,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
 from lib import claude_home, command_span, subagent_restart
 from lib.claude_home import settings_switch
+from lib.harness_vocabulary import GATE_MODES
 from lib import contract_runtime
 from lib import final_report
 from lib import dispatch_template
@@ -107,6 +108,16 @@ def _classify_verdict_line(line: str) -> str:
         return module.classify_line(line)
     except Exception:
         return "unknown"
+
+
+# The decisive verdict classes, the classifier's own (hooks/lib/close-verdict.py DECISIVE_CLASSES);
+# none when it cannot load, which never trips the inconsistency check, as 'unknown' never does.
+try:
+    from importlib.machinery import SourceFileLoader as _Loader
+    _DECISIVE = _Loader("close_verdict", str(Path(__file__).parent / "lib" / "close-verdict.py")) \
+        .load_module().DECISIVE_CLASSES
+except Exception:
+    _DECISIVE = ()
 
 
 def _dispatch_obligation(prompt) -> dict:
@@ -812,7 +823,7 @@ def main() -> None:
     env_mode = os.environ.get("CLAUDE_OBLIGATION_STOPGATE")
     stopgate_mode = (env_mode.strip().lower() if env_mode is not None
                      else settings_switch("CLAUDE_OBLIGATION_STOPGATE", "advisory"))
-    if stopgate_mode not in {"advisory", "block", "off"}:
+    if stopgate_mode not in GATE_MODES:
         stopgate_mode = "advisory"
     resolution = None
     if stopgate_mode != "off":
@@ -1036,7 +1047,7 @@ def main() -> None:
                         )
                         resp_class = _classify_verdict_line(_last_nonempty_line(resp_text))
                         if (
-                            md_class in ("yes", "no") and resp_class in ("yes", "no")
+                            md_class in _DECISIVE and resp_class in _DECISIVE
                             and md_class != resp_class
                         ):
                             failures.append(

@@ -48,7 +48,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402
 from shell_parse import (  # noqa: E402
-    OPTION_ENDS, OUTPUT_REDIRECT_OPS, RG_RUN_OPTS, SimpleCommand, active_parts, parse, resolve, walk, write_targets)
+    FIND_ACTIONS, LITERAL_PART_KINDS, OPTION_ENDS, OUTPUT_REDIRECT_OPS, RG_RUN_OPTS, SEQUENCE_OPS, SimpleCommand, active_parts, parse, resolve, walk, write_targets)
 from shell_parse import GIT_INERT_FLAGS, git_plain_subcommand_index  # noqa: E402
 from git_facts import GIT_LISTING_SUBCOMMANDS, GIT_READ_SUBCOMMANDS  # noqa: E402
 from git_facts import GIT_CONFIG_READ_MODIFIERS, GIT_CONFIG_READ_OPTIONS, GIT_CONFIG_READ_SUBCOMMANDS  # noqa: E402
@@ -60,7 +60,7 @@ MAX_COMMAND_LEN = 8192
 # The census kinds that mean code or data the text does not show.
 _ACTIVE_KINDS = frozenset({"substitution", "procsub", "heredoc", "param_reexpand"})
 
-_SEPARATORS = frozenset({";", "&&", "||", "\n", ""})
+_SEPARATORS = SEQUENCE_OPS
 
 DEV_NULL = "/dev/null"
 
@@ -117,8 +117,7 @@ def _cd(args) -> bool:
     return len(operands) <= 1 and all(not a.startswith("-") or a == "-" for a in operands)
 
 
-_FIND_FORBIDDEN = ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
-                   "-fls")
+_FIND_FORBIDDEN = FIND_ACTIONS
 
 
 def _find(args) -> bool:
@@ -441,6 +440,9 @@ PAGERS = {
     "more": _any_args,
 }
 
+# The pagers a pager setting (core.pager, PAGER) may name that only show what they are handed: the PAGERS, and cat.
+PLAIN_PAGERS = frozenset(PAGERS) | {"cat"}
+
 PROGRAMS = ANY_ARGS | frozenset(CHECKED)
 
 
@@ -504,7 +506,7 @@ def _command_ok(cmd) -> bool:
         return False
     rest = cmd.words[1:]
     if name in ANY_ARGS:
-        return all(p.kind in ("lit", "glob", "brace") for w in rest for p in active_parts(w.parts))
+        return all(p.kind in LITERAL_PART_KINDS for w in rest for p in active_parts(w.parts))
     if any(p.kind != "lit" for w in rest for p in active_parts(w.parts)):
         return False
     args = [w.value() for w in rest]

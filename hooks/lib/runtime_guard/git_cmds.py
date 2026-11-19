@@ -213,7 +213,7 @@ def _git_destructive_pathspecs(tokens: list, sub_idx: int, subcmd: str) -> list:
             # a plain branch name (`git checkout main`) is NOT a path op. An EXCLUDE
             # pathspec is always a pathspec (it has the `:!`/`:(exclude)` magic).
             if (subcmd in GIT_RESTORE_PATHS and not repo_rel and not is_exclude
-                    and not ("/" in clean or clean in (".", "..") or clean.startswith("./") or clean.startswith("../"))):
+                    and not ("/" in clean or clean in (os.curdir, os.pardir) or clean.startswith("./") or clean.startswith("../"))):
                 continue
         out.append((clean, repo_rel, ic, is_exclude))
     # a path-less destructive form (no POSITIVE pathspec — excludes don't count)
@@ -247,6 +247,6 @@ def _git_is_destructive_invocation(tokens: list, sub_idx: int, subcmd: str) -> b
         # branch switch (no worktree-file wipe) → not destructive here.
         if "--" in rest:
             return True
-        return any(("/" in t or t in (".", "..") or t.startswith("./") or t.startswith("../"))
+        return any(("/" in t or t in (os.curdir, os.pardir) or t.startswith("./") or t.startswith("../"))
                    for t in rest if not t.startswith("-"))
     return False

@@ -96,7 +96,7 @@ def owner_record_interface_digest() -> str:
 def _identifier(value: object, field: str) -> str:
     if not isinstance(value, str) or not _IDENTIFIER_RE.fullmatch(value):
         raise ResourceError(f"invalid {field}")
-    if value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+    if value in (os.curdir, os.pardir) or "/" in value or "\\" in value or "\x00" in value:
         raise ResourceError(f"invalid {field}")
     return value
 

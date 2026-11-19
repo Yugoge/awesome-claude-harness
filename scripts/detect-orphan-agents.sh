@@ -4,6 +4,7 @@
 # Exit codes: 0=success
 
 set -euo pipefail
+META_AGENTS_RE='^(orchestrator|dispatcher|coordinator)$'  # agents that dispatch others, never orphans
 
 # Parameters
 PROJECT_ROOT="${1:-.}"
@@ -126,7 +127,7 @@ if [[ -d "${CLAUDE_DIR}/agents" ]]; then
         [[ "$agent_name" == "README" ]] && continue
 
         # Skip meta-agents
-        [[ "$agent_name" =~ ^(orchestrator|dispatcher|coordinator)$ ]] && continue
+        [[ "$agent_name" =~ $META_AGENTS_RE ]] && continue
 
         # Check if referenced
         is_referenced=$(check_agent_references "$agent_name")
@@ -167,7 +168,7 @@ if [[ -d "${GLOBAL_CLAUDE_DIR}/agents" ]]; then
         [[ "$agent_name" == "README" ]] && continue
 
         # Skip meta-agents
-        [[ "$agent_name" =~ ^(orchestrator|dispatcher|coordinator)$ ]] && continue
+        [[ "$agent_name" =~ $META_AGENTS_RE ]] && continue
 
         # Check if referenced
         is_referenced=$(check_agent_references "$agent_name")

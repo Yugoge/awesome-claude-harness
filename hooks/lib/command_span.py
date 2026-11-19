@@ -46,6 +46,17 @@ def _command_sets() -> tuple[tuple, tuple]:
 # The commands a Stop gate guards, and the commands that never open a span.
 GATED_COMMANDS, CONTROL_COMMANDS = _command_sets()
 
+# The transcript record types that are conversation turns (the others: attachments, summaries,
+# meta, api-request blobs); only they hold a turn's calls and results.
+TURN_RECORD_TYPES = ("user", "assistant")
+# The markdown files of a folder that are its folder documents (doc-sync writes them), never its
+# content: not a command, an agent, a spec, a template or a todo script's command. Defined here,
+# in a standard-library module every loader reaches (hooks/stop-launch.py loads this file by its
+# path alone), and imported from here by every other reader.
+FOLDER_DOCUMENTS = ("INDEX.md", "README.md")
+# The line scripts/spec-write.py prints for each write: the rest of the line is the absolute path,
+# which may hold a space (a project directory can). Read by lib/spec_path.py and the Stop command gate.
+SPEC_WRITER_LINE = re.compile(r"^spec-write: (?:create|append) (/\S.*)$", re.M)
 # Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
 # sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
 # compaction's summary (isCompactSummary; no isMeta or origin).
@@ -65,9 +76,9 @@ _SLASH_RE = re.compile(r"\s*/([A-Za-z0-9:_-]+)(?:\s+(.*))?\Z", re.S)
 
 
 def harness_commands() -> frozenset:
-    """commands/*.md stems of this harness, INDEX and README excluded."""
+    """commands/*.md stems of this harness, the folder documents (INDEX, README) excluded."""
     try:
-        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.stem not in ("INDEX", "README"))
+        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.name not in FOLDER_DOCUMENTS)
     except OSError:
         return frozenset()
 
@@ -313,7 +324,7 @@ def _blocks(record: dict | None, sidechain: bool = False):
     results. Any other record holds none, whatever it carries (CLI 2.1.322's api-request-blob repeats
     each message of a model request, its tool_use and tool_result blocks too: a call read twice). A
     subagent's own record (isSidechain) only with ``sidechain``."""
-    if not isinstance(record, dict) or record.get("type") not in ("user", "assistant") \
+    if not isinstance(record, dict) or record.get("type") not in TURN_RECORD_TYPES \
             or (record.get("isSidechain") and not sidechain):
         return ()
     message = record.get("message")
@@ -493,20 +504,24 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
-    def last_text(self) -> str:
-        """The text of the main session's last assistant record in the span that holds text ('' when none):
-        what the Stop gate reads where the Stop payload carries no last_assistant_message."""
+    def texts(self) -> list:
+        """The text of each assistant record in the span that holds text, in order."""
         try:
             lines, floor = self._lines()
         except (OSError, TypeError, ValueError):
-            return ""
-        last = ""
+            return []
+        out = []
         for begin, end in lines.offsets((b'"text"',), floor):
             record = _decode(lines.data[begin:end])
             texts = [b.get("text") for b in _blocks(record) if b.get("type") == "text" and isinstance(b.get("text"), str)]
             if texts and record.get("type") == "assistant":
-                last = "\n".join(texts)
-        return last
+                out.append("\n".join(texts))
+        return out
+
+    def last_text(self) -> str:
+        """The text of the main session's last assistant record in the span that holds text ('' when none):
+        what the Stop gate reads where the Stop payload carries no last_assistant_message."""
+        return (self.texts() or [""])[-1]
 
     def result_text(self, ident: str) -> str:
         """The text of call ``ident``'s tool_result in the span ('' while none came back); an Agent
@@ -585,7 +600,7 @@ class Span:
         """(call, obligation) of each Agent/Task dispatch whose prompt parses to an obligation, in span order,
         however its call came back: whether and when its agent stopped is agent_returns.Returns' reading."""
         ob = _obligation()
-        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task"))
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls(*_subagent().DISPATCH_TOOLS))
         return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
 
     def obligations(self) -> list:
@@ -744,6 +759,11 @@ OPENER_REMOTE_LINE_RE = re.compile(r"^\[/push\] remote at the opener: (\S+) ([0-
 def _obligation():  # imported when first asked: a reader that needs none loads none of it
     import importlib
     return importlib.import_module(f"{__package__}.obligation" if __package__ else "obligation")
+
+
+def _subagent():
+    import importlib
+    return importlib.import_module(f"{__package__}.subagent" if __package__ else "subagent")
 
 
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):
@@ -939,7 +959,7 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
     # is a file inside the project now, or has a directory part and a dotted name.
     named = set()
     for token in _PATH_RUN.findall(command):
-        if token in (".", "..") or token.startswith("-"):
+        if token in (os.curdir, os.pardir) or token.startswith("-"):
             continue
         rel = _project_relative(token, cwd, root)
         if rel is None:

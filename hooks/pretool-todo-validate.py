@@ -58,6 +58,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.todo_canonical import (by_content, checklist, initial_status_violations, is_foreign, run_todo_script,
                                 validate_against_canonical)
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 
 
 def _check_field_changed(old_val, new_val):
@@ -258,7 +259,7 @@ def _resumed(state, sid):
     reads none and has no resumed call."""
     from lib.subagent_restart import completed_resumes, is_helper_invocation
     journal = completed_resumes(sid) if sid else {}
-    cut = {c.id: c for c in state.span.uses('Agent', 'Task') if not c.ok} if journal else {}
+    cut = {c.id: c for c in state.span.uses(*DISPATCH_TOOLS) if not c.ok} if journal else {}
     done = [b.result_at for b in state.span.uses('Bash') if b.ok and str(b.input.get('command')).split()[2:3]
             == ['finalize'] and is_helper_invocation({'tool_name': 'Bash', 'tool_input': b.input})] if cut else []
     return [(m.result_at, cut[journal[str(m.input.get('to'))]]) for m in state.span.uses('SendMessage')
@@ -282,7 +283,7 @@ def _started_at(state, content):
 def _returned_calls(state, sid):
     """(offset of its result, call) of each Agent call of the span that came
     back, and of each one session ``sid``'s /restart resumed (_resumed)."""
-    return [(c.result_at, c) for c in state.span.uses('Agent', 'Task') if c.ok] + _resumed(state, sid)
+    return [(c.result_at, c) for c in state.span.uses(*DISPATCH_TOOLS) if c.ok] + _resumed(state, sid)
 
 
 def _call_type(call):
@@ -397,7 +398,7 @@ def _unreturned(state, types):
     from lib.obligation import extract_obligation_block
     return [f'call {c.id}, declared artifacts: ' + (', '.join(re.findall(r'"path":\s*"([^"]+)"', getattr(
         extract_obligation_block(str(c.input.get('prompt') or '')), 'body', ''))) or 'none')
-        for c in state.span.uses('Agent', 'Task')
+        for c in state.span.uses(*DISPATCH_TOOLS)
         if not c.ok and str(c.input.get('subagent_type') or '').strip().lower() in types]
 
 

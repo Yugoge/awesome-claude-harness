@@ -42,6 +42,7 @@ from lib import command_span, locations, overnight, shell_parse as sp, stop_cont
 from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
 from lib import git_facts  # noqa: E402
 from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES  # noqa: E402
+from lib.subagent import is_subagent  # noqa: E402
 
 try:  # optional contract runtime + agent resolver for the self_repair grant
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -139,9 +140,9 @@ def _is_harness_state_path(target: str) -> bool:
 
 
 def _is_orchestrator_actor() -> bool:
-    """True iff the payload carries no agent_id (the orchestrator, the main agent)."""
+    """True iff the caller is the main agent (the orchestrator): no subagent (lib/subagent)."""
     payload = _REQUEST_CTX.get('payload') or {}
-    return not payload.get('agent_id')
+    return not is_subagent(payload)
 
 
 def _is_harness_state_exempt(target: str) -> bool:
@@ -409,9 +410,11 @@ def _body_mentions_protected_branch(body: str) -> bool:
 
 
 def _is_path_exempt(file_path: str) -> bool:
-    """Check if path is exempt from overnight worktree restrictions: the null device, a temp
-    directory the session's own files go to, the hook state root (lib/locations: both sides resolved)."""
-    if os.path.realpath(os.path.abspath(file_path)) == locations.NULL_DEVICE:
+    """Check if path is exempt from overnight worktree restrictions: the null device, a sink no file
+    lies behind (by name: /dev/stderr is a link to this process's own descriptor), a temp directory the
+    session's own files go to, the hook state root (lib/locations: both sides resolved)."""
+    named = os.path.abspath(file_path)
+    if os.path.realpath(named) == locations.NULL_DEVICE or locations.is_sink(named):
         return True
     roots = locations.session_temp_roots() + (locations.state_root(),)
     return any(root != os.sep and locations.is_inside(file_path, root) for root in roots)
@@ -462,11 +465,15 @@ def _block_global_worktree(tool_name: str, target: str, worktree_paths: list[str
     )
 
 
+def _edit_target(tool_name: str, tool_input: dict) -> str:
+    """The file a file-writing tool names ('' for any other): command_span.EDIT_TOOLS holds each tool's path key."""
+    key = command_span.EDIT_TOOLS.get(tool_name)
+    return str(tool_input.get(key) or '') if key else ''
+
+
 def _enforce_write_edit_all_sessions(tool_name: str, tool_input: dict, worktree_paths: list[str]) -> None:
     """Block Write/Edit outside active overnight worktrees for all sessions (self_repair-grant aware)."""
-    if tool_name not in ('Write', 'Edit', 'MultiEdit'):
-        return
-    fp = tool_input.get('file_path', '')
+    fp = _edit_target(tool_name, tool_input)
     if not fp or _is_path_allowed_during_overnight(fp, worktree_paths) or _grant_skips_block(fp):
         return
     _block_global_worktree(tool_name, fp, worktree_paths)
@@ -656,7 +663,7 @@ def _git_of(site, res) -> list:
     if res.payload is not None:
         return []
     texts = [w.value() for w in res.args] + [r.hd.body if r.hd is not None else r.target.value()
-                                            for r in site.cmd.redirects if r.op in ('<<', '<<-', '<<<')]
+                                            for r in site.cmd.redirects if r.op in sp.HEREDOC_OPS]
     return [inv for t in texts if t and 'git' in t
             for inv in sp.git_invocations(sp.parse(t), strings=True)]
 
@@ -758,8 +765,8 @@ def _check_write_edit_security(tool_name: str, file_path: str) -> None:
 def apply_global_security_checks(tool_name: str, tool_input: dict) -> None:
     """Block hooks/commands/state modifications for ALL sessions during any overnight. A Bash write
     to .claude/hooks/ or .claude/commands/ is pretool-claude-config-guard.py's refusal."""
-    if tool_name in ('Write', 'Edit', 'MultiEdit'):
-        _check_write_edit_security(tool_name, tool_input.get('file_path', ''))
+    if tool_name in command_span.EDIT_TOOLS:
+        _check_write_edit_security(tool_name, _edit_target(tool_name, tool_input))
     if tool_name == 'Bash' and check_bash_targets_state(tool_input.get('command', '')):
         _block('\nOVERNIGHT STATE PROTECTION: Modifying or deleting '
                'overnight-state-*.json via Bash is blocked.\n')
@@ -790,7 +797,7 @@ def _block_worktree_string_violation(tool_name: str, path: str) -> None:
 
 def _check_write_edit_string(tool_name: str, tool_input: dict, worktree_path: str) -> None:
     """Block a Write/Edit outside the session worktree (self_repair-grant aware)."""
-    file_path = tool_input.get('file_path', '')
+    file_path = _edit_target(tool_name, tool_input)
     if not file_path or _is_path_exempt(file_path) or _is_harness_state_exempt(file_path) or _grant_skips_block(file_path):
         return
     if is_outside_worktree(file_path, worktree_path):
@@ -808,7 +815,7 @@ def _check_bash_string(tool_input: dict, worktree_path: str) -> None:
 
 def apply_worktree_string_check(tool_name: str, tool_input: dict, worktree_path: str) -> None:
     """Block when an overnight session writes outside its worktree_path."""
-    if tool_name in ('Write', 'Edit', 'MultiEdit'):
+    if tool_name in command_span.EDIT_TOOLS:
         _check_write_edit_string(tool_name, tool_input, worktree_path)
     if tool_name == 'Bash':
         _check_bash_string(tool_input, worktree_path)
@@ -1059,7 +1066,7 @@ def _config_key_operand(args: list[str]) -> str:
             skip = True
         elif not a.startswith('-'):
             words.append(a)
-    if words and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS | git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS:
+    if words and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS | git_facts.GIT_CONFIG_WRITE_VERBS:
         words = words[1:]
     return words[0] if words else ''
 
@@ -1264,9 +1271,12 @@ def _git_option_values(command: str, option: str, env_names: tuple) -> list[str]
 
 
 _GIT_TOKEN_RE = re.compile(r'(?<![\w./-])(?:/[\w./-]*/)?git\b')
-_DANGEROUS_GIT_OP_RE = re.compile(
-    r'\b(checkout|switch|reset|restore|clean|stash|update-ref|symbolic-ref|'
-    r'branch|merge|rebase|pull|cherry-pick|am|worktree)\b')
+# git subcommands that move HEAD or write the working tree, refused after a `cd` that cannot be read
+_HEAD_MOVERS = ('checkout', 'switch', 'reset', 'restore', 'clean', 'stash', 'update-ref', 'symbolic-ref',
+                'branch', 'merge', 'rebase', 'cherry-pick', 'am', 'pull')
+_OVERNIGHT_ACTORS = ('overnight_owner', 'overnight_child')  # the classifications of an overnight session
+# Those and worktree: the git calls an interpreter's code may hide.
+_DANGEROUS_GIT_OP_RE = re.compile(r'\b(%s)\b' % '|'.join(_HEAD_MOVERS + ('worktree',)))
 _TEXT_GIT_DIR_RE = re.compile(r'(?:--git-dir(?:=|\s+)|GIT_DIR=|GIT_COMMON_DIR=)(\S+)')
 _TEXT_WORK_TREE_RE = re.compile(r'(?:--work-tree(?:=|\s+)|GIT_WORK_TREE=)(\S+)')
 
@@ -1348,9 +1358,6 @@ _KEYSTONE_CONFIG_BLOCK = (
     '(core.hooksPath, include.path, includeIf.*.path), builds that key from an expansion, removes or '
     'renames the core section, or edits the config is forbidden for overnight actors; the keystone '
     'stays as the launcher set it. Reading it (--get, --list) is allowed.\n')
-# git subcommands that move HEAD or write the working tree, refused after a `cd` that cannot be read
-_HEAD_MOVERS = ('checkout', 'switch', 'reset', 'restore', 'clean', 'stash', 'update-ref', 'symbolic-ref',
-                'branch', 'merge', 'rebase', 'cherry-pick', 'am', 'pull')
 
 
 def _git_run_dir(inv, cwd: str | None, payload_cwd: str) -> str:
@@ -1972,14 +1979,14 @@ def main():
     _set_governing_own_root(gov_state, payload)
 
     # owner/child with a null/missing worktree = invalid isolation = BLOCK.
-    if classification in ('overnight_owner', 'overnight_child'):
+    if classification in _OVERNIGHT_ACTORS:
         wt = (gov_state or {}).get('worktree_path') if gov_state else None
         if not wt:
             _block_invalid_isolation(classification)
 
     # For overnight actors (also an in-worktree actor whose owner/child resolution
     # failed): the git and write checks first, then the bwrap rewrite.
-    if classification in ('overnight_owner', 'overnight_child', 'worktree_context') \
+    if classification in _OVERNIGHT_ACTORS + ('worktree_context',) \
             and tool_name == 'Bash':
         command = tool_input.get('command', '')
         if gov_state is not None:
@@ -1996,14 +2003,14 @@ def main():
             # block, so any git / interpreter command is refused; any other command is
             # left to the worktree-boundary enforcement below.
             _fail_closed_worktree_context(command)
-    target = str(tool_input.get('file_path') or '') if tool_name in ('Write', 'Edit', 'MultiEdit') else ''
-    if classification in ('overnight_owner', 'overnight_child', 'worktree_context') and gov_state is not None \
+    target = _edit_target(tool_name, tool_input)
+    if classification in _OVERNIGHT_ACTORS + ('worktree_context',) and gov_state is not None \
             and target and _targets_git_config(target):
         _block_git_config(tool_name, target)
 
     if wt_paths:
         apply_global_worktree_enforcement(tool_name, tool_input, wt_paths)
-    if classification in ('overnight_owner', 'overnight_child') and gov_state is not None:
+    if classification in _OVERNIGHT_ACTORS and gov_state is not None:
         _apply_session_enforcement(gov_state, tool_name, tool_input)
     sys.exit(0)
 

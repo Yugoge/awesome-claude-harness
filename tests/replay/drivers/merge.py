@@ -108,12 +108,22 @@ def refusal(rp, label: str) -> str:
     return f"{b['hook']} refused {label!r}: {b['text'][:300]}" if b else f"a hook refused {label!r}"
 
 
+REPORTED = "Where one refuses, nobody is asked about it."
+OWN_ACTIONS = re.compile(r'An action the refusal names that is the agent\'s own \(("[^)]*)\) is taken at once')
+
+
 def ask_refusal(o, devs, label: str, sec: str, anchor: str, facts: str = "") -> str:
     """A refusal as the text's Refusals rule words it: ONE AskUserQuestion, the refusal's quoted message
     (and its facts) the question, the action it names (Recommended) and the rule's other option the
-    options. Returns (action, answer); the owner picks the recommended option (replay.py)."""
+    options. Returns (action, answer); the owner picks the recommended option (replay.py). A Refusals rule that
+    reports the refusal and asks nobody (the 2026-11-19 text) asks nothing: (action, None)."""
     i = sec.find(anchor)
     act = re.search(r'action "([^"]+)"', sec[i:]) if i >= 0 else None
+    text = " ".join(o.text.split())
+    if act and (REPORTED in text or REPORTED.replace("Where one", "Where a step below") in text):
+        action = " ".join(act.group(1).split())
+        own = OWN_ACTIONS.search(text)
+        return action, (action if own and f'"{action}"' in own.group(1) else None)
     other = re.search(r'\(Recommended\), and "([^"]+)"', o.text)
     if not (act and other):
         raise cmdtext.TextNotFound(f"no refusal action after {anchor!r}, or no Refusals rule")
@@ -228,6 +238,8 @@ class MergeRun:
         lab = self.label(f"{heading} AskUserQuestion") + (f" {len(self.asked)}" if len(self.asked) > 1 else "")
         action, answer = ask_refusal(self.o, self.devs, lab, cmdtext.section(self.o.text, heading), anchor, facts)
         closedrv.fact(self.rp, "merge refusal", {"step": heading, "action": action, "answer": answer})
+        if answer is None and not self.outcome:  # reported, nobody asked: the turn ends on the report
+            self.say_stop(f"/merge refused ({anchor}): {action}; nothing merged.\n{facts}".rstrip())
         return answer == action
 
     def captured(self, text: str, label: str, desc: str, names=(), actor=None):

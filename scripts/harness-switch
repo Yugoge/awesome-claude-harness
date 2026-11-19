@@ -640,10 +640,12 @@ _RUNTIMES = re.compile(r"(?:node(?:js)?[\d.]*|bun|deno)\Z")
 
 def looks_like_claude(exe, argv):
     """True when a process (its executable path and argument list) is a Claude Code session: the
-    native binary `claude`, the installer's versioned copy (.../claude/versions/<version>), or
-    node/bun running the npm package's `claude` script. A shell script named claude is not."""
-    exe = exe or ""
-    if os.path.basename(exe) == "claude" or "/claude/versions/" in exe:
+    native binary `claude` (`claude.exe` as the npm package installs it, bin/claude.exe on every
+    platform), the installer's versioned copy (.../claude/versions/<version>), or node/bun running
+    the npm package's `claude` script. /proc names a binary replaced by an upgrade while it runs
+    `<path> (deleted)`: the same program. A shell script named claude is not."""
+    exe = (exe or "").removesuffix(" (deleted)")
+    if os.path.basename(exe) in ("claude", "claude.exe") or "/claude/versions/" in exe:
         return True
     if _RUNTIMES.match(os.path.basename(exe)):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -740,7 +742,8 @@ def cmd_hook():
     ctx = {"session_id": payload.get("session_id"), "transcript_path": payload.get("transcript_path"),
            "cwd": payload.get("cwd") if isinstance(payload.get("cwd"), str) else None}
     verb = args.split()[0] if args else "status"
-    if verb not in ("off", "on", "status") or len(args.split()) > 1:
+    sys.path.insert(0, os.path.join(HOME, "hooks", "lib")); from harness_switch import VERBS; sys.path.pop(0)  # noqa: E702
+    if verb not in VERBS or len(args.split()) > 1:
         emit("HARNESS SWITCH: usage: /harness off | on | status (nothing changed). Tell the owner so.",
              "harness: usage: /harness off | on | status")
         return 0

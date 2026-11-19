@@ -88,13 +88,13 @@ def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
     out: List[Tuple[str, bool]] = _computed_command_operands(command)
     for k, t in enumerate(found):
         sources = []
-        for s in found[k + 1:] if t.mechanism in ("mv", "git-mv") else ():
+        for s in found[k + 1:] if t.mechanism in _sp.MOVE_MECHANISMS else ():
             if s.mechanism != t.mechanism + "-source":
                 break
             sources.append(s)
         plain = t.decidable and all(w.word.value() is not None and not w.word.quoted() for w in [t] + sources)
         for path in _placed(t, command):
-            if t.mechanism not in ("mv", "git-mv"):
+            if t.mechanism not in _sp.MOVE_MECHANISMS:
                 out.append((path, t.mode == _sp.DELETE))
                 continue
             out.append((path, not plain))

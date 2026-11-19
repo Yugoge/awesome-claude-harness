@@ -14,7 +14,7 @@ calls it:
   post_commit   hooks/git-hooks/post-commit-auto-push installed as a post-commit hook: the
                 background push of refs/backups/claude/<branch>/<sha12>;
   combined_hook the combined "Git LFS + Auto-Push" post-commit hook body that
-                hooks/install-protection-all.sh writes (extracted, the installer never runs): the
+                the retired hooks/install-protection-all.sh installed (tests/fixtures/post-commit-lfs-auto-push): the
                 background push of the branch. Both hooks are copies with no path of their own:
                 they load the reader from ${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/, and without
                 it they push nothing.

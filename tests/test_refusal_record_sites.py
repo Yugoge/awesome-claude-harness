@@ -119,8 +119,10 @@ class Scratch:
         self.n += 1
         p = {"session_id": SESSION, "hook_event_name": event, "cwd": str(self.root / "project"),
              "transcript_path": str(self.root / "none.jsonl"), "permission_mode": "default", "stop_hook_active": False}
-        if event in refusal_record.EVENTS[:3]:
-            tool = matcher.split("|")[0] if re.fullmatch(r"[A-Za-z0-9_|]+", matcher) else "Glob"
+        if event in refusal_record.EVENTS[:3] or event == "PermissionRequest":  # the events that carry a tool call
+            # A registration for every tool ("*", ""): a tool every rule under it sees. Not one that carries no
+            # prompt (Read, Glob, ...): the harness-switch rule passes those unread (harness_switch.NO_PROMPT).
+            tool = matcher.split("|")[0] if re.fullmatch(r"[A-Za-z0-9_|]+", matcher) else "Write"
             p.update(tool_name=tool, tool_use_id=f"toolu_{self.n:04d}", tool_response={},
                      tool_input=INPUTS.get(tool, {"file_path": str(self.root / "project" / "new.txt"), "content": "x",
                                                   "old_string": "a", "new_string": "b"}))
@@ -159,7 +161,19 @@ class Scratch:
                     target.with_name(target.name + ".kept").rename(target)
         lines = [json.loads(x) for f in (self.root / "home").glob(".local/state/claude-harness/*/refusals/*.jsonl")
                  for x in f.read_text().splitlines()]
-        return done.returncode, done.stderr, lines
+        return _refused_status(event, done), done.stderr, lines
+
+
+def _refused_status(event: str, done) -> int:
+    """The exit status, with a PermissionRequest hook's deny decision read as the refusal it is (exit 2 at that event
+    leaves the request to a person, so the hook refuses with exit 0 and the decision)."""
+    if event == "PermissionRequest" and done.returncode == 0:
+        try:
+            decision = json.loads(done.stdout)["hookSpecificOutput"]["decision"]["behavior"]
+        except (ValueError, KeyError, TypeError):
+            decision = None
+        return 2 if decision == "deny" else 0
+    return done.returncode
 
 
 @pytest.fixture(scope="module")
@@ -180,8 +194,9 @@ def cases():
             command = commands[(event, hook)]
             if event not in refusal_record.EVENTS:
                 elsewhere.add(event)
-            elif site.file != command:
-                out.setdefault(command, {}).setdefault((event, site.file), (matcher, site.role in ("main", "rule")))
+            elif site.file != command:  # a rule of the command: the registered hook itself, or a file of that hook's table
+                runs = site.file == hook or site.file in {r.file for r in enumerated.rules.get(hook) or ()}
+                out.setdefault(command, {}).setdefault((event, site.file), (matcher, runs and site.role in ("main", "rule")))
             else:  # the registered file's own site: through each file it runs
                 own.setdefault(command, {}).setdefault((event, matcher), set()).add(int(site.line))
                 children = enumerated.children.get(command, [])

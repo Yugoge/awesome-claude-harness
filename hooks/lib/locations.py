@@ -26,6 +26,8 @@ except ImportError:  # loaded outside its package (by path, or from hooks/lib): 
 # -- the literals --------------------------------------------------------------------------
 DEVICE_DIR = "/dev"
 SHM_DIR = "/dev/shm"                              # the shared-memory tmpfs mounted in it
+# The path components that name no entry of their own: empty (a doubled or trailing slash), `.` and `..`.
+NAMELESS_PARTS = ("", ".", "..")
 NULL_DEVICE = "/dev/null"
 STD_SINKS = frozenset({NULL_DEVICE, "/dev/stdout", "/dev/stderr"})
 TERMINAL_SINKS = STD_SINKS | {"/dev/tty"}
@@ -150,6 +152,12 @@ def is_device(path, cwd: Optional[str] = None) -> bool:
     are ordinary files, made or not yet: a project can be checked out on it."""
     full = absolute(path, cwd)
     return bool(full) and below(full, DEVICE_DIR) is not None and not below(full, SHM_DIR)
+
+
+def is_sink(path) -> bool:
+    """Whether a write to ``path``, as written, changes no file: the null device, the writer's own
+    standard streams or terminal, or a descriptor it already holds (/dev/fd/N)."""
+    return isinstance(path, str) and (path in TERMINAL_SINKS or bool(FD_PATH.match(path)))
 
 
 def is_system_path(path: str) -> bool:

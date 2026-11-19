@@ -50,6 +50,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import bash_read_only  # noqa: E402 -- the one list of the programs that only read
 from lib import locations  # noqa: E402
+from lib.harness_vocabulary import WRITE_TOOLS  # noqa: E402
 
 
 SENTINEL_NAME = '.hook-refactor-allow'
@@ -92,8 +93,9 @@ def _matches_any(command: str, patterns: list) -> bool:
 # so each spelling of them counts as the home (fails closed), as an unknown prefix before a
 # written-out `.claude/hooks/` is refused today.
 _HOME = '~/.claude'
-_HOME_VARS = ('CLAUDE_HOME', 'CLAUDE_CONFIG_DIR')
-_BARE_HOME_VAR = re.compile(r'\$(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)(?![A-Za-z0-9_])')
+_HOME_VARS = locations.CONFIG_HOME_VARS
+_HOME_VAR_ALT = '|'.join(_HOME_VARS)
+_BARE_HOME_VAR = re.compile(r'\$(?:%s)(?![A-Za-z0-9_])' % _HOME_VAR_ALT)
 _BRACE = re.compile(r'\$\{|\}')
 _PARAMETER = re.compile(r'([A-Za-z_][A-Za-z0-9_]*|[0-9]+)(:?[-=?+])?(.*)\Z', re.S)
 
@@ -154,7 +156,7 @@ def _legacy_kind(command: str) -> str:
 
 # A protected folder named in a path: `.claude/hooks` or `.claude/commands`, as the folder itself or
 # anything below it (`cp -t .claude/hooks x`, `--target-directory=.claude/commands`).
-_PROTECTED = re.compile(r'\.claude/(hooks|commands)(?![A-Za-z0-9_.-])')
+_PROTECTED = re.compile(r'\.claude/(' + '|'.join(locations.CONFIG_FOLDERS) + r')(?![A-Za-z0-9_.-])')
 _DOT_SEGMENTS = re.compile(r'/(?:\.?/)+')
 _FED = frozenset({'pipe', 'heredoc', 'herestring'})
 # Text in a word that makes it code or a command line rather than a path (`rsync -e 'cp x ...'`).
@@ -275,11 +277,11 @@ def _site_settled(sp, raw: str, site, res, names_any: bool) -> bool:
 
 def _sed_scripts(args) -> list:
     """The script words of a sed call: each -e/--expression value, else the first operand."""
-    scripts, operands, k = [], [], 0
+    sp, scripts, operands, k = _shell_parse(), [], [], 0
     while k < len(args):
         v = args[k].value() or ''
-        if v in ('-e', '--expression', '-f', '--file') and k + 1 < len(args):
-            if v in ('-e', '--expression'):
+        if v in sp.SED_SCRIPT_GIVEN_OPTS and k + 1 < len(args):
+            if v in sp.SED_SCRIPT_OPTS:
                 scripts.append(args[k + 1])
             k += 2
             continue
@@ -296,7 +298,6 @@ def _sed_scripts(args) -> list:
 _SED_WRITE = re.compile(r'(?:^|[;{}\n\d$!]|/[gpiImMe0-9]*)\s*[wW]\s*(\S+)')
 # perl code that may write the operands it is handed (`open F, ">", shift`, unlink, rename, a shell)
 _PERL_WRITE = re.compile(r'open|unlink|rename|system|exec|`|qx|>|mkdir|rmdir|chmod|utime|truncate|link|copy|move|print\s*\{?\s*[A-Z$]')
-_FIND_RUN = ('-exec', '-execdir', '-ok', '-okdir')
 
 
 def _long_prefix(v: str, full: str, least: int) -> bool:
@@ -311,14 +312,14 @@ def _sed_long_in_place(args, vals) -> list:
     edit; the parser reads only the full spelling."""
     if not any(v.startswith('--') and _long_prefix(v, '--in-place', 3) for v in vals):
         return []
-    script, ops, k = False, [], 0
+    sp, script, ops, k = _shell_parse(), False, [], 0
     while k < len(args):
         v = vals[k]
-        if v in ('-e', '--expression', '-f', '--file', '-l', '--line-length'):
-            script = script or v in ('-e', '--expression', '-f', '--file')
+        if v in sp.SED_SCRIPT_GIVEN_OPTS + ('-l', '--line-length'):
+            script = script or v in sp.SED_SCRIPT_GIVEN_OPTS
             k += 2
             continue
-        if v.startswith(('--expression=', '--file=')) or (v.startswith('-e') and len(v) > 2):
+        if v.startswith(sp.SED_SCRIPT_ATTACHED) or (v.startswith('-e') and len(v) > 2):
             script = True
         elif not v.startswith('-') or v == '-':
             ops.append(args[k])
@@ -464,14 +465,14 @@ def _site_writes(sp, raw: str, res) -> list:
     elif name == 'find':
         starts = []
         for w in args:
-            if (w.value() or '-').startswith(('-', '(', '!')):
+            if (w.value() or '-').startswith(sp.FIND_EXPRESSION_LEADS):
                 break
             starts.append(w)
         for k, v in enumerate(vals):
-            if v in ('-fprint', '-fprint0', '-fprintf', '-fls') and k + 1 < len(args):
+            if v in sp._FIND_FILE and k + 1 < len(args):
                 out.append((args[k + 1].value() or args[k + 1].text, args[k + 1]))
         runs = [vals[k + 1:k + 1 + next((j for j, x in enumerate(vals[k + 1:]) if x in sp.FIND_EXEC_ENDS), len(vals))]
-                for k, v in enumerate(vals) if v in _FIND_RUN and k + 1 < len(vals)]
+                for k, v in enumerate(vals) if v in sp.FIND_EXEC and k + 1 < len(vals)]
         if '-delete' in vals or any(not bash_read_only.reads_only(os.path.basename(r[0]), r[1:], pagers=True)
                                     for r in runs):
             # what find removes, or hands to a command that may write it: every start path
@@ -493,7 +494,7 @@ def _cd_dirs(sp, sites) -> list:
         if not ops:
             continue
         arg = _home_spelled_out(ops[0].text)
-        if arg.startswith(('/', '~')):
+        if arg.startswith(sp.ROOTED):
             new = [arg]
         else:
             new = [os.path.join(d, arg) if d else arg for d in dirs]
@@ -568,8 +569,6 @@ def _safe_var(sp, name: str) -> bool:
     return name in sp.INERT_ENV_VARS - sp.DIR_ENV_VARS or bool(re.fullmatch(r'LC_[A-Z]+', name))
 
 
-_FIND_ACTIONS = frozenset({'-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0',
-                           '-fprintf', '-fls'})
 _UNSAFE_TARGET_CHARS = re.compile(r'[$`*?\[\]{}!]')
 # gh pr / gh issue subcommands that change nothing in the working tree (not checkout, merge).
 _GH_READS = frozenset({'create', 'view', 'list', 'comment', 'edit', 'status', 'close', 'reopen', 'diff',
@@ -578,8 +577,8 @@ _SED_BOOL_LONG = bash_read_only.SED_LONG_FLAGS
 
 
 _ENV_PATH_WORD = re.compile(
-    r'"(?:\$HOME|\$\{HOME\}|\$(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)|\$\{(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR)\}'
-    r'|\$\{(?:CLAUDE_HOME|CLAUDE_CONFIG_DIR):-\$HOME/[^"$`\\{}*?\[]*\})'
+    r'"(?:\$HOME|\$\{HOME\}|\$(?:%s)|\$\{(?:%s)\}' % (_HOME_VAR_ALT, _HOME_VAR_ALT) +
+    r'|\$\{(?:%s):-\$HOME/[^"$`\\{}*?\[]*\})' % _HOME_VAR_ALT +
     r'/[^"$`\\]*"\Z')
 
 
@@ -904,7 +903,7 @@ def _proven_harmless(command: str, start: str) -> bool:
             if not bash_read_only.reads_only(name, vals):
                 return False  # printf -v; sort -o, --compress-program, -T
         elif name == 'find':
-            if _FIND_ACTIONS & set(vals):
+            if set(sp.FIND_ACTIONS) & set(vals):
                 return False
         elif name == 'rg':
             if not _rg_proof(vals):
@@ -1022,7 +1021,7 @@ def _proven_harmless(command: str, start: str) -> bool:
                     if '$' in text.rsplit('/', 1)[-1]:
                         return False  # a copied name the guard cannot read
                 base = os.path.basename(text.rstrip('/'))
-                if base not in ('', '.', '..'):  # `cp -r src/. dest` writes dest itself, judged above
+                if base not in locations.NAMELESS_PARTS:  # `cp -r src/. dest` writes dest itself, judged above
                     written |= {os.path.join(p, base) for p in paths}
         if not outside(written, subtree):
             return False
@@ -1135,6 +1134,7 @@ def _dev_command_product_file(file_path: str, data: dict) -> bool:
             return False
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from lib import command_span, declared_paths, obligation
+        from lib.subagent import DISPATCH_TOOLS
         transcript = Path(data['transcript_path'])
         if transcript.parent.name == 'subagents':  # <sid>/subagents/agent-x.jsonl -> <sid>.jsonl
             transcript = transcript.parent.parent.with_suffix('.jsonl')
@@ -1148,7 +1148,7 @@ def _dev_command_product_file(file_path: str, data: dict) -> bool:
         parsed = obligation.parse_obligation(prompt)
         return (isinstance(parsed, obligation.ParsedObligation) and parsed.obligation.get('role') == 'dev'
                 and any(c.id == call_id and c.input.get('prompt') == prompt
-                        and c.input.get('subagent_type') == 'dev' for c in span.iter_calls('Agent', 'Task')))
+                        and c.input.get('subagent_type') == 'dev' for c in span.iter_calls(*DISPATCH_TOOLS)))
     except Exception:
         return False
 
@@ -1236,7 +1236,7 @@ def _evaluate_bash(tool_input: dict, data: dict) -> None:
 
 def _evaluate(tool_name: str, tool_input: dict, data: dict) -> None:
     """Dispatch evaluation by tool_name."""
-    if tool_name in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
+    if tool_name in WRITE_TOOLS:
         _evaluate_write_edit(tool_name, tool_input, data)
     elif tool_name == 'Bash':
         _evaluate_bash(tool_input, data)

@@ -157,6 +157,13 @@ def r1(w):
         for script in ("resolve-dev-artifact-chain.py", "dev-lifecycle.py"):
             got = py(script_fn(SCRIPTS / script, "ns['_default_project_dir']()"), bash, cwd=sub)
             pairs.append((f"{s} {script}", str(sub), real(got)))
+        # Steps that run without hooks/lib spell the rule themselves: pinned to locations.project_root(bash=True).
+        rule = py("import locations; print(locations.project_root(bash=True))", bash, cwd=sub) \
+            if (LIB / "locations.py").is_file() else str(sub)
+        for script, call in (("steps/spec-capture.py", "ns['project_dir'](None)"),
+                             ("steps/spec-finalize.py", "ns['project_dir'](None)"),
+                             ("aggregate-dev-report.py", "ns['_resolve_project_root'](None)")):
+            pairs.append((f"{s} {script}", real(rule), real(py(script_fn(SCRIPTS / script, call), bash, cwd=sub))))
     return pairs
 
 

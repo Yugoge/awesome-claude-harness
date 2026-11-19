@@ -113,7 +113,7 @@ _UGREP_ARGV0 = "ugrep"
 # ---------------------------------------------------------------------------
 # Step 1: recover (pattern, mode) pairs from the command's search invocations.
 # ---------------------------------------------------------------------------
-_SEARCH_NAMES = ("grep", "egrep", "fgrep")
+_SEARCH_NAMES = shell_parse.GREP_NAMES
 
 # Wrappers that keep the shell function in play: a search behind them still
 # reaches the embedded engine. Every other wrapper execs the named binary through
@@ -132,7 +132,7 @@ _PAYLOAD_WRAPPERS = set(shell_parse.LOOKUP_BUILTINS)
 _SUBSTITUTIONS = ("cmdsub", "backtick", "procsub")
 
 # Word parts read as written: an unmatched glob or brace stays literal.
-_LITERAL_PARTS = ("lit", "glob", "brace")
+_LITERAL_PARTS = shell_parse.LITERAL_PART_KINDS
 
 # Bound on descents into code a command hands to a shell (`eval`, `-c`, heredoc).
 _MAX_DESCENT = 6
@@ -376,7 +376,7 @@ def _heredoc_scripts(cmd):
     if shell_parse.resolve(cmd).name not in _SHELL_INTERP_NAMES:
         return []
     return [shell_parse.parse_src(r.hd.body_src, 1) for r in cmd.redirects
-            if r.op in ("<<", "<<-") and r.hd is not None]
+            if r.op in shell_parse.HERE_DOCUMENT_OPS and r.hd is not None]
 
 
 def _searches_in(script, depth):
@@ -426,39 +426,6 @@ _GAP_RE = re.compile(
     """,
     re.VERBOSE,
 )
-
-
-def _has_top_level_alternation(pattern):
-    """True if an unescaped, top-level (depth-0) `|` exists in the pattern."""
-    depth = 0
-    i = 0
-    n = len(pattern)
-    while i < n:
-        c = pattern[i]
-        if c == "\\":
-            i += 2
-            continue
-        if c == "[":
-            # skip a character class
-            j = i + 1
-            if j < n and pattern[j] == "^":
-                j += 1
-            if j < n and pattern[j] == "]":
-                j += 1
-            while j < n and pattern[j] != "]":
-                if pattern[j] == "\\":
-                    j += 1
-                j += 1
-            i = j + 1
-            continue
-        if c == "(":
-            depth += 1
-        elif c == ")":
-            depth = max(0, depth - 1)
-        elif c == "|" and depth == 0:
-            return True
-        i += 1
-    return False
 
 
 def is_catastrophic_shape(pattern, mode):
