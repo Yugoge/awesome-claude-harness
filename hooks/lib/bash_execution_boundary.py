@@ -63,8 +63,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    CD_TARGET_BUILTINS, COMMAND_OPTS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS, OPTION_SIGNS, PIPE_OPS, XARGS_SPEC,
-    _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    CD_TARGET_BUILTINS, COMMAND_OPTS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS, OPTION_SIGNS, PIPE_OPS,
+    REEXPAND_OPS, XARGS_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -1912,7 +1912,7 @@ class Analyzer:
             elif kind == "param":
                 body = s.text
                 if body.startswith("!") or (
-                        "@" in body and body.rsplit("@", 1)[1][:1] in ("P", "E", "A")):
+                        "@" in body and body.rsplit("@", 1)[1][:1] in REEXPAND_OPS):
                     self.note("param_reexpand", off)
                     self.structural("param_reexpansion", body)
                 self.scan_expansions(s, env)
@@ -1969,7 +1969,7 @@ class Analyzer:
                         body = s.text
                         if body.startswith("!") or (
                                 "@" in body
-                                and body.rsplit("@", 1)[1][:1] in ("P", "E", "A")):
+                                and body.rsplit("@", 1)[1][:1] in REEXPAND_OPS):
                             self.note("param_reexpand", off)
                             self.structural("param_reexpansion", body)
                         self.scan_expansions(s, env)
