@@ -291,7 +291,7 @@ def _site_settled(sp, raw: str, site, res, names_any: bool) -> bool:
             return False
         if name == 'sed' and any(_names(raw, w) for w in _sed_scripts(res.args)):
             return False  # a sed script naming the folder: `e`, `w` and `r` commands
-        if name == 'perl' and any(_names(raw, w) for w in _perl_code(res.args)):
+        if name == 'perl' and any(_names(raw, w) for w in sp.perl_operands(list(res.args))[1]):
             return False
         return all(_plain(w) for w in named)
     return False
@@ -315,21 +315,6 @@ def _sed_scripts(args) -> list:
             operands.append(args[k])
         k += 1
     return scripts or operands[:1]
-
-
-def _perl_code(args) -> list:
-    """The code words of a perl call (-e/-E values, or the script operand)."""
-    code, k = [], 0
-    while k < len(args):
-        v = args[k].value() or ''
-        if v == '--' or not v.startswith('-'):
-            break
-        if v[-1:] in ('e', 'E') and not v.startswith('--') and k + 1 < len(args):
-            code.append(args[k + 1])
-            k += 2
-            continue
-        k += 1
-    return code
 
 
 _SED_WRITE = re.compile(r'(?:^|[;{}\n\d$!]|/[gpiImMe0-9]*)\s*[wW]\s*(\S+)')
