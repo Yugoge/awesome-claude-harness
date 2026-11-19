@@ -494,7 +494,7 @@ class _Scan:
                     self.feeders[id(pl.stages[k + 1])] = st
                 if isinstance(st, _sp.Compound):
                     w = writes or any(_writes_file(r) for r in st.redirects)
-                    if st.kind in ('for', 'select') and st.header and st.body:
+                    if st.kind in _sp.LOOP_VAR_KINDS and st.header and st.body:
                         var = st.header[0].value()
                         if var and re.match(r'^[A-Za-z_]\w*$', var):
                             self.loops.append((var, list(st.header[1:]), st.body))

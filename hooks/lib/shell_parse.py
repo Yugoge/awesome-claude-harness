@@ -426,6 +426,7 @@ OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (stan
 CD_OPTIONS = ("-L", "-P", "-e", "-@", "--")  # bash: cd [-L|[-P [-e]] [-@]] [--] [dir]
 CD_TARGET_BUILTINS = ("cd", "pushd")  # move to the directory their operand names (popd returns to one listed)
 CWD_BUILTINS = ("cd", "pushd", "popd")  # change the working directory of what follows
+LOOP_VAR_KINDS = ("for", "select")  # Compound kinds whose header binds a variable to each listed word
 
 
 def _match_pair(t, i, opener, closer):

@@ -993,8 +993,9 @@ def _relaxed_writes_namespace(command, ns_re):
     for one in (sites if sites is not None else [command.replace("\n", " ")]):
         if grep(ARTIFACT_WRITE_VERB_RE + ".*" + ns_re, one):
             return True
+    from lib.shell_parse import LOOP_VAR_KINDS
     one = command.replace("\n", " ")
-    listed = any(c.kind in ("for", "select") and any(grep(ns_re, w.text) for w in c.header[1:])
+    listed = any(c.kind in LOOP_VAR_KINDS and any(grep(ns_re, w.text) for w in c.header[1:])
                  for c in _compounds(command) or ())
     return bool(
         (sites is not None and _xargs_fed_writer(command))
@@ -1667,7 +1668,7 @@ class _ConsentView:
         scripts[id(script)] = script
         for sc in scripts.values():
             for c in _consent_compounds(sc, sp):
-                if c.kind in ("for", "select") and c.header and c.header[0].value():
+                if c.kind in sp.LOOP_VAR_KINDS and c.header and c.header[0].value():
                     name = c.header[0].value()
                     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
                         for w in c.header[1:] or [None]:
@@ -3267,6 +3268,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
     sentinel is minted only by the userprompt-bulk-commit-capability hook, never from Bash. A command the parser
     cannot read is TOKENIZER_ERROR.
     """
+    from lib.shell_parse import LOOP_VAR_KINDS
     sites = _parsed_sites(cmd)
     if sites is None:
         return 'TOKENIZER_ERROR'
@@ -3275,7 +3277,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
         return 'DENY'
     if named:
         compounds = _compounds(cmd)
-        if compounds is None or any(k.kind in ("for", "select") and any(_bulk_word_mentions(w) for w in k.header[1:])
+        if compounds is None or any(k.kind in LOOP_VAR_KINDS and any(_bulk_word_mentions(w) for w in k.header[1:])
                                     for k in compounds):
             return 'DENY'
     for site, res in sites:
