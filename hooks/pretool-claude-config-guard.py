@@ -91,7 +91,6 @@ def _located_kind(path: str, base=None) -> str:
     return locations.config_folder(path.replace('\\', '/'), base or str(_project_dir())) if path else ''
 
 
-
 def _matches_any(command: str, patterns: list) -> bool:
     """True iff command matches any of the regex patterns."""
     return any(re.search(p, command) for p in patterns)
