@@ -625,7 +625,7 @@ class _Scan:
         words = [w.value() for w in cmd.words]
         if not words:
             return True
-        if words[0] == 'command' and len(words) > 1 and words[1] in ('-v', '-V'):
+        if words[0] == 'command' and len(words) > 1 and words[1] in _sp.COMMAND_LOOKUP_OPTS:
             return True
         res = _sp.resolve(cmd)
         last_open = res.unresolved == 'computed-shell-option' and (
