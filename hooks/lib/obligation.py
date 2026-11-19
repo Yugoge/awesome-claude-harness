@@ -790,7 +790,7 @@ def _first_line_record(path):
         candidate = json.loads(line.decode("utf-8", "replace"))
     except ValueError:
         return None
-    if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+    if isinstance(candidate, dict) and candidate.get("type") in _lib_module("command_span").TURN_RECORD_TYPES:
         return candidate
     return _READ_ON
 
@@ -824,7 +824,8 @@ def read_first_record_prompt(transcript_path: str | Path) -> str | None:
                         candidate = json.loads(line)
                     except ValueError:
                         return None
-                    if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+                    turns = _lib_module("command_span").TURN_RECORD_TYPES
+                    if isinstance(candidate, dict) and candidate.get("type") in turns:
                         record = candidate
                         break
     except OSError:

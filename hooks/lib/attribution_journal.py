@@ -150,8 +150,8 @@ def extract_targets(tool_name: str, tool_input: dict, cwd: str) -> List[str]:
         from lib import shell_parse
         cmd = (tool_input or {}).get("command")
         if isinstance(cmd, str) and cmd:
-            raw.extend(t.path for t in shell_parse.write_targets(cmd, env=os.environ)
-                       if t.mode != shell_parse.DELETE and t.path is not None)
+            raw.extend(p for t in shell_parse.write_targets(cmd, env=os.environ)
+                       if t.mode != shell_parse.DELETE and t.path is not None for p in t.placed())
     seen, out = set(), []
     for r in raw:
         if not r or "$" in r:                            # unresolved vars

@@ -13,6 +13,7 @@
 
 # Read full JSON from stdin
 INPUT=$(cat)
+. "$(dirname "${BASH_SOURCE[0]}")/lib/refusal_record.sh" 2>/dev/null && trap refusal_record_on_exit EXIT  # one refusal record when this hook refuses
 
 # Extract tool name (fail-open on parse failure)
 TOOL_NAME=$(echo "$INPUT" | python3 -c \
@@ -71,7 +72,7 @@ BEWEOF
   fi
 fi
 
-cat >&2 << 'EOF'
+_SAID=$(cat << 'EOF'
 BLOCKED: EnterWorktree uses origin/main as start point, not local HEAD.
 This causes worktrees to contain upstream code instead of local changes.
 
@@ -80,4 +81,6 @@ Use this instead:
 
 It creates a worktree from HEAD and prints the path.
 EOF
+)
+printf '%s\n' "$_SAID" >&2
 exit 2

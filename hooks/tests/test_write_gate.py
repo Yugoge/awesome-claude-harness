@@ -192,8 +192,16 @@ def test_each_rule_sees_the_tools_its_guard_was_registered_for(tmp_path):
     assert registered.pop("pretool-write-guard.sh") == by_file.pop("overwrite.py").tools
     assert registered.pop("pretool-subagent-code-block.py") is not None  # not a rule: see below
     # the harness switch's guard was never a registration of its own: a rule from its start
-    assert by_file.pop("pretool-harness-switch-guard.py").tools == write_gate.WRITE_TOOLS | {
-        "Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"}
+    # (and it sees every tool but the CLI's own that deliver no prompt: a prompt that types /harness is
+    # known by the input, not the tool's name, so no MCP tool and no tool of a later CLI is skipped)
+    switch = by_file.pop("pretool-harness-switch-guard.py")
+    assert switch.tools is None and {"Read", "Grep", "Glob"} <= switch.skips
+    assert all(switch.applies(t) for t in ("Bash", "Write", "Skill", "CronCreate", "ScheduleWakeup", "SendMessage",
+                                           "Agent", "mcp__any__tool", "ALaterTool")) and not switch.applies("Read")
+    assert all(r.skips == frozenset() for r in by_file.values())
+    # the overnight boundary's old matcher left NotebookEdit out; its rule sees every file-writing tool
+    assert registered.pop("pretool-overnight-hook-guard.py") | {"NotebookEdit"} == \
+        by_file.pop("pretool-overnight-hook-guard.py").tools == write_gate.WRITE_TOOLS | {"Bash", "AskUserQuestion"}
     assert {k: v for k, v in registered.items()} == {k: r.tools for k, r in by_file.items()}
     assert [r.name for r in write_gate.RULES] == ["bash-views", "overnight-boundary", "tool-policy",
                                                   "cp-state", "overwrite", "claude-config", "harness-switch"]
@@ -595,8 +603,9 @@ def test_the_tools_named_one_after_another_run_their_rules_in_the_gates_process(
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     assert gate.ONE_AFTER_ANOTHER == frozenset({"Bash"})
-    from lib import hook_launch
-    assert gate.WARM == hook_launch.WARM
+    from lib import hook_launch, rule_fork
+    # one list of the modules warmed before the forks, read by the gate and the launcher
+    assert not hasattr(gate, "WARM") and not hasattr(hook_launch, "WARM") and rule_fork.WARM
     rules = [(f"s{i}", _timed(tmp_path, f"s{i}", "time.sleep(0.3)\n"), "open", 5.0) for i in range(2)]
     for tool, forked in (("Bash", False), ("Write", True), ("Edit", True), (None, True)):
         code, out, err, pid, _ = _gate_runs(tmp_path, rules, tool=tool)

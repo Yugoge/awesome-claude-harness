@@ -3,7 +3,7 @@
 PreToolUse Hook: Block foreground Agent during an active /spec Interview.
 
 Activation conditions (ALL must be true to block):
-  1. tool_name == "Agent"
+  1. tool_name is a dispatch tool (lib/subagent.DISPATCH_TOOLS)
   2. tool_input.get("run_in_background") is not True
      (background Explore agents are explicitly allowed by spec.md
       Interview Rule 5)
@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.todo_canonical import live_spec_checklist  # noqa: E402
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 
 
 def _spec_todo_progress(data: dict):
@@ -71,7 +72,7 @@ def _tool_is_exempt(data: dict) -> bool:
 
 def _should_block(data: dict) -> tuple[bool, int, int]:
     """Evaluate activation conditions. Returns (block, done_count, total_count)."""
-    if data.get("tool_name") != "Agent":
+    if data.get("tool_name") not in DISPATCH_TOOLS:
         return False, 0, 0
     if _tool_is_exempt(data):
         return False, 0, 0

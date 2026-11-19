@@ -158,6 +158,15 @@ def _load(path: Path, hint: str, package: bool = False):
 # AST helpers over the test sources
 # ---------------------------------------------------------------------------------------------
 
+def _folder_documents() -> tuple:
+    """The folder documents' names (hooks/lib/harness_vocabulary.FOLDER_DOCUMENTS of this file's harness)."""
+    spec = importlib.util.spec_from_file_location(
+        "_readme_facts_vocabulary", Path(__file__).resolve().parent.parent / "hooks" / "lib" / "harness_vocabulary.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.FOLDER_DOCUMENTS
+
+
 def _module_value(tree: ast.Module, name: str):
     """The value expression of the module-level assignment to `name`, or None."""
     for node in tree.body:
@@ -611,9 +620,11 @@ def _front(root: Path, rel: str) -> dict:
 
 
 def _roster(root: Path, directory: str) -> list[tuple[str, dict]]:
-    """(path, frontmatter) of each tracked <directory>/*.md file, README and INDEX left out, by path."""
+    """(path, frontmatter) of each tracked <directory>/*.md file, the folder documents (README, INDEX)
+    left out whatever their case, by path."""
+    docs = {name.upper() for name in _folder_documents()}
     names = sorted(p for p in _tracked(root, directory)
-                   if p.count("/") == 1 and p.endswith(".md") and Path(p).stem.upper() not in ("README", "INDEX"))
+                   if p.count("/") == 1 and p.endswith(".md") and Path(p).name.upper() not in docs)
     if not names:
         raise FactError(f"no {directory[:-1]} file ({directory}/*.md) in the git index of {root}")
     return [(rel, _front(root, rel)) for rel in names]

@@ -3020,7 +3020,7 @@ class _Scan:
         if head is None or any(v is None for v in vals):
             return None
         name = os.path.basename(head)
-        if name in ('printf', 'echo'):
+        if name in _sp.PRINTERS:
             return ['\n'.join(vals)]
         if name != 'cat':
             return None

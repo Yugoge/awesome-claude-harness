@@ -267,16 +267,27 @@ class TestCachedGitRmClassification:
     def test_shell_quote_and_escape_equivalence(self, command, expected):
         assert run_hook(command) == expected
 
-    @pytest.mark.parametrize("command", (
+    # A removal program whose name the command assembles without writing it: a substitution, a variable, an
+    # ANSI-C escape, a glob, an extended glob, a brace. The analyzer cannot name what runs (UNRESOLVED), and until
+    # 2026-11-19 the hook refused each on that silence. By the owner's rule an unproven command whose text holds no
+    # removal word runs and is handed to the record; these do. (`r\<newline>m` is no member: the analyzer joins the
+    # line and finds the removal.)
+    ASSEMBLED_WITHOUT_NAMING = (
         "$(printf r)$(printf m) tracked.txt", "r$(printf m) tracked.txt",
         "$(printf r)m tracked.txt", '"$(printf r)$(printf m)" tracked.txt',
         "`printf r``printf m` tracked.txt", 'R=r; M=m; "$R$M" tracked.txt',
         r"$'\x72\x6d' tracked.txt", r"$'\162\155' tracked.txt",
-        "/bin/r? tracked.txt", "r\\\nm tracked.txt",
+        "/bin/r? tracked.txt",
         "eval '$(printf r)$(printf m) tracked.txt'",
         "bash -c '$(printf r)$(printf m) tracked.txt'",
         "sh -lc 'r$(printf m) tracked.txt'",
-        "EMPTY=; r${EMPTY}m tracked.txt", "command -p /bin/rm tracked.txt",
+        "EMPTY=; r${EMPTY}m tracked.txt",
+        "bash -O extglob -c '/bin/r@(m) tracked.txt'", "bash -O extglob -c '/bin/r+(m) tracked.txt'",
+        "{r,echo}m tracked.txt",
+    )
+
+    @pytest.mark.parametrize("command", (
+        "r\\\nm tracked.txt", "command -p /bin/rm tracked.txt",
         "env -i /bin/rm tracked.txt", "exec /bin/rm tracked.txt",
         ">/dev/null /bin/rm tracked.txt", "! /bin/rm tracked.txt",
         "{ /bin/rm tracked.txt; }", "bash -O extglob -c '/bin/rm tracked.txt'",
@@ -285,6 +296,18 @@ class TestCachedGitRmClassification:
     ))
     def test_structural_command_positions_fail_closed(self, command):
         assert run_hook(command) == BLOCK, command
+
+    @pytest.mark.parametrize("command", ASSEMBLED_WITHOUT_NAMING)
+    def test_a_removal_program_assembled_without_naming_it_runs_unproven(self, command):
+        proc = run_hook_proc(command)
+        assert proc.returncode == ALLOW and "removal-policy" not in proc.stderr, (command, proc.stderr)
+
+    @pytest.mark.parametrize("command", ASSEMBLED_WITHOUT_NAMING)
+    def test_the_same_assembly_is_refused_once_the_text_names_a_removal(self, command):
+        # The owner's rule refuses an unproven command whose text holds a removal word: the assembly stays
+        # unproven, and a trailing word (here a comment) is enough to name one.
+        proc = run_hook_proc(command + " # rm")
+        assert proc.returncode == BLOCK and "removal-policy" in proc.stderr, (command, proc.stderr)
 
     @pytest.mark.parametrize("command", (
         "printf '%s' '$(printf r)$(printf m) tracked.txt'",
@@ -299,7 +322,6 @@ class TestCachedGitRmClassification:
         assert run_hook(command) == ALLOW, command
 
     @pytest.mark.parametrize("command", (
-        "bash -O extglob -c '/bin/r@(m) tracked.txt'", "bash -O extglob -c '/bin/r+(m) tracked.txt'",
         "env -S '/bin/rm tracked.txt'", "env --split-string='/bin/rm tracked.txt'",
         "/usr/bin/time -f fmt /bin/rm tracked.txt", "sudo -p prompt /bin/rm tracked.txt",
         "coproc JOB { /bin/rm tracked.txt; }", "A+=x /bin/rm tracked.txt",
@@ -328,7 +350,7 @@ class TestCachedGitRmClassification:
         ("git rm --cached>/dev/null tracked.txt", ALLOW), ("rm2>/dev/null tracked.txt", ALLOW),
         ("git rm --cached -- --cached", ALLOW), ("git rm \"$maybe\" --cached tracked.txt", BLOCK),
         ("env -S 'echo $(/bin/rm)'", ALLOW), ("printf '/bin/rm tracked.txt' | cat", ALLOW),
-        ("A=rm echo ok", ALLOW), (r"find . -name rm", ALLOW), ("{r,echo}m tracked.txt", BLOCK),
+        ("A=rm echo ok", ALLOW), (r"find . -name rm", ALLOW),
         ("echo '${X:-$(/bin/rm tracked.txt)}'", ALLOW), ("cat <<'EOF'\n$(/bin/rm tracked.txt)\nEOF", ALLOW),
         ("cat <<EOF\n\\$(/bin/rm tracked.txt)\nEOF", ALLOW), ("bash <<'EOF'\n/bin/rm tracked.txt\nEOF", BLOCK),
     ))

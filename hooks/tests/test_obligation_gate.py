@@ -417,12 +417,12 @@ def test_AC_L1_09_internal_crash_still_exits_0(tmp_path):
 
 
 def test_AC_L1_10_settings_json_registration_additive_only():
-    """AC-L1-10: the matcher="Agent" PreToolUse group runs pretool-obligation-gate.py exactly once;
+    """AC-L1-10: the matcher="Agent|Task" (lib/subagent.DISPATCH_TOOLS) PreToolUse group runs pretool-obligation-gate.py exactly once;
     since P12 the group is the dispatch gate (hooks/pretool-dispatch-gate.py), which runs it as one
     refuse rule, beside the hooks that shared the group with it."""
     settings_path = Path(REPO_ROOT) / "settings.json"
     data = _expanded(json.loads(settings_path.read_text(encoding="utf-8")))
-    agent_groups = [g for g in data["hooks"]["PreToolUse"] if g.get("matcher") == "Agent"]
+    agent_groups = [g for g in data["hooks"]["PreToolUse"] if g.get("matcher") == "Agent|Task"]
     assert len(agent_groups) == 1
     commands = [h["command"] for h in agent_groups[0]["hooks"]]
     assert len(commands) == 1 and commands[0].rstrip('"').endswith("/hooks/pretool-dispatch-gate.py"), commands

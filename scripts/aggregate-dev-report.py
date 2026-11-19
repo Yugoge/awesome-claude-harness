@@ -55,57 +55,39 @@ from pathlib import Path
 from types import ModuleType
 
 # ---------------------------------------------------------------------------
-# Filename patterns — sourced from lib/dev_report_shard_patterns.py, the ONE
-# shared module hooks/pretool-aggregate-check.py and
-# hooks/posttool-lane-completeness-watch.py also import (ticket
-# 20261001-161041-r05 M2; was two hand-mirrored copies, "MUST mirror ...
-# exactly" comments on both sides).
-#
-# Resolved via CLAUDE_PROJECT_DIR / cwd, deliberately NOT __file__: this
-# module's source is also exec'd into a bare namespace with no __file__ (a
-# test fixture builds its canonical that way), and a module-top-level
-# __file__ reference there raises NameError. Any failure
-# (unresolvable root, import error) falls back to byte-identical literal
-# copies so classification behavior never changes.
+# Filename patterns — lib/dev_report_shard_patterns.py, the ONE shared module
+# hooks/pretool-aggregate-check.py and hooks/posttool-lane-completeness-watch.py
+# also import (ticket 20261001-161041-r05 M2). Loaded by its path from this
+# file's own harness (scripts/../hooks/lib), else from CLAUDE_PROJECT_DIR / cwd
+# (this source is also exec'd into a bare namespace, which may have no
+# __file__). The module holds only regular expressions and sets (it imports
+# only re), so there is no copy of it here.
 # ---------------------------------------------------------------------------
 
-try:
-    _shard_patterns_root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
-    if str(_shard_patterns_root) not in sys.path:
-        sys.path.insert(0, str(_shard_patterns_root))
-    from hooks.lib.dev_report_shard_patterns import (
-        PREFIXED_WORKER_RE,
-        PREFIXED_CANONICAL_RE,
-        PER_WORKER_ROLE_FIRST_RE,
-        PER_WORKER_TASK_FIRST_RE,
-        CANONICAL_RE,
-        NON_WORKER_LABELS,
-        NON_WORKER_LABEL_RE,
-    )
-except Exception:
-    # Fallback — MUST mirror hooks/lib/dev_report_shard_patterns.py exactly.
-    PREFIXED_WORKER_RE = re.compile(
-        r"^dev-report-(?P<task_id>dev-\d{8}-\d{6})-(?P<worker>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json$"
-    )
-    PREFIXED_CANONICAL_RE = re.compile(
-        r"^dev-report-(?P<task_id>dev-\d{8}-\d{6})\.json$"
-    )
-    PER_WORKER_ROLE_FIRST_RE = re.compile(
-        r"^dev-report-(?P<role>[A-Za-z0-9]+)-(?P<task_id>\d{8}-\d{6})\.json$"
-    )
-    PER_WORKER_TASK_FIRST_RE = re.compile(
-        r"^dev-report-(?P<task_id>\d{8}-\d{6})-(?P<worker>[A-Za-z0-9][A-Za-z0-9.\-]*)\.json$"
-    )
-    CANONICAL_RE = re.compile(
-        r"^dev-report-(?P<task_id>\d{8}-\d{6})\.json$"
-    )
-    NON_WORKER_LABELS = frozenset({
-        "draft", "final", "fix", "continuation", "wip",
-    })
-    NON_WORKER_LABEL_RE = re.compile(
-        r"^(?:iter|retry|attempt)\d*$",
-        re.IGNORECASE,
-    )
+
+def _shard_patterns() -> ModuleType:
+    import importlib.util
+    own_file = globals().get("__file__")
+    roots = ([Path(own_file).resolve().parent.parent] if own_file else []) + \
+        [Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())]
+    for root in roots:
+        path = root / "hooks" / "lib" / "dev_report_shard_patterns.py"
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("_aggregate_dev_report_shard_patterns", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise ImportError("hooks/lib/dev_report_shard_patterns.py not found beside this script or in the project")
+
+
+_SP = _shard_patterns()
+PREFIXED_WORKER_RE = _SP.PREFIXED_WORKER_RE
+PREFIXED_CANONICAL_RE = _SP.PREFIXED_CANONICAL_RE
+PER_WORKER_ROLE_FIRST_RE = _SP.PER_WORKER_ROLE_FIRST_RE
+PER_WORKER_TASK_FIRST_RE = _SP.PER_WORKER_TASK_FIRST_RE
+CANONICAL_RE = _SP.CANONICAL_RE
+NON_WORKER_LABELS = _SP.NON_WORKER_LABELS
+NON_WORKER_LABEL_RE = _SP.NON_WORKER_LABEL_RE
 
 # Strips a round shard's "-round<N>" label suffix back to its lane's own base
 # label (backlog #99 iteration 1): e.g. "d-round0" -> "d". _scan_shards keeps
@@ -119,9 +101,6 @@ _ROUND_LABEL_SUFFIX_RE = re.compile(r"-round\d+$")
 def _base_lane(label: str) -> str:
     return _ROUND_LABEL_SUFFIX_RE.sub("", label)
 
-
-# NON_WORKER_LABELS / NON_WORKER_LABEL_RE now sourced above from
-# lib.dev_report_shard_patterns (ticket 20261001-161041-r05 M2).
 
 # Optional per-shard declaration that this lane's baseline is the tree its
 # predecessor lane left behind (sequential dispatch — spec R28).  Absent from

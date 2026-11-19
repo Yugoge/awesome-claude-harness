@@ -54,9 +54,7 @@ from typing import Sequence
 ORIENTATION_MODE = "source_depender_target_dependency"
 # Coupling relations that constitute real blast radius (used for BOTH reverse-dependent
 # selection by target==seed AND forward-dependency context by source==seed).
-REVERSE_DEPENDENT_RELATIONS = frozenset(
-    {"imports", "imports_from", "calls", "inherits", "uses", "re_exports"}
-)
+# (graphify_lib.COUPLING_RELATIONS, imported below as REVERSE_DEPENDENT_RELATIONS)
 # `contains` is file->symbol containment: NOT coupling, anchor-only.
 CONTAINS_RELATIONS = frozenset({"contains"})
 MAX_NODES = 100
@@ -80,6 +78,7 @@ from graphify_lib import (
     is_graphify_enabled, load_graph, resolve_paths_to_node_ids, run_graphify_cmd,
     scrub_sensitive, should_exclude_path, write_json_locked, write_validated, read_json_safe,
 )
+from graphify_lib import COUPLING_RELATIONS as REVERSE_DEPENDENT_RELATIONS  # noqa: E402
 
 
 def _context_fingerprint(context_file: str | None, pipeline_index: int | None,

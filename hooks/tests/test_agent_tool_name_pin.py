@@ -64,11 +64,14 @@ def assert_hooks_saw_agent(payloads: list[dict]) -> None:
 
 
 def _rule_tools(launcher: str, rule: str) -> tuple:
-    tree = ast.parse((ROOT / "hooks" / launcher).read_text())
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Rule" and node.args
-                and isinstance(node.args[0], ast.Constant) and node.args[0].value == rule):
-            return ast.literal_eval(node.args[2])
+    sys.path.insert(0, str(ROOT / "hooks"))
+    try:
+        from lib import launch_settings  # the launchers' static table reader
+    finally:
+        sys.path.pop(0)
+    for path, tools, _timeout in launch_settings.rules(str(ROOT), f"hooks/{launcher}"):
+        if path == f"pretool-{rule}.py" or path == f"posttool-{rule}.py":
+            return tools
     raise AssertionError(f"{launcher} has no Rule {rule!r}")
 
 

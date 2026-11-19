@@ -68,8 +68,8 @@ DEV_LOOP = "lib.dev_loop_checks:advice"
 GIT_WARN = "posttool-git-warn.sh"
 # (event, matcher, gate file, the rule name its RULES give dev_loop_checks or None)
 GATES = (
-    ("PreToolUse", "Agent", "pretool-dispatch-gate.py", "dev-loop-before"),
-    ("PostToolUse", "Agent", "posttool-dispatch-record.py", "dev-loop-after"),
+    ("PreToolUse", "Agent|Task", "pretool-dispatch-gate.py", "dev-loop-before"),  # lib/subagent.DISPATCH_TOOLS
+    ("PostToolUse", "Agent|Task", "posttool-dispatch-record.py", "dev-loop-after"),
     ("SubagentStop", "*", "subagentstop-producer-gate.py", None),
 )
 BASE_COUNT = 78
