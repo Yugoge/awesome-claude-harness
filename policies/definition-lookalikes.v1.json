@@ -3397,6 +3397,174 @@
      }
     ]
    ]
+  },
+  {
+   "id": "git-ref-movers-guard-vs-overnight-shim",
+   "source": "lane defs-git (defs-83)",
+   "reason": "The git privilege guard asks which ref a git update-ref / symbolic-ref call moves, to judge a protected branch; the overnight policy shim asks the same of its own argv, but it is a bash script installed alone on the overnight PATH (verified with cmp) and cannot read a Python definition.",
+   "sides": [
+    [
+     {
+      "name": "_branch_writes:in",
+      "fingerprint": "58e0410fe64a5d83",
+      "at": "hooks/pretool-git-privilege-guard.py:1204"
+     }
+    ],
+    [
+     {
+      "name": "_branch_protection_gate:case",
+      "fingerprint": "58e0410fe64a5d83",
+      "at": "scripts/overnight-git/git-policy-shim:427"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "pipelines-exempt-preflight-vs-codex",
+   "source": "lane defs-git (defs-83)",
+   "reason": "READING_PIPELINES asks which pipelines dispatch agents the gitignore preflight lets read their own obligation; subagentstop-codex-enforce asks which pipelines dispatch agents that are not bound by /dev --codex. Both are close and commit today, but each is its own guard exemption.",
+   "sides": [
+    [
+     {
+      "name": "<module>.READING_PIPELINES",
+      "fingerprint": "f760bc7563f8dcc5",
+      "at": "hooks/pretool-gitignore-preflight.py:678"
+     }
+    ],
+    [
+     {
+      "name": "main:in",
+      "fingerprint": "f760bc7563f8dcc5",
+      "at": "hooks/subagentstop-codex-enforce.py:109"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "script-name-patterns",
+   "source": "lane defs-git (defs-83)",
+   "reason": "Each regex finds a different thing whose name ends .py or .sh: tool-policy a hook entry file a command runs, check-enforcement-evidence the script word of a settings hook command, render-settings the scripts a file references, check-file-references.sh (a shell script, which cannot read a Python definition) a markdown reference to a script.",
+   "sides": [
+    [
+     {
+      "name": "<module>:re",
+      "fingerprint": "f1f3713fd853ff64",
+      "at": "hooks/pretool-tool-policy.py:1119"
+     }
+    ],
+    [
+     {
+      "name": "settings_triples:re",
+      "fingerprint": "f1f3713fd853ff64",
+      "at": "scripts/check-enforcement-evidence.py:353"
+     }
+    ],
+    [
+     {
+      "name": "usage:re",
+      "fingerprint": "f1f3713fd853ff64",
+      "at": "scripts/check-file-references.sh:343"
+     }
+    ],
+    [
+     {
+      "name": "_named.name:re",
+      "fingerprint": "f1f3713fd853ff64",
+      "at": "scripts/install/render-settings:1339"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "runners-vs-shell-file-readers",
+   "source": "lane defs-git (defs-83)",
+   "reason": "userintent asks which command words run the rest of their line as a command (source, ., exec, env); check-file-references.sh asks which shell words read a named file as code (source, ., exec), and is a shell script that cannot read a Python definition.",
+   "sides": [
+    [
+     {
+      "name": "_Scan._site:in",
+      "fingerprint": "b44d4e4b0208d1c4",
+      "at": "hooks/pretool-wrapper-userintent.py:1604"
+     }
+    ],
+    [
+     {
+      "name": "usage:re",
+      "fingerprint": "96c29f50cb44225d",
+      "at": "scripts/check-file-references.sh:250"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "tasks-off-spellings-shell-vs-python",
+   "source": "lane defs-git (defs-83)",
+   "reason": "Both ask which CLAUDE_CODE_ENABLE_TASKS values mean off; session-info.sh is a shell SessionStart hook and cannot read the Python TASKS_OFF of stop-command-gate.py.",
+   "sides": [
+    [
+     {
+      "name": "<script>:case",
+      "fingerprint": "404875dd26afbecf",
+      "at": "hooks/session-info.sh:36"
+     }
+    ],
+    [
+     {
+      "name": "<module>.TASKS_OFF",
+      "fingerprint": "404875dd26afbecf",
+      "at": "hooks/stop-command-gate.py:283"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "real-git-paths-shim-vs-selector",
+   "source": "lane defs-git (defs-83)",
+   "reason": "Both ask where the system git binary is. The overnight policy shim and the git selector are bash scripts, each installed alone as `git` in its own directory and verified with cmp (scripts/overnight-git-env.sh), so neither can source a file the other also reads.",
+   "sides": [
+    [
+     {
+      "name": "_real_git:for",
+      "fingerprint": "4780dafabfd0eb92",
+      "at": "scripts/overnight-git/git-policy-shim:45"
+     }
+    ],
+    [
+     {
+      "name": "_system_git:for",
+      "fingerprint": "4780dafabfd0eb92",
+      "at": "scripts/overnight-git/git-selector:27"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "code-roots-mutation-vs-hook-commands",
+   "source": "lane defs-git (defs-83)",
+   "reason": "diff-mutate.TARGET_ROOTS asks which directories mutation testing mutates; render-settings._CODE_DIRS asks which harness directories a hook command runs files from; scripts/install/land asks the same as render-settings of a settings overlay, but is a shell script and cannot read the Python definition.",
+   "sides": [
+    [
+     {
+      "name": "<module>.TARGET_ROOTS",
+      "fingerprint": "3f6d0d63ccd6b04e",
+      "at": "scripts/ci/diff-mutate.py:36"
+     }
+    ],
+    [
+     {
+      "name": "<module>._CODE_DIRS:re",
+      "fingerprint": "3f6d0d63ccd6b04e",
+      "at": "scripts/install/render-settings:671"
+     }
+    ],
+    [
+     {
+      "name": "settings_stat:re",
+      "fingerprint": "3f6d0d63ccd6b04e",
+      "at": "scripts/install/land:252"
+     }
+    ]
+   ]
   }
  ]
 }
