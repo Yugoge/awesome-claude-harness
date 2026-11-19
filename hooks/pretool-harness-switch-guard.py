@@ -287,7 +287,7 @@ def settings_writes(command: str, cwd: str) -> list:
     Each directory, and each word with its kind, is read once: a command padded with repeated
     `cd .` costs what its distinct words cost, not their count times its segments'."""
     segments = list(_commands(command, "shell"))
-    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd"))
+    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in shell_parse.CD_TARGET_BUILTINS)
     dirs = list(dict.fromkeys([cwd] + [_resolve(w, cwd) for w in cds]))
     out, seen, home = [], set(), _settings_files()
     for words, written in segments:

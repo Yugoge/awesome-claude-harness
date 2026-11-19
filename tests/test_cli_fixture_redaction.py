@@ -5,7 +5,8 @@ a number; 0, false or "<redacted>" for every value of a rate-limit reading (stre
 rate_limit_event) and every utilization or overage value; and a stand-in for a model id.
 `cli-fixture-record.sh --redact` runs that rule alone on a recording made by hand. Every file under
 tests/fixtures that the CLI wrote, the recorder's tests/fixtures/cli/<version> files and the
-hand-recorded tests/fixtures/cli-todowrite-oldtodos stream alike, is a fixed point of it.
+hand-recorded tests/fixtures/cli-todowrite-oldtodos stream and cli-request-copies excerpt alike, is a
+fixed point of it.
 """
 import json
 import os
@@ -17,7 +18,7 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "cli-fixture-record.sh"
 FIXTURES = REPO / "tests" / "fixtures"
 # shapes.json is derived from the recordings (types only); CURRENT and README.md are not JSON.
-RECORDINGS = sorted(p for d in ("cli", "cli-todowrite-oldtodos") for p in (FIXTURES / d).rglob("*")
+RECORDINGS = sorted(p for d in ("cli", "cli-todowrite-oldtodos", "cli-request-copies") for p in (FIXTURES / d).rglob("*")
                     if p.suffix in (".json", ".jsonl") and p.name != "shapes.json")
 
 
@@ -31,6 +32,7 @@ def _redact(tmp_path, *files):
 
 def test_every_cli_recording_is_already_under_the_account_rule(tmp_path):
     assert FIXTURES / "cli-todowrite-oldtodos" / "stream-2.1.326.jsonl" in RECORDINGS
+    assert FIXTURES / "cli-request-copies" / "transcript-2.1.322.jsonl" in RECORDINGS
     copies = []
     for i, path in enumerate(RECORDINGS):
         copy = tmp_path / f"{i}{path.suffix}"

@@ -15,7 +15,7 @@ one). The call and its tool_result are in the agent's own transcript
 :func:`final_report` returns the handback message when this run of the agent
 delivered one, else the payload's ``last_assistant_message`` unchanged (absent stays
 None), so a reader that refused a missing reply before refuses it still.
-Stdlib-only; never raises.
+Stdlib and lib/command_span only; never raises.
 """
 from __future__ import annotations
 
@@ -24,15 +24,14 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+try:  # package import (hooks.lib.final_report) or lib/ on sys.path
+    from .command_span import _blocks
+except ImportError:
+    from command_span import _blocks  # type: ignore[no-redef]
+
 HANDBACK_TOOL = "SubagentHandback"
 
 _USER = re.compile(rb'"type":\s*"user"')
-
-
-def _blocks(record: Mapping[str, Any]) -> list:
-    message = record.get("message")
-    content = message.get("content") if isinstance(message, Mapping) else None
-    return [b for b in content if isinstance(b, Mapping)] if isinstance(content, list) else []
 
 
 def _starts_run(record: Mapping[str, Any]) -> bool:
@@ -44,7 +43,7 @@ def _starts_run(record: Mapping[str, Any]) -> bool:
     content = message.get("content") if isinstance(message, Mapping) else None
     if isinstance(content, str):
         return True
-    return isinstance(content, list) and not any(b.get("type") == "tool_result" for b in _blocks(record))
+    return isinstance(content, list) and not any(b.get("type") == "tool_result" for b in _blocks(record, sidechain=True))
 
 
 def _accepted(block: Mapping[str, Any]) -> bool:
@@ -85,7 +84,7 @@ def handback_message(transcript_path: Any) -> Optional[str]:
                 if _starts_run(record):
                     calls, delivered = {}, None
                     continue
-                for block in _blocks(record):
+                for block in _blocks(record, sidechain=True):
                     if (block.get("type") == "tool_use" and block.get("name") == HANDBACK_TOOL
                             and isinstance(block.get("id"), str)):
                         tool_input = block.get("input")
