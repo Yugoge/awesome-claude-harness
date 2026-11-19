@@ -114,7 +114,7 @@ _SENTINEL_DIR = harness_state_dir()
 _PYTHON_RE = re.compile(r'^(?:python[\d.]*|pypy[\d.]*)$')
 _PY_VALUE_OPTS = 'cmWXQ'
 _STDIN_FILES = locations.STDIN_DEVICES
-_SUBST_KINDS = frozenset(('cmdsub', 'backtick', 'procsub_in', 'procsub_out'))
+_SUBST_KINDS = frozenset(_sp.SUBST_KINDS if _sp else ())
 _UNSAFE_CONTEXTS = frozenset(('cmdsub', 'backtick', 'procsub', 'pipe_shell'))
 # Builtins and keywords that run no file.
 _NO_EXEC = frozenset((
@@ -194,6 +194,7 @@ _CMD_VAR_RE = re.compile(
 # git configuration keys whose value runs a command (lib/git_facts.py).
 from lib.git_facts import GH_MESSAGE_SUBCOMMANDS as _GH_MESSAGE_SUBS  # noqa: E402
 from lib.git_facts import GIT_RUN_CONFIG_KEY_RE as _GIT_RUN_KEY  # noqa: E402
+from lib.git_facts import GIT_BOOLEAN_VALUES as _GIT_BOOLEAN_VALUES  # noqa: E402
 _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 'ls-files',
                             'ls-tree', 'status', 'cat-file', 'rev-parse', 'shortlog', 'describe',
                             'show-ref', 'whatchanged', 'rev-list', 'add', 'commit', 'diff-tree',
@@ -664,8 +665,7 @@ class _Scan:
                 return False
             if name == 'sort' and any(v.startswith('--compress-program') for v in sv):
                 return False
-            if name == 'find' and any(v in ('-exec', '-execdir', '-ok', '-okdir', '-delete',
-                                            '-fprint', '-fprint0', '-fprintf', '-fls') for v in sv):
+            if name == 'find' and any(v in _sp.FIND_ACTIONS for v in sv):
                 return False
             if name == 'hash' and any(v.startswith('-') and 'p' in v for v in sv):
                 return False
@@ -729,7 +729,7 @@ class _Scan:
             if v in _sp.OPTION_ENDS:
                 break
             if v.startswith('--'):
-                if v in ('--rcfile', '--init-file'):
+                if v in _sp.SHELL_FILE_OPTS:
                     k += 2
                     continue
                 k += 1
@@ -846,7 +846,7 @@ class _Scan:
                     return None
                 out.extend(self._alt_str(alt) for alt in alts)
             return out
-        if p.kind in ('cmdsub', 'backtick'):
+        if p.kind in _sp.CMDSUB_KINDS:
             alts = self._echo_alts(p.text or '', 0)
             if not alts or len(alts) >= self._ALT_CAP:
                 return None
@@ -1235,7 +1235,7 @@ class _Scan:
                 k += 1
                 continue
             if v.startswith('--'):
-                if v in ('--rcfile', '--init-file') and k + 1 < len(args):
+                if v in _sp.SHELL_FILE_OPTS and k + 1 < len(args):
                     self._path_target(args[k + 1])
                     k += 2
                     continue
@@ -1378,7 +1378,7 @@ class _Scan:
             self._cwd_changed()
             return
         if self.cdpath and not os.path.isabs(target) and not target.startswith(('./', '../')) \
-                and target not in ('.', '..'):
+                and target not in (os.curdir, os.pardir):
             self.cwd_unknown = True
             self._cwd_changed()
             return
@@ -1425,7 +1425,7 @@ class _Scan:
         j = i
         while j < len(vals):
             p = vals[j]
-            if p in ('-exec', '-execdir', '-ok', '-okdir'):
+            if p in _sp.FIND_EXEC:
                 k = j + 1
                 argv = []
                 while k < len(vals) and vals[k] not in _sp.FIND_EXEC_ENDS:
@@ -1652,7 +1652,7 @@ class _Scan:
     def _built(word) -> bool:
         """The word is built at run time by a command substitution or backticks."""
         try:
-            return any(p.kind in ('cmdsub', 'backtick') for p in word.parts)
+            return any(p.kind in _sp.CMDSUB_KINDS for p in word.parts)
         except Exception:
             return False
 
@@ -2156,7 +2156,7 @@ class _Scan:
             parts = list(word.parts)
         except Exception:
             return False
-        if _mentions(''.join(p.text or '' for p in parts if p.kind in ('lit', 'glob', 'brace'))):
+        if _mentions(''.join(p.text or '' for p in parts if p.kind in _sp.LITERAL_PART_KINDS)):
             return True
         dirs = _harness_dirs()
         # the literal prefix, up to the first part that is computed
@@ -2183,7 +2183,7 @@ class _Scan:
         run = ''
         runs = []
         for p in parts:
-            if p.kind in ('lit', 'glob', 'brace'):
+            if p.kind in _sp.LITERAL_PART_KINDS:
                 run += p.text or ''
             else:
                 runs.append(run)
@@ -2251,7 +2251,7 @@ class _Scan:
                         choices.extend(self._alts(val, depth + 1) if val is not None else [[None]])
                 elif name is None:
                     choices = self._pe_alts(p.text or '', depth)
-            elif p.kind in ('cmdsub', 'backtick'):
+            elif p.kind in _sp.CMDSUB_KINDS:
                 choices = self._echo_alts(p.text or '', depth) or [[None]]
             else:
                 choices = [[None]]
@@ -2784,7 +2784,7 @@ class _Scan:
         return all(w.startswith('-') and 'k' not in w.lstrip('-')[:1] and 'lesskey' not in w
                    for w in words[1:])
 
-    _GIT_BOOL = frozenset(('true', 'false', 'yes', 'no', 'on', 'off', '1', '0', ''))
+    _GIT_BOOL = _GIT_BOOLEAN_VALUES
 
     def _git_pager_setting(self, gvals, dirs):
         """The pager `git grep -O` with no program opens. git takes GIT_PAGER, then

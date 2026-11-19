@@ -65,3 +65,15 @@ GIT_RUN_CONFIG_KEY_RE = re.compile(
     r'remote\..*\.(?:uploadpack|receivepack|vcs)|submodule\..*\.update|'
     r'.*\.(?:pager|editor|command|cmd|textconv|program|helper|external|driver|path|tool|hook|sshcommand|'
     r'difffilter|clean|smudge|process))$', re.IGNORECASE)
+# git's boolean spellings (an empty value reads as false).
+GIT_BOOLEAN_VALUES = frozenset({"true", "false", "yes", "no", "on", "off", "1", "0", ""})
+
+
+def git_config_value_names_no_program(key: str, value: str) -> bool:
+    """Whether a GIT_RUN_CONFIG_KEY_RE key's value names no program (`git help config`, git 2.54): a boolean for
+    core.fsmonitor (false: no monitor; true: git's own built-in daemon) and pager.<cmd> (false: no pager; true: the
+    pager configured elsewhere), "" or cat for core.pager (no pager), "" for diff.external (git's own diff)."""
+    k = key.lower()
+    if k == "core.fsmonitor" or k.startswith("pager."):
+        return value.lower() in GIT_BOOLEAN_VALUES
+    return (k == "core.pager" and value in ("", "cat")) or (k == "diff.external" and value == "")

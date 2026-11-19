@@ -1394,7 +1394,7 @@ def _in_checkpoint_ns(dst):
     and `..` applied; the spellings git rejects outright are refused alike."""
     parts = []
     for comp in dst.lstrip('+').lower().split('/'):
-        if comp in ('', '.'):
+        if comp in ('', os.curdir):
             continue
         if comp == '..':
             if parts:

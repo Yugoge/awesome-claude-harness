@@ -62,7 +62,7 @@ def test_two_actions_and_a_computed_file():
 
 def test_the_exec_actions_are_read_as_before():
     """-exec, -execdir, -ok, -okdir: the command they run is walked, as on the base."""
-    for action in sp._FIND_EXEC:
+    for action in sp.FIND_EXEC:
         targets = sp.write_targets(sp.parse("find src/planted.py %s rm {} +" % action))
         assert [(t.path, t.mode) for t in targets] == [("{}", sp.DELETE)]
 
@@ -72,7 +72,7 @@ def test_the_parser_and_the_read_only_proof_know_the_same_file_writing_actions()
     command only reads (hooks/lib/bash_read_only.py, which the switch rule asks) refuses each of them."""
     from lib import bash_read_only
     assert set(sp._FIND_FILE) == {"-fprint", "-fprint0", "-fprintf", "-fls"}
-    for action in sp._FIND_FILE + sp._FIND_EXEC + ("-delete",):
+    for action in sp._FIND_FILE + sp.FIND_EXEC + ("-delete",):
         assert not bash_read_only.reads_only("find", [".", action, "x"]), action
     assert bash_read_only.reads_only("find", [".", "-name", "*.py", "-print"])
 

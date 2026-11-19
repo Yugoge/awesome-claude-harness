@@ -298,7 +298,6 @@ def _sed_scripts(args) -> list:
 _SED_WRITE = re.compile(r'(?:^|[;{}\n\d$!]|/[gpiImMe0-9]*)\s*[wW]\s*(\S+)')
 # perl code that may write the operands it is handed (`open F, ">", shift`, unlink, rename, a shell)
 _PERL_WRITE = re.compile(r'open|unlink|rename|system|exec|`|qx|>|mkdir|rmdir|chmod|utime|truncate|link|copy|move|print\s*\{?\s*[A-Z$]')
-_FIND_RUN = ('-exec', '-execdir', '-ok', '-okdir')
 
 
 def _long_prefix(v: str, full: str, least: int) -> bool:
@@ -473,7 +472,7 @@ def _site_writes(sp, raw: str, res) -> list:
             if v in sp._FIND_FILE and k + 1 < len(args):
                 out.append((args[k + 1].value() or args[k + 1].text, args[k + 1]))
         runs = [vals[k + 1:k + 1 + next((j for j, x in enumerate(vals[k + 1:]) if x in sp.FIND_EXEC_ENDS), len(vals))]
-                for k, v in enumerate(vals) if v in _FIND_RUN and k + 1 < len(vals)]
+                for k, v in enumerate(vals) if v in sp.FIND_EXEC and k + 1 < len(vals)]
         if '-delete' in vals or any(not bash_read_only.reads_only(os.path.basename(r[0]), r[1:], pagers=True)
                                     for r in runs):
             # what find removes, or hands to a command that may write it: every start path
@@ -570,8 +569,6 @@ def _safe_var(sp, name: str) -> bool:
     return name in sp.INERT_ENV_VARS - sp.DIR_ENV_VARS or bool(re.fullmatch(r'LC_[A-Z]+', name))
 
 
-_FIND_ACTIONS = frozenset({'-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0',
-                           '-fprintf', '-fls'})
 _UNSAFE_TARGET_CHARS = re.compile(r'[$`*?\[\]{}!]')
 # gh pr / gh issue subcommands that change nothing in the working tree (not checkout, merge).
 _GH_READS = frozenset({'create', 'view', 'list', 'comment', 'edit', 'status', 'close', 'reopen', 'diff',
@@ -906,7 +903,7 @@ def _proven_harmless(command: str, start: str) -> bool:
             if not bash_read_only.reads_only(name, vals):
                 return False  # printf -v; sort -o, --compress-program, -T
         elif name == 'find':
-            if _FIND_ACTIONS & set(vals):
+            if set(sp.FIND_ACTIONS) & set(vals):
                 return False
         elif name == 'rg':
             if not _rg_proof(vals):

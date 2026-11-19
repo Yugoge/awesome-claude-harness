@@ -54,6 +54,9 @@ TURN_RECORD_TYPES = ("user", "assistant")
 # in a standard-library module every loader reaches (hooks/stop-launch.py loads this file by its
 # path alone), and imported from here by every other reader.
 FOLDER_DOCUMENTS = ("INDEX.md", "README.md")
+# The line scripts/spec-write.py prints for each write: the rest of the line is the absolute path,
+# which may hold a space (a project directory can). Read by lib/spec_path.py and the Stop command gate.
+SPEC_WRITER_LINE = re.compile(r"^spec-write: (?:create|append) (/\S.*)$", re.M)
 # Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
 # sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
 # compaction's summary (isCompactSummary; no isMeta or origin).
@@ -956,7 +959,7 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
     # is a file inside the project now, or has a directory part and a dotted name.
     named = set()
     for token in _PATH_RUN.findall(command):
-        if token in (".", "..") or token.startswith("-"):
+        if token in (os.curdir, os.pardir) or token.startswith("-"):
             continue
         rel = _project_relative(token, cwd, root)
         if rel is None:

@@ -132,7 +132,7 @@ _PAYLOAD_WRAPPERS = set(shell_parse.LOOKUP_BUILTINS)
 _SUBSTITUTIONS = ("cmdsub", "backtick", "procsub")
 
 # Word parts read as written: an unmatched glob or brace stays literal.
-_LITERAL_PARTS = ("lit", "glob", "brace")
+_LITERAL_PARTS = shell_parse.LITERAL_PART_KINDS
 
 # Bound on descents into code a command hands to a shell (`eval`, `-c`, heredoc).
 _MAX_DESCENT = 6
@@ -376,7 +376,7 @@ def _heredoc_scripts(cmd):
     if shell_parse.resolve(cmd).name not in _SHELL_INTERP_NAMES:
         return []
     return [shell_parse.parse_src(r.hd.body_src, 1) for r in cmd.redirects
-            if r.op in ("<<", "<<-") and r.hd is not None]
+            if r.op in shell_parse.HERE_DOCUMENT_OPS and r.hd is not None]
 
 
 def _searches_in(script, depth):

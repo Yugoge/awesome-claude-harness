@@ -55,3 +55,14 @@ def test_the_runtime_guard_reads_nodes_value_options_as_the_git_classifier_does(
     """One NODE_VALUE_OPTIONS (shell_parse) for the git classifier and the runtime guard
     (family node-value-options): the guard finds the script past every value option."""
     assert _core._runtime_target(rest) == script
+
+
+@pytest.mark.parametrize("program", ["node", "nodejs"])
+@pytest.mark.parametrize("option", ["--print", "-p"])
+def test_node_and_nodejs_read_print_code_alike(program, option):
+    """nodejs is Debian's name for node; --print and -p evaluate their argument for both, so the
+    removal analyzer reads the code they carry (family interpreters: one INTERPRETERS entry)."""
+    import bash_execution_boundary as eb
+    code = "require('fs').rmSync('build', {recursive: true})"
+    assert eb.analyze('%s %s "%s"' % (program, option, code))["verdict"] != "PROVEN_INERT"
+    assert eb.analyze('%s %s "1 + 1"' % (program, option))["verdict"] == "PROVEN_INERT"

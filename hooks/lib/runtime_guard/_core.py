@@ -3210,7 +3210,7 @@ def _classify_filter_value(val: str) -> str:
     if val.startswith("@") and val.count("/") == 1 and not val.startswith("@/"):
         return val
     # path-like: contains a slash, or is '.'/'..', or starts with './' or '../'
-    if "/" in val or val in (".", ".."):
+    if "/" in val or val in (os.curdir, os.pardir):
         return _PATH_FILTER_PREFIX + val
     # otherwise a package name (or name with a leading scope '@org/...' which
     # contains '/' and is handled above). A trailing dependency selector ('^'/'~')

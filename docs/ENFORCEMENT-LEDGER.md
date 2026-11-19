@@ -282,6 +282,7 @@ fact or carry no veto — `PostToolUse`, `PostToolUseFailure`, `SessionStart`, `
 | H-098 | PostToolUse | (universal) | posttool-orchestrator-ran.py | advisory; switch: none. It never blocks and exits 0 on every path: for a main-agent call (lib/subagent.is_subagent_context) it appends the payload's tool_use_id to `<state dir>/claude-tool-ran-<sid>.log` (lib/allowlist.record_tool_ran), the record H-015 reads to keep a call that ran counted; the prompt reset removes the log | detected | unexercised | source-level | hooks/posttool-orchestrator-ran.py:1 @1a661407 | hooks/tests/test_orchestrator_gate_refused_refund.py |
 | H-099 | PostToolUseFailure | (universal) | posttool-orchestrator-ran.py | advisory; switch: none. It never blocks: the H-098 record on the failure event, so a call that ran and failed, exited non-zero or was interrupted stays counted by H-015 | detected | unexercised | source-level | hooks/posttool-orchestrator-ran.py:1 @1a661407 | hooks/tests/test_orchestrator_gate_refused_refund.py |
 | H-100 | PreToolUse | Monitor | pretool-monitor-command.py | block; switch: none. A rule in pretool-launch.py, for every caller: a Monitor's shell command is handed, as the Bash call {command, description} the CLI hands a settings.json Bash matcher, to every launcher rule whose tools name Bash and to the write gate (H-029 to H-033, H-078, H-089's Bash rules), each as its own process; any refusal exits 2 with their reasons, an ask or defer decision and additional context pass on, an allow or updatedInput does not. A Monitor whose command cannot be read (not a non-empty string; neither command nor ws) exits 2, and so does a fault in its own code; a WebSocket Monitor (ws, no command) and a call that is not Monitor exit 0 | advisory | unexercised | source-level | hooks/pretool-monitor-command.py:1 @724a872a | hooks/tests/test_monitor_command.py |
+| H-101 | PermissionRequest | (universal) | permissionrequest-answer.py | block; switch: none. Run by `permissionrequest-launch.py`, the event's one registration, whenever Claude Code would ask a person to approve a call. It answers every request with a decision, never exit 2 (at this event an exit 2 leaves the request to the person): a Bash or Monitor command the Bash rules (lib/bash_safety_rules.py) or a Bash deny entry found in its text refuse is denied with that text; otherwise it is allowed in bypassPermissions mode, and in another mode only when its text holds a removal word the removal rule proved; another tool is allowed in bypassPermissions mode and denied in any other; AskUserQuestion and ExitPlanMode get no answer from it. An error or no decision within 30 s is a deny; a deny it decides itself goes to the refusal record (lib/refusal_record.py) | detected | exercised | component-tested | hooks/permissionrequest-answer.py:1 @f6cee9be | tests/test_no_permission_prompt.py |
 
 ### 3.1 Rules a merged gate runs
 
@@ -355,15 +356,15 @@ no per-rule budget exists.
 | S-009 | requirement-round-text-question:stop-command-gate.py | detected | exercised | component-tested | hooks/stop-command-gate.py:652 @b74f9720 | hooks/tests/test_stop_command_gate.py | component-tested |
 | S-010 | requirement-round-code-token-lint:subagentstop-artifact-contract-enforce.py | detected | exercised | component-tested | hooks/lib/requirement_round.py:30 @b74f9720 | hooks/tests/test_requirement_round.py | component-tested |
 | S-011 | low-score-extra-round:stop-command-gate.py | detected | exercised | component-tested | hooks/lib/score_view.py:49 @a959bcec | hooks/tests/test_score_view.py | component-tested |
-| S-014 | permission-layer-read-only-allow-and-its-ask-guards | advisory | exercised | component-tested | settings.json:81 @263d9c7a | tests/test_permission_readonly_allow.py | component-tested |
+| S-014 | permission-layer-read-only-allow | advisory | exercised | component-tested | settings.json:81 @263d9c7a | tests/test_permission_readonly_allow.py | component-tested |
 | S-015 | permission-layer-project-writes | advisory | unexercised | component-tested | settings.json:158 @c1f2e447 | tests/test_project_write_permissions.py | component-tested |
 | S-016 | permission-layer-scratch-reach | advisory | unexercised | source-level | settings.json:167 @d1abc798 | tests/test_scratch_permissions.py | source-level |
 | S-017 | search-convention:read-deny-arms-cd-guard | advisory | unexercised | source-level | settings.json:236 @d1abc798 | tests/test_search_without_cd.py | source-level |
 | S-019 | permission-layer-secret-file-denies | advisory | unexercised | source-level | settings.json:278 @79c79db1 | tests/test_secret_file_denies.py | source-level |
 | S-023 | permission-layer-home-secret-denies | advisory | unexercised | source-level | settings.json:253 @aa685f4c | tests/test_home_secret_denies.py | source-level |
 | S-020 | permission-layer-skill-deny-exact-name | detected | exercised | component-tested | settings.json:249 @d1abc798 | hooks/tests/test_skill_deny_coverage.py | component-tested |
-| S-021 | permission-layer-ask:kubectl-apply-create-npm-publish | advisory | unexercised | source-level | settings.json:269 @e606277d | tests/test_permission_ask_dry_run.py | source-level |
-| S-022 | permission-layer-pipe-to-shell | advisory | unexercised | source-level | settings.json:288 @c42adf0c | tests/test_permission_pipe_to_shell.py | source-level |
+| S-021 | bash-rule:npm-publish-kubectl-apply-create-dry-run-only | detected | unexercised | component-tested | hooks/lib/bash_safety_rules.py:3715 @2a8b1a26 | tests/test_permission_ask_dry_run.py | component-tested |
+| S-022 | bash-rule:fetched-code-piped-to-shell | detected | unexercised | component-tested | hooks/lib/bash_safety_rules.py:3732 @2a8b1a26 | tests/test_permission_pipe_to_shell.py | component-tested |
 | S-024 | git-hidden-in-interpreter-code-or-script:pretool-git-privilege-guard.py | advisory | exercised | component-tested | hooks/pretool-git-privilege-guard.py:1 @ac4fe5ee | hooks/tests/test_git_hidden_code.py | component-tested |
 | S-030 | refusal-record:refusal_record.py | detected | unexercised | component-tested | hooks/lib/refusal_record.py:1 @ff60b2eb | tests/test_refusal_record_sites.py | component-tested |
 
@@ -381,8 +382,9 @@ no per-rule budget exists.
   not denied, by decision (P5): agents and `/close`, `/commit`, `/do` call `Skill(skill="codex")`
   under `--codex`, and `subagentstop-codex-enforce.py` (R-022, run by the producer gate H-092)
   requires the ledger entry that call's PostToolUse (H-050) writes.
-  `permissions.ask` is no longer empty: OB-L07 (`@263d9c7a`, S-014) added nineteen rules and OB-L21
-  (`@3698c04e`, S-021) the entries for the three verbs that left deny. None of these is a backstop for
+  `permissions.ask` is empty again since 2026-11-19: no person is asked to approve a tool call
+  (docs/how-it-works.md, "Permission prompts"). Until then OB-L07 (`@263d9c7a`, S-014) had added nineteen rules
+  and OB-L21 (`@3698c04e`, S-021) the entries for the three verbs that left deny. None of these was a backstop for
   this class: OB-L07's only keep the new `git -C`, `rg --files` and `make -n` allow entries from reaching
   another verb, option or evaluation. `git -C <dir> push --force` and `git -C <dir> reset --hard` still match no deny
   and ask because no allow entry covers them.
@@ -411,7 +413,14 @@ no per-rule budget exists.
   `hooks/tests/test_skill_deny_coverage.py` models that matcher and pins every Skill deny exact, the human-only
   commands refused with and without arguments, and docs, devops, commit-message, domain-model, testing and codex
   not denied. `scripts/install/render-settings` SWITCH_PERMISSIONS carries `Skill(harness)` to match.
-- **S-021** — OB-L21 (owner decision): `Bash(kubectl apply:*)`, `Bash(kubectl create:*)` and
+- **S-021** — Since 2026-11-19 the Bash rules decide these verbs, and no settings entry names them:
+  `lib/bash_safety_rules.py` `_dry_run_only`, run by `outward_rule` on every command it reads through the parser
+  (wrappers such as `sudo`, `timeout` and assignments peeled, `bash -c` and substitutions entered), lets
+  `npm publish --dry-run`, `kubectl apply --dry-run=client|server` and `kubectl create ... --dry-run=client|server`
+  run and refuses the real `npm publish`, `kubectl apply` and `kubectl create` with a message naming the dry run;
+  `kubectl delete` and `yarn publish` stay deny entries, and every `sudo` form stays refused by `Bash(sudo:*)`.
+  `tests/test_permission_ask_dry_run.py` checks the rule both ways and keeps the 2.1.326 measurements below as
+  history. Until 2026-11-19: OB-L21 (owner decision): `Bash(kubectl apply:*)`, `Bash(kubectl create:*)` and
   `Bash(npm publish:*)` left `permissions.deny` for `permissions.ask`, because a whole-verb deny
   refused the harmless dry runs (`kubectl apply --dry-run=client -f k8s/deploy.yaml`,
   `kubectl create deployment web --image=nginx --dry-run=client -o yaml`, `npm publish --dry-run`) and
@@ -470,7 +479,19 @@ no per-rule budget exists.
   header or option holds a backtick, a path with an extension, `()` or `::`. **Its real strength is a lint: it
   catches code tokens only.** A technical choice written in plain words passes it; the prompts' product-level
   examples and BA's instructions are what keep such a question out, not this check.
-- **S-014** — OB-L07: `settings.json @263d9c7a` `permissions.allow` lets these read-only commands run
+- **S-014** — Since 2026-11-19 the guard asks described below are gone (no ask rule remains;
+  docs/how-it-works.md, "Permission prompts"). bypassPermissions mode, the harness's mode, never read the allow
+  entries, so there the asks only made a person approve calls the PreToolUse hooks decide. In default mode the
+  allow entries now pass the guarded forms (`git -C x push --force origin log`, `git -C x -c core.pager=sh log`,
+  `rg --files --hostname-bin ./e`, `make -n --eval ...`) to the hooks alone: git pushes and resets are
+  `hooks/pretool-git-privilege-guard.py`'s; the Bash rules (`lib/bash_safety_rules.py` `_read_made_to_run`) refuse a
+  git read given `-c`/`--config-env` with a key whose value git runs (`git_facts.GIT_RUN_CONFIG_KEY_RE`, a plain
+  pager aside), `--exec-path=` or an option of `GIT_RUN_OR_WRITE_OPTIONS`, and rg given `--pre` or
+  `--hostname-bin` (`shell_parse.RG_PROGRAM_OPTS`). Not decided by any rule: make's evaluating options (`--eval`,
+  `-E`, `-f`, `V:=$(shell ...)`), for which no definition exists, and a glob that may expand into an option
+  (`tests/test_permission_readonly_allow.py` NOW_UNDECIDED). A command no allow entry covers is refused in default
+  mode by the PermissionRequest hook. The text below is the design until then, kept as history. OB-L07:
+  `settings.json @263d9c7a` `permissions.allow` lets these read-only commands run
   without a prompt: `gh pr view|list|diff|checks`, `gh run view`, `gh issue view` (`Bash(<verb>:*)`),
   `git -C <dir> diff|log|show|status` (`Bash(git -C * <verb>)` and `Bash(git -C * <verb> *)`),
   `Bash(make -n:*)` and `Bash(rg --files:*)`. Test runners, builds and gh's mutating verbs have no entry,
@@ -505,7 +526,13 @@ no per-rule budget exists.
   Makefile the agent can write), and `git -C <dir>`
   reads `<dir>`'s repository config (pager, fsmonitor, diff drivers), the same class the existing
   `Bash(bash:*)`, `Bash(git log:*)` and `Bash(git diff:*)` entries already admit.
-- **S-015** — OB-L08 (owner decision: `Edit(./**)`, not `defaultMode: acceptEdits`): `permissions.allow` carries
+- **S-015** — Since 2026-11-19 the Edit asks below are gone (no ask rule remains; docs/how-it-works.md,
+  "Permission prompts"). Writes to the harness home are decided by the hooks (`hooks/` and `commands/`:
+  `hooks/pretool-claude-config-guard.py`; the switch keys of `settings.local.json`: `hooks/pretool-harness-switch-guard.py`
+  and the deny entry) and by two new deny entries, `Edit(/venv/**)` and `Edit(/.venv/**)`, for the interpreter
+  the hooks run. A write of a HOME dot file that is no secret store (`~/.gitconfig`, `~/.config/gh/config.yml`)
+  now runs without anyone being asked; the secret stores stay denied (S-023). The text below is the design until
+  then, kept as history. OB-L08 (owner decision: `Edit(./**)`, not `defaultMode: acceptEdits`): `permissions.allow` carries
   `Edit(./**)` (settings.json:158 @c1f2e447), so a write under the session's current directory (Write
   `src/newmodule.py`, `echo hi > notes.md`, a heredoc written to a project file) no longer asks in default mode;
   before it the Edit allow entries covered only manifests, `.claude/agents|commands`, `.review`, `docs`, `scripts`
@@ -822,8 +849,15 @@ no per-rule budget exists.
   CLAUDE.md with no line naming `cd`, `Read()` and a path operand while a `Read()` deny exists. A
   compound split across lines, or a read command it does not list, is not reported. Prose only:
   nothing stops an agent from writing the compound, and the CLI then asks.
-- **S-022** — a download piped into a shell. **No hook refuses it; hook coverage for pipe-to-shell is
-  a gap owned by the bash-safety session.** `pretool-bash-safety.sh` and the PreToolUse rules
+- **S-022** — a download piped into a shell. Since 2026-11-19 the Bash rules refuse it:
+  `lib/bash_safety_rules.py` `outward_rule` refuses a pipeline in which a stage run by an HTTP client (`HTTP_CLIENTS`: curl, wget, nc, ...) feeds a later
+  shell that reads its program from stdin, in every form and wrapper listed below and every former KNOWN_GAP
+  (`| bash -euo pipefail`, `| bash /dev/fd/0`, `| X=1 bash`, `| sh`, `| zsh`); a shell fed by a heredoc, a
+  here-string, a file or a local program (`cat x | bash`, `printf ... | bash`) and `bash <script>` run. The 18 ask
+  entries described below are gone: measured on Claude Code 2.1.322 as deny entries they refused `bash <<'EOF'`,
+  `bash -s <<EOF`, `cat x | bash`, `echo hi | bash` and `basename /opt/flash`. Not covered: `bash <(curl x)` and
+  `sh -c "$(curl x)"` (no pipe). The text below is the design until then, kept as history. Until then:
+  **no hook refused it; hook coverage for pipe-to-shell was a gap owned by the bash-safety session.** `pretool-bash-safety.sh` and the PreToolUse rules
   `pretool-launch.py` runs exit 0 on `curl https://x | sh`, `curl -fsSL x | bash`, `wget -qO- x | sh`,
   `curl x | sudo bash`, `bash <(curl x)` (fed to each on stdin @d1abc798; only `sh -c "$(curl x)"` and
   `bash -c "$(wget -qO- x)"` exit 2 for a subagent, as an unresolvable git command in
