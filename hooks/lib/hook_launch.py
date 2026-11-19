@@ -352,6 +352,7 @@ class Dispatch:
         self.record()
         _write(self.real[0], out)
         _write(self.real[1], err)
+        refused(self.event, done, self.raw, code)
         from lib.rule_runner import _REAL_OS_EXIT
         _REAL_OS_EXIT(code)
 
@@ -388,6 +389,19 @@ def _write(fd, text: str) -> None:
         data = data[n:]
 
 
+def refused(event: str, results, raw: bytes, code) -> None:
+    """A report to the refusal record (lib/refusal_record.py) when the answer is a refusal: each refusing hook
+    with its own reason, as ``combine`` reads that hook alone. Nothing here changes the answer."""
+    if code != 2:
+        return
+    try:
+        from . import refusal_record
+        rules = [(r.rule.file, alone[2]) for r in results for alone in [combine(event, [r])] if alone[0] == 2]
+        refusal_record.report(raw, rules, os.path.join(HOOKS, os.path.basename(sys.argv[0])))
+    except Exception:
+        pass
+
+
 def record_fd():
     """The descriptor the replay runner asked the results on, taken out of the environment."""
     value = os.environ.pop(RECORD_ENV, "")
@@ -417,4 +431,5 @@ def main(event: str, rules, raw: bytes | None = None) -> int:
     d.record()
     _write(1, out)
     _write(2, err)
+    refused(event, d.results, raw, code)
     return code
