@@ -19,8 +19,8 @@ the overnight pipelines' dev-report-<ts>-<N>.json, which the filenames alone
 would read as lanes of task <ts>. The canonical's one producer is the lane
 completeness watch, run by each lane report's write; a hook has no dispatch, so
 a canonical finding names the lane whose declaring dispatch, run again, runs it
-(P1b E5 (a)): the first the aggregator's reasons for refusing the lane reports
-name, which a missing canonical states (W1), else this QA's lane or the first.
+(P1b E5 (a)): a missing one, the first whose own report the aggregator refuses,
+with its reasons (W1; two lanes that differ, both named), else this QA's lane.
 
 Task-id scoping (BUG-AGGCHK-2): the check covers the cycle of the task the
 QA dispatch's own obligation names. A shard family is in scope when its id and
@@ -254,7 +254,9 @@ def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
             violations.append((
                 "canonical_missing", canonical,
                 f"the canonical aggregate of lanes {', '.join(sorted(declared))} is missing"
-                + (f"; its producer, scripts/aggregate-dev-report.py, refuses: {'; '.join(refused)}" if refused else ""),
+                + ("; its producer, scripts/aggregate-dev-report.py, refuses: " + "; ".join(r + (
+                    f" (lanes {min(lane_reports[task_id])} and {r.split(chr(39))[1]} differ; dispatch again the one "
+                    "that is wrong)" if _cross(r) else "") for r in refused) if refused else ""),
                 None, (named[0], lane_reports[task_id].get(named[0], via[1])) if named else via,
             ))
             continue
@@ -276,20 +278,21 @@ def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
 @functools.lru_cache(maxsize=None)
 def aggregator_refusal(dev_dir, task_id):
     """The aggregator's reasons for refusing task_id's lane reports (--dry-run); () if it accepts or cannot run."""
-    script, project = Path(__file__).resolve().parent.parent / "scripts" / "aggregate-dev-report.py", dev_dir.parent.parent
     try:
-        run = subprocess.run([sys.executable, str(script), "--task-id", task_id, "--dry-run", "--project-dir",
-                              str(project)], capture_output=True, text=True, timeout=30)
+        run = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "scripts" / "aggregate-dev-report.py"),
+                              "--task-id", task_id, "--dry-run", "--project-dir", str(dev_dir.parent.parent)],
+                             capture_output=True, text=True, timeout=30)
     except Exception:
         return ()
     return tuple(ln.strip() for ln in run.stderr.splitlines() if ln.startswith("  ")) if run.returncode == 1 else ()
 
 
-def own_refusal(reasons, label):
-    """Those about lane `label`'s report; one comparing it with another's only while no other is refused (W1)."""
-    mine = lambda r: r.startswith((f"shard '{label}':", f"'{label}':"))  # noqa: E731
-    cross = lambda r: " != first shard " in r or r.endswith("snapshot mismatch")  # noqa: E731
-    return [r for r in reasons if mine(r) and not (cross(r) and any(not mine(o) and not cross(o) for o in reasons))]
+def _cross(reason):  # a report compared with the first one: no lane's own fault; the main agent decides (W1)
+    return " != first shard " in reason or reason.endswith("snapshot mismatch")
+
+
+def own_refusal(reasons, label):  # the reasons about lane `label`'s report by itself
+    return [r for r in reasons if r.startswith((f"shard '{label}':", f"'{label}':")) and not _cross(r)]
 
 
 def _roster(value):

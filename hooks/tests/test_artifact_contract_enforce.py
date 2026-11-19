@@ -3326,11 +3326,8 @@ _PRED = {"mode": "sequential", "derived_from": "l1"}
 _L1_CREATED = {"dev": {"status": "completed", "files_modified": ["src.txt"], "files_created": ["x.py"]}}
 C5_REFUSALS = {  # own report's fault, the sibling's fault, the reason the producer gives for this report
     "head_empty": ({"baseline_head_sha": ""}, None, "shard 'l2': baseline_head_sha is missing or empty"),
-    "head_moved": ({"baseline_head_sha": "b" * 40}, None, f"shard 'l2': baseline_head_sha '{'b' * 40}' != first"),
     "snapshot_prose": ({"baseline_dirty_snapshot": "see the lane write manifest (3 entries)"}, None,
                        "shard 'l2': baseline_dirty_snapshot is neither verbatim porcelain output nor a leading-count"),
-    "snapshot_mismatch": ({"baseline_head_sha": "b" * 40, "baseline_dirty_snapshot": "?? other.txt"}, None,
-                          "shard 'l2': baseline_dirty_snapshot mismatch"),
     "provenance_mode": ({"baseline_provenance": {"mode": "parallel"}}, None,
                         "shard 'l2': baseline_provenance.mode 'parallel' is not supported"),
     "provenance_no_predecessor": ({"baseline_provenance": {"mode": "sequential"}}, None,
@@ -3391,6 +3388,34 @@ def test_c5_the_same_unrepaired_report_is_refused_the_hundredth_stop_as_the_firs
     s = _c5_setup(tmp_path, own_fault=C5_REFUSALS["snapshot_prose"][0])
     stops = {(p.returncode, p.stderr) for p in (_l2_stop(s) for _ in range(100))}
     assert len(stops) == 1 and next(iter(stops))[0] == 2
+
+
+# A head or snapshot that differs from the first report's is a comparison of two lanes, not a fault of one
+# report by itself: neither lane can know which is wrong, so it holds no lane's stop (G3 names both, at QA).
+C5_DIFFER = {"own_head": ({"baseline_head_sha": "b" * 40}, None), "sibling_head": (None, {"baseline_head_sha": "b" * 40}),
+             "own_snapshot": ({"baseline_head_sha": "b" * 40, "baseline_dirty_snapshot": "?? other.txt"}, None)}
+
+
+@pytest.mark.parametrize("l1_newer", [False, True], ids=["own-newest", "sibling-newest"])
+@pytest.mark.parametrize("case", sorted(C5_DIFFER))
+def test_c5_a_lane_valid_by_itself_is_not_held_for_differing_from_a_sibling(tmp_path, case, l1_newer):
+    own_fault, l1_fault = C5_DIFFER[case]
+    s = _c5_setup(tmp_path, own_fault=own_fault, l1_fault=l1_fault, l1_newer=l1_newer)
+    _c5_edit(s, _c5_report(s.task, "l2", own_fault))
+    assert not (s.project / s.canonical).exists()  # the producer refuses the pair
+    proc = _l2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    assert "canonical_missing" not in proc.stderr
+
+
+def test_c5_an_own_fault_beside_a_comparison_is_held_with_its_own_reason_the_hundredth_stop_as_the_first(tmp_path):
+    # An empty head is this report's own fault, and the producer also reports it as differing from l1's.
+    s = _c5_setup(tmp_path, own_fault=C5_REFUSALS["head_empty"][0])
+    stops = {(p.returncode, p.stderr) for p in (_l2_stop(s) for _ in range(100))}
+    assert len(stops) == 1, stops
+    code, err = next(iter(stops))
+    assert code == 2 and C5_REFUSALS["head_empty"][2] in err, err
+    assert "!= first shard" not in err
 
 
 @pytest.mark.parametrize("l1_newer", [False, True], ids=["own-newest", "sibling-newest"])

@@ -8,10 +8,9 @@ harness's `scripts/aggregate-dev-report.py --task-id <task_id> --project-dir
 land and the last lane's write rewrites an earlier one (ticket
 20261001-161041-r05). Any other path, a canonical, or a report without a
 lane_set (a singular cycle, an overnight pipeline's dev-report-<ts>-<N>.json)
-is a no-op. The roster is G3's (hooks/pretool-aggregate-check.py); the
-aggregator's refusal is not reported here but at the lane's stop (G2, its
-reasons about that lane's report) and the main agent's QA dispatch (G3, all of
-them). Fail-open: nothing here blocks or delays the writer's tool call (AC6).
+is a no-op. The roster is G3's (hooks/pretool-aggregate-check.py); a refusal
+is reported at the lane's stop (G2, its own report's reasons) and the main
+agent's QA dispatch (G3, all). Fail-open: nothing here blocks the writer (AC6).
 """
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
@@ -65,8 +64,7 @@ def _read_json(path):
 def _invoke_aggregator(project_dir, task_id):
     """Best effort: the aggregator's exit 1, a timeout or an exception never reaches this hook's exit (AC6)."""
     try:
-        # The harness's own copy, next to this hook: a product repository has
-        # no scripts/ of its own.
+        # The harness's own copy, next to this hook: a product repository has no scripts/ of its own.
         script = Path(__file__).resolve().parent.parent / "scripts" / "aggregate-dev-report.py"
         if not script.exists():
             return
