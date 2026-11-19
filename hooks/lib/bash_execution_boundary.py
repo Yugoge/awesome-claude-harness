@@ -63,8 +63,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    CD_TARGET_BUILTINS, COMMAND_OPTS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS, OPTION_SIGNS, PIPE_OPS,
-    REEXPAND_OPS, XARGS_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    CD_TARGET_BUILTINS, COMMAND_OPTS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS, OPTION_SIGNS,
+    PARALLEL_SEPARATORS, PIPE_OPS, REEXPAND_OPS, XARGS_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -2875,7 +2875,7 @@ class Analyzer:
     def _h_parallel(self, name, args, redirs, env, piped):
         cut = len(args)
         for idx, a in enumerate(args):
-            if (a.literal() or "") in (":::", "::::", ":::+", "::::+"):
+            if (a.literal() or "") in PARALLEL_SEPARATORS:
                 cut = idx
                 break
         head_args = args[:cut]
@@ -2900,7 +2900,7 @@ class Analyzer:
         # belong to the same argv. Passing them through is both more faithful
         # and what lets `parallel echo ::: /bin/rm` explain its removal name.
         items = [a for a in args[cut:]
-                 if (a.literal() or "") not in (":::", "::::", ":::+", "::::+")]
+                 if (a.literal() or "") not in PARALLEL_SEPARATORS]
         self.eval_argv(payload + items, [], env)
 
     def _h_find(self, name, args, redirs, env, piped):

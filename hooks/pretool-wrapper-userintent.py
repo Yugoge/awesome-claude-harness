@@ -1577,9 +1577,9 @@ class _Scan:
                 for v in vals[cut + 1:]:
                     if v is None:
                         self.unsure = True
-                    elif v not in (':::', '::::'):
+                    elif v not in _sp.PARALLEL_SEPARATORS:
                         self._sub(v)
-            vals = [v for v in vals if v not in (':::', '::::')]
+            vals = [v for v in vals if v not in _sp.PARALLEL_SEPARATORS]
         if not reader and named:
             if name in _CODE_RUNNERS or name in _STDIN_RUNNERS or _sp._SCRIPT_INTERP_RE.match(name):
                 self.unsure = True
