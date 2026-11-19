@@ -13,6 +13,15 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path, PurePath
 
+# The project directories doc-sync watches.
+WATCHED_DIRS = frozenset({
+    '.claude/commands',
+    '.claude/agents',
+    '.claude/hooks',
+    '.claude/skills',
+    '.claude/scripts',
+})
+
 # The names doc-sync leaves out, defined once for every doc-sync module and for
 # hooks/userprompt-doc-sync-check.py, which loads this file by its path (it must not import the
 # doc_sync package, whose __init__ loads every module): so this file imports only the stdlib.
