@@ -3172,6 +3172,8 @@ VERBS = {
     "setfacl": (None, "attr", IN_PLACE),
 }
 VERBS["gsed"] = VERBS["sed"]  # GNU sed's name where sed is another one
+# cp, mv, ln and install's option that names the destination directory (every guard reads this one).
+TARGET_DIR_OPTS = ("-t", "--target-directory")
 VERBS["awk"] = VERBS["gawk"]  # where awk is gawk, `awk -i inplace` edits in place
 
 # The commands that change a file's mode, owner, attributes or ACL: the file
@@ -3532,7 +3534,7 @@ def _verb_targets(name, verb, args, env, context):
         out.extend(WriteTarget(_project(w, env)[0], mode, name, None, False, w, None, context)
                    for w in args if not (w.value() or "").startswith("-"))
         return out
-    target_dir = [v for o, v in opts if o in ("-t", "--target-directory")]
+    target_dir = [v for o, v in opts if o in TARGET_DIR_OPTS]
     if name == "tee":
         append = any(o in ("-a", "--append") for o, _v in opts)
         for w in operands:

@@ -196,7 +196,7 @@ def _into_dir_texts(script, dirs):
             continue
         if res.name == "install" and names.intersection(("-d", "--directory")):
             continue
-        target_dir = [v for o, v in opts if o in ("-t", "--target-directory")]
+        target_dir = [v for o, v in opts if o in _sp.TARGET_DIR_OPTS]
         if target_dir:
             dest, sources, into = _word_text(target_dir[-1]), operands, True
         elif res.name == "ln" and len(operands) == 1:

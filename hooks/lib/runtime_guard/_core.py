@@ -870,7 +870,7 @@ def _operands_and_tdir(head: str, args: list):
             continue
         # exact long/short option taking a SEPARATED value.
         if a in val_opts and i + 1 < n:
-            if a in ("-t", "--target-directory") and head in tdir_verbs:
+            if a in _sp.TARGET_DIR_OPTS and head in tdir_verbs:
                 tdir = args[i + 1]
             i += 2
             continue

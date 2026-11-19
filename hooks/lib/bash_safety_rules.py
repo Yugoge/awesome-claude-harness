@@ -2112,7 +2112,8 @@ def _consent_operands(view, r):
         no_dir = bool(names & {"-T", "--no-target-directory"}) or (
             r.name == "ln" and bool(names & {"-n", "--no-dereference"}))
         recursive = bool(names & {"-r", "-R", "-a", "--recursive", "--archive"})
-        targets = [v for o, v, _ in opts if o in ("-t", "--target-directory")]
+        from lib.shell_parse import TARGET_DIR_OPTS
+        targets = [v for o, v, _ in opts if o in TARGET_DIR_OPTS]
         if targets:
             return ops, targets[-1] or [], True, recursive, None
         if r.name == "ln" and len(ops) == 1:

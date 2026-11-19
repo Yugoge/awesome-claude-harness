@@ -266,7 +266,7 @@ def _operands(plain: list, moves: bool) -> list:
     each source (moved away); cp's sources are only read."""
     sources, dest, it = [], None, iter(plain[1:])
     for w in it:
-        if w in ("-t", "--target-directory"):
+        if w in shell_parse.TARGET_DIR_OPTS:
             dest = next(it, None)
         elif w.startswith("--target-directory="):
             dest = w.split("=", 1)[1]
