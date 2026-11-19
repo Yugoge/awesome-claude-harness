@@ -15,7 +15,7 @@ CODEX_REQUESTED = $ARGUMENTS contains literal token "--codex"
 TASK = $ARGUMENTS with "--codex" token removed (trimmed)
 ```
 
-If `TASK` is empty, ask the user for the task with AskUserQuestion inside the turn before proceeding (a typed reply would be a new prompt, which ends the /do consent).
+If `TASK` is empty, end: say that `/do` was given no task and that `/do <the task>` runs one. Nobody is asked.
 
 ## Workflow
 
@@ -43,7 +43,7 @@ State what changed, which files were modified, and (if Step 3 ran) whether codex
 
 End every `/do` with a do-report at `docs/dev/do-report-<TASK_ID>.json`, written whole by you (the template below; no hook pre-writes it) once `TASK` is done: `do.status` `"completed"` is its one terminal.
 
-The Stop gate (`hooks/stop-command-gate.py`) exits 2 until the report validates against `schemas/do-report.v1.json` and its file lists are exact (below). When `TASK` cannot be finished as asked, or needs a decision only the user can make (an operation a hook refuses included), ask one specific AskUserQuestion in this turn naming it, then continue the work; the answer releases no gate.
+The Stop gate (`hooks/stop-command-gate.py`) exits 2 until the report validates against `schemas/do-report.v1.json` and its file lists are exact (below). When part of `TASK` cannot be done as asked (an operation a hook refuses included), nobody is asked: do what a rule allows, write the do-report, and state in Step 4 what was not done, with the hook's output for each refused operation.
 
 **`TASK_ID`** is the id in the hook's `[/do] task-id minted: <id>` line. The hook is the only mint: never mint one, and never take the newest `claude-orchestrator-consent-*.flag` in the state dir (two concurrent `/do` sessions would alias onto one id and overwrite each other's do-reports). To read it back for the current session (after a compaction):
 1. `SID = $CLAUDE_CODE_SESSION_ID` (fallback `$CLAUDE_SESSION_ID`).

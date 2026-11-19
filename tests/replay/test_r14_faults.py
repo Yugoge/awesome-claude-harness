@@ -5,11 +5,10 @@ commands/push.md compliantly from there (drivers/merge.py, drivers/push.py): Ste
 with a blocked verdict, Step 4 with moved tips, a missing session id at /merge Step 1 and at /push Step 2,
 and /push's blocked verdict at Step 5. D25's shape, for every case:
 
-* the refusal is ONE AskUserQuestion naming the action that clears it (the text's own action,
-  recommended), asked once, and the owner picks it;
-* that action clears it with no other human step: the agent's own next steps where the action is the
-  agent's (the analysis or the snapshot run again), or, where it is the owner's ("resolve the listed
-  risks first"), his resolution in his terminal and his own command typed again;
+* nobody is asked (2026-11-19): the action the refusal names clears it with no other human step: the
+  agent takes it at once where it is the agent's own (the analysis or the snapshot run again), and, where
+  it is the owner's ("resolve the listed risks first"), the refusal is reported and the turn ends; his
+  resolution in his terminal and his own command typed again follow;
 * the command then reaches its terminal (merged into master / published on the origin), and the replay
   meets no gate block and no hook error.
 """
@@ -49,12 +48,13 @@ def test_a_refusal_is_cleared_by_the_action_it_names(replays, case, cmd, asked, 
         assert injected == [case], injected
     refusals = [f["value"] for f in r.facts if f.get("key") == f"{cmd} refusal"]
     step, action = asked
-    assert [(a["step"], a["action"], a["answer"]) for a in refusals] == [(step, action, action)], r.explain() + \
-        f"\nrefusals asked: {refusals}"
+    own = action.startswith("re-run ")  # the agent's own action, taken at once; the owner's is reported
+    assert [(a["step"], a["action"], a["answer"]) for a in refusals] == [(step, action, action if own else None)], \
+        r.explain() + f"\nrefusals met: {refusals}"
     events = r.hook_events()
     questions = [ev["label"] for ev in events if ev["event"] == "PreToolUse" and ev.get("tool") == "AskUserQuestion"]
     prompts = [ev["label"] for ev in events if ev["event"] == "UserPromptSubmit"]
-    assert len(questions) == 1, questions
+    assert questions == [], questions
     assert len(prompts) == typed, prompts
     assert not r.blocks, "a refusal's fault replay met a gate block:\n" + r.explain()
     assert not r.hook_errors, "a refusal's fault replay met a hook error:\n" + r.explain()

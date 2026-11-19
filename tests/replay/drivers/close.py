@@ -672,12 +672,12 @@ class CloseRun:
         self.rp.task(self.tid)
 
     # ------------------------------------------------------------ start
-    def start(self, args: str) -> None:
+    def start(self, args: str, again: str = "") -> None:
         o = self.o
-        o.slash(args, label=self.label("typed") if not self.auto else "/close --auto typed")
+        o.slash(args, label=self.label("typed" + again) if not self.auto else "/close --auto typed")
         os.environ["CLAUDE_TODO_PROMPT"] = f"/close {args}"
         try:
-            o.todo_start(label=self.label("TodoWrite canonical list"))
+            o.todo_start(label=self.label("TodoWrite canonical list" + again))
         finally:
             os.environ.pop("CLAUDE_TODO_PROMPT", None)
         o.values.update(TASK_ID=self.tid)
@@ -685,9 +685,9 @@ class CloseRun:
 
     # ------------------------------------------------------------ task-id resolution
     def resolve_typed(self) -> None:
-        """A typed path (P5 review M): "Verify it exists"; one that does not is awaiting-input cause (iii)
-        naming it, asked in the turn with ONE AskUserQuestion (D23), this conversation's task recommended.
-        The owner picks it, and the resolution resumes in place on that id (TASK_ID, as typed)."""
+        """A typed path (P5 review M): "Verify it exists"; one that does not binds no task: Task-id resolution's
+        "Which task?" ends the run on its NO_TARGET: line naming the candidates, nobody asked. The owner types
+        `/close <the task this conversation ran>`, and the run starts again on that id."""
         o = self.o
         lab = self.label("Task-id resolution Glob typed path")
         g = o.s.tool("Glob", {"pattern": os.path.basename(self.typed),
@@ -695,17 +695,13 @@ class CloseRun:
                      label=lab, deviation=self.devs.at(lab))
         if not g.ok or g.response.get("filenames"):
             raise agents.PlayError(f"Task-id resolution: the typed {self.typed} exists, or Glob failed")
-        question = f"{self.typed} does not exist, so no spec is identified. Which task do I close?"
-        lab = self.label("Task-id resolution AskUserQuestion")
-        options = [{"label": f"{self.tid} (Recommended)", "description": "the task this conversation ran"},
-                   {"label": "I name another task", "description": ""}]
-        call = o.s.tool("AskUserQuestion", {"questions": [{"question": question, "header": "Task id",
-                                                           "multiSelect": False, "options": options}]},
-                        label=lab, deviation=self.devs.at(lab))
-        answer = (call.response.get("answers") or {}).get(question, "").replace(" (Recommended)", "") if call.ok else ""
-        fact(self.rp, "close typed", {"typed": self.typed, "asked": question, "answer": answer})
-        if answer != self.tid:
-            raise agents.PlayError(f"Task-id resolution: the owner's answer {answer!r} is not {self.tid}")
+        if "print one line `NO_TARGET: `" not in " ".join(o.section("Task-id resolution").split()):
+            raise cmdtext.TextNotFound("Task-id resolution: no NO_TARGET: line for a task it cannot bind")
+        line = f"NO_TARGET: {self.typed} does not exist; /close {self.tid}"
+        ev = o.s.stop(line, label=self.label("Stop (no task)"), deviation=self.devs.at(self.label("Stop (no task)")))
+        fact(self.rp, "close typed", {"typed": self.typed, "line": line, "retyped": self.tid,
+                                      "still_blocked": bool(ev.still_blocked)})
+        self.start(self.tid, " again")
 
     def resolve_task(self) -> None:
         o = self.o

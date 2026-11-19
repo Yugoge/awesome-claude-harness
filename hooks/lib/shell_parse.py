@@ -400,11 +400,11 @@ class Redir:
 
     @property
     def close(self):
-        return self.op in (">&", "<&") and self.target is not None and self.target.literal() == "-"
+        return self.op in DUP_OPS and self.target is not None and self.target.literal() == "-"
 
     @property
     def dup(self):
-        if self.op in (">&", "<&") and self.target is not None:
+        if self.op in DUP_OPS and self.target is not None:
             lit = self.target.literal()
             if lit is not None and lit.endswith("-") and _digits(lit[:-1]):
                 lit = lit[:-1]          # N>&M- moves M onto N
@@ -439,6 +439,13 @@ BOTH_STREAMS_OPS = ("&>>", "&>")  # redirect stdout and stderr together (they ta
 REDIRECT_OPS = BOTH_STREAMS_OPS + _REDIR_OPS  # every redirection operator, longest first
 OUTPUT_REDIRECT_OPS = (">", ">>", ">|") + BOTH_STREAMS_OPS  # send output to their target
 WRITE_REDIRECT_OPS = OUTPUT_REDIRECT_OPS + ("<>",)  # open their target for writing (<> read-write)
+INPUT_REDIRECT_OPS = ("<", "<>")  # open their target for reading (<> read-write)
+HEREDOC_OPS = ("<<", "<<-", "<<<")  # feed a here-document or a here-string
+DUP_OPS = (">&", "<&")  # duplicate a file descriptor (or close one, with `-`)
+AND_OR_OPS = ("&&", "||")  # run what follows depending on what precedes
+STATIC_PART_KINDS = ("lit", "glob")  # word parts the shell does not compute (a glob only expands to names)
+BODY_PART_KINDS = frozenset({"sub", "arith", "procsub"})  # word parts whose body the shell runs
+DYNAMIC_PART_KINDS = BODY_PART_KINDS | {"param"}  # word parts the shell computes
 PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
 OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
 OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (standard input)
@@ -460,7 +467,9 @@ SUBST_OPENERS = ("$(", "<(", ">(")  # open a command or process substitution (so
 # shell the parser knows), and with `source` and `.` the commands that run a script file
 # operand as shell text in this or a new shell.
 COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
-SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
+SOURCE_BUILTINS = ("source", ".")  # run a script file in this shell
+SCRIPT_RUNNERS = COMMON_SHELLS + SOURCE_BUILTINS
+SHELL_VALUE_OPTS = ("-o", "+o", "-O", "+O", "--rcfile", "--init-file")  # a shell's options that take a value
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
 PRINTERS = ("echo", "printf")  # print their arguments and run nothing
@@ -1669,7 +1678,7 @@ class _Grammar:
             if self.is_op(tok, *_TERMINATORS):
                 sep = tok[1]
                 self.pos += 1
-                if sep in ("&&", "||"):
+                if sep in AND_OR_OPS:
                     self.skip_newlines()
                     nxt = self.peek()
                     if nxt is None or (self.is_op(nxt) and nxt[1] in _TERMINATORS + end_ops + (")",)) or (
@@ -2157,7 +2166,7 @@ def _feed(cmd, piped):
             fed.add("heredoc")
         elif r.op == "<<<":
             fed.add("herestring")
-        elif r.op in ("<", "<>"):
+        elif r.op in INPUT_REDIRECT_OPS:
             fed.add("file")
     return frozenset(fed)
 
@@ -2716,7 +2725,7 @@ def resolve(cmd, depth=None):
             if len(ops) > 1 and ops[0].value() not in ("-", ""):
                 _set_payload(r, [ops[0]], "eval", depth, "trap_dynamic")
             return r
-        if name in ("source", "."):
+        if name in SOURCE_BUILTINS:
             r.head = head
             r.args = tuple(words[1:])
             ops = list(words[1:])
@@ -2895,7 +2904,7 @@ FIND_OPERATORS = ("(", ")", "!")  # a word of find's expression that is no optio
 FIND_EXPRESSION_LEADS = ("-", "(", "!")  # a word led by one of these begins find's expression
 SHELL_STARTUP_VARS = ("BASH_ENV", "ENV")  # the environment names a non-interactive shell sources at start
 ROOTED = ("/", "~")  # a path led by one of these does not depend on the working directory
-SED_SCRIPT_OPTS = ("-e", "--expression", "-f", "--file")  # sed's options whose value is a script
+SED_SCRIPT_GIVEN_OPTS = ("-e", "--expression", "-f", "--file")  # sed's options that give it a script (text or file)
 SED_SCRIPT_ATTACHED = ("--expression=", "--file=")  # the same, value attached
 
 
@@ -3434,6 +3443,14 @@ NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the w
 INSTALL_DIR_OPTS = ("-d", "--directory")  # install makes every operand a directory (no source)
 TAR_NAMES = ("tar", "bsdtar", "gtar")  # the program names that are tar
 AWK_NAMES = ("awk", "gawk", "mawk", "nawk")  # the program names that are awk
+GREP_NAMES = ("grep", "egrep", "fgrep")  # the program names that are grep
+PYTHON_NAMES = ("python", "pypy")  # the names a Python interpreter starts with (python3.12, pypy3)
+SED_SCRIPT_OPTS = ("-e", "--expression")  # sed: the option whose value is a script
+SED_QUIET_OPTS = ("-n", "--quiet", "--silent")  # sed: print only what the script prints
+SORT_OUTPUT_OPTS = ("-o", "--output")  # sort: the option whose value is the file it writes
+GIT_REDIRECT_ENV_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")  # move git to another repository
+GIT_MESSAGE_OPTS = ("-m", "--message")  # git commit, tag, stash: the option whose value is the message
+FIND_NAME_TESTS = ("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename")  # find: match a name glob
 # The host names that are the local machine as a network client's destination (0.0.0.0 connects to it on
 # Linux; ::1 is bare in a socket client's arguments and bracketed in a URL).
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0")
@@ -3907,7 +3924,7 @@ class _AssignScope:
         before = None
         for pl, sep in site.script.items:
             if any(st is cmd for st in pl.stages):
-                return len(pl.stages) == 1 and sep != "&" and before not in ("&&", "||")
+                return len(pl.stages) == 1 and sep != "&" and before not in AND_OR_OPS
             before = sep
         return False
 
@@ -4035,8 +4052,8 @@ def _verb_targets(name, verb, args, env, context):
                 in_place = True
                 k += 1
                 continue
-            if v in SED_SCRIPT_OPTS + ("-l", "--line-length"):
-                script_given = script_given or v in SED_SCRIPT_OPTS
+            if v in SED_SCRIPT_GIVEN_OPTS + ("-l", "--line-length"):
+                script_given = script_given or v in SED_SCRIPT_GIVEN_OPTS
                 k += 2
                 continue
             if v is not None and v.startswith(SED_SCRIPT_ATTACHED):
