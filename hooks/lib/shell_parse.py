@@ -3175,6 +3175,7 @@ VERBS = {
 VERBS["gsed"] = VERBS["sed"]  # GNU sed's name where sed is another one
 # cp, mv, ln and install's option that names the destination directory (every guard reads this one).
 TARGET_DIR_OPTS = ("-t", "--target-directory")
+NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the written file, never a directory
 VERBS["awk"] = VERBS["gawk"]  # where awk is gawk, `awk -i inplace` edits in place
 
 # The commands that change a file's mode, owner, attributes or ACL: the file

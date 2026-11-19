@@ -170,7 +170,6 @@ def _cd_dirs(script, call_dir):
 # Copy, move, install and link: into a directory destination the written path is
 # `<dest>/<basename(source)>`.
 _INTO_DIR = ("cp", "mv", "install", "ln", "rsync")
-_NO_TARGET_DIR = ("-T", "--no-target-directory")
 
 
 def _word_text(w):
@@ -192,7 +191,7 @@ def _into_dir_texts(script, dirs):
         opts, operands, _err = _sp.split_options(list(res.args), _sp.VERBS[res.name][0], 0,
                                                   permute=True, lenient=True)
         names = {o for o, _v in opts}
-        if names.intersection(_NO_TARGET_DIR):
+        if names.intersection(_sp.NO_TARGET_DIR_OPTS):
             continue
         if res.name == "install" and names.intersection(("-d", "--directory")):
             continue

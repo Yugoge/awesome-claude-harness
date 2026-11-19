@@ -909,7 +909,7 @@ def _dest_entries(dest: str, srcs: list, args: list) -> list:
     st = _strip_quotes(dest)
     norm = _normalize_path(st)
     into_dir = (st.endswith("/") or (os.path.isabs(norm) and os.path.isdir(norm))) and not any(
-        a in ("-T", "--no-target-directory")
+        a in _sp.NO_TARGET_DIR_OPTS
         or (a.startswith("-") and not a.startswith("--") and "T" in a[1:]) for a in args)
     if not into_dir or not srcs:
         return [dest]
