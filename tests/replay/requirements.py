@@ -34,7 +34,8 @@ that decides that means, run as the CLI runs it:
                      lane's report. For each field of the lane report's schema that takes free text: a
                      sibling lane's report holding prose there, which that sibling's own stop accepts
                      (its schema validation, contract_runtime), and the stopping lane's own means
-                     (saving its own report again, which runs the aggregator; an Edit of the
+                     (saving its own report again, which runs the aggregator; an Edit of a field of its own
+                     report the finding names, to agree with the sibling's; an Edit of the
                      sibling's report, put to the write gate). If none clears it, the stopping lane
                      waits on a lane that has stopped, which only the main agent can dispatch again,
                      while the main agent waits for the stopping lane: a circular wait.
@@ -471,18 +472,43 @@ def wait_cells(hooks: Hooks, made: dict, tpls: list | None = None) -> list:
                     cells.append(Cell(row, "wait", "home", f"{t.role} lane l2", {
                         "stop": "permitted"}, state + ": no canonical_missing at l2's stop"))
                 else:
-                    me = (agents["l2"], t.role)
-                    edit = {"file_path": os.path.join(project, paths["l2"]), "old_string": "{", "new_string": "{"}
-                    means = {"save its own report again with Edit (the watch runs the aggregator)":
-                             _answer(hooks.write_gate(store.payload("Edit", edit, me)))}
-                    if means[next(iter(means))] == "permitted":
-                        os.utime(edit["file_path"])
+                    me, own_path = (agents["l2"], t.role), os.path.join(project, paths["l2"])
+
+                    def edit_own(change: dict) -> str:
+                        """The lane's Edit of its own report (each changed field, value for value), put to the
+                        write gate, made, the watch run on it as on the Edit, and the lane's next stop."""
+                        with open(own_path) as fh:
+                            before = fh.read()
+                        doc = json.loads(before)
+                        for dotted, value in change.items():
+                            schemagen.set_path(doc, dotted, value)
+                        after = json.dumps(doc, indent=1)
+                        old, new = (before, after) if change else ("{", "{")
+                        edit = {"file_path": own_path, "old_string": old, "new_string": new}
+                        verdict = _answer(hooks.write_gate(store.payload("Edit", edit, me)))
+                        if verdict != "permitted":
+                            return verdict
+                        with open(own_path, "w") as fh:
+                            fh.write(after)
                         hooks.run("posttool-lane-completeness-watch.py", {**store.payload("Edit", edit, me),
-                                  "hook_event_name": "PostToolUse", "tool_response": {"filePath": edit["file_path"]}})
+                                  "hook_event_name": "PostToolUse", "tool_response": {"filePath": own_path}})
                         again = stop("l2")
-                        means[next(iter(means))] = "permitted" if again.returncode == 0 else next(
-                            (ln.strip() for ln in again.stderr.splitlines() if "canonical_missing" in ln
-                             or "dev-report" in ln), again.stderr.strip()[:300])[:400]
+                        if again.returncode == 0:
+                            return "permitted"
+                        with open(own_path, "w") as fh:
+                            fh.write(before)
+                        return next((ln.strip() for ln in again.stderr.splitlines() if "canonical_missing" in ln
+                                     or "dev-report" in ln), again.stderr.strip()[:300])[:400]
+                    # Its own means: save the report again (the watch runs the aggregator), or correct a field
+                    # of its own report the finding names to agree with the fan-out (the sibling's value).
+                    means = {"save its own report again with Edit (the watch runs the aggregator)": edit_own({})}
+                    with open(os.path.join(project, paths["l1"])) as fh:
+                        theirs = json.load(fh)
+                    finding = own.stderr.partition("canonical_missing")[2]  # the finding's own text
+                    named = [f for f in _free_text(schema) if re.search(rf"\b{f.rpartition('.')[2]}\b", finding)]
+                    for f in named if not any(v == "permitted" for v in means.values()) else ():
+                        means[f"Edit its own {f} to agree with the fan-out"] = edit_own(
+                            {f: schemagen.get_path(theirs, f)})
                     sib = {"file_path": os.path.join(project, paths["l1"]), "old_string": "{", "new_string": "{"}
                     means["Edit the sibling lane's report"] = _answer(hooks.write_gate(store.payload("Edit", sib, me)))
                     cells.append(Cell(row, "wait", "home", f"{t.role} lane l2", means, state))
