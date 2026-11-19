@@ -377,10 +377,7 @@ hooks/
 ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 ├── `git-fswatch@.service` - service file
-├── `install-auto-sync.sh` - LEGACY / DO NOT USE — describes an obsolete auto-sync model.
-├── `install-git-hooks.sh` - LEGACY / DO NOT USE — describes an obsolete git-tracking model.
 ├── `install-protection-all.sh` - LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
-├── `install.sh` - LEGACY / DO NOT USE — describes an obsolete auto-commit model.
 ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
