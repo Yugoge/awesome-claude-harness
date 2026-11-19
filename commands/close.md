@@ -22,7 +22,7 @@ Five TodoSteps (`scripts/todo/close.py`): Step 0 resolves the disposition and co
 
 An explicit path also works: `/close docs/dev/ticket-<ts>.md` (legacy `ba-spec-<ts>.md`, or `do-report-<ts>.json`). No filesystem scan, no default-to-newest. Follow with `/commit <task-id>`.
 
-`--force` (with an optional `--reason "<text>"`) is accepted and ignored: it changes nothing and nothing is logged. Two combinations ask a question first (below): `--auto` with it, and `--late-repair` with it.
+`--force` (with an optional `--reason "<text>"`) is accepted and ignored: it changes nothing and nothing is logged. Two combinations end with a statement before any action (below): `--auto` with it, and `--late-repair` with it.
 
 ## Workflow
 
@@ -30,32 +30,32 @@ Load the preloaded todo list: run `python3 "${CLAUDE_HOME:-$HOME/.claude}/script
 
 `<PROJECT_ROOT>` below is the `PROJECT_ROOT=` line the UserPromptSubmit hook printed for this `/close`.
 
-**Owner questions.** Where this file asks the owner, it makes exactly one AskUserQuestion call: a header of at most 12 characters, 2-4 options that each name a concrete way on, `multiSelect: false`. The question is the pause: after the answer `/close` goes on in the same turn; an answer releases no gate, and no option offers to stop, to end, or to leave the cycle unfinished.
+**Owner questions.** `/close` asks the owner one thing only: the rating (Step 4). Every other point this file meets ends in a statement, never a question (`hooks/pretool-tool-policy.py` refuses any other AskUserQuestion).
 
 ### Argument parsing
 
 - `--codex` anywhere in `$ARGUMENTS`: strip it and set `codex_required = true`; otherwise `false`. It decides whether QA's judgment includes a Codex review (Step 2); the inspectors get the literal line `codex_required: true` when it is set.
 - `--auto`: strip it and set `auto = true`; otherwise `false`, and every `--auto` rule is inert. A legal `--auto` skips Task-id resolution (control passes to the `--auto` mode section); it combines with `--codex`.
-- `--auto` together with an explicit task-id or path, `--force` or a `--reason` value (the combinations `validate_auto_flag_combination()` in `scripts/dev-lifecycle.py` rejects): ask before any other action (header `Close mode`) which close runs. Options: `/close --auto` (every close_pending parent) and `/close <task-id>` for the task named (when none was named: one option per candidate parent of "Task candidates" below, at most three). Go on with the chosen form.
+- `--auto` together with an explicit task-id or path, `--force` or a `--reason` value (the combinations `validate_auto_flag_combination()` in `scripts/dev-lifecycle.py` rejects): take no action and end with one line `NO_TARGET: <the conflict>; run /close --auto (every close_pending parent) or /close <task-id>`.
 
 ### Task-id resolution
 
 The task-id is the one the source `/dev` or `/do` cycle used, never a fresh `date` stamp: `/commit` looks up `close-report-<task-id>.md` beside `dev-report-<task-id>.json`.
 
-- An explicit path (ends in `.md`/`.json` or contains `/`): the task-id is its basename without the `ticket-` (legacy `ba-spec-`) or `do-report-` prefix and the suffix; a `do-report-` path also binds `DO_REPORT` to it. A path that does not exist: ask "Which task?" (below).
+- An explicit path (ends in `.md`/`.json` or contains `/`): the task-id is its basename without the `ticket-` (legacy `ba-spec-`) or `do-report-` prefix and the suffix; a `do-report-` path also binds `DO_REPORT` to it. A path that does not exist: "Which task?" (below).
 - A timestamp argument (e.g. `20260424-103044`): `TASK_ID=$ARGUMENTS`, with no parent ticket or QA-report check first (a fan-out cycle has no parent ticket).
 - No argument: the parent task-id of this conversation's `/dev` cycle, or the `/do` task-id. No filesystem scan, no default-to-newest.
 
 A `/do` task: bind `DO_REPORT` to `docs/dev/do-report-<TASK_ID>.json` when that file exists, or when a GAP line of Step 0 names it (a `/do` that stopped before it wrote the do-report). A dev-report that dev wrote along its route (Routes) leaves `DO_REPORT` bound.
 
-**Which task?** When no task-id can be bound, ask (header `Task`) which task to close. The options are the task candidates, at most four: the first word of each stdout line, then the task-id of each `<task-id>: skipped: <reason>` stderr line, of `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>"`. A skipped task has a gap no dispatch owes; `/close <task-id>` takes it, so offer it with its reason. A stderr line that begins with the script's own name is its progress on a long history, not a task. Fewer than two candidates: add `/close --auto` and the tasks `list-actionable --next-action commit` prints (a closed task closing again). The dialog's own answer box takes any other task-id or path. Never default the close-report filename to a fresh timestamp.
+**Which task?** When no task-id can be bound, nobody is asked: print one line `NO_TARGET: ` followed by the task candidates, each as `/close <task-id>`, and end; the owner types `/close` again with the id. The candidates: the first word of each stdout line, then the task-id of each `<task-id>: skipped: <reason>` stderr line (with its reason), of `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action close --project-dir "<PROJECT_ROOT>"`. A skipped task has a gap no dispatch owes; `/close <task-id>` takes it. A stderr line that begins with the script's own name is its progress on a long history, not a task. Fewer than two candidates: add `/close --auto` and the tasks `list-actionable --next-action commit` prints (a closed task closing again). The Stop gate (`hooks/stop-command-gate.py`, `no_target_end`) lets a run that bound no task and dispatched nothing end on that line. Never default the close-report filename to a fresh timestamp.
 
 ### Late-repair route
 
 Deliberately invoked, never automatic: without `--late-repair`, nothing in this section runs.
 
 - `--late-repair` anywhere in `$ARGUMENTS`: strip it and set `LATE_REPAIR=true`; otherwise `false`.
-- `--late-repair` with `--force`: before any eligibility check, run record or dispatch, ask (header `Repair mode`) which route runs, with the options `/close --late-repair <task-id>` and `/close <task-id>`; go on with the chosen one.
+- `--late-repair` with `--force`: before any eligibility check, run record or dispatch, take no action and end with one line `NO_TARGET: --late-repair takes no --force; run /close --late-repair <task-id> or /close <task-id>`.
 - With `LATE_REPAIR=true`, Step 0 first runs `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/late-repair-controller.py" init --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>"` once. It re-derives `late_repair_eligible` from the resolver's own output (never recompute it here) and either **declines** (`outcome: refuse`; zero run records, zero dispatch; that is no verdict: record the reason, set `LATE_REPAIR=false` and run Step 0's disposition call, the ordinary route) or **creates or reuses the controller-owned run record** (`docs/dev/late-repair-run-<task-id>.json`) before any dispatch.
 - On an eligible chain, dispatch BA, then dev, then QA against the CURRENT state of the work, each from the cycle command's own template (Routes, "Cycle templates"); a measured no-change dev result is acceptable, a skipped stage is not. After each stage returns, run `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/late-repair-controller.py" record-stage --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>" --stage <ba|dev|qa> --report-path <path> --repair-run-id <id>`: the controller records the stage, its report path and the dispatch that declared it, enforces the order ba, dev, qa and refuses a second call for a dispatch already recorded. A stage dispatched again to repair its report (here or at `/commit`) is recorded again the same way; the dev report recorded again clears finalize's outcome, so Step 0's finalize runs again.
 - After the three stages, Step 0 itself (the main agent's own step, whose todo item under `--late-repair` declares the effective report) runs `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/late-repair-controller.py" finalize --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>" --repair-run-id <id>`: drift detection over each declared file's recorded provenance, then a non-destructive `docs/dev/dev-report-<task-id>.effective.json` written afresh on every run (never over the dev-report) when reconcilable, or a refusal. `finalized_pending_verification` is provisional.
@@ -92,11 +92,11 @@ It reads this task's dispatch records in every session the project's transcript 
 - `source` `todo_step` with a `subagent_call`: a fresh dispatch of that role under the same task id, from the `template` (its obligation) of the answer's `step` in `commands/<command>.md`; a wholly missing lane is rebuilt in ba, dev, qa order.
 - `source` `todo_step` with no `subagent_call` (the main agent's own step, as `/dev` Step 11 or the late-repair finalize): run that step yourself under the same task id.
 - `null` for a close-QA finding, or a finding that cites no artifact: that round's own QA dispatch (the answer for `docs/dev/close-report-<TASK_ID>.md`) runs again and names the artifact; route that artifact.
-- `null` otherwise: no dispatch or request exists to re-run. Ask (header `Request`) what the cycle should deliver, naming the task and the artifact; the options are the requests the task's own artifacts state (its ticket or user-requirement file) and the task candidates. Then dispatch dev under the same task id for the answer, from the cycle command's dev template (below).
+- `null` otherwise: no dispatch or request exists to re-run. Nobody is asked: end with a report naming the task, the artifact and that no dispatch or request owes it, with the requests the task's own artifacts state (its ticket or user-requirement file).
 
 **Cycle templates.** Where no record gives a template to repeat (the `null` bullet above, the late-repair route's stages), the template is the one the command that ran the cycle holds: `commands/dev.md` (`commands/dev-command.md` for a `/dev-command` task) Step 4 for BA, Step 10 for dev, and for the final-verification QA Step 13 (`commands/dev-command.md`: Step 12). Fill it for the bound `<TASK_ID>` with a new `dispatched_at`.
 
-A close-QA round's findings, once routed, are followed by Step 0's call again, then a fresh close-QA round (Step 2). A dissent that would reopen a materially different scope is an owner decision: ask (header `Scope`) with the options the dissent names (this cycle's scope; the wider scope under the same task id), then route its findings.
+A close-QA round's findings, once routed, are followed by Step 0's call again, then a fresh close-QA round (Step 2). A dissent that would reopen a materially different scope is recorded in the close report (the dissent, the wider scope it names, and that this cycle's scope was kept); nobody is asked, and its findings inside this cycle's scope are routed.
 
 ### Step 1: Agent dispatch — three inspectors (orchestrator authority — `commands/close.md` itself, NOT QA)
 
@@ -207,7 +207,7 @@ RETURN VALUE. Your response ends with the verdict line your branch names (`CLOSE
 
 Echo the final line QA returned in the orchestrator's text message. QA wrote the close-report in Step 2; make sure `docs/dev/close-report-<task-id>.md` exists.
 
-- **Round-open** (`CLOSE_FINDINGS: <n> items`, or a `CLOSE_REPORT_APPEND_` line): route each finding (Routes), run Step 0's call again, then a fresh close-QA round (Step 2). A cause in the environment that persists (no space left, a read-only filesystem) is one owner question naming it (header `Append`), whose options are the remedies for that cause, each followed by the next round. Nothing below runs for a round-open echo.
+- **Round-open** (`CLOSE_FINDINGS: <n> items`, or a `CLOSE_REPORT_APPEND_` line): route each finding (Routes), run Step 0's call again, then a fresh close-QA round (Step 2). A cause in the environment that persists (no space left, a read-only filesystem) is reported in one line naming it and its remedies; nobody is asked, and the next round follows once the cause is gone. Nothing below runs for a round-open echo.
 - **Landed** (`CLOSE: YES*`, any suffix): the Session Summary, the next step, then Step 4.
 
 The close-report FILE ends with exactly the verdict line (Step 2); the message holds the `CLOSE:` echo and, landed only, the Session Summary and the next step. Step 4's question is a tool call, in no output channel of the close-report.
@@ -253,6 +253,6 @@ The dialog adds its own Skip control and free-text box; no other option is added
 
 2. **Walk the steps over the parents.** Each TodoStep runs for every parent, in list order, before it is marked completed: Step 0 binds `TASK_ID` to the parent as Task-id resolution binds a timestamp argument (a `/do` parent's `DO_REPORT` included) and makes its own disposition call; Step 2 runs each parent's close judgment until it lands; Step 4 asks one rating question per landed parent. No two dispatches run at once; `codex_required` is shared by the batch.
 
-3. **An owner decision** a parent meets — a hook rejection (CLAUDE.md Subagent Hook Discipline: the rejected operation is never retried, disguised or worked around) or a genuine choice — is one owner question naming the parent and the decision (header `Authorize` for a hook rejection: the rejected operation, the exact command the human may authorize, and declining it under Hook Discipline #4). The parent then goes on to its landed verdict; no parent is recorded and passed over.
+3. **A hook rejection** a parent meets (CLAUDE.md Subagent Hook Discipline: the rejected operation is never retried, disguised or worked around) is reported in the batch line for that parent, with the rejected operation and the hook's output, as refused; nobody is asked about it. The parent then goes on to its landed verdict without the operation (Hook Discipline #4); no parent is recorded and passed over.
 
 4. **Batch line**: after Step 3, one line per parent (`<task-id>: <its landed CLOSE: line>`), then each `skipped:` line of the discovery, verbatim.

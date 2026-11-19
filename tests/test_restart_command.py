@@ -735,7 +735,7 @@ def test_bare_restart_with_nothing_to_resume_carries_on_with_the_gated_command(
     then a bare /restart, and the main agent stopped ("say if you want me to continue"). prepare
     finds 0 candidates and no guidance there: step 7's "No guidance" branch, which carries on with
     the gated command from its checklist step in progress (the rule of step 5 and of the overnight
-    wake), never stops there, and pauses only with AskUserQuestion."""
+    wake), never stops there, and asks nothing."""
     monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
     monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "states"))
     sid = str(uuid.uuid4())
@@ -769,7 +769,7 @@ def test_bare_restart_with_nothing_to_resume_carries_on_with_the_gated_command(
     assert "the rule of step 5 and of the overnight wake" in rule
     assert "The turn ends only when no gated command's checklist is open" in rule
     assert 'Never end it with an offer to continue ("say if you want me to continue")' in rule
-    assert "`AskUserQuestion` only" in rule and "`/stop` is the exit" in rule
+    assert "nothing is asked" in rule and "`/stop` is the exit" in rule
     # lesson 16 is untouched: the same agent_id is resumed and never replaced
     assert "Use its exact\n   `agent_id` as `to`" in command and "never dispatch a replacement" in command
     architecture = " ".join((ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8").split())

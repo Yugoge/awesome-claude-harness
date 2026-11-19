@@ -70,8 +70,8 @@ def _step7() -> str:
 def test_step7_never_retried_rule_excludes_exactly_the_retryable_grant_codes() -> None:
     step7 = _step7()
     retryable = _codes(re.search(r"\*\*Retryable\*\* \(([^)]*)\)", step7).group(1))
-    hook = re.search(r"\*\*A hook rejection\*\*.*?(?=Ask one AskUserQuestion)", step7).group(0)
-    assert "never retried without the owner's grant" in hook
+    hook = re.search(r"\*\*A hook rejection\*\*.*?(?=For a hook rejection, print one)", step7, re.S).group(0)
+    assert "reported, never asked about" in " ".join(hook.split())
     excluded = _codes(re.search(r"This rule does not cover (.*?), though", hook).group(1))
     assert retryable == excluded == ["grant_missing", "grant_expired", "grant_consumed"]
     assert "not a hook refusing an operation" in hook and "asks nothing" in hook
