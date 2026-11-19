@@ -142,11 +142,11 @@ def bash_safety(tmp_path_factory):
     for step in (["init", "-q", "-b", "master"], ["add", "-A"], ["commit", "-qm", "init"]):
         subprocess.run(["git", *step], cwd=repo, env=env, check=True, capture_output=True)
 
-    def run(command):
+    def run(command, **more):
         payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "shared-lists",
                    "cwd": str(repo), "hook_event_name": "PreToolUse"}
         return subprocess.run(["bash", str(HOOKS / "pretool-bash-safety.sh")], input=json.dumps(payload),
-                              capture_output=True, text=True, env=env, cwd=repo, timeout=300)
+                              capture_output=True, text=True, env=dict(env, **more), cwd=repo, timeout=300)
     return run
 
 
@@ -189,6 +189,15 @@ def test_one_list_of_the_directories_a_plain_program_is_written_with():
 def test_a_plain_program_is_one_in_each_rule_that_asks(bash_safety, command):
     proc = bash_safety(command)
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("directory, refused", [("/usr/local/bin", False), ("/opt/homebrew/bin", False),
+                                                ("/tmp/x", True), (".", True)])
+def test_a_set_ban_list_reads_a_reader_in_each_plain_program_directory(bash_safety, directory, refused):
+    """The hard ban's read-only reading (a set CLAUDE_HARD_BANNED_SCRIPTS) asks the same list as its
+    noexec shape: a reader written under any of the four directories only reads the name."""
+    proc = bash_safety(directory + "/grep -n pattern scripts/demo-recovery.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery")
+    assert (proc.returncode == 2 and "hard-banned script" in proc.stderr) if refused else proc.returncode == 0, proc.stderr
 
 
 @pytest.mark.parametrize("command", [
