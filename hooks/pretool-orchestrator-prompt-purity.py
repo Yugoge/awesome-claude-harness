@@ -47,7 +47,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib.subagent import DISPATCH_TOOLS  # noqa: E402
+from lib.subagent import DISPATCH_TOOLS, is_subagent  # noqa: E402
 
 
 # Rule-doc pointers are derived from THIS hook's own on-disk location
@@ -276,8 +276,7 @@ def main() -> int:
     if hit is None:
         return 0
     category, snippet = hit
-    is_subagent = bool(data.get("agent_id"))
-    return _route_hit(category, snippet, is_subagent)
+    return _route_hit(category, snippet, is_subagent(data))
 
 
 if __name__ == "__main__":

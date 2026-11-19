@@ -641,7 +641,8 @@ def _declarations(record, calls: list, targets=None) -> list:
 def _caller_label(role, data: dict) -> str:
     if role:
         return role
-    if not data.get("agent_id"):
+    from lib.subagent import is_subagent
+    if not is_subagent(data):
         return "main"
     return data.get("agent_type") or "unresolved"
 
@@ -1027,7 +1028,8 @@ def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, 
     pins it as allowed; an owner decision). Whatever this misses, the e2e gate refuses by
     provenance (lib/report_provenance.py)."""
     global _DECLARED_REPORTS
-    if data.get("agent_id") or not isinstance(tool_input, dict):
+    from lib.subagent import is_subagent
+    if is_subagent(data) or not isinstance(tool_input, dict):
         return
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     if tool_name in WRITE_TOOLS or tool_name == "Bash":
@@ -1340,7 +1342,8 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
 
 def _check_hook_replay(role, tool_name: str, tool_input: dict, data: dict) -> None:
     """Exit 2 on the main agent's Bash call that runs the harness's own hook code by hand (above)."""
-    if data.get("agent_id") or tool_name != "Bash" or not isinstance(tool_input, dict):
+    from lib.subagent import is_subagent
+    if is_subagent(data) or tool_name != "Bash" or not isinstance(tool_input, dict):
         return
     command = tool_input.get("command")
     if not isinstance(command, str) or not command:

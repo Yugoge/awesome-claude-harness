@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib import command_span, overnight, shell_parse as sp, stop_contract  # noqa: E402
 from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
+from lib.subagent import is_subagent  # noqa: E402
 
 try:  # optional contract runtime + agent resolver for the self_repair grant
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -137,9 +138,9 @@ def _is_harness_state_path(target: str) -> bool:
 
 
 def _is_orchestrator_actor() -> bool:
-    """True iff the payload carries no agent_id (the orchestrator, the main agent)."""
+    """True iff the caller is the main agent (the orchestrator): no subagent (lib/subagent)."""
     payload = _REQUEST_CTX.get('payload') or {}
-    return not payload.get('agent_id')
+    return not is_subagent(payload)
 
 
 def _is_harness_state_exempt(target: str) -> bool:

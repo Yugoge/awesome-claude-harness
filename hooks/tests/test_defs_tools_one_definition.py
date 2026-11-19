@@ -91,6 +91,41 @@ def _hook(name: str):
         sys.path.pop(0)
 
 
+# (payload fields, environment): the audit's inputs (an alias of agent_id; an environment name
+# of a spawned agent) and two controls (the main agent; a Claude Code subagent).
+RECOGNITION_INPUTS = [
+    ({"agent_path": "/x"}, {}),
+    ({}, {"CLAUDE_AGENT_ID": "x"}),
+    ({}, {}),
+    ({"agent_id": "a1", "agent_type": "qa"}, {}),
+]
+
+
+@pytest.mark.parametrize("fields,env", RECOGNITION_INPUTS)
+def test_every_subagent_predicate_agrees(fields, env, monkeypatch, tmp_path):
+    """The orchestrator gate's predicate (lib/subagent) said "subagent" where tool-policy, the
+    cp-state guard and the overnight guard read the payload's agent_id and said "main agent"."""
+    for key in ("CLAUDE_AGENT_ID", "CLAUDE_SUBAGENT_ID", "CODEX_AGENT_ID", "CODEX_AGENT_PATH", "OPENAI_AGENT_ID",
+                "CLAUDE_COMPAT_RUNTIME"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    payload = {"session_id": "s1", "tool_name": "Write", "cwd": str(tmp_path), **fields}
+    expected = _lib("subagent").is_subagent_context(payload)
+    assert (_hook("pretool-tool-policy.py")._caller_label(None, payload) != "main") is expected
+    guard = _hook("pretool-overnight-hook-guard.py")
+    guard._REQUEST_CTX["payload"] = payload
+    assert guard._is_orchestrator_actor() is (not expected)
+    # the cp-state guard refuses a subagent's direct write of a cp-state file, and only a subagent's
+    target = tmp_path / ".claude" / "specs" / "s1" / "cp-state-dev.json"
+    target.parent.mkdir(parents=True)
+    body = {**payload, "tool_input": {"file_path": str(target), "content": "{}"}}
+    run = subprocess.run([sys.executable, str(HOOKS / "pretool-cp-state-write-guard.py")], input=json.dumps(body),
+                         capture_output=True, text=True, env={**os.environ, "CLAUDE_PROJECT_DIR": str(tmp_path)},
+                         cwd=tmp_path)
+    assert (run.returncode == 2) is expected, run.stderr
+
+
 # ---------------------------------------------------------------- subagent-env-variables
 SPAWNED_AGENT_ENV = ("CLAUDE_AGENT_ID", "CLAUDE_SUBAGENT_ID", "CODEX_AGENT_ID", "CODEX_AGENT_PATH", "OPENAI_AGENT_ID")
 

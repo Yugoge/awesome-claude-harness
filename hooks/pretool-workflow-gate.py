@@ -49,11 +49,11 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+from lib.subagent import COMPAT_RUNTIME_ENV as CODEX_RUNTIME_ENV, is_subagent  # noqa: E402
 
 CODEX_PLAN_TOOLS = {'update_plan', 'UpdatePlan', 'functions.update_plan'}
 # Tools that only read, which the checklist-not-started lock lets through (OB-L39).
 CHECKLIST_LOCK_READ_ONLY_TOOLS = frozenset({'Read', 'Grep', 'Glob'})
-CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 
 def is_restart_helper_bash_command(data: dict) -> bool:
     """The exact, unchained /restart helper invocation (lib/subagent_restart.py's
@@ -231,46 +231,6 @@ def valid_codex_session_id(value) -> bool:
         and 0 < len(value) <= 120
         and re.fullmatch(r'[A-Za-z0-9._-]+', value) is not None
     )
-
-
-def codex_payload_is_subagent_context(data: dict) -> bool:
-    """Identify child-local Codex tool events without borrowing parent state."""
-    for key in (
-        'agent_id',
-        'subagent_id',
-        'agent_path',
-        'parent_agent_id',
-        'parent_thread_id',
-        'parent_session_id',
-    ):
-        if data.get(key):
-            return True
-    for key in ('CLAUDE_AGENT_ID', 'CODEX_AGENT_ID', 'CODEX_AGENT_PATH', 'OPENAI_AGENT_ID'):
-        if os.environ.get(key):
-            return True
-    transcript_path = str(data.get('transcript_path') or '').strip()
-    if not transcript_path:
-        return False
-    try:
-        with Path(transcript_path).open(encoding='utf-8', errors='ignore') as handle:
-            for _ in range(20):
-                line = handle.readline()
-                if not line:
-                    break
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(event, dict):
-                    continue
-                if event.get('type') != 'session_meta':
-                    continue
-                payload = event.get('payload')
-                source = payload.get('source') if isinstance(payload, dict) else None
-                return isinstance(source, dict) and isinstance(source.get('subagent'), dict)
-    except OSError:
-        return False
-    return False
 
 
 def normalize_step_text(value: str) -> str:
@@ -1177,7 +1137,7 @@ def main():
     if (
         tool_name in CODEX_PLAN_TOOLS
         and is_codex_runtime(data)
-        and codex_payload_is_subagent_context(data)
+        and is_subagent(data)
     ):
         sys.exit(0)
 
