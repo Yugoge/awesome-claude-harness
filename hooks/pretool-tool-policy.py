@@ -2104,22 +2104,23 @@ def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None
             with open(os.path.join(root, name), "w") as fh:
                 fh.write(json.dumps(record) + "\n")
         for path in paths:
-            target, saved, sys.stderr = os.path.join(project, path), sys.stderr, io.StringIO()
+            target, saved, sys.stderr, code = os.path.join(project, path), sys.stderr, io.StringIO(), 0
             try:
                 _decide({**data, "transcript_path": os.path.join(root, "s.jsonl"), "tool_name": "Write",
                          "agent_id": "dispatch", "agent_type": role, "tool_input": {"file_path": target}})
             except SystemExit as stop:
-                refusal, sys.stderr = sys.stderr.getvalue(), saved
-                if stop.code == 2:
-                    with contextlib.suppress(ValueError, KeyError, TypeError):
-                        refusal = json.loads(refusal.partition("\n")[0].partition(": ")[2])["deny_reason"]
-                    _emit_block("main", tool_name, path, f"this dispatch declares {path} for its {role} subagent, and "
-                                f"tool-policy.v1 (hooks/pretool-tool-policy.py) would refuse that subagent's Write of "
-                                f"{target}: {refusal.strip()}"
-                                "; its stop gate would demand a file it may not write, so no subagent is started")
-                    sys.exit(2)
+                code = stop.code
             finally:
-                sys.stderr = saved
+                refusal, sys.stderr = sys.stderr.getvalue(), saved
+            if code != 2:
+                continue
+            with contextlib.suppress(ValueError, KeyError, TypeError):
+                refusal = json.loads(refusal.partition("\n")[0].partition(": ")[2])["deny_reason"]
+            _emit_block("main", tool_name, path, f"this dispatch declares {path} for its {role} subagent, and "
+                        f"tool-policy.v1 (hooks/pretool-tool-policy.py) would refuse that subagent's Write of "
+                        f"{target}: {refusal.strip()}; its stop gate would demand a file it may not write, so no "
+                        "subagent is started")
+            sys.exit(2)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
