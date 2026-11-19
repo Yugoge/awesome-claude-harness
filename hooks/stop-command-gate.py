@@ -17,6 +17,8 @@ payload on stdin and decides, in order:
       (overnight.open_wakes), naming its id; a time-lock it cannot read
       blocks the same way until the human's /stop;
   (5) no gated span (stop-commands.json's GATED_COMMANDS) and no /spec or /dev-family span: allow;
+  (5b) a /close or /commit that bound no task and dispatched none, ending on a NO_TARGET: line (no_target_end:
+      "Which task?" and refused flag combinations end with the candidates, nobody asked): allow;
   (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question: a last line
       ending in "?" with a question the span neither asked with an AskUserQuestion the owner answered
       nor recorded in a spec it wrote through spec-write.py; /spec has no other gap); in a gated span the todo half and the command's predicate, each held to the
@@ -373,6 +375,39 @@ def _targets(span, root, action: str) -> tuple[list[str] | None, list[str]]:
         return None, [f"{action}: {arg} names no task or chain file, and no dispatch of this /{action} names a task"
                       for arg in held]
     return sorted({task for arg, task in typed if arg not in held} | families), []
+
+
+# close.md's and commit.md's "Which task?": with no task bound and none dispatched, the run lists the candidates in
+# one NO_TARGET: line and ends; the owner types the command again with an id. Nobody is asked.
+NO_TARGET_LINE = re.compile(r"^NO_TARGET: \S", re.M)
+
+
+def _flags_refused(span) -> bool:
+    """The typed flags combine as close.md and commit.md refuse before any action (dev-lifecycle's
+    validate_auto_flag_combination: --auto with a task, --force or --bulk; close.md: --late-repair with --force)."""
+    try:
+        words = shlex.split(span.args)
+    except ValueError:
+        return False
+    named = [w for k, w in enumerate(words) if not w.startswith("-") and (k == 0 or words[k - 1] not in ("--reason", "-m"))]
+    return ("--auto" in words and bool(named or {"--force", "--bulk"} & set(words))) or (
+        "--late-repair" in words and "--force" in words)
+
+
+def no_target_end(span, root) -> bool:
+    """A /close or /commit that bound no task and dispatched none ends on its NO_TARGET: line (close.md's and
+    commit.md's "Which task?" and refused flag combinations; nobody is asked): the span's last main-agent text holds
+    the line, the span dispatched no task, and its flags are refused or _targets binds no task it resolves. A run
+    that worked on a task is never released by it."""
+    if span.command not in ("close", "commit") or span.session_families() \
+            or not NO_TARGET_LINE.search(span.last_text() or ""):
+        return False
+    if _flags_refused(span):
+        return True
+    if "--bulk" in span.args.split():  # a legal --bulk binds no task by design: its own predicate holds it
+        return False
+    targets, unresolved = _targets(span, root, span.command)
+    return bool(unresolved) or targets is None
 
 
 def _resolves(root, arg: str, task: str) -> bool:
@@ -1165,6 +1200,11 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if not gated and not asking:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
+    try:
+        if gated and no_target_end(span, root):  # nothing bound, nothing run: the NO_TARGET: line ends it
+            return 0, "", terminal
+    except Exception:  # an unread record releases nothing: the gaps below decide
+        pass
     gaps, unread = [], False
     for predicate, part in (((False, lambda: todo_gaps(span)),
                              (True, lambda: PREDICATES[span.command](span, root, payload))) if gated else ()) \

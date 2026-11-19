@@ -15,7 +15,7 @@ CODEX_REQUESTED = $ARGUMENTS contains literal token "--codex"
 TASK = $ARGUMENTS with "--codex" token removed (trimmed)
 ```
 
-If `TASK` is empty, ask the user for the task with AskUserQuestion inside the turn before proceeding (a typed reply would be a new prompt, which ends the /do consent).
+If `TASK` is empty, end: say that `/do` was given no task and that `/do <the task>` runs one. Nobody is asked.
 
 ## Workflow
 

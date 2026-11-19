@@ -370,6 +370,10 @@ KEPT = {
     "requirement-round": "/spec Step 3a or /dev Step 4b: its round file's questions as written",
     "producer-question": "the relay of a producer's question file, docs/dev/producer-question-<task>-<role>.json",
     "close-rating": "/close Step 4, after a landed close QA of the task",
+    # The owner stating and confirming what he wants (/spec Steps 1, 2 and 4); not a permission or a way past a refusal.
+    "spec-question": "/spec, while it is the current command",
+    # Which cleanup plan he wants (/clean Step 13); the per-action approvals are not kept.
+    "clean-option": "/clean Step 13, once docs/clean/combined-report-<request id>.json exists",
 }
 REFUSED = ("Ask the owner only what he wants: " + "; ".join(f"metadata.source {k}:... in {v}" for k, v in KEPT.items())
            + ". Nobody is asked whether something is allowed, how to get past a refusal or whether to go on. Go on "
@@ -377,10 +381,15 @@ REFUSED = ("Ask the owner only what he wants: " + "; ".join(f"metadata.source {k
            "put it in your report as refused, with the hook's own output.")
 
 
+_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
+CLEAN_REPORT = "docs/clean/combined-report-{request}.json"  # commands/clean.md Step 11's combined report
+
+
 def question_refusal(payload: dict) -> str | None:
     """None when the AskUserQuestion call is a kept kind (KEPT) made by the main agent in the step that owns it:
     a round whose file exists with these questions exactly (as handle records it), a producer question whose file
-    exists, a close rating in a /close span holding a landed close QA of the task. Else the refusal's text."""
+    exists, a close rating in a /close span holding a landed close QA of the task, a spec question in a /spec span,
+    a cleanup option in a /clean span whose request's combined report exists. Else the refusal's text."""
     tin = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
     meta = tin.get("metadata") if isinstance(tin.get("metadata"), dict) else {}
     source = meta.get("source") if isinstance(meta.get("source"), str) else ""
@@ -395,6 +404,11 @@ def question_refusal(payload: dict) -> str | None:
         task = _lib("close_rating").source_task(tin)
         span = _lib("command_span").active_span(payload.get("transcript_path") or "")
         ok = bool(task) and span is not None and _lib("close_rating").rating_required(span, task)
+    elif kind in ("spec-question", "clean-option"):
+        span = _lib("command_span").active_span(payload.get("transcript_path") or "")
+        rest = source.partition(":")[2]
+        ok = span is not None and span.command == kind.partition("-")[0] and bool(_LABEL.fullmatch(rest)) and (
+            kind == "spec-question" or (project / CLEAN_REPORT.format(request=rest)).is_file())
     elif match and kind == "requirement-round" and match.group(3).startswith("r"):
         qfile = question_file(project, task_of(match.group(2)) or "", int(match.group(3)[1:]))
         doc = _load(qfile) if qfile else None

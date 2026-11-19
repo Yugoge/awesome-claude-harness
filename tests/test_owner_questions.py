@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HOOK = ROOT / "hooks" / "pretool-tool-policy.py"
 sys.path.insert(0, str(ROOT / "hooks"))
 from lib import requirement_round  # noqa: E402
+from tests.cli_shapes import synthesize  # noqa: E402
 
 TASK = "20261119-120000"
 ROUND_Q = {"question": "What should the page show?", "header": "Page", "multiSelect": False,
@@ -46,8 +47,41 @@ def project(tmp_path):
     return tmp_path
 
 
-def test_the_kept_kinds_are_the_three_the_owner_designed():
-    assert set(requirement_round.KEPT) == {"requirement-round", "producer-question", "close-rating"}
+def test_the_kept_kinds_are_the_five_the_owner_designed():
+    assert set(requirement_round.KEPT) == {"requirement-round", "producer-question", "close-rating", "spec-question",
+                                           "clean-option"}
+
+
+RID = "clean-20261119-120000"
+
+
+def opened(project: Path, command: str) -> None:
+    """The transcript holds a human-typed /<command>: the active span is that command's."""
+    records = [synthesize("user", "command", turnOrigin="human", message__content=(
+        f"<command-message>{command} is running…</command-message>\n<command-name>/{command}</command-name>\n"
+        "<command-args></command-args>")),
+        synthesize("user", "meta", message__content=[{"type": "text", "text": f"body of {command}"}])]
+    (project / "t.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+@pytest.mark.parametrize("command,source", [("spec", "spec-question:clarify-1"), ("spec", "spec-question:match-2"),
+                                            ("clean", f"clean-option:{RID}")])
+def test_spec_and_clean_questions_reach_the_owner_in_their_command_alone(project, command, source):
+    (project / "docs" / "clean").mkdir()
+    (project / "docs" / "clean" / f"combined-report-{RID}.json").write_text("{}")
+    assert ask(project, source).returncode == 2  # no command open
+    opened(project, "dev" if command == "spec" else "spec")
+    assert ask(project, source).returncode == 2  # another command's span
+    opened(project, command)
+    done = ask(project, source)
+    assert done.returncode == 0, done.stderr
+    assert ask(project, source, agent=True).returncode == 2  # never a subagent's
+
+
+def test_a_clean_option_before_its_combined_report_is_refused(project):
+    opened(project, "clean")
+    assert ask(project, f"clean-option:{RID}").returncode == 2
+    assert ask(project, "clean-option:").returncode == 2
 
 
 @pytest.mark.parametrize("source", [f"requirement-round:{TASK}:r1", f"producer-question:{TASK}:ba"])
@@ -56,7 +90,7 @@ def test_a_kept_kind_in_its_step_reaches_the_owner(project, source):
     assert done.returncode == 0, done.stderr
 
 
-@pytest.mark.parametrize("source", [None, "", "owner-decision:x:seed", "owner-confirmation:x:r04",
+@pytest.mark.parametrize("source", [None, "", "owner-decision:x:seed", "clean-approval:x", "spec:x", "owner-confirmation:x:r04",
                                     "hook-rejection:x:r07-dispatch-gate", "do", "Requirement-round:x:r1",
                                     f"requirement-round:{TASK}:r2", f"producer-question:{TASK}:dev",
                                     f"close-rating:{TASK}", f"requirement-round-x:{TASK}:r1"])

@@ -1598,6 +1598,31 @@ def test_a8_no_target_names_the_gap(env, monkeypatch):
     assert code == 2 and "close: no target task resolved" in text
 
 
+TYPO_ID = "20261101-095958"
+
+
+@pytest.mark.parametrize("command,args", [("close", ""), ("commit", ""), ("close", TYPO_ID), ("commit", TYPO_ID),
+                                          ("close", f"--auto {TYPO_ID}"), ("commit", "--auto --bulk"),
+                                          ("close", "--late-repair --force x")])
+def test_no_target_ends_on_its_line_only_while_nothing_was_dispatched(env, monkeypatch, command, args):
+    """close.md's and commit.md's "Which task?" and refused flag combinations: nobody is asked; the run lists the
+    candidates in a NO_TARGET: line and ends. Without the line the Stop holds; with a dispatch that names a task the
+    line releases nothing (that task's gaps hold)."""
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
+    env.tx.command(command, args)
+    if "--auto" not in args:
+        assert run(env)[0] == 2
+    env.tx.say(f"/{command}: no task given.")
+    if "--auto" not in args:
+        assert run(env)[0] == 2  # a statement without the NO_TARGET: line
+    env.tx.say(f"NO_TARGET: /{command} 20261101-100000")
+    assert run(env) == (0, "")
+    env.tx.dispatch(FAMILY, role="changelog-analyst" if command == "commit" else "style-inspector", pipeline=command)
+    env.fake.answers[(FAMILY, command)] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    env.tx.say(f"NO_TARGET: /{command} 20261101-100000")
+    assert run(env)[0] == 2
+
+
 def test_a8_auto_targets_leave_out_a_task_registered_after_the_cut_off():
     lifecycle = _load(REPO / "scripts" / "dev-lifecycle.py", "lifecycle_under_test")
     rows = [{"task_id": t, "kind": "ticket", "next_action": "close"}
