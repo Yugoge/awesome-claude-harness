@@ -19,7 +19,7 @@ import pytest
 ROOT = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 HOOK = os.path.join(ROOT, "hooks", "pretool-tool-policy.py")
 SID = "5e6f7a8b-1c2d-4e3f-9a0b-1c2d3e4f5a6b"
-PROJECTS = ("/root/nonexistent-own-scratch/proj", "/dev/shm/nonexistent-own-scratch/proj")
+PROJECTS = ("/nonexistent-own-scratch/proj", "/dev/shm/nonexistent-own-scratch/proj")
 NAMED = re.compile(r"your own scratch directory is (/\S+?)/ ")
 
 
