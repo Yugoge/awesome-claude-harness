@@ -63,8 +63,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS, OPTION_SIGNS,
-    PARALLEL_SEPARATORS, PIPE_OPS, REEXPAND_OPS, XARGS_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
+    OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
+    _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -837,15 +838,9 @@ PARALLEL = _spec(
      "--trc", "-a", "--arg-file", "-N", "-L", "-l", "-I", "--recstart", "--recend",
      "--transfer", "--cleanup", "--sshloginfile", "--interactive", "--limit"))
 
-WATCH = _spec(("-d", "--differences", "-t", "--no-title", "-b", "--beep",
-               "-e", "--errexit", "-g", "--chgexit", "-c", "--color", "-x", "--exec",
-               "-h", "--help", "-v", "--version", "-p", "--precise", "-w", "--no-wrap"),
-              ("-n", "--interval"))
+WATCH = PEEL["watch"][0]
 
-SSH_SPEC = _spec(("-4", "-6", "-A", "-a", "-C", "-f", "-G", "-g", "-K", "-k", "-M",
-                  "-N", "-n", "-q", "-s", "-T", "-t", "-V", "-v", "-X", "-x", "-Y", "-y"),
-                 ("-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L",
-                  "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w"))
+SSH_SPEC = _SSH_SPEC
 
 FIND_EXEC_OPS = {"-exec", "-execdir", "-ok", "-okdir"}
 FIND_DELETE_OPS = {"-delete"}
@@ -2674,11 +2669,7 @@ class Analyzer:
     _h_builtin = _h_busybox
 
     def _h_flock(self, name, args, redirs, env, piped):
-        spec = _spec(("-s", "--shared", "-x", "--exclusive", "-u", "--unlock",
-                      "-n", "--nonblock", "-o", "--close", "-v", "--verbose",
-                      "-F", "--no-fork"),
-                     ("-w", "--wait", "--timeout", "-E", "--conflict-exit-code"))
-        i, err = split_opts(args, spec)
+        i, err = split_opts(args, PEEL["flock"][0])
         if err == "missing_option_value":
             self.structural("missing_option_value", "flock")
             return
@@ -2698,26 +2689,18 @@ class Analyzer:
         self.eval_argv(payload, [], env)
 
     def _h_su(self, name, args, redirs, env, piped):
-        spec = _spec(("-l", "--login", "-", "-p", "--preserve-environment", "-m",
-                      "-P", "--pty", "-f", "--fast"),
-                     ("-c", "--command", "-s", "--shell", "-g", "--group",
-                      "-G", "--supp-group", "-w", "--whitelist-environment"))
-        if self._command_option(args, env, "su"):
+        if self._command_option(args, env, "su", SU_COMMAND_OPTS):
             return
-        i, err = split_opts(args, spec)
+        i, err = split_opts(args, _SU_SPEC)
         if err:
             self.scoped(err, "su")
             return
         self._terminal_inert("su_without_command", "su", args)
 
     def _h_runuser(self, name, args, redirs, env, piped):
-        if self._command_option(args, env, "runuser"):
+        if self._command_option(args, env, "runuser", SU_COMMAND_OPTS):
             return
-        spec = _spec(("-l", "--login", "-p", "--preserve-environment", "-m",
-                      "-P", "--pty", "-f", "--fast"),
-                     ("-u", "--user", "-g", "--group", "-G", "--supp-group",
-                      "-s", "--shell", "-w", "--whitelist-environment"))
-        i, err = split_opts(args, spec)
+        i, err = split_opts(args, PEEL["runuser"][0])
         if err == "missing_option_value":
             self.structural("missing_option_value", "runuser")
             return
@@ -2968,16 +2951,17 @@ class Analyzer:
 
     # -- shells --------------------------------------------------------------
 
-    def _command_option(self, args, env, who):
+    def _command_option(self, args, env, who, names=COMMAND_OPTS):
         """Analyze the code of a `-c CODE`, `--command CODE` or `--command=CODE` among args."""
         for idx, a in enumerate(args):
             lit = a.literal()
-            if lit in COMMAND_OPTS:
+            if lit in names:
                 self._shell_code_operand(args, idx + 1, env, who)
                 return True
-            if lit is not None and lit.startswith("--command="):
+            long = next((n for n in names if n.startswith("--") and (lit or "").startswith(n + "=")), None)
+            if long is not None:
                 content = a.content()
-                start = len(content.text) - (len(lit) - len("--command="))
+                start = len(content.text) - (len(lit) - len(long) - 1)
                 self.analyze_code(content.slice(start, len(content.text)), Env(env.hashed, env.aliases))
                 return True
         return False

@@ -80,6 +80,9 @@ CASES = [
     # the removal analyzer reads the attached spelling from the same COMMAND_OPTS
     ("su-command-option", "su --command='{}'", ("gp", "bs", "tp")),
     ("su-command-option", "runuser --command='{}'", ("bs",)),
+    ("su-command-option", "su --session-command '{}'", ("gp", "bs", "tp")),
+    ("wrapper-option-specs", "flock /tmp/l -c '{}'", ("gp", "bs", "tp")),
+    ("wrapper-option-specs", "ssh -P t host {}", ("gp", "bs", "tp")),
     ("xargs-value-options", "xargs -i {} < /dev/null", ("gp", "tp")),
     ("xargs-value-options", "xargs -e {} < /dev/null", ("gp", "tp")),
     ("xargs-value-options", "xargs -l {} < /dev/null", ("gp", "tp")),

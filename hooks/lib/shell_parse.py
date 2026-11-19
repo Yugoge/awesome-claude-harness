@@ -2433,14 +2433,15 @@ PEEL = {
                        "-P", "--preferred-many")), 0),
     "xargs": (XARGS_SPEC, 0),
     "flock": (_spec(("-s", "--shared", "-x", "--exclusive", "-e", "-u", "--unlock", "-n",
-                     "--nb", "--nonblock", "-o", "--close", "-F", "--no-fork"),
+                     "--nb", "--nonblock", "-o", "--close", "-F", "--no-fork", "--verbose"),
                     ("-w", "--wait", "--timeout", "-E", "--conflict-exit-code", "-c",
                      "--command")), 1),
     "command": (_spec(("-p",)), 0),
     # programs that only run the command after their options (each one's --help / manual)
     "watch": (_spec(("-b", "--beep", "-c", "--color", "-C", "--no-color", "-d", "--differences",
                      "-e", "--errexit", "-g", "--chgexit", "-t", "--no-title", "-x", "--exec",
-                     "-p", "--precise", "-w", "--no-wrap", "-r", "--no-rerun"),
+                     "-p", "--precise", "-w", "--no-wrap", "-r", "--no-rerun", "-h", "--help",
+                     "-v", "--version"),
                     ("-n", "--interval", "-q", "--equexit")), 0),
     "faketime": (_spec(("-m", "-f", "--exclude-monotonic", "--disable-shm"),
                        ("--date-prog", "-p")), 1),
@@ -2455,9 +2456,6 @@ PEEL = {
                        ("-l", "--limit", "-c", "--cpu")), 0),
     "tsp": (_spec(("-n", "-f", "-d", "-B", "-E", "-g"), ("-L", "-D", "-W", "-N")), 0),
     "ssh-agent": (_spec(("-c", "-s", "-D", "-d"), ("-a", "-E", "-O", "-P", "-t")), 0),
-    "runuser": (_spec(("-l", "--login", "-m", "-p", "--preserve-environment", "-P", "--pty"),
-                      ("-u", "--user", "-g", "--group", "-G", "--supp-group", "-s", "--shell",
-                       "-w", "--whitelist-environment", "-c", "--command")), 0),
 }
 
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ksh93", "mksh", "ash", "rbash", "yash",
@@ -2472,10 +2470,14 @@ SHELL_SPEC = _spec(("-e", "-x", "-u", "-v", "-n", "-f", "-h", "-k", "-m", "-p", 
                     "--noediting", "--verbose", "--debugger", "--dump-strings",
                     "--dump-po-strings", "--help", "--version", "-c"),
                    ("-o", "-O", "--rcfile", "--init-file"))
+# su and runuser (util-linux --help): runuser adds -u/--user; -c, --command and
+# --session-command pass the command to the shell.
+SU_COMMAND_OPTS = COMMAND_OPTS + ("--session-command",)
 _SU_SPEC = _spec(("-l", "--login", "-m", "-p", "--preserve-environment", "-P", "--pty",
-                  "-f", "--fast", "-"),
-                 ("-c", "--command", "-s", "--shell", "-g", "--group", "-G", "--supp-group",
-                  "-w", "--whitelist-environment", "--session-command"))
+                  "-f", "--fast", "-", "-h", "--help", "-V", "--version"),
+                 SU_COMMAND_OPTS + ("-s", "--shell", "-g", "--group", "-G", "--supp-group",
+                                    "-w", "--whitelist-environment"))
+PEEL["runuser"] = (_spec(_SU_SPEC["bool"], _SU_SPEC["val"] | set(RUNUSER_USER_OPTS)), 0)
 _SCRIPT_SPEC = _spec(("-a", "--append", "-e", "--return", "-f", "--flush", "-q", "--quiet"),
                      ("-c", "--command", "-E", "--echo", "-I", "--log-in", "-O", "--log-out",
                       "-B", "--log-io", "-T", "--log-timing", "-m", "--logging-format",
@@ -2741,7 +2743,7 @@ def resolve(cmd, depth=None):
             opts, rest, err = split_options(words, spec, 1, permute=True)
             r.head = head
             r.args = tuple(words[1:])
-            code = [v for o, v in opts if o in COMMAND_OPTS]
+            code = [v for o, v in opts if o in SU_COMMAND_OPTS]
             if code:
                 _set_payload(r, [code[-1]], "shell_c", depth, name + "_c_dynamic")
             return r
@@ -2888,7 +2890,7 @@ def _merge(outer, inner):
 def _has_c(words):
     for w in words[1:]:
         v = w.value()
-        if v in COMMAND_OPTS or (v and v.startswith("--command=")):
+        if v in SU_COMMAND_OPTS or (v and v.startswith(("--command=", "--session-command="))):
             return True
         if v and len(v) > 1 and v[0] == "-" and v[1] != "-" and "c" in v[1:]:
             return True
