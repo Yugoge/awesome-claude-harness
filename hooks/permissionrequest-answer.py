@@ -22,7 +22,8 @@ hooks have already run on the call and not refused it. The answer:
 Failure: any error of this file, and a decision not reached within DEADLINE seconds, is a deny. Where
 this process itself dies or is killed (no decision printed), Claude Code applies no decision: a run
 without a prompt host refuses the call, and a session whose host answers prompts (--permission-prompt-tool
-stdio) leaves the request to that host.
+stdio) leaves the request to that host. While /harness off holds, the launcher answers nothing, so
+the prompt goes to the person as without the harness.
 """
 from __future__ import annotations
 
@@ -84,7 +85,8 @@ def names_removal(command: str) -> bool:
     return any(pattern.search(line) for line in command.split("\n"))
 
 
-def decide(payload: dict) -> tuple[str, str] | None:
+def decide(payload: dict) -> tuple[str, str, bool] | None:
+    """(behavior, message, whether this file records a deny: the Bash rules record their own refusals)."""
     tool, mode = payload.get("tool_name"), payload.get("permission_mode")
     if tool in QUESTIONS:
         return None
@@ -93,20 +95,20 @@ def decide(payload: dict) -> tuple[str, str] | None:
     if isinstance(command, str):  # a call that runs a shell command: Bash, Monitor
         refusal, rule = bash_rules(payload), denied_in_text(command)
         if refusal is not None:
-            return "deny", refusal
+            return "deny", refusal, False
         if rule is not None:
-            return "deny", f"BLOCKED: the command holds what the deny rule {rule} of settings.json refuses."
+            return "deny", f"BLOCKED: the command holds what the deny rule {rule} of settings.json refuses.", True
         if bypass or names_removal(command):
-            return "allow", ""
+            return "allow", "", False
     elif bypass:
-        return "allow", ""
+        return "allow", "", False
     return "deny", (f"BLOCKED: no allow rule in settings covers this {tool} call in {mode} mode, and outside "
-                    "bypassPermissions mode a call runs only when one does.")
+                    "bypassPermissions mode a call runs only when one does."), True
 
 
 def record(raw: str, message: str) -> None:
-    """REFUSAL-RECORD CALL SITE: the refusal record's writer (lib/refusal_record.py, branch pledge/20261119)
-    is not on this branch; once joined, this records the deny (its EVENTS must then name PermissionRequest)."""
+    """REFUSAL-RECORD CALL SITE: lib/refusal_record.report(<the payload>, [(<this file>, <the deny message>)],
+    <this file>); it records a PermissionRequest once refusal_record.EVENTS names that event."""
     try:
         from lib import refusal_record  # type: ignore[attr-defined]
     except ImportError:
@@ -131,13 +133,13 @@ def main() -> int:
         result = decide(payload if isinstance(payload, dict) else {})
     except BaseException as exc:  # noqa: BLE001 -- failing to decide is a refusal, never a prompt
         result = ("deny", f"BLOCKED: the permission-request hook could not decide this call ({type(exc).__name__}: "
-                          f"{exc}); refused rather than asking a person.")
+                          f"{exc}); refused rather than asking a person.", True)
     signal.alarm(0)
     if result is None:
         return 0
-    behavior, message = result
+    behavior, message, own = result
     answer(behavior, message)
-    if behavior == "deny":
+    if behavior == "deny" and own:
         sys.path.insert(0, HOOKS)
         record(raw, message)
     return 0
