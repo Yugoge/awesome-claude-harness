@@ -3203,6 +3203,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "container-launchers",
+   "source": "defs-shell lane, audit f199dfb1e family container-launchers (undecided)",
+   "reason": "git_command_classifier._EXEC_LAUNCHERS names the container launchers whose exec/run arguments may run git (docker, podman, kubectl); bash_safety_rules._DG_READ_HANDLERS names the commands the degraded reader has its own subcommand handler for (git, docker, kubectl, find, hash, ssh). A launcher set and a dispatch table.",
+   "sides": [
+    [
+     {
+      "name": "<module>._EXEC_LAUNCHERS",
+      "fingerprint": "bb35e013ddb182ab",
+      "at": "hooks/lib/git_command_classifier.py:1041"
+     }
+    ],
+    [
+     {
+      "name": "<module>._DG_READ_HANDLERS",
+      "fingerprint": "f2262a747587f24d",
+      "at": "hooks/lib/bash_safety_rules.py:4686"
+     }
+    ]
+   ]
   }
  ]
 }
