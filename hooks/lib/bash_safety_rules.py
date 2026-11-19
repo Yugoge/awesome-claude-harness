@@ -4138,20 +4138,23 @@ class ServiceView:
 
     def __init__(self, command, cwd=None):
         self.raw, self.sites, self.code, self.runners, self.redirect_sites = False, [], [], [], []
-        self.exec_redirects, self.plain = [], False
+        self.exec_redirects, self.plain, self.command, self.digits = [], False, command, {}
         self.cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
         try:
-            from lib.shell_parse import parse, resolve, walk
+            from lib.shell_parse import _AssignScope, parse, resolve, walk
             script = parse(command)
             if script.error is not None:
                 raise ValueError(script.error.code)
-            nested = False
+            nested, scope = False, _AssignScope(script)
             for site in walk(script):
                 r = resolve(site.cmd)
                 if site.dynamic or site.templated or (r.unresolved and not str(r.unresolved).startswith("xargs_")):
                     self.raw = True
                 nested = nested or tuple(site.context) != ("top",)
                 self.redirect_sites.append(site)
+                if not site.cmd.words and tuple(site.context) == ("top",) and scope.certain(site, site.cmd):
+                    self.digits.update((a.name, a.word.span[0]) for a in site.cmd.assignments
+                                       if re.fullmatch("[0-9]+", a.static_value() or "") and not a.append)
                 if [w.value() for w in site.cmd.words] == ["exec"]:
                     self.exec_redirects.extend(site.cmd.redirects)  # they hold for every later command
                 name = r.name
@@ -4176,6 +4179,16 @@ class ServiceView:
 
     def named(self, *names):
         return [(n, a, s, r) for n, a, s, r in self.sites if n in names]
+
+    def unprobed(self, view):
+        """`view` without the liveness probes: `kill -0 PID...` as the command word of a simple command at the top
+        level (inside if, for, while and until too), where a program runs and sends no signal."""
+        out = list(view)
+        for _n, _a, site, r in self.named("kill") if not self.raw and len(view) == len(self.command) else ():
+            words = site.cmd.words
+            if tuple(site.context) == ("top",) and _kill_probe(site.cmd, r, self):
+                out[words[0].span[0]:words[-1].span[1]] = " " * (words[-1].span[1] - words[0].span[0])
+        return "".join(out)
 
 
 # The plain shape. Only a command made wholly of these simple commands, each with static arguments and plain
@@ -4330,6 +4343,23 @@ def _plain_kill_args(words):
     return len(words) == 1 and len(words[0].parts) == 1 and words[0].parts[0].kind == "param" \
         and words[0].parts[0].quote == "double" and re.match(r"^([A-Za-z_][A-Za-z0-9_]*|[0-9])$", words[0].parts[0].text) \
         and not words[0].substitutions()
+
+
+def _kill_probe(cmd, r, sv):
+    """`kill -0` and then only PIDs: literal words that are no option, one double-quoted bare parameter, or one bare
+    parameter the command sets once to digits, unconditionally and earlier, and names nowhere else but as `$name`
+    (nothing else can have set it, and digits split into digits, never into `-s SIG`)."""
+    rest = cmd.words[2:]
+    if cmd.assignments or r.wrappers or r.payload is not None or r.unresolved or not rest \
+            or [w.value() if _plain_word(w) else None for w in cmd.words[:2]] != ["kill", "-0"] \
+            or any((w.value() or w.text).startswith("-") for w in rest):
+        return False
+    name = rest[0].parts[0].text if len(rest) == 1 and [p.kind for p in rest[0].parts] == ["param"] else ""
+    n = re.escape(name)
+    return _plain_kill_args(rest) or (
+        sv.digits.get(name, cmd.span[0]) < cmd.span[0] and not rest[0].substitutions()
+        and len(re.findall(rf"(?<![A-Za-z0-9_]){n}(?![A-Za-z0-9_])", sv.command))
+        == 1 + len(re.findall(rf"\$(?:{n}(?![A-Za-z0-9_])|\{{{n}\}})", sv.command)))
 
 
 def _plain_script(script, sv):
@@ -4612,7 +4642,7 @@ def service_rules(command, view, env, sv=None):
         return structural() or any(raw_rule(t) for t in sv.code + sv.runners) \
             or (not sv.plain and raw_rule(command))
 
-    def reads_view(view_rule, structural):  # an executable-view rule: runner lines keep it
+    def reads_view(view_rule, structural, view=view):  # an executable-view rule: runner lines keep it
         if sv.raw:
             return view_rule(view)
         return structural() or any(view_rule(t) for t in sv.runners) or (not sv.plain and view_rule(view))
@@ -4628,7 +4658,7 @@ def service_rules(command, view, env, sv=None):
     if reads_view(lambda t: _raw_killall(t, family), lambda: _kill_protected_family(sv, family)):
         refuse(f"BLOCKED: Killing {family + '/' if family else ''}claude/docker processes is refused",
                    f"Command: {command}", released_line())
-    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv)):
+    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv), sv.unprobed(view)):
         refuse("BLOCKED: kill with signals is refused — use graceful shutdown methods", f"Command: {command}",
                    released_line())
     prefix = env["prefix"]
