@@ -2104,9 +2104,9 @@ def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None
     import shutil
     import tempfile
     from lib import obligation
-    from lib.send_policy import AGENT_TOOLS
+    from lib.subagent import DISPATCH_TOOLS
 
-    if tool_name not in AGENT_TOOLS:
+    if tool_name not in DISPATCH_TOOLS:
         return
 
     parsed = obligation.parse_obligation(prompt)
