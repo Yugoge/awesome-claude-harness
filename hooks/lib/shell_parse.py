@@ -3528,7 +3528,10 @@ class CdScopes:
     a `cd` applied only to what follows it in its own shell (not past a closing subshell, a pipeline
     stage or a background job, replaced by a later cd, `&&` and `||` followed), relative to the
     starting directory ''. A cd that cannot be followed exactly (`cd -` with no known OLDPWD, a
-    computed target, CDPATH, popd, a function body, more than LIMIT possibilities) leaves the unknown directory '?'.
+    computed target, CDPATH, popd, the body of a function the command defines but never calls where it is
+    followed, more than LIMIT possibilities) leaves the unknown directory '?'. A brace group, loop, if or case body
+    runs in the shell's own directory, and so do a compound's own redirections; a function called in the command
+    runs its body where it is called.
     ``spell(word)`` is a cd operand's text (default: its static value, else as written, quotes removed);
     ``reached(dir)`` says a directory is there now, so one `cd` to it cannot fail (default: any cd may fail)."""
 
@@ -3537,6 +3540,7 @@ class CdScopes:
 
     def __init__(self, raw: str, spell=None, reached=None):
         self.raw, self.spans, self.visited, self.unfollowed = raw, [], set(), []
+        self.defs, self.calling = {}, set()  # functions defined in the command; those being followed
         self.cdpath = 'CDPATH' in raw
         self.functions = False  # a function or coprocess defined anywhere it walked
         self.spell = spell or (lambda w: w.text.replace('"', '').replace("'", '') if w.value() is None else w.value())
@@ -3591,6 +3595,15 @@ class CdScopes:
                     if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
                         here = {(self._target(cwd, val), cwd) for cwd, _old in here}
             self._record(cmd.span, here | set(states))  # its redirections open where the shell is
+            if res.name in self.defs and res.name not in self.calling and res.payload is None:
+                # a function defined in this command runs its body where it is called
+                self.calling.add(res.name)
+                succ, fail = set(), set()
+                for s in self.defs[res.name]:
+                    s_succ, s_fail = self.run_script(s, states)
+                    succ, fail = succ | s_succ, fail | s_fail
+                self.calling.discard(res.name)
+                return succ, fail
             for r in cmd.redirects:
                 if r.hd is not None:  # an unquoted body's substitutions run where its command does
                     self._record(r.hd.body_span, set(states))
@@ -3604,6 +3617,9 @@ class CdScopes:
         if isinstance(cmd, Compound):
             self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
             self._record(cmd.span, states)
+            for r in cmd.redirects:
+                if r.target is not None:
+                    self._record(r.target.span, states)
             scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, Script)]
             self.functions = self.functions or cmd.kind in DEFINER_KINDS
             if cmd.kind in ('subshell', 'coproc'):
@@ -3616,9 +3632,7 @@ class CdScopes:
                     succ, fail = self.run_script(s, succ)
                 return succ, fail
             if cmd.kind == 'function':
-                for s in scripts:
-                    self._record(s.span, {self.UNKNOWN})
-                    self.run_script(s, {self.UNKNOWN})
+                self.defs[cmd.name] = scripts  # followed where it is called; never called: see run()
                 return set(states), set(states)
             acc = set(states)
             for s in scripts:
@@ -3667,6 +3681,11 @@ class CdScopes:
         """Follow ``script`` from ``start``; a `cd` it did not follow (in a substitution, a re-parsed payload) makes
         the directory of everything written after it unknown."""
         self.run_script(script, {(start, '?')})
+        for name, scripts in self.defs.items():  # a body called nowhere it was followed: run where it may be
+            if not any(s.span[0] <= a < s.span[1] for s in scripts for a, _b, _st in self.spans):
+                for s in scripts:
+                    self._record(s.span, {self.UNKNOWN})
+                    self.run_script(s, {self.UNKNOWN})
         self.unfollowed = [s.cmd.span[0] if self.raw[slice(*s.cmd.span)].startswith(s.cmd.words[0].text) else 0
                            for s in walk(script) if s.cmd.words and s.cmd.span not in self.visited
                            and resolve(s.cmd).name in CWD_BUILTINS]
@@ -3681,11 +3700,12 @@ class CdScopes:
 
     def at(self, offset: int):
         """The possible directories at raw ``offset``: the innermost recorded command around it."""
-        best = None
+        best, found = None, set()
         for a, b, states in self.spans:
-            if a <= offset < b and (best is None or b - a < best[1] - best[0]):
-                best = (a, b, states)
-        return {cwd for cwd, _old in best[2]} if best else {'?'}
+            if a <= offset < b and (best is None or b - a <= best):
+                found = (found if best == b - a else set()) | set(states)
+                best = b - a
+        return {cwd for cwd, _old in found} if best is not None else {'?'}
 
 
 
