@@ -186,6 +186,7 @@ _OTHER_SHELLS = frozenset(('fish', 'tcsh', 'csh', 'elvish', 'nu', 'xonsh', 'rc',
 _PY_RUNNERS = frozenset(('pytest', 'py.test', 'coverage', 'ipython', 'ipython3', 'pdb', 'pdb3'))
 # less runs these over each file it opens.
 _LESS_HOOK_VARS = ('LESSOPEN', 'LESSCLOSE')
+_HOME_PARAMS = ('HOME', '{HOME}')  # the parameter texts of $HOME and ${HOME}
 # Variables whose value is a command or a file some program runs.
 _CMD_VAR_RE = re.compile(
     r'^(?:BASH_ENV|ENV|PYTHONSTARTUP|PROMPT_COMMAND|PS[0-4]|SHELL|LESSOPEN|LESSCLOSE|'
@@ -556,7 +557,7 @@ class _Scan:
                 if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
                     t = self.home + t[1:]
                 alts = [(t, glob.escape(t), False)]
-            elif p.kind == 'param' and p.text in ('HOME', '{HOME}') and self.home:
+            elif p.kind == 'param' and p.text in _HOME_PARAMS and self.home:
                 alts = [(self.home, glob.escape(self.home), False)]
             elif p.kind == 'glob':
                 alts = [(p.text, p.text, True)]
@@ -2172,7 +2173,7 @@ class _Scan:
                 if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
                     t = self.home + t[1:]
                 prefix += t
-            elif p.kind == 'param' and p.text in ('HOME', '{HOME}') and self.home:
+            elif p.kind == 'param' and p.text in _HOME_PARAMS and self.home:
                 prefix += self.home
             else:
                 break
