@@ -101,7 +101,10 @@ def _literal_form(interp):
 def test_the_literal_form_is_refused(interp):
     result = eb.analyze(_literal_form(interp))
     assert result["allowed"] is False
-    assert result["reason"].startswith("interpreter_api_removal_not_proven_inert")
+    # Restated 2026-11-19: Python is read with ast and the call is found as a removal; the other languages,
+    # which have no reader here, keep the scan's reason.
+    assert result["reason"].startswith("interpreter_removal_call" if interp.startswith("python")
+                                       else "interpreter_api_removal_not_proven_inert")
 
 
 @pytest.mark.parametrize("interp,spelling,command", DESTRUCTIVE,
