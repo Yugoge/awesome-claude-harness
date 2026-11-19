@@ -404,8 +404,10 @@ ROUNDS = {
 # git clean or disk operation, a commit that skips its hooks, a write of a keystone git setting, and the runtime
 # guard's own fail-closed refusal of package and build tools while no protected-runtime file is configured (these
 # runs carry none).
+# The hook's other rules, which may refuse a command before the removal policy reads it. "reads, but" is the
+# read-made-to-run rule (outward_rule, ec3af2f5b, 2026-11-19): `rg --pre`, `git -c core.pager=sh log`.
 OTHER_RULES = ("git clean", "Destructive disk operation", "commit-hook-bypass", "config-keystone-write",
-               "protected-runtime-guard")
+               "protected-runtime-guard", " reads, but ")
 
 
 def _rmref():
