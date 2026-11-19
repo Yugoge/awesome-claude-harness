@@ -701,10 +701,8 @@ def _tool_call_texts(transcript_path) -> list | None:
             record = json.loads(line)
         except ValueError:
             continue
-        message = record.get("message") if isinstance(record, dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
-        for block in content if isinstance(content, list) else ():
-            if isinstance(block, dict) and block.get("type") == "tool_use":
+        for block in command_span._blocks(record, sidechain=True):
+            if block.get("type") == "tool_use":
                 texts.append("\n".join(_call_strings(block.get("input"))))
     return texts
 
