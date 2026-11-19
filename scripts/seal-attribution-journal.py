@@ -7,10 +7,9 @@ reboot. This copies:
   * every session journal  -> <dest>/journals/<session>.jsonl   (atomic replace)
   * every blob referenced by any event's pre_sha/post_sha
                            -> <dest>/objects.git  (bare repo, same blob ids)
-Default dest: $CLAUDE_CONFIG_DIR/attribution-seals when that directory is
-outside the harness tree, else attribution-seals/ beside the journal's own
-state dir (<harness>/state/attribution-seals, ignored like the rest of state/)
--- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
+Default dest: ~/.local/state/claude-attribution-seals (attribution-seals/ beside
+the journal's state dir when $ATTRIBUTION_STATE_DIR moves it) -- override with
+$ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
 destination unless --allow-volatile.
 
 Idempotent; safe to re-run (journals are append-only, blobs content-addressed).
@@ -64,12 +63,10 @@ def default_dest() -> Path:
     env = os.environ.get("ATTRIBUTION_SEAL_DEST")
     if env:
         return Path(env)
-    # A config dir apart from the harness tree keeps the seals off a volatile checkout (a tree on
-    # tmpfs); else beside the journal's state, which the harness .gitignore ignores.
-    config = os.environ.get("CLAUDE_CONFIG_DIR")
-    if config and not Path(config).resolve().is_relative_to(aj.harness_root().resolve()):
-        return Path(config) / "attribution-seals"
-    return aj.state_dir().parent / "attribution-seals"
+    if os.environ.get("ATTRIBUTION_STATE_DIR"):  # a journal moved elsewhere keeps its seals beside it
+        return aj.state_dir().parent / "attribution-seals"
+    # One store whichever account runs the session, off the harness tree (a tree on tmpfs is refused).
+    return Path.home() / ".local" / "state" / "claude-attribution-seals"
 
 
 def _git(gd, *args, inp=None):

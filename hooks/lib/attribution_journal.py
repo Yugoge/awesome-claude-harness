@@ -55,8 +55,8 @@ Never raises into the tool pipeline: callers wrap in try/except and exit 0, and
 `autoseal_hook_trigger()` (run by posttool-attribution-post.py after record_post)
 too. It seals via scripts/seal-attribution-journal.py at most once per interval
 (600 s), each attempt logged to <dest>/seal-log.jsonl; <dest> is
-$ATTRIBUTION_SEAL_DEST, else $CLAUDE_CONFIG_DIR/attribution-seals for a config dir
-outside the harness tree, else <harness>/state/attribution-seals; a volatile
+$ATTRIBUTION_SEAL_DEST, else ~/.local/state/claude-attribution-seals (beside the
+journal's state dir when $ATTRIBUTION_STATE_DIR is set); a volatile
 (tmpfs) <dest> is refused and the refusal logged.
 """
 

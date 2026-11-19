@@ -481,18 +481,20 @@ def test_autoseal_disabled_by_default_is_a_true_noop(tmp_path, monkeypatch):
     assert not (tmp_path / "would-be-dest").exists()
 
 
-def test_default_seal_store_is_beside_the_journal_state_dir_in_ignored_state(tmp_path, monkeypatch):
-    """No override: <harness>/state/attribution-seals when CLAUDE_CONFIG_DIR is unset or inside the
-    harness tree, and the harness's .gitignore ignores it (the old default was an unignored store at
-    the home's root); a config dir apart from the tree keeps the seals there (a tmpfs checkout)."""
+def test_default_seal_store_is_one_per_home_whichever_account_runs(tmp_path, monkeypatch):
+    """No override: ~/.local/state/claude-attribution-seals, the same store for every configuration
+    directory (C13: one account's seals were invisible to another's --show-last) and off the harness
+    tree (a tmpfs checkout is refused); the older default, <harness>/state/attribution-seals, stays
+    ignored by the harness's .gitignore."""
     for name in ("ATTRIBUTION_SEAL_DEST", "ATTRIBUTION_STATE_DIR", "ATTRIBUTION_HARNESS_ROOT"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
-    assert seal.default_dest() == tmp_path / "config" / "attribution-seals"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(ROOT))
-    assert seal.default_dest() == aj.state_dir().parent / "attribution-seals" == ROOT / "state" / "attribution-seals"
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    store = tmp_path / "user" / ".local" / "state" / "claude-attribution-seals"
+    for config in (tmp_path / "config", tmp_path / "other-account", ROOT):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+        assert seal.default_dest() == store
     monkeypatch.delenv("CLAUDE_CONFIG_DIR")
-    assert seal.default_dest() == ROOT / "state" / "attribution-seals"
+    assert seal.default_dest() == store
     repo = tmp_path / "home"
     repo.mkdir()
     (repo / ".gitignore").write_bytes((ROOT / ".gitignore").read_bytes())
