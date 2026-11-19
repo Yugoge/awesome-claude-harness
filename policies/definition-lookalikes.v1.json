@@ -3182,6 +3182,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "container-exec-subcommands",
+   "source": "defs-shell lane, audit f199dfb1e family container-exec-subcommands (undecided)",
+   "reason": "The removal analyzer's _h_kubectl reads kubectl's subcommands that run a command in a pod (exec, run, debug); _docker_sub reads docker's that run one in a container (exec, run, create: docker create takes the command it later starts). Two programs, two subcommand sets.",
+   "sides": [
+    [
+     {
+      "name": "Analyzer._h_kubectl:in",
+      "fingerprint": "bf9c336c29d28450",
+      "at": "hooks/lib/bash_execution_boundary.py:2831"
+     }
+    ],
+    [
+     {
+      "name": "Analyzer._docker_sub:in",
+      "fingerprint": "e453c14c53c6458b",
+      "at": "hooks/lib/bash_execution_boundary.py:3463"
+     }
+    ]
+   ]
   }
  ]
 }
