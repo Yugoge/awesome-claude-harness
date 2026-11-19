@@ -97,6 +97,9 @@ STATE_SCHEMA = "claude-harness/install-state/v2"
 SELF_MANAGE_REL = ".self-manage"
 SELF_MANAGE_VERSION = "claude-harness/self-manage/v1"
 SELF_MANAGE_FILES = ("installer.py", "profile.json", "uninstall")
+# The uninstall plan actions that handle a settings hook entry the install did not leave as it
+# was (un-merge one it merged, report a residual one).
+RESIDUAL_ACTIONS = ("un-merge", "residual")
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -1668,7 +1671,7 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
         else:
             final_doc = {}
         for item in items:
-            if item["action"] in ("un-merge", "residual"):
+            if item["action"] in RESIDUAL_ACTIONS:
                 item["measured_present"] = bool(locate(
                     final_doc, (item["event"], item["matcher"],
                                 item["hook_type"], item["command"])))
@@ -1688,7 +1691,7 @@ def uninstall(ctx: Ctx, keep_payload: bool = False) -> dict:
     # retains the whole config-home footprint too, leaving a coherent state that
     # a re-run can finish.
     retained = [i for i in items
-                if i.get("action") in ("un-merge", "residual")
+                if i.get("action") in RESIDUAL_ACTIONS
                 and i.get("result") in RETAINED_RESULTS]
     partial = bool(retained)
 
@@ -1865,7 +1868,7 @@ def main(argv=None) -> int:
                     if it.get("backup_retained"):
                         extra += f"  [backup retained: {it['backup_retained']}]"
                     print(f"  {it['action']:8} {it['result']:24} {it['path']}{extra}")
-                elif it["action"] in ("un-merge", "residual"):
+                elif it["action"] in RESIDUAL_ACTIONS:
                     print(f"  {it['action']:8} {it['result']:24} "
                           f"{it['event']} matcher={it['matcher']!r} "
                           f"[present after: {it['measured_present']}]")
