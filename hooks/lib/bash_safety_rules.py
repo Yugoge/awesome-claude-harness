@@ -1634,6 +1634,11 @@ def _consent_compounds(script, sp, depth=0):
                     yield from _consent_compounds(body, sp, depth + 1)
 
 
+# The consent view's lattice: a token's origin is lit, glob, state (the state directory itself) or unk (a value
+# not known here); a variable's kind is static, word, text, state or any.
+_CONSENT_STATEFUL = ("state", "any")  # a variable kind that depends on what ran before
+
+
 class _ConsentView:
     """What one command can do to the consent flag in `state`: variables, working directories and path words read
     as glob tokens tagged by origin (lit, glob, state: the state directory itself, unk: a value not known here)."""
@@ -1715,7 +1720,7 @@ class _ConsentView:
         if self.cwd_state(".") and re.search(r"\bpwd\b|\bO?L?D?PWD\b|\$\{?PWD|\bdirs\b", text):
             return True
         for name in re.findall(r"\$\{?!?([A-Za-z_][A-Za-z0-9_]*)", text):
-            if self.var(name)[0] in ("state", "any"):
+            if self.var(name)[0] in _CONSENT_STATEFUL:
                 return True
         return False
 
@@ -2436,7 +2441,7 @@ def _consent_git_tree(view, sp, r):
             trees.append(view.tokens(a.value) if a.value is not None else [(("*",), "state")])
     if "GIT_WORK_TREE" in view.defs:
         info = view.var("GIT_WORK_TREE")
-        if info[0] in ("state", "any"):
+        if info[0] in _CONSENT_STATEFUL:
             return why
         trees.extend(view.tokens(text=v) for v in ((info[1],) if info[0] == "static" else
                                                     info[1] if info[0] == "multi" else ()))
@@ -2511,7 +2516,7 @@ def _consent_git_tree(view, sp, r):
                 gitdirs.append(view.tokens(a.value) if a.value is not None else [(("*",), "state")])
         if "GIT_DIR" in view.defs:
             info = view.var("GIT_DIR")
-            if info[0] in ("state", "any"):
+            if info[0] in _CONSENT_STATEFUL:
                 return f"it runs `git {sub}` with the state directory as its git directory"
             gitdirs.extend(view.tokens(text=v) for v in ((info[1],) if info[0] == "static" else
                                                          info[1] if info[0] == "multi" else ()))
@@ -2620,7 +2625,7 @@ def _consent_text_names_state(view, text):
     if view.cwd_state(".") and re.search(r"\bpwd\b|\$\{?O?L?D?PWD\b|\bdirs\b", text):
         return True
     for name in re.findall(r"\$\{?!?([A-Za-z_][A-Za-z0-9_]*)", text):
-        if view.var(name)[0] in ("state", "any"):
+        if view.var(name)[0] in _CONSENT_STATEFUL:
             return True
     return False
 
