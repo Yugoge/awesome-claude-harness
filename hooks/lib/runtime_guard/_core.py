@@ -273,6 +273,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         _LAUNCH_SUBCMDS,
         _RECURSIVE_WS_FLAGS,
         _SERVICE_MANAGER_PROGRAMS,
+        _WS_SELECT_KEYWORDS,
         _anchor_exec_tokens,
         _anchor_in_launch_position,
         _anchor_nonprotected_workspace_selector,
@@ -286,6 +287,7 @@ except ImportError:  # executed as a top-level script (no package context)
         _LAUNCH_SUBCMDS,
         _RECURSIVE_WS_FLAGS,
         _SERVICE_MANAGER_PROGRAMS,
+        _WS_SELECT_KEYWORDS,
         _anchor_exec_tokens,
         _anchor_in_launch_position,
         _anchor_nonprotected_workspace_selector,
@@ -3101,7 +3103,7 @@ def _strip_selector_tokens(rest: list) -> list:
     sel_flags = ("-w", "--workspace", "--filter", "-F", "--prefix", "-C", "--dir", "--cwd")
     while i < len(rest):
         t = rest[i]
-        if t in ("workspace", "workspaces") and i + 1 < len(rest):
+        if t in _WS_SELECT_KEYWORDS and i + 1 < len(rest):
             i += 2
             continue
         if t in sel_flags and i + 1 < len(rest):
