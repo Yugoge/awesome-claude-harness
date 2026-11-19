@@ -27,7 +27,9 @@ from typing import Iterable, Iterator, Mapping, Sequence
 
 try:
     from . import locations
-except ImportError:  # hooks/lib itself is on sys.path
+except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import locations
 
 

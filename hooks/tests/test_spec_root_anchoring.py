@@ -6,7 +6,7 @@ hooks/pretool-bash-views-guard.py refused a Bash redirect into any `*.lock.json`
 subagent's write of any `*/specs/*/cp-state-*.json` (a test fixture under tests/fixtures/specs/).
 Both now refuse only a path that lies under a spec root: a `.claude/specs/` or `docs/dev/specs/`
 directory, or the `specs/` of the harness home wherever it really is (here a directory named
-`dot-claude`, reached as `~/.claude`, as on the author's machine; hooks/lib/locations.py), read
+`dot-claude`, reached as `~/.claude`: a home may have any name; hooks/lib/locations.py), read
 from the call's directory (and each `cd` of the command), by the path as written and by its real
 path, so `../`, `./`, absolute spellings and a symlink that lands in a spec root are refused as
 the plain path is. A directory that only has that name is no spec root

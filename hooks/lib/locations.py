@@ -17,7 +17,9 @@ from typing import Optional, Tuple
 
 try:
     from .harness_state_dir import harness_state_dir
-except ImportError:  # hooks/lib itself is on sys.path
+except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from harness_state_dir import harness_state_dir
 
 # -- the literals --------------------------------------------------------------------------

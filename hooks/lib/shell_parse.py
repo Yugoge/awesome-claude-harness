@@ -30,7 +30,8 @@ import sys
 
 try:
     from . import locations
-except ImportError:  # no package: hooks/lib itself is on sys.path
+except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import locations
 
 # ---------------------------------------------------------------------------

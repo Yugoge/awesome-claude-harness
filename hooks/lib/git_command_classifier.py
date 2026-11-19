@@ -65,7 +65,8 @@ except ImportError:  # run as a script: hooks/lib is on sys.path
     import shell_parse
 try:
     from . import locations
-except ImportError:  # no package: hooks/lib itself is on sys.path
+except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import locations
 
 # One table each, in the parser.
