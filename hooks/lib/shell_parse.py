@@ -3083,6 +3083,8 @@ class WriteTarget:
 _REDIR_MODE = {">": TRUNCATE, ">|": TRUNCATE, "&>": TRUNCATE, ">&": TRUNCATE,
                ">>": APPEND, "&>>": APPEND, "<>": CREATE}
 
+WGET_OUTPUT_OPTS = ("-O", "--output-document")  # wget's option naming the file the download is written to
+
 # Write verbs: name -> (option spec, reading). The reading names which operands
 # are written and how: "all" every operand, "last" the last operand (with the
 # others as sources), "first" the first operand, or an option whose value is
@@ -3166,7 +3168,7 @@ VERBS = {
     "gawk": (None, "gawk", IN_PLACE),
     "dd": (_spec(), "dd", TRUNCATE),
     "curl": (_spec(), "opt:-o,--output", TRUNCATE),
-    "wget": (_spec(), "opt:-O,--output-document", TRUNCATE),
+    "wget": (_spec(), "opt:" + ",".join(WGET_OUTPUT_OPTS), TRUNCATE),
     "chmod": (None, "attr", IN_PLACE),
     "chown": (None, "attr", IN_PLACE),
     "chgrp": (None, "attr", IN_PLACE),

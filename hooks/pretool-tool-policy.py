@@ -886,6 +886,7 @@ def _operand_writes(name: str, values: list) -> list:
         if remote:
             out += [os.path.join(out_dir, _url_name(u)) for u in urls if _url_name(u)]
     elif name == "wget":
+        from lib import shell_parse as sp
         prefix, urls = "", []
         for i, v in enumerate(plain):
             if v in ("-P", "--directory-prefix") and i + 1 < len(plain):
@@ -894,7 +895,7 @@ def _operand_writes(name: str, values: list) -> list:
                 prefix = v.split("=", 1)[1]
             elif v.startswith("-P") and len(v) > 2:
                 prefix = v[2:]
-            elif v in ("-O", "--output-document") and i + 1 < len(plain):
+            elif v in sp.WGET_OUTPUT_OPTS and i + 1 < len(plain):
                 out.append(plain[i + 1])
             elif "://" in v:
                 urls.append(v)

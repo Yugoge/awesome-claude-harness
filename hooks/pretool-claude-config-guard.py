@@ -462,7 +462,8 @@ def _site_writes(sp, raw: str, res) -> list:
         if not dirs and not listing and res.head is not None:
             out.append(('.', res.head))
     elif name == 'wget':
-        if not any(v in ('-O', '--output-document') or v.startswith(('-O', '--output-document=')) for v in vals):
+        out_opts = sp.WGET_OUTPUT_OPTS
+        if not any(v in out_opts or v.startswith((out_opts[0], out_opts[1] + '=')) for v in vals):
             prefix = option_values('-P', '--directory-prefix')
             out += prefix or ([('.', res.head)] if res.head is not None else [])
     elif name == 'git':
