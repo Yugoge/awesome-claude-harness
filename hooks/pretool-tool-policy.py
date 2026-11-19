@@ -90,6 +90,11 @@ Behavior:
     ba-qa-report-*.json, dev-report-*.json), a Write/Edit/MultiEdit/NotebookEdit
     of a QA or BA-QA report, declared by a dispatch yet or not -> exit 2
     (_check_report_writes, CD-6; residuals in docs/ENFORCEMENT-LEDGER.md R-003).
+  - An Agent/Task call whose obligation declares a file its subagent could not
+    write: each declared file is put to this decision (_decide) as that
+    subagent's Write of it, the dispatch recorded as the CLI records one; a
+    refusal -> exit 2 naming the file, the role and the refusing rule
+    (_check_dispatch_writes). No declared file, nothing is read.
   - Main agent (no agent_id) -> exit 0 after the derived permission and the
     grant binding (the orchestrator gate handles the rest of the main agent).
   - Subagent role unresolvable (a NORMAL state in agent_resolver), or one
@@ -2064,22 +2069,81 @@ def _check_scheduled_prompt(role, tool_name: str, tool_input: dict, data: dict) 
         sys.exit(2)
 
 
+def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None:
+    """A dispatch whose obligation declares a file its subagent cannot write -> exit 2, so no
+    subagent is started into a stop gate (G2) it cannot pass. Each declared file is put to this
+    hook's own decision (_decide) as that subagent's Write of it, its dispatch recorded as the CLI
+    records one (the call, the child's first record and meta) in a store of its own."""
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+    if not isinstance(prompt, str) or "<obligation" not in prompt or '"path"' not in prompt:
+        return  # no block, or one declaring no file: a file artifact's fields hold its path
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+    from lib import obligation
+    from lib.send_policy import AGENT_TOOLS
+
+    if tool_name not in AGENT_TOOLS:
+        return
+
+    parsed = obligation.parse_obligation(prompt)
+    arts = parsed.obligation.get("artifacts") or [] if isinstance(parsed, obligation.ParsedObligation) else []
+    paths = [a["path"] for a in arts if obligation.FRESHNESS_SLACK_SECONDS_BY_KIND.get(a.get("kind")) is not None]
+    role, call = tool_input.get("subagent_type") or "general-purpose", data.get("tool_use_id") or "toolu_dispatch"
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd()
+    if not paths:
+        return
+    root = tempfile.mkdtemp(prefix="dispatch-writes-")
+    try:
+        for name, record in (("s/subagents/agent-dispatch.jsonl", {"type": "user", "message": {"role": "user",
+                             "content": prompt}}), ("s/subagents/agent-dispatch.meta.json", {"agentType": role,
+                             "toolUseId": call}), ("s.jsonl", {"type": "assistant", "message": {"role": "assistant",
+                             "content": [{"type": "tool_use", "id": call, "name": tool_name, "input": tool_input}]}})):
+            os.makedirs(os.path.dirname(os.path.join(root, name)), exist_ok=True)
+            with open(os.path.join(root, name), "w") as fh:
+                fh.write(json.dumps(record) + "\n")
+        for path in paths:
+            target, saved, sys.stderr, code = os.path.join(project, path), sys.stderr, io.StringIO(), 0
+            try:
+                _decide({**data, "transcript_path": os.path.join(root, "s.jsonl"), "tool_name": "Write",
+                         "agent_id": "dispatch", "agent_type": role, "tool_input": {"file_path": target}})
+            except SystemExit as stop:
+                code = stop.code
+            finally:
+                refusal, sys.stderr = sys.stderr.getvalue(), saved
+            if code != 2:
+                continue
+            with contextlib.suppress(ValueError, KeyError, TypeError):
+                refusal = json.loads(refusal.partition("\n")[0].partition(": ")[2])["deny_reason"]
+            _emit_block("main", tool_name, path, f"this dispatch declares {path} for its {role} subagent, and "
+                        f"tool-policy.v1 (hooks/pretool-tool-policy.py) would refuse that subagent's Write of "
+                        f"{target}: {refusal.strip()}; its stop gate would demand a file it may not write, so no "
+                        "subagent is started")
+            sys.exit(2)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main() -> None:
     # Bootstrap the deny-logic FIRST, fail-closed (exit 2) on import error.
     _bootstrap_security()
     data = _read_payload()
-    if not data:
+    if not data or not isinstance(data.get("tool_name"), str):
         sys.exit(0)
-    tool_name = data.get("tool_name")
-    if not isinstance(tool_name, str):
-        sys.exit(0)
-    tool_input = data.get("tool_input") or {}
     _observe_reports(data)
+    _decide(data)
+
+
+def _decide(data: dict) -> None:
+    """The decision on one call (exit 2 refuses it, exit 0 lets it through)."""
+    tool_name, tool_input = data["tool_name"], data.get("tool_input") or {}
     role = resolve_agent_type(data)
     _check_hook_replay(role, tool_name, tool_input, data)
     targets = _extract_targets(tool_name, tool_input)
     _check_protected(role, tool_name, tool_input, targets, data)
     _check_scheduled_prompt(role, tool_name, tool_input, data)
+    _check_dispatch_writes(tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
     approved = _check_clean_writes(role, tool_name, targets, data)
     _check_grant_writes(role, tool_name, targets, data)
