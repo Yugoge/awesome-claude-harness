@@ -28,6 +28,8 @@ GIT_CONFIG_WRITE_OPTIONS = frozenset({
     "--add", "--replace-all", "--unset", "--unset-all", "--rename-section", "--remove-section"})
 GIT_CONFIG_READ_SUBCOMMANDS = frozenset({"get", "list"})
 GIT_CONFIG_WRITE_SUBCOMMANDS = frozenset({"set", "unset", "rename-section", "remove-section", "edit"})
+# The words a key-reading guard takes for a write verb: those and the action options' names, which git rejects as keys.
+GIT_CONFIG_WRITE_VERBS = GIT_CONFIG_WRITE_SUBCOMMANDS | {"add", "replace-all", "unset-all"}
 # Options that change only the scope a read looks in or how it prints.
 GIT_CONFIG_READ_MODIFIERS = frozenset({
     "--global", "--local", "--system", "--worktree", "--show-origin", "--show-scope", "--null", "-z",

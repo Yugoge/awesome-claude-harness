@@ -1066,7 +1066,7 @@ def _config_key_operand(args: list[str]) -> str:
             skip = True
         elif not a.startswith('-'):
             words.append(a)
-    if words and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS | git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS:
+    if words and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS | git_facts.GIT_CONFIG_WRITE_VERBS:
         words = words[1:]
     return words[0] if words else ''
 
