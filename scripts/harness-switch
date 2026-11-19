@@ -585,7 +585,13 @@ def session_started(transcript_path):
 
 
 def config_dir():
-    return os.path.realpath(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+    """The configuration directory and the home of the settings.json its CLI loads (claude_home.config_home)."""
+    sys.path.insert(0, os.path.join(HOME, "hooks", "lib"))
+    try:
+        from claude_home import config_home
+    finally:
+        sys.path.pop(0)
+    return os.path.realpath(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")), str(config_home())
 
 
 def status_lines(ctx):
@@ -595,8 +601,10 @@ def status_lines(ctx):
     since = state.get("since") or "(no switch recorded)"
     lines = ["Harness: %s%s (switched %s)" % (label, " (hooks " + mode + ")" if problems else "", since),
              "Home: %s, a %s" % (HOME, "git checkout" if is_checkout() else "directory that is not a git checkout")]
-    cfg = config_dir()
+    cfg, loads = config_dir()
     lines.append("Config dir: " + ("the same directory (this account's)" if cfg == HOME else
+                                   "%s, whose settings.json is this home's: switched by this home" % cfg
+                                   if loads == HOME else
                                    "%s, not this home: that account is not switched by this home" % cfg))
     started = session_started(ctx.get("transcript_path") or "")
     if started is None and ctx.get("session_id") and ctx.get("session_id") == state.get("session_id"):
