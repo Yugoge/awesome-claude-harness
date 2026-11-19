@@ -317,13 +317,20 @@ environment cannot tell the two sessions apart: Claude Code sets `CLAUDECODE` an
 `CLAUDE_CODE_CHILD_SESSION` in a top-level session's hooks too. The owner's terminal, desktop app
 or IDE session has one Claude Code process in its ancestry and switches as before.
 
-**Known limits.** The agent guard covers the tools the harness names. An MCP tool that schedules a
-prompt (a remote `send_later` or trigger tool, for example) is not covered: the prompt it fires
-reaches UserPromptSubmit like a typed one, and the hook cannot tell them apart
+A prompt an agent's tool delivers is refused where it is sent. The guard reads every tool's input,
+whatever the tool is called (`CronCreate`, `ScheduleWakeup`, `SendMessage`, an MCP tool that sends
+or schedules a prompt, a tool a later CLI adds): a string in it that types `/harness` refuses the
+call. Only the CLI's own tools that deliver no prompt are named, and pass: `Read`, `Glob`, `Grep`,
+`WebFetch`, `WebSearch`, `TodoWrite`, `AskUserQuestion`, `ExitPlanMode`; an `Agent` prompt, prose
+that may quote the command, is refused only when it is the command.
+
+**Known limits.** The guard sees a tool's input, in a session whose harness is on. A prompt put
+together elsewhere (a Bash command that has another program send it, a service that fires text it
+already holds) reaches UserPromptSubmit like a typed one, and the hook cannot tell them apart
 (`hooks/userprompt-restart-authorize.py` documents the same limit). The nested-session check names
-a Claude Code process by its executable (`claude`, the installer's `claude/versions/` copy, or
-node/bun running the npm package's `claude`): a copy of the binary under another name is not
-recognized.
+a Claude Code process by its executable (`claude`, or `claude.exe` as the npm package installs it,
+the installer's `claude/versions/` copy, or node/bun running the npm package's `claude`): a copy of
+the binary under another name is not recognized.
 
 **What off does.**
 

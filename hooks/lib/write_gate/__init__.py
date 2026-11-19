@@ -91,8 +91,8 @@ RULES: tuple[Rule, ...] = (
          "both", "open",
          ("the project's .claude/.hook-refactor-allow sentinel, made by hand",
           "/dev-command's dev writing the project command file its cycle develops"), 5.0),
-    Rule("harness-switch", "pretool-harness-switch-guard.py",
-         WRITE_TOOLS | {"Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"},
+    # Every tool: a tool that delivers a prompt is known by what its input holds, not by a list of names.
+    Rule("harness-switch", "pretool-harness-switch-guard.py", None,
          "both", "closed",  # an overrun refuses: an agent pads a command past the budget at will
          ("reading the switch's state or settings files",
           "the project's .claude/.hook-refactor-allow sentinel, made by hand, for the home's settings files",

@@ -192,8 +192,8 @@ def test_each_rule_sees_the_tools_its_guard_was_registered_for(tmp_path):
     assert registered.pop("pretool-write-guard.sh") == by_file.pop("overwrite.py").tools
     assert registered.pop("pretool-subagent-code-block.py") is not None  # not a rule: see below
     # the harness switch's guard was never a registration of its own: a rule from its start
-    assert by_file.pop("pretool-harness-switch-guard.py").tools == write_gate.WRITE_TOOLS | {
-        "Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"}
+    # (and it sees every tool: a prompt that types /harness is known by the input, not the tool's name)
+    assert by_file.pop("pretool-harness-switch-guard.py").tools is None
     assert {k: v for k, v in registered.items()} == {k: r.tools for k, r in by_file.items()}
     assert [r.name for r in write_gate.RULES] == ["bash-views", "overnight-boundary", "tool-policy",
                                                   "cp-state", "overwrite", "claude-config", "harness-switch"]
