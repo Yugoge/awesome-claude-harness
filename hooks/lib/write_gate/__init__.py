@@ -52,7 +52,7 @@ try:  # the tools the switch rule passes unread (lib/harness_switch.py): the gat
 except Exception:  # not importable this way: the rule then sees every tool and passes them itself
     _NO_PROMPT = frozenset()
 
-WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+from ..harness_vocabulary import WRITE_TOOLS  # noqa: E402
 
 
 @dataclass(frozen=True)

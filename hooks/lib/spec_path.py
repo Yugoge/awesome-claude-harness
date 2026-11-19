@@ -18,7 +18,7 @@ target resolves against the cwd its tool_use record carries, as the CLI resolved
 import os
 import re
 
-EDIT_TOOLS = ("Write", "Edit", "MultiEdit")
+EDIT_TOOLS = ("Write", "Edit", "MultiEdit")  # the tools that name their target in tool_input.file_path
 WRITER = "spec-write.py"
 _WRITER_LINE = re.compile(r"^spec-write: (?:create|append) (/\S+)$", re.M)
 try:  # lib.spec_path, or hooks/lib on the path

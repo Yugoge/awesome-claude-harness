@@ -2906,6 +2906,12 @@ FIND_SYMLINK_OPTS = ("-H", "-L", "-P")  # find's symlink options, before the sta
 FIND_EXEC_ENDS = (";", "+")  # the words that end the command of a find -exec/-ok (every reader reads this one)
 _FIND_FILE = ("-fprint", "-fprint0", "-fprintf", "-fls")  # the next word names a file the action writes
 FIND_ACTIONS = FIND_EXEC + _FIND_FILE + ("-delete",)  # find actions that run a command, write a file or delete
+FIND_OPERATORS = ("(", ")", "!")  # a word of find's expression that is no option: the start paths end before it
+FIND_EXPRESSION_LEADS = ("-", "(", "!")  # a word led by one of these begins find's expression
+SHELL_STARTUP_VARS = ("BASH_ENV", "ENV")  # the environment names a non-interactive shell sources at start
+ROOTED = ("/", "~")  # a path led by one of these does not depend on the working directory
+SED_SCRIPT_GIVEN_OPTS = ("-e", "--expression", "-f", "--file")  # sed's options that give it a script (text or file)
+SED_SCRIPT_ATTACHED = ("--expression=", "--file=")  # the same, value attached
 
 
 def _resolve_find(r, head, words, cmd, depth):
@@ -3027,7 +3033,7 @@ def _resolve_shell(r, head, words, cmd, depth):
             continue
         break
     for a in r.assignments:
-        if a.name in ("BASH_ENV", "ENV") and a.value is not None:
+        if a.name in SHELL_STARTUP_VARS and a.value is not None:
             # the startup file runs before the shell's own code
             _script_operand(r, a.value, cmd, depth)
             if r.payload is not None:
@@ -3573,7 +3579,7 @@ class CdScopes:
         arg = self.spell(word) if word is not None else '~'
         if any(c in arg for c in '$`*?[') or (self.cdpath and not arg.startswith(('/', '~', './', '../'))):
             return '?'
-        if arg.startswith(('/', '~')):
+        if arg.startswith(ROOTED):
             return os.path.normpath(arg)
         if cwd == '?':
             return '?'
@@ -4052,11 +4058,11 @@ def _verb_targets(name, verb, args, env, context):
                 in_place = True
                 k += 1
                 continue
-            if v in ("-e", "--expression", "-f", "--file", "-l", "--line-length"):
-                script_given = script_given or v in ("-e", "--expression", "-f", "--file")
+            if v in SED_SCRIPT_GIVEN_OPTS + ("-l", "--line-length"):
+                script_given = script_given or v in SED_SCRIPT_GIVEN_OPTS
                 k += 2
                 continue
-            if v is not None and v.startswith(("--expression=", "--file=")):
+            if v is not None and v.startswith(SED_SCRIPT_ATTACHED):
                 script_given = True
                 k += 1
                 continue

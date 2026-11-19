@@ -121,7 +121,7 @@ def test_the_chain_call_a_command_spells_runs_the_resolver_and_yields_the_fields
 
 def test_commit_completes_an_unclosed_task_from_one_disposition() -> None:
     """P4 R5: an incomplete disposition is completed (dev-stage gaps routed, the close
-    stage as close.md Steps 1-2), the waits are in-turn questions, nothing re-validates."""
+    stage as close.md Steps 1-2), nobody is asked, nothing re-validates."""
     command = _read("commands/commit.md")
     step3 = command[command.index("### Step 3:") : command.index("### Step 4:")]
     flat = _squash(step3)
@@ -138,10 +138,9 @@ def test_commit_completes_an_unclosed_task_from_one_disposition() -> None:
     for gone in ("AWAITING_INPUT", "awaiting-input", "R15", "arbitrat", "route_finding", "owing_dispatch",
                  "pass_with_exceptions", "artifact_role", "source_check"):
         assert gone not in command, gone
-    # Each wait is one AskUserQuestion with a header of at most 12 characters.
-    headers = __import__("re").findall(r"header `([^`]+)`", command)
-    assert sorted(headers) == ["Authorize", "Flags", "Request", "Task"], headers
-    assert all(len(h) <= 12 for h in headers)
+    # Nobody is asked (2026-11-19): each former wait ends in a statement, the line the Stop gate reads.
+    assert __import__("re").findall(r"header `([^`]+)`", command) == [] and "AskUserQuestion" not in command
+    assert "`NO_TARGET: " in command and "`REFUSED: <hook> refused <the operation> for task <TASK_ID>`" in command
     assert "/stop" not in command and "I will fix the harness" not in command
     related = command[command.index("## Related") :]
     assert "may run first; `/commit` completes an unclosed task itself" in related

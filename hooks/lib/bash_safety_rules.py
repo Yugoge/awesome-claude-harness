@@ -229,7 +229,7 @@ def commit_guard(payload):
     commits, why, cfg, loc, ex = [], [], [], [], {}
     LONGV = tuple(o[2:] for o in sorted(git_facts.GIT_COMMIT_VALUE_OPTIONS))
     GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
-    CFGW, CFGR = git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS, git_facts.GIT_CONFIG_READ_SUBCOMMANDS
+    CFGW, CFGR = git_facts.GIT_CONFIG_WRITE_VERBS, git_facts.GIT_CONFIG_READ_SUBCOMMANDS
     WRF, RDF = git_facts.GIT_CONFIG_WRITE_OPTIONS, git_facts.GIT_CONFIG_READ_OPTIONS
 
     def prot(k):

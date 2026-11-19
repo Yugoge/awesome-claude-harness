@@ -38,6 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import locations  # noqa: E402
+from lib.sensitive_names import REDIRECT_OPS  # noqa: E402
 try:
     from lib import shell_parse as _sp
     from lib.bash_write_targets import extract_bash_write_targets_with_modes as _write_targets
@@ -61,7 +62,7 @@ BLOCK_PATTERNS = [
 ]
 
 # A redirect target in raw text, for a command the parser cannot read.
-_RAW_REDIRECT = re.compile(r"(?:>|>>)\s*([^\s;&|<>()]+)")
+_RAW_REDIRECT = re.compile(REDIRECT_OPS + r"\s*([^\s;&|<>()]+)")
 _MAX_DIRS = 64
 
 # The spellings of spec-check.py a command may run it by (_checker_spans)

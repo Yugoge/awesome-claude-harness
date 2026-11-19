@@ -1084,7 +1084,7 @@ def _lib_module(name: str):
 
 def _session_transcripts(project_dir: str | Path, roots: Iterable[str | Path] | None) -> list[Path]:
     """Every top-level session transcript the CLI keeps for the project, in
-    every account root (the store candidate_transcript_paths walks)."""
+    every account root."""
     slug = project_slug(project_dir)
     found: list[Path] = []
     for root in (list(roots) if roots is not None else account_project_roots()):

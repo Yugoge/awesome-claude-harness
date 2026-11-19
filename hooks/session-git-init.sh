@@ -11,10 +11,13 @@
 set -e
 
 # Opt-in gate: truthy-only semantics — {1,true,TRUE,yes,YES} → enabled; everything else → skip
-case "${CLAUDE_SESSION_GIT_INIT:-}" in
-  1|true|TRUE|yes|YES) ;;
-  *) exit 0 ;;  # off (the default): silent, since a SessionStart hook's stdout enters the context
-esac
+_truthy() {
+  case "$1" in
+    1|true|TRUE|yes|YES) return 0 ;;
+  esac
+  return 1
+}
+_truthy "${CLAUDE_SESSION_GIT_INIT:-}" || exit 0  # off (the default): silent, since a SessionStart hook's stdout enters the context
 
 # Its own messages go to the hook's stdout (fd 3), which a SessionStart hook adds to the model's
 # context (code.claude.com/docs/en/hooks); what the commands it runs print goes to stderr.
@@ -107,8 +110,8 @@ if harness_auto_push .; then
 fi
 MANUAL_CMD="gh repo create \"$REPO_NAME\" ${CREATE_ARGS[*]}"
 
+_truthy "$AUTO_CREATE" || {
 case "$AUTO_CREATE" in
-  1|true|TRUE|yes|YES) ;;
   ask)
     echo -e "${BLUE}❓ Create GitHub repository '$REPO_NAME'? (set CLAUDE_AUTO_CREATE_REPO env var to automate)${NC}" >&3
     echo -e "${YELLOW}   Skipping for now. Run manually: $MANUAL_CMD${NC}" >&3
@@ -121,6 +124,7 @@ case "$AUTO_CREATE" in
     echo -e "${YELLOW}⚠️  CLAUDE_AUTO_CREATE_REPO value not recognised (true/1/yes create, false skips). Skipping GitHub repository creation.${NC}" >&3
     exit 0 ;;
 esac
+}
 
 # Auto-create GitHub repository
 echo -e "${BLUE}🌐 Creating GitHub repository: $REPO_NAME${NC}" >&3
