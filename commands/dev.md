@@ -51,7 +51,7 @@ An empty `$ARGUMENTS` is asked for with one AskUserQuestion (the pause; the cycl
 **Views.** With `spec_path` set, run the spec resolver once; it alone derives the artifact id, views folder, split marker and cp-state folder (a hand-derived name silently drops a de-prefixed spec to monolith mode):
 
 ```bash
-[ -z "$spec_path" ] || python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
+[ -z "$spec_path" ] || python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$PWD}"
 ```
 
 Its stdout JSON carries `artifact_id` (`SPEC_ID` below), `views_available`, `manifest_path`, `split_marker`, `views_dir` and `cp_dir`; keep them in your notes (a Bash call carries no variable to the next). A non-zero exit is an invalid, mismatched, ambiguous or stale split: have `/spec` re-finalized, never fall back to the monolith; `views_available=false` with exit 0 is a legacy spec (monolith `spec_path`, no checkpoint enforcement). When `views_available` is true, pass `view_paths.ba`, `.qa`, `.dev` (from `manifest_path`) beside, never in place of, `spec_path`; BEFORE composing any dispatch read `<views_dir>/orchestrator.md` and the spec's Section 5 (User's Acceptance Criterion) and quote Section 5 verbatim into every dispatch prompt.
@@ -479,8 +479,8 @@ After the test-writer subagent completes, verify on disk that both `tests/genera
 Before the dev dispatch, once per stage, capture the baseline dev's report is measured against (`agents/dev.md` gives its point-in-time semantics); the value goes into the dev dispatch, `baseline_head_sha` as the empty string (never omitted) in a repository with no commits yet:
 
 ```bash
-baseline_head_sha=$(git -C "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" rev-parse HEAD 2>/dev/null || echo "")
-baseline_dirty_snapshot=$(git -C "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" status --porcelain 2>/dev/null || echo "")
+baseline_head_sha=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse HEAD 2>/dev/null || echo "")
+baseline_dirty_snapshot=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" status --porcelain 2>/dev/null || echo "")
 ```
 
 Dispatch dev with file paths only:
@@ -634,7 +634,7 @@ Before `/dev` or `/redev` is complete, run the shared read-only resolver from th
 
 ```bash
 ARTIFACT_CHAIN="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-artifact-chain.py" \
-  --task-id "<TASK_ID>" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}")" || exit 2
+  --task-id "<TASK_ID>" --project-dir "${CLAUDE_PROJECT_DIR:-$PWD}")" || exit 2
 ```
 
 The fixed entrypoint contract is

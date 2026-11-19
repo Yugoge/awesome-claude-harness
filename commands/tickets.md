@@ -14,7 +14,7 @@ Prints the lifecycle table that `scripts/dev-lifecycle.py scan` derives from `do
 1. `--format` in `$ARGUMENTS` is `table` (default) or `json`. Any other token is ignored: there is no task-id.
 2. Run this one call, with `<FORMAT>` the format from step 1:
    ```bash
-   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" scan --format <FORMAT> --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
+   python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" scan --format <FORMAT> --project-dir "${CLAUDE_PROJECT_DIR:-$PWD}"
    ```
 3. Print its stdout verbatim. Do not summarize, filter or re-interpret the rows.
 

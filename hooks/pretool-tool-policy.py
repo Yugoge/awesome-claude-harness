@@ -1953,7 +1953,9 @@ def _protected(path: str, removed: bool, home, config: str, state: str, git_file
 
     if HOOK_OWNED.search(path.replace(os.sep, "/")):
         return "an owner's answer, which only the PostToolUse AskUserQuestion hook writes"
-    if _below(path, os.path.join(os.path.dirname(config), "logs")) in ("lifecycle.jsonl", "lifecycle.jsonl.lock"):
+    from lib.score_log import log_path  # the writer's own definition
+
+    if _below(path, str(log_path().parent)) in ("lifecycle.jsonl", "lifecycle.jsonl.lock"):
         return "the score log or its lock, which only hooks write"
     if _below(path, config) and kept(name):
         return "a session transcript or its subagent meta"

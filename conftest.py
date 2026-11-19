@@ -71,7 +71,7 @@ os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"] = str(_PROTECTED_RUNTIME)
 # module. A test that needs one sets it itself; none is inherited. CLAUDECODE
 # marks a Claude Code process: with CLAUDE_HOME gone, hooks and libraries would
 # then read their settings from the harness home's settings.json (P7b R7).
-for _name in ("CLAUDE_PROJECT_DIR", "PASEO_CONFIG_DIR", "CLAUDE_HOME",
+for _name in ("CLAUDE_PROJECT_DIR", "PASEO_HOME", "CLAUDE_HOME",
               "CODEX_HOME", "CLAUDE_RESTART_ACCOUNTS_ROOT", "CLAUDECODE"):
     os.environ.pop(_name, None)
 

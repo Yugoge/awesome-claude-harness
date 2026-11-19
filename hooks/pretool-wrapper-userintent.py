@@ -107,8 +107,8 @@ try:
 except Exception:  # pragma: no cover - fail-soft when lib missing
     _sp = None
 
-# Directory holding the user-intent sentinels (overridable for sandbox tests).
-_SENTINEL_DIR = os.environ.get('CLAUDE_USERINTENT_SENTINEL_DIR', harness_state_dir())
+# Directory holding the user-intent sentinels: where hooks/prompt-workflow.py writes them.
+_SENTINEL_DIR = harness_state_dir()
 
 _PYTHON_RE = re.compile(r'^(?:python[\d.]*|pypy[\d.]*)$')
 _PY_VALUE_OPTS = 'cmWXQ'

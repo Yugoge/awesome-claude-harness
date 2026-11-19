@@ -282,14 +282,16 @@ def test_the_fallback_file_is_the_printed_one_and_the_default_directory_is_var_t
     assert printed.read_text() == "stub-stdout\nstub-stderr\n"
 
 
-def test_without_a_project_dir_the_git_toplevel_is_the_root(box, tmp_path):
+def test_without_a_project_dir_the_working_directory_is_the_root(box, tmp_path):
+    """R1: a Bash call has no CLAUDE_PROJECT_DIR and its cwd is the session's directory, which is the
+    hooks' project root even below the git top level (a session started in a subdirectory)."""
     repo = tmp_path / "repo"
     (repo / "sub").mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
     env = box.env(CLAUDE_PROJECT_DIR=None, CODEX_OUT_TASK_ID="T", CODEX_OUT_ROLE="r")
     proc = box.run("exec", "p", env=env, cwd=repo / "sub")
     assert proc.returncode == 0, proc.stderr
-    assert Path(keys(proc.stdout)["out"]).resolve() == (repo / "docs" / "codex" / "T" / "r.txt").resolve()
+    assert Path(keys(proc.stdout)["out"]).resolve() == (repo / "sub" / "docs" / "codex" / "T" / "r.txt").resolve()
 
 
 def test_without_a_project_dir_and_no_git_it_falls_back_instead_of_writing_to_the_filesystem_root(box, tmp_path):

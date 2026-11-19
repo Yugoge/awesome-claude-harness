@@ -136,9 +136,10 @@ def test_a_broken_command_file_is_told_to_the_model(tmp_path, repo):
 
 
 def test_a_run_code_timeout_is_told_to_the_model(tmp_path, repo):
-    env = _env(tmp_path, CLAUDE_SESSION_ID="s1", PLAYWRIGHT_RUNCODE_TIMEOUT="30")
+    env = _env(tmp_path, PLAYWRIGHT_RUNCODE_TIMEOUT="30")  # the session is the payload's (S23)
     (tmp_path / "state" / ".runcode-watchdog-s1.pid.timeout").write_text("")
-    p = _run("posttool-runcode-watchdog.py", {"tool_name": "mcp__playwright__browser_run_code"}, env, repo)
+    p = _run("posttool-runcode-watchdog.py", {"tool_name": "mcp__playwright__browser_run_code", "session_id": "s1"},
+             env, repo)
     assert p.returncode == 0 and p.stderr == ""
     assert _context(p.stdout, "PostToolUse") == "browser_run_code was terminated after 30s timeout"
 
