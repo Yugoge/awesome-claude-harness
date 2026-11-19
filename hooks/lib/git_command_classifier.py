@@ -1874,6 +1874,7 @@ def iter_git_invocations(command_text):
     """
     layers = [list(_segment_invocations(text, tagged=True, nested=k > 0))
               for k, text in enumerate(iter_shell_texts(command_text))]
+    seen = collections.Counter()
     for k, layer in enumerate(layers):
         later = collections.Counter(_bare_invocation(inv) for rest in layers[k + 1:] for inv, _q in rest)
         for inv, quoted in layer:
@@ -1881,7 +1882,31 @@ def iter_git_invocations(command_text):
             if quoted and later[key]:
                 later[key] -= 1
                 continue
+            seen[key] += 1
             yield inv
+    # The shared parser's reading of the same text (shell_parse.git_invocations):
+    # the commands a wrapper, a payload option or a shell definition runs
+    # (`env -S`, `su -c`, `find -exec`, `xargs -i`, alias, trap, function) are
+    # split by the one definition of how a command line splits, and an
+    # invocation this scan did not reach is yielded after its own.
+    for inv in _parser_invocations(command_text):
+        key = _bare_invocation(inv)
+        if seen[key]:
+            seen[key] -= 1
+            continue
+        yield inv
+
+
+def _parser_invocations(command_text):
+    """GitInvocation for each git invocation shell_parse.git_invocations reads in command_text
+    that names a subcommand (a git alias whose value is computed reads as git with none)."""
+    try:
+        found = shell_parse.git_invocations(command_text)
+    except Exception:  # never let the second reading cost the first its verdict
+        return []
+    return [GitInvocation(inv.word.raw.text, inv.path_qualified, inv.subcommand,
+                          [a if a is not None else w.raw.text for a, w in zip(inv.args, inv.arg_words)])
+            for inv in found if inv.word is not None and inv.subcommand is not None]
 
 
 def _bare_invocation(inv):
