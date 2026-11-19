@@ -4,10 +4,13 @@
 hooks/pretool-bash-views-guard.py refused a Bash redirect into any `*.lock.json` anywhere
 (`npm ls --json > /tmp/deps.lock.json`), and hooks/pretool-cp-state-write-guard.py refused a
 subagent's write of any `*/specs/*/cp-state-*.json` (a test fixture under tests/fixtures/specs/).
-Both now refuse only a path that lies under a spec root: a `.claude/specs/`, `docs/dev/specs/` or
-`dot-claude/specs/` directory, read from the call's directory (and each `cd` of the command), by
-the path as written and by its real path, so `../`, `./`, absolute spellings and a symlink that
-lands in a spec root are refused as the plain path is.
+Both now refuse only a path that lies under a spec root: a `.claude/specs/` or `docs/dev/specs/`
+directory, or the `specs/` of the harness home wherever it really is (here a directory named
+`dot-claude`, reached as `~/.claude`, as on the author's machine; hooks/lib/locations.py), read
+from the call's directory (and each `cd` of the command), by the path as written and by its real
+path, so `../`, `./`, absolute spellings and a symlink that lands in a spec root are refused as
+the plain path is. A directory that only has that name is no spec root
+(test_locations_relocation.py).
 
 Each case runs the real hook process in a throwaway project, with that project as the call's
 directory, and checks only its exit status (0 allow, 2 refuse).
@@ -27,18 +30,20 @@ CP_STATE = ROOT / "hooks" / "pretool-cp-state-write-guard.py"
 
 
 @pytest.fixture
-def proj(tmp_path):
+def proj(tmp_path, monkeypatch):
     p = tmp_path / "proj"
     for d in (".claude/specs/s1", ".claude/specs/x", "docs/dev/specs/s1/views", "docs/dev/specs/x",
               "dot-claude/specs/x", "tests/fixtures/specs/demo", "home"):
         (p / d).mkdir(parents=True, exist_ok=True)
     (p / "README.md").write_text("readme\n")
+    # the home's Claude directory really is the directory named dot-claude
+    (p / "home" / ".claude").symlink_to(p / "dot-claude")
+    monkeypatch.setenv("HOME", str(p / "home"))
     return p
 
 
 def _run(hook: Path, payload: dict, cwd: Path) -> subprocess.CompletedProcess:
-    env = dict(os.environ)
-    env["HOME"] = str(cwd / "home")
+    env = dict(os.environ)  # HOME is the project's home/, whatever directory the call runs in
     env.pop("CLAUDE_PROJECT_DIR", None)
     payload = dict(payload, cwd=str(cwd), session_id="spec-root-anchoring", hook_event_name="PreToolUse")
     return subprocess.run([sys.executable, str(hook)], input=json.dumps(payload), text=True,
