@@ -390,7 +390,7 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
              f"written but not declared: {listed(map(show, extra))}", "set dev.files_modified and dev.files_created "
              "to exactly: " + "; ".join(f"{key}: {', '.join(sorted(v)) or '[]'}" for key, v in expected.items())]
     lines += ["a file your own Bash produced counts once one of your Bash commands names it (for example "
-              "`ls -l <path>`): name it and keep it listed"] if missing else []
+              "`ls -l <path>`): name it and keep it listed"] if any(map(change, missing)) else []  # else nothing lands
     if unreadable:
         lines.append(f"unreadable, so its files count only once your own Bash names them: {listed(unreadable)}")
     return lines
