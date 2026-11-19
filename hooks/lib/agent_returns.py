@@ -88,7 +88,7 @@ def _final_reply(path) -> dict | None:
     hook record; else None. A stop a hook blocked is followed by the CLI's feedback record and more of
     the agent's turn, so its tail is not this one; nor is the tail of an agent cut mid-turn."""
     last, hooked = None, False
-    turns = _lib("obligation").TURN_RECORD_TYPES
+    turns = _lib("command_span").TURN_RECORD_TYPES
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             for line in handle:

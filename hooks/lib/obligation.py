@@ -76,8 +76,6 @@ except ImportError:  # hooks/lib placed directly on sys.path
 OBLIGATION_VERSION = "1"
 OBLIGATION_OPEN_TOKEN = "<obligation"
 OBLIGATION_CLOSE_TAG = "</obligation>"
-# The transcript record types that are conversation turns (the others: attachments, summaries, meta).
-TURN_RECORD_TYPES = ("user", "assistant")
 
 _HARNESS_DIR = Path(__file__).resolve().parent.parent.parent
 _SCHEMAS_DIR = _HARNESS_DIR / "schemas"
@@ -792,7 +790,7 @@ def _first_line_record(path):
         candidate = json.loads(line.decode("utf-8", "replace"))
     except ValueError:
         return None
-    if isinstance(candidate, dict) and candidate.get("type") in TURN_RECORD_TYPES:
+    if isinstance(candidate, dict) and candidate.get("type") in _lib_module("command_span").TURN_RECORD_TYPES:
         return candidate
     return _READ_ON
 
@@ -826,7 +824,8 @@ def read_first_record_prompt(transcript_path: str | Path) -> str | None:
                         candidate = json.loads(line)
                     except ValueError:
                         return None
-                    if isinstance(candidate, dict) and candidate.get("type") in TURN_RECORD_TYPES:
+                    turns = _lib_module("command_span").TURN_RECORD_TYPES
+                    if isinstance(candidate, dict) and candidate.get("type") in turns:
                         record = candidate
                         break
     except OSError:

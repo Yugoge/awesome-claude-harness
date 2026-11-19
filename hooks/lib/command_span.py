@@ -49,6 +49,9 @@ GATED_COMMANDS, CONTROL_COMMANDS = _command_sets()
 # Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
 # sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
 # compaction's summary (isCompactSummary; no isMeta or origin).
+# The transcript record types that are conversation turns (the others: attachments, summaries,
+# meta, api-request blobs); only they hold a turn's calls and results.
+TURN_RECORD_TYPES = ("user", "assistant")
 _NON_HUMAN_KEYS = ("isMeta", "isSidechain", "sourceToolUseID", "toolUseResult", "isCompactSummary")
 # The origin kinds of a prompt the owner typed. A session driven through the SDK entrypoint (the
 # desktop app, Remote Control: entrypoint "sdk-cli" or "remote") records its typed prompts with
@@ -315,7 +318,7 @@ def _blocks(record: dict | None, sidechain: bool = False):
     results. Any other record holds none, whatever it carries (CLI 2.1.322's api-request-blob repeats
     each message of a model request, its tool_use and tool_result blocks too: a call read twice). A
     subagent's own record (isSidechain) only with ``sidechain``."""
-    if not isinstance(record, dict) or record.get("type") not in ("user", "assistant") \
+    if not isinstance(record, dict) or record.get("type") not in TURN_RECORD_TYPES \
             or (record.get("isSidechain") and not sidechain):
         return ()
     message = record.get("message")
