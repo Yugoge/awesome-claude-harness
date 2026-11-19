@@ -1510,8 +1510,8 @@ def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, tran
 
 
 def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True):
-    """The role's denials on the declaring dispatch's own write: its tool
-    lists, deny prefixes and an unreadable policy, never its allow prefixes."""
+    """The role's denials on the declaring dispatch's own write: its tool lists (and
+    declared_artifact_tools), deny prefixes and an unreadable policy, never its allow prefixes."""
     from lib import policy_registry
 
     if policy_registry.load_policy() is None:
@@ -1519,7 +1519,7 @@ def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True
     role_pol = policy_registry.get_role_policy(role)
     if role_pol.get("_unknown_role"):
         return is_allowed(role, tool, target, carveouts)
-    tool_check = policy_registry._check_tool_lists(role_pol, tool)
+    tool_check = policy_registry._check_tool_lists(role_pol, tool, own=True)
     if tool_check is not None:
         return tool_check
     denial = policy_registry._write_denial(role_pol, target, carveouts)
