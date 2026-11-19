@@ -447,6 +447,11 @@ ITEM_RUNNERS = ("xargs", "parallel")  # run their command once per input item, o
 REEXPAND_OPS = ("P", "E", "A")  # ${x@P} ${x@E} ${x@A}: the value is read again as shell text
 PARALLEL_SEPARATORS = (":::", ":::+", "::::", "::::+")  # GNU parallel: the input sources after the command
 SUBST_OPENERS = ("$(", "<(", ">(")  # open a command or process substitution (so does a lone backquote)
+# The common POSIX-family shells, by the narrow readings that name them (SHELLS is every
+# shell the parser knows), and with `source` and `.` the commands that run a script file
+# operand as shell text in this or a new shell.
+COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
+SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
 # Environment variables whose VALUE is executed by the command that follows
 # them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
 # a fixture-pinned safe row -- but these named vectors are documented command

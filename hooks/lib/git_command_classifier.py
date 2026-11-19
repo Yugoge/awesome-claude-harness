@@ -1966,7 +1966,7 @@ _HIDDEN_CODE_OPTIONS = (
     (re.compile(r'ruby[0-9.]*\Z'), 'e', ()),
     (re.compile(r'node(?:js)?[0-9.]*\Z'), 'ep', ('--eval', '--print')),
 )
-_HIDDEN_SHELLS = frozenset({'bash', 'sh', 'dash', 'zsh', 'ksh', 'source', '.'})
+_HIDDEN_SHELLS = shell_parse.SCRIPT_RUNNERS
 _HIDDEN_SHELL_VALUE_OPTS = frozenset({'-o', '+o', '-O', '+O', '--rcfile', '--init-file'})
 _HIDDEN_SCRIPT_MAX = 256 * 1024
 _HIDDEN_GIT_RE = re.compile(r'(?<![\w.-])git(?![\w.-])')

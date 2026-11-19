@@ -178,7 +178,7 @@ def commit_guard(payload):
     H = HOOKS
     from lib.git_command_classifier import _command_token_index, _git_subcommand
     from lib.claude_home import load_settings
-    from lib.shell_parse import CD_TARGET_BUILTINS
+    from lib.shell_parse import CD_TARGET_BUILTINS, COMMON_SHELLS
     s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py')
     og = iu.module_from_spec(s)
     s.loader.exec_module(og)
@@ -254,7 +254,7 @@ def commit_guard(payload):
         if ' ' in t[i]:
             return scan(' '.join(t[i:]), depth + 1, lg, gc)
         b, c = os.path.basename(t[i]), [j for j in range(i + 1, len(t) - 1) if re.match(r'-[^-]*c', t[j])]
-        if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c:
+        if b in COMMON_SHELLS and c:
             scan(t[c[0] + 1], depth + 1, lg, gc)
         if b in CD_TARGET_BUILTINS:
             cur[0] = at(cur[0], ([a for a in t[i + 1:] if a[:1] != '-'] or ['~'])[0])
@@ -3373,10 +3373,10 @@ def executable_view_or_raw(command):
         return command
 
 
-_HB_NOEXEC_SHELLS = frozenset({"bash", "sh", "dash"})
+_HB_NOEXEC_SHELLS = ("bash", "sh", "dash")
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile(r"(/bin/|/usr/bin/|/usr/local/bin/)?(bash|sh|dash)")
+_HB_SHELL_WORD = re.compile(r"(/bin/|/usr/bin/|/usr/local/bin/)?(%s)" % "|".join(_HB_NOEXEC_SHELLS))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
 # Options an inert noexec shell may carry: none of them runs, echoes or sources anything.
@@ -7325,7 +7325,6 @@ def _sd_reads_back(site, res):
 # into display filters and redirected only to /dev/null or between stdout and stderr. Nothing in it assigns or
 # exports a variable, defines, configures or reads back anything, or writes a file.
 _SD_PLAIN_WRAPPERS = frozenset({"timeout", "nice", "command"})
-_SD_PLAIN_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
 _SD_PLAIN_GIT = frozenset({"status", "diff", "log", "show", "push", "fetch"})
 # git options of those subcommands that run a program or write a file (taken in any abbreviation).
 _SD_PLAIN_GIT_REFUSED = ("--ext-diff", "--textconv", "--receive-pack", "--upload-pack", "--exec")
@@ -7375,7 +7374,7 @@ def _sd_plain_command(cmd):
     command (echo, printf, true, false, :, pwd, cd, ls, git status/diff/log/show/push/fetch), with plain wrappers at
     most, literal words and quiet redirections; or a shell -c or a find -exec whose code is itself plain."""
     from types import SimpleNamespace
-    from lib.shell_parse import Script, resolve
+    from lib.shell_parse import COMMON_SHELLS, Script, resolve
     if cmd.assignments or not cmd.words:
         return False
     try:
@@ -7397,7 +7396,7 @@ def _sd_plain_command(cmd):
     if not literal or not _sd_quiet_redirects(cmd.redirects):
         return False
     vals = [w.value() for w in res.args]
-    if name in _SD_PLAIN_SHELLS:
+    if name in COMMON_SHELLS:
         return len(vals) == 2 and vals[0] == "-c" and isinstance(res.payload, Script) and \
             _sd_plain_script(res.payload)
     if name == "find":
