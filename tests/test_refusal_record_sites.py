@@ -119,7 +119,7 @@ class Scratch:
         self.n += 1
         p = {"session_id": SESSION, "hook_event_name": event, "cwd": str(self.root / "project"),
              "transcript_path": str(self.root / "none.jsonl"), "permission_mode": "default", "stop_hook_active": False}
-        if event in refusal_record.EVENTS[:3]:
+        if event in refusal_record.EVENTS[:3] or event == "PermissionRequest":  # the events that carry a tool call
             tool = matcher.split("|")[0] if re.fullmatch(r"[A-Za-z0-9_|]+", matcher) else "Glob"
             p.update(tool_name=tool, tool_use_id=f"toolu_{self.n:04d}", tool_response={},
                      tool_input=INPUTS.get(tool, {"file_path": str(self.root / "project" / "new.txt"), "content": "x",

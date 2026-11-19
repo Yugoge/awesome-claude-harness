@@ -50,8 +50,9 @@ except ImportError:
         sys.path.pop(0)
 
 REFUSAL, UNPROVEN = "refusal", "unproven"
-# The events at which a hook's exit 2 refuses something: a call before or after it ran, a prompt, a stop.
-EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "SubagentStop")
+# The events at which a hook's exit 2 refuses something: a call before or after it ran, a prompt, a stop, a
+# permission request (denied). The first three are the tool-call events (``same``); new names go at the end.
+EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "SubagentStop", "PermissionRequest")
 KEEP_DAYS, MAX_DAY_BYTES = 90, 16 << 20
 LOCK_WAIT, SAME_CALL, REPORT_WAIT = 2.0, 30, 10   # seconds
 TEXT_MAX = 4000                         # characters of a rule's text handed to the writer

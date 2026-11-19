@@ -525,3 +525,14 @@ def test_the_writers_own_process_ends_itself_where_its_input_never_ends(tmp_path
         held.kill()
         held.stdin.close()
     assert not list(tmp_path.glob(".local/state/claude-harness/*/refusals/*.jsonl"))
+
+
+def test_a_denied_permission_request_is_a_refusal_of_its_call():
+    """A PermissionRequest hook's denial goes through the one writer: the event is one of EVENTS, after the three
+    tool-call events the merge of id-less reports reads by position."""
+    assert R.EVENTS[:3] == ("PreToolUse", "PostToolUse", "PostToolUseFailure") and "PermissionRequest" in R.EVENTS[3:]
+    assert R.write(payload(event="PermissionRequest"), [("hooks/permissionrequest-launch.py", "DENIED: not allowed here")],
+                   "hooks/permissionrequest-launch.py")
+    (line,) = lines()
+    assert (line["event"], line["kind"], line["tool"], line["tool_use_id"]) == ("PermissionRequest", "refusal", "Bash", "toolu_01")
+    assert line["rules"] == [{"hook": "hooks/permissionrequest-launch.py", "id": "denied-not-allowed-here", "by": "hooks/permissionrequest-launch.py"}]
