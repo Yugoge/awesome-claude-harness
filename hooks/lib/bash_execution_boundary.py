@@ -62,9 +62,12 @@ Two failure classes are distinguished so the deny surface stays proportionate:
     assembles a removal.  A parse failure alone is not a removal reference.
   * REMOVAL-SCOPED failures (an unknown option inside a known dispatcher, an
     unknown git subcommand, interpreter code whose removal token cannot be
-    proven inert) are UNRESOLVED only when the command carries removal
-    evidence.  Without such evidence there is nothing for the removal policy
-    to authorize, so the boundary is inert for THIS policy's purposes.
+    proven inert) are UNRESOLVED only when the text that can become that
+    command carries removal evidence; otherwise they are inert for THIS policy.
+
+Every UNRESOLVED boundary carries that text, its scope (Analyzer._scope_text),
+and an UNRESOLVED result lists them as ``unresolved_scopes``: the only text the
+removal policy asks its word list of (owner's rule, 2026-11-19).
 
 Completeness obligation: ``bash_active_syntax_census`` independently
 scans the raw bytes and lists every active-syntax site it can see.  This module
@@ -112,9 +115,7 @@ MAX_BOUNDARIES = 400
 # forbidden), not the authorization mechanism. Widening it widens the deny
 # surface. The one definition of "removal binary" is the census's
 # REMOVAL_BINARIES (the census, an independent backstop, imports nothing from
-# here; this analyzer reads its set): the degraded fallback in
-# hooks/pretool-bash-safety.sh names the same four, so the primary path can
-# never be laxer than the fallback.
+# here; this analyzer reads its set).
 REMOVAL_EXES = frozenset(census_mod.REMOVAL_BINARIES)
 
 # Removal evidence gates the REMOVAL-SCOPED failure class only.
@@ -1793,8 +1794,8 @@ class Analyzer:
     def unreadable_option_word_names_removal(w):
         """The same question for an option word that is not fully literal.
 
-        `cat -X/bin/r? T` is judged by the one predicate, not by whether the
-        raw text carries removal evidence. The word's own option marker is
+        `cat -X/bin/r? T` is judged by the one predicate, not by removal
+        evidence in the text. The word's own option marker is
         stripped by the split search, so the value is what gets recognised.
         """
         raw = _strip_outer_quotes(w.raw.text)
@@ -2079,7 +2080,6 @@ class Analyzer:
     def walk(self, toks, env):
         cur = []
         piped = False
-        next_piped = False
         # Inside `[[ ... ]]` (cond_depth is not None) the shell reads a
         # conditional expression, not commands: `&&`, `||`, `!`, `(` and `)` are
         # its operators and a line break between its terms is blank, so none of
@@ -2107,7 +2107,7 @@ class Analyzer:
                     cond_depth = None
                 self.flush(cur, env, piped)
                 cur = []
-                piped = next_piped = (op in PIPE_OPS)
+                piped = op in PIPE_OPS
                 continue
             if tok[0] == "W":
                 if cond_depth is None:
@@ -2602,7 +2602,7 @@ class Analyzer:
 
     # -- generic prefix wrapper ---------------------------------------------
 
-    def _prefix_wrapper(self, base, args, spec, nops, env, allow_assignments=False, redirs=()):
+    def _prefix_wrapper(self, base, args, spec, nops, env, redirs=()):
         i, err = split_opts(args, spec)
         if err == "missing_option_value":
             self.structural("missing_option_value", base)
@@ -2610,7 +2610,7 @@ class Analyzer:
         if err:
             self.scoped(err, base)
             return
-        if base == "env" or allow_assignments:
+        if base == "env":
             while i < len(args):
                 lit = args[i].literal()
                 if lit is not None and _ENVVAR_RE.match(lit):
@@ -3302,7 +3302,7 @@ class Analyzer:
     def _dynamic_interpreter_code(self, base, code):
         """An inline program whose word holds an expansion.
 
-        The scoped check alone refuses only when the raw command carries an
+        The scoped check alone refuses only when the command's scope carries an
         rm/unlink/shred/srm word, so it would judge `python3 -c
         "shutil.rmtree('$HOME/x')"` inert while refusing its literal-path form.
         The fixed text is therefore classified by the SAME classifier as the

@@ -81,32 +81,6 @@
    ]
   },
   {
-   "id": "docker-management-nouns",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "DOCKER_RESOURCE_NOUNS is every docker management noun the execution boundary skips before the verb; the two bash_safety_rules sets are the nouns whose subcommands the docker rule and the docker read rule judge.",
-   "sides": [
-    [
-     {
-      "name": "<module>.DOCKER_RESOURCE_NOUNS",
-      "fingerprint": "3fdd605760229119",
-      "at": "hooks/lib/bash_execution_boundary.py:835"
-     }
-    ],
-    [
-     {
-      "name": "_dg_docker:in",
-      "fingerprint": "d1b3c477d238237f",
-      "at": "hooks/lib/bash_safety_rules.py:5375"
-     },
-     {
-      "name": "_dg_docker_read:in",
-      "fingerprint": "d1b3c477d238237f",
-      "at": "hooks/lib/bash_safety_rules.py:5401"
-     }
-    ]
-   ]
-  },
-  {
    "id": "dot-dotdot",
    "source": "audit f199dfb1e families.json, different-questions",
    "reason": "15 identical {., ..}; the variants add '' (an empty component) or .git for their own tests.",
@@ -629,9 +603,9 @@
     ],
     [
      {
-      "name": "_CdScopes.run_cmd:in",
+      "name": "CdScopes.run_cmd:in",
       "fingerprint": "7dc2fd8f59c75fa4",
-      "at": "hooks/pretool-claude-config-guard.py:650"
+      "at": "hooks/lib/shell_parse.py:3642"
      }
     ]
    ]
@@ -660,48 +634,6 @@
       "name": "<module>._HARNESS_STATE_DIR_PREFIXES",
       "fingerprint": "034475696d29ca7c",
       "at": "hooks/pretool-overnight-hook-guard.py:93"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "help-version-options",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "Each table is one program's help/version spellings.",
-   "sides": [
-    [
-     {
-      "name": "<module>._DG_INFO",
-      "fingerprint": "c37ea0c39d0c8fea",
-      "at": "hooks/lib/bash_safety_rules.py:4675"
-     }
-    ],
-    [
-     {
-      "name": "_dg_pip:in",
-      "fingerprint": "b1dc5c76c1ef0ace",
-      "at": "hooks/lib/bash_safety_rules.py:5390"
-     }
-    ],
-    [
-     {
-      "name": "_is_meta_query.meta",
-      "fingerprint": "0d5901cd44fdfa5c",
-      "at": "hooks/lib/runtime_guard/_core.py:1772"
-     }
-    ],
-    [
-     {
-      "name": "_dg_docker:in",
-      "fingerprint": "c6f2f24236755b6e",
-      "at": "hooks/lib/bash_safety_rules.py:5372"
-     }
-    ],
-    [
-     {
-      "name": "_dg_python:in",
-      "fingerprint": "ac7608f04b8acf5c",
-      "at": "hooks/lib/bash_safety_rules.py:5411"
      }
     ]
    ]
@@ -1769,8 +1701,8 @@
     [
      {
       "name": "<module>.NAME_ROOT_VARS",
-      "fingerprint": "f8bf01d10db2e7c4",
-      "at": "hooks/lib/harness_temp_state.py:64"
+      "fingerprint": "5f774f889c0115fe",
+      "at": "hooks/lib/harness_temp_state.py:67"
      }
     ]
    ]
@@ -1953,20 +1885,20 @@
   {
    "id": "ruled-out-06-ancestor-stop-roots",
    "source": "audit f199dfb1e families.json, ruled_out_lookalikes",
-   "reason": "share /boot /dev /etc /proc /run /sys; one is where the walk up from the runtime-guard data file stops, the other the directories a plain-command write must not name",
+   "reason": "share /boot /dev /etc /proc /run /sys; locations.SYSTEM_ROOTS is where the runtime guard's walk up from its data file stops (runtime_guard/config._ANCESTOR_STOP_ROOTS reads it), locations.UNSAFE_DIRS the system directories no ordinary project file is in",
    "sides": [
     [
      {
-      "name": "<module>._ANCESTOR_STOP_ROOTS",
+      "name": "<module>.SYSTEM_ROOTS",
       "fingerprint": "1a73a8d86b85f87e",
-      "at": "hooks/lib/runtime_guard/config.py:175"
+      "at": "hooks/lib/locations.py:46"
      }
     ],
     [
      {
-      "name": "<module>._PLAIN_UNSAFE_DIRS",
+      "name": "<module>.UNSAFE_DIRS",
       "fingerprint": "d103402a9bf111f5",
-      "at": "hooks/lib/bash_safety_rules.py:4190"
+      "at": "hooks/lib/locations.py:45"
      }
     ]
    ]
@@ -2217,27 +2149,6 @@
    ]
   },
   {
-   "id": "ruled-out-16-hooks-lib-bash-read-only-py-331",
-   "source": "audit f199dfb1e families.json, ruled_out_lookalikes",
-   "reason": "share list, show; git stash/worktree read forms vs pip read subcommands",
-   "sides": [
-    [
-     {
-      "name": "_git_sub:in",
-      "fingerprint": "9b0571585ec01a7a",
-      "at": "hooks/lib/bash_read_only.py:331"
-     }
-    ],
-    [
-     {
-      "name": "_dg_pip:in",
-      "fingerprint": "63635c60bbf2ea2d",
-      "at": "hooks/lib/bash_safety_rules.py:5392"
-     }
-    ]
-   ]
-  },
-  {
    "id": "ruled-out-17-lists",
    "source": "audit f199dfb1e families.json, ruled_out_lookalikes",
    "reason": "expected_fields of four different signed records; BINDING_FIELDS and WORKFLOW_IDENTITY_FIELDS of two records",
@@ -2456,7 +2367,7 @@
      {
       "name": "<module>.SKIP_FILES",
       "fingerprint": "f94d8ec4d2a7cbda",
-      "at": "hooks/doc_sync/tree.py:22"
+      "at": "hooks/doc_sync/config.py:32"
      }
     ]
    ]
@@ -2630,27 +2541,6 @@
    ]
   },
   {
-   "id": "shell-set-options",
-   "source": "defs-shell lane, audit f199dfb1e family shell-set-options (undecided)",
-   "reason": "bash_safety_rules._HB_INERT_SET lists the -o values a shell invocation (bash -o X -c ...) may carry and stay readable, noexec and posix included because that reader follows noexec and needs no later word read differently; the degraded set reader's value_ok list (_DG_SET_OPTS) accepts on a later `set -o` only the four that change nothing a later word means, so noexec (later commands not run) and posix (parsing changes) are out.",
-   "sides": [
-    [
-     {
-      "name": "<module>._HB_INERT_SET",
-      "fingerprint": "a5e37477665a6369",
-      "at": "hooks/lib/bash_safety_rules.py:3385"
-     }
-    ],
-    [
-     {
-      "name": "<module>:in",
-      "fingerprint": "677de015dea86fa5",
-      "at": "hooks/lib/bash_safety_rules.py:5243"
-     }
-    ]
-   ]
-  },
-  {
    "id": "shell-long-bool-options",
    "source": "defs-shell lane, audit f199dfb1e family shell-long-bool-options (undecided)",
    "reason": "bash_execution_boundary.SHELL_LONG_BOOL is bash's long options that take no value (for splitting a shell's options); bash_safety_rules._HB_SHELL_LONG the long options the harmless-bash reader can read at all (others make the reading None); _HB_INERT_LONG the subset that leaves the run inert (not --login, which reads profile files, nor --verbose, which echoes the script). Three questions; bash --help decides only the first.",
@@ -2716,27 +2606,6 @@
       "name": "Analyzer._docker_sub:in",
       "fingerprint": "e453c14c53c6458b",
       "at": "hooks/lib/bash_execution_boundary.py:3463"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "container-launchers",
-   "source": "defs-shell lane, audit f199dfb1e family container-launchers (undecided)",
-   "reason": "git_command_classifier._EXEC_LAUNCHERS names the container launchers whose exec/run arguments may run git (docker, podman, kubectl); bash_safety_rules._DG_READ_HANDLERS names the commands the degraded reader has its own subcommand handler for (git, docker, kubectl, find, hash, ssh). A launcher set and a dispatch table.",
-   "sides": [
-    [
-     {
-      "name": "<module>._EXEC_LAUNCHERS",
-      "fingerprint": "bb35e013ddb182ab",
-      "at": "hooks/lib/git_command_classifier.py:1041"
-     }
-    ],
-    [
-     {
-      "name": "<module>._DG_READ_HANDLERS",
-      "fingerprint": "f2262a747587f24d",
-      "at": "hooks/lib/bash_safety_rules.py:4686"
      }
     ]
    ]

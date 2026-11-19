@@ -118,8 +118,6 @@ EXIT_CRASH = 9
 
 MODEL_LADDER = ["fable 5", "opus 5", "sonnet 5"]
 TASK_CLASS_BASE_MODEL = {"fast": "sonnet 5", "general": "opus 5", "quality": "fable 5"}
-ACCOUNT_STATES = ["unknown", "eligible", "suspect", "blocked_until", "probation"]
-ERROR_CLASSES = ["hard_usage_limit", "transient", "auth", "model", "unknown"]
 ERROR_CLASS_ACTION = {
     "hard_usage_limit": "account_blocked_until",
     "transient": "retry_backoff_in_place",
