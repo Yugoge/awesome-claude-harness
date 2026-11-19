@@ -1229,8 +1229,10 @@ _SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve
                               "-H", "--set-home"})
 """sudo's options that keep its command as named: -s/--shell and -i/--login run it through `$SHELL -c`, and any
 other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
-_SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
-"""A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
+_SD_HEAD_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
+"""The directories a plain program is written with: the one list each rule that trusts a command word reads."""
+_SHAPE_HEAD_RE = re.compile(r"[^/]+|(?:%s)/[^/]+" % "|".join(_SD_HEAD_DIRS))
+"""A command word: a bare name found on PATH, or exactly <one of _SD_HEAD_DIRS>/<name>."""
 _SHAPE_DIR_CHANGE = frozenset({"cd", "pushd", "popd"})
 _GIT_DIR_OPTS = ("-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--attr-source", "--exec-path",
                  "--config-env")
@@ -3372,7 +3374,7 @@ def executable_view_or_raw(command):
 _HB_NOEXEC_SHELLS = frozenset({"bash", "sh", "dash"})
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile(r"(/bin/|/usr/bin/|/usr/local/bin/)?(bash|sh|dash)")
+_HB_SHELL_WORD = re.compile(r"((?:%s)/)?(bash|sh|dash)" % "|".join(_SD_HEAD_DIRS))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
 # Options an inert noexec shell may carry: none of them runs, echoes or sources anything.
@@ -6395,7 +6397,6 @@ _SD_DECODE = (
     (re.compile(r"\\0?([0-7]{1,3})"), 8),
 )
 _SD_DROP = re.compile(r"""['"\\$+`\s]""")
-_SD_HEAD_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
 # What can change which program a search or commit call runs, or what it reads: a shell function of that name
 # (read with quotes, blanks and escapes gone), a command that defines one or an alias or rehashes a path, and a
 # variable that moves the program, its options or its config.
@@ -6617,6 +6618,8 @@ def _sd_git(args):
             j += 1
         return allowed, False
     if sub == "commit":
+        from lib.shell_parse import _STDIN_FILES  # -, /dev/stdin, /dev/fd/0, /proc/self/fd/0: the one list
+
         allowed, stdin, j = set(), False, 0
         while j < len(rest):
             a = rest[j]
@@ -6629,7 +6632,7 @@ def _sd_git(args):
                     value = val if eq else (rest[j + 1] if j + 1 < len(rest) else None)
                     if name == "--message":
                         allowed.add(base + value_at)
-                    if name == "--file" and value in ("-", "/dev/stdin"):
+                    if name == "--file" and value in _STDIN_FILES:
                         stdin = True
                     j += 1 if eq else 2
                     continue
@@ -6645,7 +6648,7 @@ def _sd_git(args):
                     value = a[c_at + 1:] if attached else (rest[j + 1] if j + 1 < len(rest) else None)
                     if c == "m":
                         allowed.add(base + (j if attached else j + 1))
-                    if c == "F" and value in ("-", "/dev/stdin"):
+                    if c == "F" and value in _STDIN_FILES:
                         stdin = True
                     if not attached:
                         j += 1

@@ -409,7 +409,7 @@ def _body_mentions_protected_branch(body: str) -> bool:
 def _is_path_exempt(file_path: str) -> bool:
     """Check if path is exempt from overnight worktree restrictions (/tmp, /dev/null)."""
     abs_path = os.path.realpath(os.path.abspath(file_path))
-    if abs_path == "/dev/null":
+    if abs_path == "/dev/null" or sp.is_sink_device(os.path.abspath(file_path)):  # by name: /dev/stderr is a link
         return True
     state_root = harness_state_dir()
     return (abs_path.startswith("/tmp/") or abs_path == "/tmp"

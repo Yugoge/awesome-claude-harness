@@ -2813,6 +2813,13 @@ def _resolve_shell(r, head, words, cmd, depth):
 
 
 _STDIN_FILES = ("/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "-")
+SINK_DEVICES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty")
+
+
+def is_sink_device(path):
+    """True for a write target that is no file: the null device, the writer's own streams or
+    terminal, or a descriptor it already holds (/dev/fd/N). One answer for each guard that asks."""
+    return path in SINK_DEVICES or (path.startswith("/dev/fd/") and path[8:].isdigit())
 
 
 def _script_operand(r, w, cmd, depth):
