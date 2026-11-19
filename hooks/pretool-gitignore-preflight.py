@@ -662,7 +662,7 @@ def is_contract_deliverable(path, src_task_id, repo_root=None, project_dir=None)
         if not task:
             continue
         try:
-            owner = obligation.declaring_dispatch(task, path, project)
+            owner = obligation.declaring_dispatch(task, path, project, writer=False)  # a writer is no declaration
         except Exception:
             owner = None
         if owner and owner.get('source') != 'writer':
@@ -900,7 +900,8 @@ def main():
         sys.exit(0)
 
     tool_input = data.get('tool_input') or data.get('toolInput') or {}
-    findings = gitignored_deliverables(tool_input.get('prompt', ''))
+    with obligation.transcript_scan():  # each transcript read once for every path, not once per path
+        findings = gitignored_deliverables(tool_input.get('prompt', ''))
     # E7: a dispatch whose agent type has no write tool ships no deliverable.
     if findings and not agent_can_write(tool_input.get('subagent_type')):
         sys.exit(0)

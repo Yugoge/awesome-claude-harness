@@ -29,7 +29,8 @@ LEDGER = "/tmp/state/report-provenance/x.json"
 
 @pytest.fixture()
 def world(tmp_path):
-    return tt.World(tmp_path)
+    with tt.base.project_outside_temp() as project:
+        yield tt.World(tmp_path, project)
 
 
 READS = {
