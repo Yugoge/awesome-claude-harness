@@ -152,6 +152,7 @@ from lib.git_command_classifier import (  # noqa: E402
 # hooks/pretool-commit-dispatch-attest.py. See _grant_provenance_refusal.
 from lib import commit_pipeline  # noqa: E402
 from lib import shell_parse  # noqa: E402
+from lib import git_facts  # noqa: E402
 # The per-event pointer a spent grant hands to the PostToolUse finalizer, which
 # appends the commit-event journal entry from it.
 from lib import commit_journal  # noqa: E402
@@ -536,10 +537,9 @@ def _push_forces_or_deletes(args):
     return False
 
 
-# Commit options whose value is the next word when it is not attached.
-_COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fixup', '--squash',
-                      '--reuse-message', '--reedit-message', '--template', '--trailer',
-                      '--pathspec-from-file'}
+# Commit options whose value is the next word when it is not attached, but the message options
+# (-m/--message, -F/--file), which the walks below read on their own.
+_COMMIT_VALUE_OPTS = (git_facts.GIT_COMMIT_VALUE_OPTIONS - {'--message', '--file'}) | {'-C', '-c', '-t'}
 
 
 # ---------------------------------------------------------------------------

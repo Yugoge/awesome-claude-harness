@@ -69,3 +69,10 @@ GIT_RUN_OR_WRITE_OPTIONS = GIT_ARGV_RUN_OR_WRITE_OPTIONS | {
 # `git remote` flags that keep it a read: -v/--verbose (list with URLs), -n (`show` without asking the
 # remote), --push and --all (`get-url`). Where a form does not take one, git refuses it and runs nothing.
 GIT_REMOTE_READ_FLAGS = frozenset({"-v", "--verbose", "-n", "--push", "--all"})
+
+# `git commit`'s long options that take a value (the next word, or after `=`); the short ones are
+# -m -F -C -c -t (and -S, -u, whose value can only be attached).
+GIT_COMMIT_VALUE_OPTIONS = frozenset({
+    "--message", "--file", "--reuse-message", "--reedit-message", "--template", "--author", "--date",
+    "--cleanup", "--fixup", "--squash", "--trailer", "--pathspec-from-file",
+})

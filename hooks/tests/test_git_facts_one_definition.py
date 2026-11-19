@@ -289,3 +289,17 @@ def test_git_rm_options_one_definition():
     from lib import bash_execution_boundary as beb
     longs = {o for o in beb.GIT_RM["bool"] | beb.GIT_RM["val"] if o.startswith("--")}
     assert longs == set(sp.GIT_LONG_OPTIONS["rm"])
+
+
+def test_git_commit_value_options_one_definition():
+    """git-commit-value-options (undecided: three tables differing on --message, --file, -C, -c, -t). One
+    question, which commit options take the next word: the session_dirs rule holds the long ones, the
+    privilege guard the same less the message options (its walks read those apart) plus the short -C -c
+    -t, and the commit guard the long ones without dashes (it lacked --cleanup, --fixup, --squash and
+    --pathspec-from-file)."""
+    from lib import bash_safety_rules as bsr, git_facts
+    gp = _load("pretool-git-privilege-guard.py")
+    longs = git_facts.GIT_COMMIT_VALUE_OPTIONS
+    assert bsr._SD_COMMIT_LONG_VALUES == longs
+    assert gp._COMMIT_VALUE_OPTS == (longs - {"--message", "--file"}) | {"-C", "-c", "-t"}
+    assert longs <= set(sp.GIT_LONG_OPTIONS["commit"])

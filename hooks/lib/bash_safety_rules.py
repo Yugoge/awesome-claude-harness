@@ -192,7 +192,7 @@ def commit_guard(payload):
     cur = [d.get('cwd') or os.getcwd()]
     dirs = cur[:]
     commits, why, cfg, loc, ex = [], [], [], [], {}
-    LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer')
+    LONGV = tuple(o[2:] for o in sorted(git_facts.GIT_COMMIT_VALUE_OPTIONS))
     GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
     CFGW, CFGR = git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS, git_facts.GIT_CONFIG_READ_SUBCOMMANDS
     WRF, RDF = git_facts.GIT_CONFIG_WRITE_OPTIONS, git_facts.GIT_CONFIG_READ_OPTIONS
@@ -6500,8 +6500,7 @@ _SD_LOG_SHORT_ATTACHED = "nUMCBlIO"  # a short option whose value may follow it 
 _SD_COMMIT_SHORT_VALUES = "mFCct"
 _SD_COMMIT_SHORT_OPTIONAL = "Su"
 _SD_COMMIT_SHORT_FLAGS = "aqvsneiopz"
-_SD_COMMIT_LONG_VALUES = {"--message", "--file", "--reuse-message", "--reedit-message", "--template", "--author",
-                          "--date", "--cleanup", "--fixup", "--squash", "--trailer", "--pathspec-from-file"}
+_SD_COMMIT_LONG_VALUES = git_facts.GIT_COMMIT_VALUE_OPTIONS
 _SD_COMMIT_LONG_FLAGS = {"--all", "--patch", "--quiet", "--verbose", "--signoff", "--no-signoff", "--no-verify",
                          "--verify", "--amend", "--no-edit", "--edit", "--allow-empty", "--allow-empty-message",
                          "--dry-run", "--short", "--branch", "--porcelain", "--long", "--null", "--include", "--only",
