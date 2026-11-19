@@ -142,3 +142,71 @@ def test_a_signal_sent_to_a_process_is_still_refused_in_each_position(sandbox, c
 def test_a_monitors_real_kill_is_still_refused(sandbox):
     r = bash_safety(sandbox, "until ! kill -9 4242 2>/dev/null; do sleep 5; done; echo gone", description="stop it")
     assert r.returncode == 2 and KILL_SIG in r.stderr, r.stderr
+
+
+# ── A read of a settings file is no change to it ─────────────────────────────
+# 3 recorded refusals: `command grep` and `git check-ignore` naming a Claude Code settings file. The rule judges a
+# command at its command word as hooks/lib/shell_parse.py resolves it, and a git command by
+# hooks/lib/bash_read_only.py's proof that it only reads.
+@pytest.fixture()
+def project(tmp_path):
+    proj = tmp_path / "proj"
+    (proj / ".claude").mkdir(parents=True)
+    (proj / ".claude" / "settings.json").write_text('{"env": {"A": "1"}, "permissions": {"deny": ["Bash(rm:*)"]}}')
+    (proj / ".claude.json").write_text('{"env": {"A": "1"}}')
+    return proj
+
+
+def switch_guard(sandbox, project, command):
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "misread-refusals",
+               "cwd": str(project), "hook_event_name": "PreToolUse"}
+    env = dict(sandbox["env"], CLAUDE_PROJECT_DIR=str(project))
+    return subprocess.run(["python3", str(HOOKS / "pretool-harness-switch-guard.py")], input=json.dumps(payload),
+                          capture_output=True, text=True, env=env, cwd=str(project), timeout=120)
+
+
+SETTINGS_READS = [
+    "echo '--- mentions'; command grep -c 'model-x' /srv/other/.claude.json {P}/.claude.json",
+    "P='qa-scratch|baseline'; command grep -oE '\"/[^\"]*('\"$P\"')[^\"]*\"' {P}/.claude.json "
+    "/srv/accounts/*/.claude.json 2>/dev/null | sort -u | head",
+    'cd {P}; grep -n "research" .claude/settings.json | cut -c1-200 | head -40; '
+    "git check-ignore -v .claude/settings.json; git ls-files .claude/settings.json .claude/settings.local.json",
+    "timeout 20 cat .claude/settings.json",
+    "git -C {P} diff -- .claude/settings.json",
+]
+
+
+@pytest.mark.parametrize("command", SETTINGS_READS)
+def test_a_search_or_print_of_a_settings_file_passes(sandbox, project, command):
+    r = switch_guard(sandbox, project, command.replace("{P}", str(project)))
+    assert r.returncode == 0, (command, r.stderr)
+
+
+SETTINGS_WRITES = [
+    "command tee .claude/settings.json < /dev/null",
+    "command cp /srv/other/settings.json .claude/settings.json",
+    "command sed -i 's/on/off/' .claude/settings.json",
+    "timeout 20 rm .claude/settings.json",
+    "command grep -c x notes.md > .claude/settings.json",
+    "time -o .claude/settings.json cat notes.md",            # the wrapper's own operand is the file written
+    "git check-ignore -v notes.md > .claude/settings.json",
+    "git checkout -- .claude/settings.json",
+    "git -C {P} checkout HEAD -- .claude/settings.json",
+    "git config --file .claude/settings.json core.x y",
+    "command grep -c x notes.md > {P}/.claude.json",
+]
+
+
+@pytest.mark.parametrize("command", SETTINGS_WRITES)
+def test_a_write_of_a_settings_file_is_still_refused_behind_the_same_words(sandbox, project, command):
+    r = switch_guard(sandbox, project, command.replace("{P}", str(project)))
+    assert r.returncode == 2 and "harness-switch:" in r.stderr and "Claude Code settings file" in r.stderr, \
+        (command, r.stderr)
+
+
+@pytest.mark.parametrize("command", ["command touch {H}/.harness-switch/off", "echo x > {H}/.harness-switch/off",
+                                     "timeout 5 rm -rf {H}/.harness-switch"])
+def test_a_write_of_the_switch_state_is_still_refused(sandbox, project, command):
+    r = switch_guard(sandbox, project, command.replace("{H}", str(REPO)))
+    assert r.returncode == 2 and "harness-switch:" in r.stderr and "switch's state" in r.stderr, (command, r.stderr)
+
