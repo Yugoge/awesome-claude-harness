@@ -53,8 +53,9 @@ all, so there they prompted a person for calls the hooks already decide. They ar
 above stays as history, checked against `_then()`: today's allow and deny (unchanged) with the ask list of
 tests/fixtures/permissions-ask-until-20261119.json. The "now" tests check the shipped settings: the read-only
 commands still run; a command no allow entry covers still does not run unasked, and in default mode the
-PermissionRequest hook refuses it; the guarded forms (NOW_UNGUARDED) are let through by the allow entries in
-default mode and decided by the PreToolUse hooks alone, as every call is in bypassPermissions mode.
+PermissionRequest hook refuses it; of the guarded forms the allow entries now let through in default mode, the
+Bash rules refuse an option that makes a read run a program or write a file (NOW_REFUSED), the git privilege
+guard the pushes and resets, and NOW_UNDECIDED pins the rest with the reason no rule decides them.
 """
 from __future__ import annotations
 
@@ -65,7 +66,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_permission_ask_dry_run import OLD_ASK
+from tests.test_permission_ask_dry_run import OLD_ASK, _bash_rules_refuse
 from tests.test_no_permission_prompt import _payload, _run
 
 REPO = Path(__file__).resolve().parent.parent
@@ -429,8 +430,30 @@ def test_every_example_is_measured():
 # ------------------------------------------------------------------ now (no ask rule)
 # No allow entry covers these two (`make -n:*` needs `-n` as its own word): still no run unasked.
 NOW_UNCOVERED = ["make -nE'all: ; +touch X'", "make -nf /dev/stdin"]
-NOW_UNGUARDED = sorted((set(ASK_GUARDED) | {c for c, v in GLOB_ATTACKS.items() if v[2] == "ask"}
-                        | set(ANCHORED_STILL_ASK)) - set(NOW_UNCOVERED))
+# The allow entries pass these in default mode now; the Bash rules refuse them (lib/bash_safety_rules.py
+# _read_made_to_run: an option that makes a read run a program or write a file).
+NOW_REFUSED = ["git -C x --exec-path=/e status", "git -C x -c core.pager=sh log", "git -C x diff --output=/tmp/f",
+               "git -C x log --output=/tmp/f", "rg --files --hostname-bin ./e", "rg --files --hostname-bin=./e src",
+               "rg --files --hostname-bin=sh"]
+# ... and hooks/pretool-git-privilege-guard.py these.
+NOW_REFUSED_BY_GIT_GUARD = ["git -C x push --force origin log", "git -C x push origin show",
+                            "git -C x reset --hard status", "git -C x\tpush\t--force\torigin\tlog"]
+# Not decided by any rule, pinned with the reason:
+NOW_UNDECIDED = {
+    # no definition of make's options that evaluate code (--eval, -E, a makefile read with -f, V:=$(shell)) exists
+    **{c: "make" for c in ("echo 'all: ; +touch X' | make -n -f -", "make -n --ev='all: ; +touch X'",
+                           'make -n --eval "all: ; +touch p"', "make -n --eval 'all: ; +touch X'",
+                           "make -n --file=/dev/stdin", "make -n --makefile=x", "make -n -E 'all: ; +touch X'",
+                           "make -n -f -", "make -n -f /dev/null 'V:=$(shell touch X)'",
+                           "make -n -f /dev/null --eval='$(shell touch X)'", "make -n -f x.mk")},
+    # a glob may expand into an option; the text cannot say into which, and refusing every glob refuses `rg --files *`
+    **{c: "glob" for c in ("git -C -* log", "git -C ?? log", "git -C [-]* status", "git -C [ap]* log --force main",
+                           "git -C src log *", "git -C x log --outpu?=f", "git -C x* log", "make -n *", "make -n ?",
+                           "make -n x*", "rg --files *", "rg --files --hostname-b?n=sh", "rg --files -g '*.py' src",
+                           "rg --files ?", "rg --files [-]*", "rg --files x*")},
+    'git -C "a b" log': "a directory with a space: an ordinary read",
+    "git -C x checkout -- . diff": "as `git checkout -- .` written plainly, which no rule refuses",
+}
 
 
 @pytest.mark.parametrize("cmd", MUST_PASS + ALSO_PASS)
@@ -445,9 +468,25 @@ def test_now_an_uncovered_command_is_refused_in_default_mode(cmd):
     assert _run(_payload("Bash", {"command": cmd}, mode="default"))["behavior"] == "deny"
 
 
-@pytest.mark.parametrize("cmd", NOW_UNGUARDED)
-def test_now_the_guarded_forms_are_left_to_the_hooks(cmd):
-    """Pinned: with the guard asks gone, the allow entries pass these in default mode; the PreToolUse hooks
-    decide them (git pushes and resets: hooks/pretool-git-privilege-guard.py), as in bypassPermissions mode."""
-    assert decide(_now(), cmd) == "allow"
-    assert decide(_perms(), cmd) == "ask"
+def test_now_every_formerly_guarded_form_is_accounted_for():
+    guarded = set(ASK_GUARDED) | {c for c, v in GLOB_ATTACKS.items() if v[2] == "ask"} | set(ANCHORED_STILL_ASK)
+    assert guarded == set(NOW_UNCOVERED) | set(NOW_REFUSED) | set(NOW_REFUSED_BY_GIT_GUARD) | set(NOW_UNDECIDED)
+
+
+@pytest.mark.parametrize("cmd", NOW_REFUSED)
+def test_now_a_read_made_to_run_a_program_is_refused(cmd):
+    assert decide(_now(), cmd) == "allow" and decide(_perms(), cmd) == "ask"
+    assert "makes it run a program or write a file" in _bash_rules_refuse(cmd)
+
+
+@pytest.mark.parametrize("cmd", ["git -C x log", "git -C x log --oneline -3", "git -C x -c core.pager=less log",
+                                 "rg --files x", "rg -z foo f.gz", "make -n target", "git log -p",
+                                 "git -c user.name=x commit -m y"])
+def test_now_the_ordinary_forms_run(cmd):
+    assert _bash_rules_refuse(cmd) == ""
+
+
+@pytest.mark.parametrize("cmd", sorted(NOW_UNDECIDED))
+def test_now_the_undecided_forms_are_pinned(cmd):
+    """Pinned so a rule that closes one shows up here (move it to NOW_REFUSED then)."""
+    assert decide(_now(), cmd) == "allow" and _bash_rules_refuse(cmd) == ""

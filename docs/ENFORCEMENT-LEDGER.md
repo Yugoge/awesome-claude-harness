@@ -484,8 +484,12 @@ no per-rule budget exists.
   entries, so there the asks only made a person approve calls the PreToolUse hooks decide. In default mode the
   allow entries now pass the guarded forms (`git -C x push --force origin log`, `git -C x -c core.pager=sh log`,
   `rg --files --hostname-bin ./e`, `make -n --eval ...`) to the hooks alone: git pushes and resets are
-  `hooks/pretool-git-privilege-guard.py`'s, and the Bash rules do not refuse the rg and make forms (measured:
-  `tests/test_permission_readonly_allow.py` NOW_UNGUARDED). A command no allow entry covers is refused in default
+  `hooks/pretool-git-privilege-guard.py`'s; the Bash rules (`lib/bash_safety_rules.py` `_read_made_to_run`) refuse a
+  git read given `-c`/`--config-env` with a key whose value git runs (`git_facts.GIT_RUN_CONFIG_KEY_RE`, a plain
+  pager aside), `--exec-path=` or an option of `GIT_RUN_OR_WRITE_OPTIONS`, and rg given `--pre` or
+  `--hostname-bin` (`shell_parse.RG_PROGRAM_OPTS`). Not decided by any rule: make's evaluating options (`--eval`,
+  `-E`, `-f`, `V:=$(shell ...)`), for which no definition exists, and a glob that may expand into an option
+  (`tests/test_permission_readonly_allow.py` NOW_UNDECIDED). A command no allow entry covers is refused in default
   mode by the PermissionRequest hook. The text below is the design until then, kept as history. OB-L07:
   `settings.json @263d9c7a` `permissions.allow` lets these read-only commands run
   without a prompt: `gh pr view|list|diff|checks`, `gh run view`, `gh issue view` (`Bash(<verb>:*)`),

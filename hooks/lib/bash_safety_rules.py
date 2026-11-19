@@ -3733,6 +3733,32 @@ def _dry_run_only(name, args):
     return None
 
 
+def _read_made_to_run(name, args):
+    """A read that one of its words makes run a program or write a file: the option, else None. rg with an option
+    whose value is a program (shell_parse.RG_PROGRAM_OPTS); a git read subcommand (git_facts.GIT_READ_SUBCOMMANDS)
+    with `-c`/`--config-env` naming a key whose value git runs (GIT_RUN_CONFIG_KEY_RE; a pager key set to a plain
+    pager, bash_read_only.PLAIN_PAGERS, only shows), `--exec-path=`, or an option of GIT_RUN_OR_WRITE_OPTIONS."""
+    from lib.bash_read_only import PLAIN_PAGERS, _long_hits
+    from lib.shell_parse import RG_PROGRAM_OPTS, git_global_options
+    if name == "rg":
+        return next((a for a in args if a is not None and _long_hits(a, RG_PROGRAM_OPTS)), None)
+    if name != "git":
+        return None
+    opts, sub = git_global_options(args)
+    if sub is None or args[sub] not in git_facts.GIT_READ_SUBCOMMANDS:
+        return None
+    for i, v in opts:
+        if args[i] in ("-c", "--config-env"):
+            key, _eq, value = (args[v] if v is not None and args[v] is not None else "").partition("=")
+            if v is None or args[v] is None or (git_facts.GIT_RUN_CONFIG_KEY_RE.match(key) and not (
+                    key.lower().endswith("pager") and value in PLAIN_PAGERS)):
+                return f"{args[i]} {args[v] if v is not None else ''}".strip()
+        elif args[i].startswith("--exec-path="):
+            return args[i]
+    return next((a for a in args[sub + 1:] if a is not None and _long_hits(a, git_facts.GIT_RUN_OR_WRITE_OPTIONS)),
+                None)
+
+
 def outward_rule(command):
     """What acts beyond this machine with no undo: a real `npm publish`, `kubectl apply` or `kubectl create` (their
     dry runs run), and code fetched by an HTTP client (HTTP_CLIENTS: curl, wget, ...) piped into a shell
@@ -3746,6 +3772,11 @@ def outward_rule(command):
         scripts.setdefault(id(site.script), site.script)
         res = resolve(site.cmd) if isinstance(site.cmd, SimpleCommand) else None
         why = _dry_run_only(res.name, res.argv()) if res is not None else None
+        made = _read_made_to_run(res.name, res.argv()) if res is not None and not why else None
+        if made:
+            refuse(f"BLOCKED: {res.name} reads, but {made} makes it run a program or write a file.",
+                   f"Command: {command}", f"REASON: run the {res.name} read without {made}; to run a program, run it "
+                   "as its own command, where the rules read it.", released_line())
         if why:
             refuse(f"BLOCKED: {why}.", f"Command: {command}",
                    "REASON: a publish or a cluster change acts outside this machine and cannot be taken back; "
