@@ -271,7 +271,7 @@ def _matches_block(command, call_dir):
     if _sp is not None and _write_targets is not None:
         try:
             script = _sp.parse(command)
-            spans = _checker_spans(script) if script.error is None else []
+            spans = _checker_spans(script) if "spec-check.py" in command and script.error is None else []
             texts += _target_texts(command, spans)
             checker = spans  # the raw text is read around the checker only once the parser's targets are in
             dirs = _cd_dirs(script, call_dir)
