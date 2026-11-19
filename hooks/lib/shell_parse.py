@@ -3651,36 +3651,26 @@ def _perl_in_place(args):
     return operands if inplace else []
 
 
-_GAWK_VALUES = ("-f", "--file", "-v", "--assign", "-F", "--field-separator", "-i", "--include", "-l", "--load",
-                "-e", "--source", "-E", "--exec")
-
-
 def _gawk_in_place(args):
     """The files `gawk -i inplace` (also -iinplace, --include=inplace) edits: its file operands
-    (not var=value), after the program text unless -f, -e or -E gave the program."""
+    (not var=value), after the program text unless -e, -f or -E gave the program."""
     vals = [w.value() or "" for w in args]
-    inplace = any(v in ("-iinplace", "--include=inplace") or (v in ("-i", "--include") and nxt == "inplace")
-                  for v, nxt in zip(vals, vals[1:] + [""]))
-    if not inplace:
+    if not any(v in ("-iinplace", "--include=inplace") or (v in ("-i", "--include") and nxt == "inplace")
+               for v, nxt in zip(vals, vals[1:] + [""])):
         return []
-    program_given, operands, k = False, [], 0
+    given, operands, k = False, [], 0
     while k < len(args):
-        v = vals[k]
+        v, k = vals[k], k + 1
         if v == "--":
-            operands += args[k + 1:]
+            operands += args[k:]
             break
-        if v in _GAWK_VALUES:
-            program_given = program_given or v in ("-f", "--file", "-e", "--source", "-E", "--exec")
-            k += 2
-            continue
-        if v.startswith(("-f", "--file=", "-e", "--source=", "-E", "--exec=")) and not v.startswith("--field"):
-            program_given = True
-        if not v.startswith("-") or v == "-":
-            operands.append(args[k])
-        k += 1
-    if not program_given:
-        operands = operands[1:]
-    return [w for w in operands if not _ASSIGN_RE.match(w.value() or "") and w.value() != "-"]
+        if v in AWK_VALUE_OPTS:
+            given, k = given or v in AWK_SOURCE_OPTS + AWK_PROGFILE_OPTS, k + 1
+        elif v.startswith("-") and v != "-":
+            given = given or v.startswith(("-e", "-f", "-E", "--source=", "--file=", "--exec="))
+        else:
+            operands.append(args[k - 1])
+    return [w for w in operands[0 if given else 1:] if not _ASSIGN_RE.match(w.value() or "") and w.value() != "-"]
 
 
 def _flag_values(args, short, long_opt, env):
