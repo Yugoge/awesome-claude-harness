@@ -28,13 +28,19 @@ def sandbox(tmp_path_factory):
     for d in (home / ".claude", state, repo, tmp):
         d.mkdir(parents=True)
     (base / "gitconfig").write_text("")
-    (base / "protected-runtime.json").write_text(json.dumps(RUNTIME))
+    mono = base / "mono"
+    (mono / "packages" / "svc-cli").mkdir(parents=True)
+    (mono / "package.json").write_text('{"name": "mono", "scripts": {"build": "x"}}')
+    (mono / "packages" / "svc-cli" / "package.json").write_text('{"name": "svc", "scripts": {"build": "x"}}')
+    (base / "protected-runtime.json").write_text(json.dumps(dict(
+        RUNTIME, script_run_policy="default_deny", protected_script_workspaces=["svc"],
+        protected_script_paths=["**/packages/svc-cli"], protected_root_manifest_paths=[str(mono)])))
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "CLAUDE_CONFIG_DIR": str(home / ".claude"),
            "CLAUDE_STATE_DIR": str(state), "GIT_CONFIG_GLOBAL": str(base / "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1",
            "TMPDIR": str(tmp), "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8",
            "CLAUDE_PROTECTED_RUNTIME_FILE": str(base / "protected-runtime.json"),
            "CLAUDE_PROTECTED_PROCESS_FAMILY": "svc", "CLAUDE_HARD_BANNED_SCRIPTS": "svc-session-recovery|svc-restart"}
-    return {"env": env, "repo": str(repo)}
+    return {"env": env, "repo": str(repo), "state": str(state), "mono": str(mono)}
 
 
 def bash_safety(sandbox, command, description=None):
@@ -210,3 +216,37 @@ def test_a_write_of_the_switch_state_is_still_refused(sandbox, project, command)
     r = switch_guard(sandbox, project, command.replace("{H}", str(REPO)))
     assert r.returncode == 2 and "harness-switch:" in r.stderr and "switch's state" in r.stderr, (command, r.stderr)
 
+
+# ── dd reading a file to standard output writes no disk ──────────────────────
+# 1 recorded refusal: twelve `dd if=$F bs=1M skip=N count=1 status=none | sed -n 2p | cut ...` lines sampling a log.
+DISK = "Destructive disk operation"
+DD_READS = [
+    "F=/var/log/app.log\n" + "\n".join(
+        f"dd if=$F bs=1M skip={n} count=1 status=none | sed -n '2p' | cut -c1-110" for n in (500, 1000, 2000)),
+    "for n in 1 2; do\ndd if=/var/log/app.log bs=1M skip=$n count=1 status=none | wc -c\ndone",
+]
+
+
+@pytest.mark.parametrize("command", DD_READS)
+def test_dd_reading_a_file_to_standard_output_passes(sandbox, command):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+DD_WRITES = [
+    "F=/dev/sda\ndd if=/dev/zero of=$F bs=1M count=1 status=none | sed -n '2p'",
+    "F=/var/log/app.log\ndd if=$F bs=1M count=1 status=none > /dev/sda",
+    "F=/var/log/app.log\ndd if=$F bs=1M count=1 status=none | sed -n '2p'\ndd if=/dev/zero of=/dev/sdb bs=1M",
+    "for n in 1 2; do dd if=/dev/zero of=/dev/sd$n bs=1M count=1; done",
+    "F=/var/log/app.log\ndd if=$F $EXTRA | head -c 100",           # a computed word may be of=
+    'F=/var/log/app.log\ndd if=$F "of=$X" | head -c 100',
+    "F=/var/log/app.log\ndd if=$F status=none | sudo dd of=/dev/sda",
+    "dd if=/var/log/app.log status=none | head -c 10; mkfs.ext4 /dev/sdb1",
+    "exec 3>/dev/sda; dd if=/dev/zero of=/dev/fd/3 status=none | cat",
+]
+
+
+@pytest.mark.parametrize("command", DD_WRITES)
+def test_a_destructive_dd_is_still_refused_in_the_same_shape(sandbox, command):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 2 and DISK in r.stderr, (command, r.stderr)
