@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
-from lib import command_span, overnight, shell_parse as sp, stop_contract  # noqa: E402
+from lib import command_span, locations, overnight, shell_parse as sp, stop_contract  # noqa: E402
 from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
 
 try:  # optional contract runtime + agent resolver for the self_repair grant
@@ -407,13 +407,12 @@ def _body_mentions_protected_branch(body: str) -> bool:
 
 
 def _is_path_exempt(file_path: str) -> bool:
-    """Check if path is exempt from overnight worktree restrictions (/tmp, /dev/null)."""
-    abs_path = os.path.realpath(os.path.abspath(file_path))
-    if abs_path == "/dev/null":
+    """Check if path is exempt from overnight worktree restrictions: the null device, a temp
+    directory the session's own files go to, the hook state root (lib/locations: both sides resolved)."""
+    if os.path.realpath(os.path.abspath(file_path)) == locations.NULL_DEVICE:
         return True
-    state_root = harness_state_dir()
-    return (abs_path.startswith("/tmp/") or abs_path == "/tmp"
-            or abs_path.startswith(state_root + "/") or abs_path == state_root)
+    roots = locations.session_temp_roots() + (locations.state_root(),)
+    return any(root != os.sep and locations.is_inside(file_path, root) for root in roots)
 
 
 def _in_isolated_main_root(file_path: str) -> bool:
@@ -691,15 +690,13 @@ def _assigned(command: str, names: tuple) -> list[str]:
 
 
 def is_hooks_path(file_path: str) -> bool:
-    """Check if a file path targets the .claude/hooks/ directory."""
-    normalized = file_path.replace('\\', '/')
-    return '.claude/hooks/' in normalized or '.claude/hooks\\' in normalized
+    """Check if a file path lies in a Claude configuration hooks/ folder, by where it is (lib/locations)."""
+    return locations.config_folder(file_path.replace('\\', '/')) == 'hooks'
 
 
 def is_commands_path(file_path: str) -> bool:
-    """Check if a file path targets the .claude/commands/ directory."""
-    normalized = file_path.replace('\\', '/')
-    return '.claude/commands/' in normalized or '.claude/commands\\' in normalized
+    """Check if a file path lies in a Claude configuration commands/ folder, by where it is."""
+    return locations.config_folder(file_path.replace('\\', '/')) == 'commands'
 
 
 def is_state_file_path(file_path: str) -> bool:
@@ -1459,7 +1456,7 @@ def _enforce_overnight_git_command(command: str, main_root: str, worktree_path: 
         if write_paths else None
     for t in write_paths:
         path = os.path.join(payload_cwd or os.getcwd(), t)
-        if not path.startswith('/dev/') and _targets_git_config(path, git_config_paths):
+        if not locations.is_device(path) and _targets_git_config(path, git_config_paths):
             _block_git_config('Bash', path)
     if _gitdir_into_main(command, main_real, main_git_dir):
         _block(
@@ -1684,8 +1681,8 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
     ]
     # A TMPDIR outside /tmp (settings.json pins one) is private and writable too, as /tmp is, or
     # every mktemp of the command fails on the RO host; never one holding main or the worktree.
-    tmp = os.path.realpath(os.environ.get('TMPDIR') or '/tmp')
-    if os.path.isdir(tmp) and not _path_under_prefix(tmp, '/tmp') and not any(
+    tmp = os.path.realpath(locations.temp_root())
+    if os.path.isdir(tmp) and not _path_under_prefix(tmp, locations.DEFAULT_TEMP_DIR) and not any(
             _path_under_prefix(r, tmp) or _path_under_prefix(tmp, r) for r in (main_real, wt_real)):
         argv += ['--tmpfs', tmp]
     for d in journal:  # /restart's (_restart_journal): over the private tmps, under step 7's RO rebinds

@@ -25,6 +25,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator, Mapping, Sequence
 
+try:
+    from . import locations
+except ImportError:  # hooks/lib itself is on sys.path
+    import locations
+
 
 SCHEMA_VERSION = "lane_b.session-resources/v1"
 TRUST_SCHEMA_VERSION = "lane_b.session-resources-trust/v1"
@@ -1269,14 +1274,7 @@ def classify_target(
         resolved.relative_to(scratch_root)
         status = "sibling"
     except ValueError:
-        status = (
-            "system_temp"
-            if resolved == Path("/tmp")
-            or Path("/tmp") in resolved.parents
-            or resolved == Path("/var/tmp")
-            or Path("/var/tmp") in resolved.parents
-            else "outside"
-        )
+        status = "system_temp" if locations.in_arbitrary_temp(str(resolved), str(root)) else "outside"
     return {"status": status, "owner": False, "path": str(resolved)}
 
 
