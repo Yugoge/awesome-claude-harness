@@ -1885,8 +1885,10 @@ def _parser_invocations(command_text):
                     found.extend(shell_parse.git_invocations(value))
     except Exception:  # never let the second reading cost the first its verdict
         return []
+    # as _invocations writes them: an option as git receives it, an operand as written
     return [GitInvocation(inv.word.raw.text, inv.path_qualified, inv.subcommand,
-                          [a if a is not None else w.raw.text for a, w in zip(inv.args, inv.arg_words)])
+                          [a if a is not None and _is_option_word(a) else w.raw.text
+                           for a, w in zip(inv.args, inv.arg_words)])
             for inv in found if inv.word is not None and inv.subcommand is not None]
 
 
