@@ -3379,6 +3379,8 @@ RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
 GREP_PATTERN_OPTS = ("-e", "--regexp")
 GREP_PATTERN_FILE_OPTS = ("-f", "--file")
 GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
+# man's options whose value names a program it runs (man-db 2.12: the pager, the HTML browser).
+MAN_PROGRAM_OPTS = ("-P", "--pager", "-H", "--html", "-B", "--browser")
 # grep's options that take a value (GNU grep 3.11 --help; --color[=WHEN] takes one only after `=`): those
 # every grep-like search shares, then GNU grep's own.
 GREP_CORE_VALUE_OPTS = GREP_PATTERN_OPTS + GREP_PATTERN_FILE_OPTS + (
