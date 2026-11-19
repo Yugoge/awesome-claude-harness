@@ -714,7 +714,7 @@ _CODE_WRITE_FORMS = [re.compile(p) for p in (
     r"""['"]\+?>{1,2}['"]\s*,\s*""" + _LIT,                            # perl open(F, '>', P)
     r"""(['"])\+?>{1,2}\s*([^'"\n]*?""" + _REPORT_FAMILY + r"""-[^'"\n/]*\.json)\1""",  # perl open(F, ">P")
 )]
-_DEST_MODES = ("copy-dest", "move-dest", "link")
+_DEST_MODES = ("copy-dest", "move-dest", "link")  # the write modes that stage a destination
 _WRITER_NAMES = frozenset({"tee", "cp", "mv", "install", "ln", "rsync", "dd", "truncate", "sed", "sh", "bash",
                            "dash", "zsh", "ksh", "sponge", "sort", "uniq", "awk", "gawk", "curl", "wget", "touch"})
 _CD_LIMIT = 64
@@ -1782,9 +1782,6 @@ def _approved_write_allowed(role: str, tool: str, target):
     return (True, "ok")
 
 
-_STAGING_MODES = ("link", "copy-dest", "move-dest")
-
-
 def _restaged_targets(tool_name: str, tool_input: dict) -> "set | None":
     """The Bash write targets a write carve-out may not admit: each path that
     another operation of the same command first makes as a link, copy or move
@@ -1803,7 +1800,7 @@ def _restaged_targets(tool_name: str, tool_input: dict) -> "set | None":
 
         command = tool_input.get("command") or ""
         found = [(bwt._render(t, command), t.mode) for t in bwt.extract_bash_write_targets_with_modes(command)]
-        staged = [(i, os.path.abspath(p)) for i, (p, mode) in enumerate(found) if p and mode in _STAGING_MODES]
+        staged = [(i, os.path.abspath(p)) for i, (p, mode) in enumerate(found) if p and mode in _DEST_MODES]
         out = set()
         for j, (path, _) in enumerate(found):
             if path and any(i != j and policy_registry._path_is_prefix(s, os.path.abspath(path))
