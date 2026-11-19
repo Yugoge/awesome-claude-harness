@@ -1116,10 +1116,10 @@ def _proven_harmless(command: str, start: str) -> bool:
             sites.append((cmd, name, res, inplace))
             continue
         elif name in _PROOF_WRITERS:
-            if name in ('cp', 'mv', 'install') and any(
+            if name in sp.CP_MV + ('install',) and any(
                     (v or '').startswith(('-S', '--suffix', '--parents', '--su', '--pa')) for v in vals):
                 return False  # a backup suffix or --parents: a written path not read here
-            if name in ('cp', 'mv', 'install'):
+            if name in sp.CP_MV + ('install',):
                 refused, alias = _copy_links(name, vals)
                 if refused:
                     return False  # a link into whatever the source is, or a strip program run
@@ -1194,7 +1194,7 @@ def _proven_harmless(command: str, start: str) -> bool:
         paths = resolved(word, t.path)
         if paths is None:
             return False
-        recursive = name in ('cp', 'install') and any(
+        recursive = name in sp.COPY_VERBS and any(
             v and (v in ('--recursive', '--archive') or (v.startswith('-') and not v.startswith('--')
                                                         and set(v[1:]) & set('rRa')))
             for v in (w.value() for w in res.args))

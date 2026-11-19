@@ -169,7 +169,7 @@ def _cd_dirs(script, call_dir):
 
 # Copy, move, install and link: into a directory destination the written path is
 # `<dest>/<basename(source)>`.
-_INTO_DIR = ("cp", "mv", "install", "ln", "rsync")
+_INTO_DIR = _sp.INTO_DIR_VERBS if _sp is not None else ()
 
 
 def _word_text(w):

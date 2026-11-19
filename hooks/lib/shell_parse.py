@@ -3176,6 +3176,13 @@ VERBS = {
     "setfacl": (None, "attr", IN_PLACE),
 }
 VERBS["gsed"] = VERBS["sed"]  # GNU sed's name where sed is another one
+# The copy, move and link verbs: cp and mv (CP_MV), the copiers (COPY_VERBS: cp, install), the
+# coreutils that define -t/--target-directory (TARGET_DIR_VERBS), and those whose destination may be
+# a directory the sources land in (INTO_DIR_VERBS: rsync too).
+CP_MV = ("cp", "mv")
+COPY_VERBS = ("cp", "install")
+TARGET_DIR_VERBS = ("cp", "mv", "install", "ln")
+INTO_DIR_VERBS = TARGET_DIR_VERBS + ("rsync",)
 # cp, mv, ln and install's option that names the destination directory (every guard reads this one).
 TARGET_DIR_OPTS = ("-t", "--target-directory")
 NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the written file, never a directory
@@ -3355,7 +3362,7 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
     return out
 
 
-_COPY_MOVE_WORD_RE = re.compile(r"(?:cp|mv)(?!\w)")
+_COPY_MOVE_WORD_RE = re.compile(r"(?:%s)(?!\w)" % "|".join(CP_MV))
 
 
 def _appends_args(res):

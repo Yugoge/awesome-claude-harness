@@ -297,7 +297,7 @@ def settings_writes(command: str, cwd: str) -> list:
             continue
         head = os.path.basename(plain[0])
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
-        message, moves = _message(plain), head in ("cp", "mv")
+        message, moves = _message(plain), head in shell_parse.CP_MV
         named = [(w, head in ("rm", "rmdir", "rsync")) for w in
                  _written_words(words, written, False if (interpreter or message or moves) else None)]
         named += _operands(plain, head == "mv") if moves else []

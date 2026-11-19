@@ -1524,6 +1524,7 @@ def commit_artifact_rules(command, state):
 # The flag's name has one definition, next to its reader (lib/allowlist.has_do_consent); hooks/prompt-workflow.py
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
+from lib.shell_parse import INTO_DIR_VERBS  # noqa: E402 -- the copy, move and link verbs
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
 # Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
@@ -1542,7 +1543,7 @@ _CONSENT_GIT_COMMIT_OPTS = frozenset({"-a", "--all", "-q", "--quiet", "-s", "--s
                                       "--allow-empty", "--amend", "--no-edit", "--no-verify", "-n", "--"})
 _CONSENT_TMP_VARS = frozenset({"TMPDIR", "TMP", "TEMP", "TEMPDIR", "CLAUDE_TMPDIR"})
 _CONSENT_DIR_CREATORS = frozenset({"touch", "mkdir", "mkfifo", "mknod"})
-_CONSENT_COPIERS = frozenset({"cp", "mv", "ln", "install", "rsync", "link"})
+_CONSENT_COPIERS = frozenset(INTO_DIR_VERBS + ("link",))  # link(1): read failing closed
 # Tools that extract or check out files whose names they read from a file (an archive, a package, a stored gzip
 # name) into a directory: program -> how _consent_unpack_dirs reads its options (rule 3b). git checkout-index
 # --prefix and git init/clone are read by _consent_git_tree.
@@ -3730,7 +3731,7 @@ def _subcommands(command):
 _SENSITIVE_WRITERS = frozenset({"tee", "cp", "mv", "install", "rsync", "ln", "dd", "curl", "wget", "sed", "truncate"})
 # The verbs that write what they read into another file: a listed name among their operands is a secret read
 # into a file, as an argument of a command whose output is redirected into one is.
-_SENSITIVE_COPIERS = frozenset({"cp", "mv", "install", "rsync", "ln"})
+_SENSITIVE_COPIERS = frozenset(INTO_DIR_VERBS)
 # The writers the base never judged without an output redirection: a source-code or Markdown/reST document operand
 # of theirs (`sed -i ... src/password_reset.py`, `mv docs/password-reset.md docs/pw.md`) is no secret file
 # (lib/sensitive_names.is_code_or_doc_operand).

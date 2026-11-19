@@ -844,7 +844,7 @@ def _operands_and_tdir(head: str, args: list):
     Unknown single-dash tokens are treated as no-arg flags (dropped) — the fail-safe
     direction: a flag we do not model never STEALS an operand slot, so a real
     protected operand is never dropped because of an unmodeled flag."""
-    tdir_verbs = ("cp", "mv", "install", "rename", "ln")
+    tdir_verbs = _sp.TARGET_DIR_VERBS + ("rename",)  # and rename, read here with mv's options
     val_opts = _VALUE_OPTS.get(head, set())
     operands = []
     tdir = None
@@ -961,7 +961,7 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
     # coreutils that define it ({cp, mv, install, ln}); for every other verb it is
     # None and the verb's own last-operand-is-dest logic runs unchanged.
     barewords, tdir = _operands_and_tdir(head, args)
-    if head in ("cp", "install"):
+    if head in _sp.COPY_VERBS:
         # `install -d DIR…` / `install --directory DIR…` (incl. clustered `-Dd`)
         # CREATES every named directory (there is NO source operand). So EVERY
         # operand is a target — creating/`mkdir -p`-ing a protected ancestor/config
