@@ -462,8 +462,7 @@ def _block_global_worktree(tool_name: str, target: str, worktree_paths: list[str
 
 
 def _edit_target(tool_name: str, tool_input: dict) -> str:
-    """The file a file-writing tool names, '' for any other tool: command_span.EDIT_TOOLS holds each
-    tool's path key (NotebookEdit's notebook_path too), so no list of tool names is kept here."""
+    """The file a file-writing tool names ('' for any other): command_span.EDIT_TOOLS holds each tool's path key."""
     key = command_span.EDIT_TOOLS.get(tool_name)
     return str(tool_input.get(key) or '') if key else ''
 

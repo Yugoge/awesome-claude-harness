@@ -1821,7 +1821,6 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     for target in targets:
         if check_tool in WRITE_TOOLS and isinstance(target, str) and target.startswith("/dev/"):
             from lib import shell_parse  # the null device, the caller's own streams or terminal: no file is written
-
             if shell_parse.is_sink_device(target):
                 continue
         carveouts = restaged is not None and target not in restaged

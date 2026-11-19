@@ -2668,8 +2668,7 @@ def resolve(cmd, depth=None):
 
 _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
 _FIND_FILE = ("-fprint", "-fprint0", "-fprintf", "-fls")  # the next word names a file the action writes
-# Every action of find that runs a program, writes a file or deletes: the one table a guard reads.
-FIND_ACTIONS = _FIND_EXEC + _FIND_FILE + ("-delete",)
+FIND_ACTIONS = _FIND_EXEC + _FIND_FILE + ("-delete",)  # each action that runs a program, writes a file or deletes
 
 
 def _resolve_find(r, head, words, cmd, depth):
@@ -2813,13 +2812,12 @@ def _resolve_shell(r, head, words, cmd, depth):
 
 
 _STDIN_FILES = ("/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "-")
-SINK_DEVICES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty")
 
 
 def is_sink_device(path):
-    """True for a write target that is no file: the null device, the writer's own streams or
-    terminal, or a descriptor it already holds (/dev/fd/N). One answer for each guard that asks."""
-    return path in SINK_DEVICES or (path.startswith("/dev/fd/") and path[8:].isdigit())
+    """True for a write target that is no file: the null device, the writer's own streams or terminal, /dev/fd/N."""
+    return path in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty") or (
+        path.startswith("/dev/fd/") and path[8:].isdigit())
 
 
 def _script_operand(r, w, cmd, depth):
@@ -3566,9 +3564,8 @@ def _verb_targets(name, verb, args, env, context):
 
 
 def _find_write_targets(args, env, context):
-    """The file each -fprint, -fprint0, -fprintf and -fls of one find writes. The words of an
-    -exec up to `;` or `+` are another command's (walk reads them); -delete removes each match,
-    a name the command does not hold, so it names no target here."""
+    """The file each -fprint, -fprint0, -fprintf and -fls of one find writes. An -exec's words up to `;` or `+` are
+    another command's (walk reads them); -delete removes the matches, names the command does not hold: no target."""
     out, k = [], 0
     while k < len(args):
         v = args[k].value()

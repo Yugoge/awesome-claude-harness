@@ -16,12 +16,10 @@ subagent, each other path by which an agent call could switch the harness or fak
                         a file under <H>/.harness-switch/; the home's settings files; any
                         settings*.json that would set disableAllHooks; a script outside a harness
                         checkout that names the switch's state
-  every other tool      a string of its input, under any key at any depth, that types /harness
-                        (a delivered or scheduled prompt reaches UserPromptSubmit as if typed):
-                        CronCreate, ScheduleWakeup, SendMessage, every MCP tool and any tool the
-                        CLI adds later, none of them known here by name. Only the CLI's own tools
-                        that deliver no prompt are named: NO_PROMPT passes, and Agent / Task
-                        (prose that may quote the command) only where the prompt is the command
+  every other tool      a string of its input, under any key at any depth, that types /harness (a
+                        delivered or scheduled prompt reaches UserPromptSubmit as if typed), whatever
+                        the tool's name; only the CLI's own tools that deliver no prompt are named:
+                        NO_PROMPT passes, Agent / Task is refused only where a string is the command
 
 A Claude Code settings file's env, hooks, disableAllHooks and permissions decide which hooks run,
 with what environment, and what is asked (an env value reaches every hook), so they are the
@@ -81,9 +79,8 @@ TAGGED = r"<command-name>/?harness</command-name>"  # the other form scripts/har
 PROMPT = re.compile(TYPED.pattern + "|" + TAGGED, re.M)  # a prompt that types /harness, anywhere in it
 WHOLE = re.compile(r"\s*(?:/harness(?:\s+\S+)?|(?:<command-message>.*?</command-message>\s*)?" + TAGGED + r".*)\s*",
                    re.S)  # a prompt that is the command, as scripts/harness-switch acts on one
-# The CLI's own tools whose input reaches no session as a prompt: they read or search, keep the caller's own
-# lists and background tasks, or go to the owner; a Monitor's command meets the Bash rule
-# (hooks/pretool-monitor-command.py). Any other tool may deliver its text to a session (check_prompt).
+# The CLI's own tools whose input reaches no session as a prompt (readers, the caller's own lists and tasks, the
+# owner's; a Monitor's command meets the Bash rule, hooks/pretool-monitor-command.py). Any other tool may deliver one.
 NO_PROMPT = frozenset({"Read", "Glob", "Grep", "WebFetch", "WebSearch", "ToolSearch", "TodoWrite", "TodoRead",
                        "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "BashOutput", "TaskStop",
                        "KillShell", "AskUserQuestion", "PushNotification", "ExitPlanMode", "Monitor"})
