@@ -379,7 +379,7 @@ class Redir:
             return int(self.io)
         if self.op in ("<", "<<", "<<-", "<<<", "<&", "<>"):
             return 0 if self.fd_var is None else None
-        if self.op in ("&>", "&>>"):
+        if self.op in BOTH_STREAMS_OPS:
             return None
         return 1 if self.fd_var is None else None
 
@@ -403,7 +403,7 @@ class Redir:
 
     def writes(self):
         """True when this redirection opens a file for writing."""
-        if self.op in (">", ">>", ">|", "&>", "&>>", "<>"):
+        if self.op in WRITE_REDIRECT_OPS:
             return True
         return self.op == ">&" and self.dup is None and not self.close
 
@@ -420,7 +420,10 @@ _OP_CHARS = ";&|()"
 _WORD_BREAK = " \t\n" + _OP_CHARS + "<>"
 _OPS = (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")")
 _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
-REDIRECT_OPS = ("&>>", "&>") + _REDIR_OPS  # every redirection operator, longest first (&> takes no fd)
+BOTH_STREAMS_OPS = ("&>>", "&>")  # redirect stdout and stderr together (they take no fd)
+REDIRECT_OPS = BOTH_STREAMS_OPS + _REDIR_OPS  # every redirection operator, longest first
+OUTPUT_REDIRECT_OPS = (">", ">>", ">|") + BOTH_STREAMS_OPS  # send output to their target
+WRITE_REDIRECT_OPS = OUTPUT_REDIRECT_OPS + ("<>",)  # open their target for writing (<> read-write)
 PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
 OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
 OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (standard input)

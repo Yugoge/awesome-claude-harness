@@ -419,8 +419,6 @@ _COMPOUND_WORDS = frozenset({
     'for', 'select', 'while', 'until', 'if', 'then', 'elif', 'else', 'fi',
     'do', 'done', 'case', 'esac', 'function', 'coproc', '{', '}',
 })
-# Redirections that write a file.
-_WRITE_REDIRS = frozenset({'>', '>>', '>|', '&>', '&>>'})
 
 
 def _opens_compound(cmd):
@@ -470,7 +468,7 @@ def _writes_file(redir):
     `>`, `>>`, `>|`, `&>`, `&>>`, `<>` (read-write), and `>&` with a word
     that is no descriptor number or `-` (`>& file` writes the file).
     """
-    if redir.op in _WRITE_REDIRS or redir.op == '<>':
+    if redir.op in shell_parse.WRITE_REDIRECT_OPS:
         return True
     if redir.op == '>&':
         target = _value(redir.target)[0]
@@ -527,7 +525,7 @@ def _is_inert(cmd, written):
             return False
     for r in cmd.redirs:
         target = None if r.target is None else _value(r.target)[0]
-        if r.op in _WRITE_REDIRS or r.op == '<>':
+        if r.op in shell_parse.WRITE_REDIRECT_OPS:
             if target != '/dev/null':
                 return False
         elif r.op == '>&' and not (target is not None and (target.isdigit() or target == '-')):

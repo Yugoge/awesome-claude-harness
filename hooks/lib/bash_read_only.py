@@ -48,7 +48,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402
 from shell_parse import (  # noqa: E402
-    OPTION_ENDS, SimpleCommand, active_parts, parse, resolve, walk, write_targets)
+    OPTION_ENDS, OUTPUT_REDIRECT_OPS, SimpleCommand, active_parts, parse, resolve, walk, write_targets)
 sys.path.pop(0)
 
 MAX_COMMAND_LEN = 8192
@@ -396,7 +396,7 @@ def _redirect_ok(r) -> bool:
         return False
     if r.op == ">&":
         return r.fd in (1, 2) and r.dup in (1, 2) and not r.close
-    if r.op in (">", ">>", ">|", "&>", "&>>"):
+    if r.op in OUTPUT_REDIRECT_OPS:
         if r.fd not in (None, 1, 2):
             return False
         return all(p.kind == "lit" for p in r.target.parts) and r.target.value() == DEV_NULL

@@ -4226,6 +4226,7 @@ def _plain_file(w, sv):
 def _plain_redirects(cmd, sv, reads_ok=True):
     """Writes on fd 1 or 2 (or &>) to an ordinary file or /dev/null, 2>&1, >&2, N>&-; with `reads_ok` also a read
     on fd 0 of a static file and a heredoc or here-string that expands nothing."""
+    from lib.shell_parse import OUTPUT_REDIRECT_OPS
     for x in cmd.redirects:
         if x.fd_var is not None:
             return False
@@ -4244,7 +4245,7 @@ def _plain_redirects(cmd, sv, reads_ok=True):
         elif x.op == "<":
             if not reads_ok or x.fd != 0 or x.target is None or not _plain_word(x.target):
                 return False
-        elif x.op in (">", ">>", ">|", "&>", "&>>"):
+        elif x.op in OUTPUT_REDIRECT_OPS:
             if x.fd not in (1, 2, None) or x.target is None or not _plain_file(x.target, sv):
                 return False
         else:
@@ -7091,10 +7092,11 @@ def _sd_streams(node, out, err):
     """(stdout safe, stderr safe) after a command's own redirections, given whether its stdout and stderr reach only
     the terminal or /dev/null (through display filters at most) before them. A file, another fd or a computed
     target is unsafe: a later command or a later call can read it back."""
+    from lib.shell_parse import BOTH_STREAMS_OPS
     for r in node.redirects:
         if r.op in ("<", "<<", "<<-", "<<<", "<&"):
             continue
-        both = r.op in ("&>", "&>>") or (r.op == ">&" and r.io is None and r.dup is None and not r.close)
+        both = r.op in BOTH_STREAMS_OPS or (r.op == ">&" and r.io is None and r.dup is None and not r.close)
         fd = None if both else r.fd
         if fd is None and not both:
             out = err = False  # a {NAME}> form
