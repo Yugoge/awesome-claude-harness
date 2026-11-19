@@ -3205,13 +3205,14 @@ AWK_PROGFILE_OPTS = ("-f", "--file", "-E", "--exec")  # a file holding the progr
 AWK_LIB_OPTS = ("-i", "--include", "-l", "--load")  # a source library or extension it loads
 AWK_VALUE_OPTS = AWK_DATA_OPTS + AWK_SOURCE_OPTS + AWK_PROGFILE_OPTS + AWK_LIB_OPTS
 # ripgrep: the options whose value is a program it runs, and every option that makes it run
-# one (--search-zip, short -z, runs the decompressors). --pre-glob only narrows --pre.
+# one (--search-zip, short -z, runs the decompressors; --pre-glob selects the files a --pre
+# preprocessor, perhaps from a config file, is run on).
 RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
 # grep's (and rg's) options that carry the pattern, and a file of patterns; their long forms.
 GREP_PATTERN_OPTS = ("-e", "--regexp")
 GREP_PATTERN_FILE_OPTS = ("-f", "--file")
 GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
-RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip",)
+RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip", "--pre-glob")
 # ripgrep's options that take a value: the short letters and the long names.
 RG_VALUE_SHORT = frozenset("efgtTmABCMjrEd")
 RG_VALUE_LONG = frozenset((
