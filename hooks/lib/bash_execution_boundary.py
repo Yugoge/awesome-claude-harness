@@ -80,14 +80,16 @@ MAX_BOUNDARIES = 400
 
 # Filesystem-removal front ends. This set defines the POLICY SCOPE (what is
 # forbidden), not the authorization mechanism. Widening it widens the deny
-# surface. It is the SINGLE shared definition of "removal binary": the degraded
-# fallback in hooks/pretool-bash-safety.sh names the same four, so the primary
-# path can never be laxer than the fallback.
-REMOVAL_EXES = {"rm", "unlink", "shred", "srm"}
+# surface. The one definition of "removal binary" is the census's
+# REMOVAL_BINARIES (the census, an independent backstop, imports nothing from
+# here; this analyzer reads its set): the degraded fallback in
+# hooks/pretool-bash-safety.sh names the same four, so the primary path can
+# never be laxer than the fallback.
+REMOVAL_EXES = frozenset(census_mod.REMOVAL_BINARIES)
 
 # Removal evidence gates the REMOVAL-SCOPED failure class only.
 _REMOVAL_EVIDENCE_RE = re.compile(
-    r"(?:^|[^A-Za-z0-9_])(rm|unlink|shred|srm)(?![A-Za-z0-9_])")
+    r"(?:^|[^A-Za-z0-9_])(%s)(?![A-Za-z0-9_])" % "|".join(map(re.escape, sorted(REMOVAL_EXES))))
 
 # Library-level removal in interpreter payloads. These carry NO rm/unlink/
 # shred/srm token, so _REMOVAL_EVIDENCE_RE is structurally blind to them; this
