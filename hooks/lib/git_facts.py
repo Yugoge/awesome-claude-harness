@@ -55,22 +55,24 @@ GIT_COMMIT_VALUE_OPTIONS = frozenset({
 GH_MESSAGE_SUBCOMMANDS = frozenset({"issue", "pr", "release"})  # gh: words are a title or body
 GIT_SHELL_PAYLOAD_SUBCOMMANDS = frozenset({"bisect", "difftool", "filter-branch", "rebase", "submodule"})
 
-# Configuration keys whose value makes git run a program or read another config or repository
-# (matched against the key, case-insensitively, as git compares keys).
-GIT_RUN_CONFIG_KEY_RE = re.compile(
+# Configuration keys whose value names a program git runs, or another config or repository it reads (`git help
+# config`); a key of the families below that names neither (diff.renames, merge.conflictStyle) is a setting.
+_GIT_PROGRAM_KEYS = (
     r'^(?:alias\..*|core\.(?:pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy|alternaterefscommand)|'
-    r'pager\..*|sequence\.editor|include\..*|includeif\..*|filter\..*|diff\..*|merge\..*|'
-    r'gpg\..*|credential.*|uploadpack\..*|receive\..*|man\..*|web\..*|browser\..*|'
-    r'sendemail\..*|interactive\..*|protocol\..*|url\..*\.(?:insteadof|pushinsteadof)|'
+    r'pager\..*|sequence\.editor|include\..*|includeif\..*|sendemail\..*|url\..*\.(?:insteadof|pushinsteadof)|'
     r'remote\..*\.(?:uploadpack|receivepack|vcs)|submodule\..*\.update|'
     r'.*\.(?:pager|editor|command|cmd|textconv|program|helper|external|driver|path|tool|hook|sshcommand|'
-    r'difffilter|clean|smudge|process))$', re.IGNORECASE)
+    r'difffilter|clean|smudge|process))$')
+GIT_PROGRAM_CONFIG_KEY_RE = re.compile(_GIT_PROGRAM_KEYS, re.IGNORECASE)
+# Those, and every key of the families that hold one (matched case-insensitively, as git compares keys).
+GIT_RUN_CONFIG_KEY_RE = re.compile(_GIT_PROGRAM_KEYS + r'|^(?:filter|diff|merge|gpg|uploadpack|receive|man|web|browser|'
+                                   r'interactive|protocol)\..*$|^credential.*$', re.IGNORECASE)
 # git's boolean spellings (an empty value reads as false).
 GIT_BOOLEAN_VALUES = frozenset({"true", "false", "yes", "no", "on", "off", "1", "0", ""})
 
 
 def git_config_value_names_no_program(key: str, value: str) -> bool:
-    """Whether a GIT_RUN_CONFIG_KEY_RE key's value names no program (`git help config`, git 2.54): a boolean for
+    """Whether a GIT_PROGRAM_CONFIG_KEY_RE key's value names no program (`git help config`, git 2.54): a boolean for
     core.fsmonitor (false: no monitor; true: git's own built-in daemon) and pager.<cmd> (false: no pager; true: the
     pager configured elsewhere), "" or cat for core.pager (no pager), "" for diff.external (git's own diff)."""
     k = key.lower()
