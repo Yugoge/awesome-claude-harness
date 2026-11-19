@@ -8,6 +8,7 @@ allowed; another actor's is not. Only paths are judged: the projects are never c
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -88,4 +89,70 @@ def test_the_main_agents_session_scratch_is_unchanged(tmp_path):
     project = PROJECTS[0]
     proc = run(tmp_path, project, "Write", {"file_path": f"/var/tmp/claude-scratch/{SID}/notes.md",
                                             "content": "x"}, caller=None)
+    assert proc.returncode == 0, proc.stderr
+
+
+# -- the main agent: its session's scratch directory -----------------------------------------
+INIT = os.path.join(ROOT, "hooks", "session-scratch-init.sh")
+
+
+def _session_scratch(tmp_path):
+    """hooks/session-scratch-init.sh run for SID with TMPDIR on tmp_path: (TMPDIR, the env file it wrote)."""
+    root, env_file = tmp_path / "tmpdir", tmp_path / "env-file"
+    root.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    env.update(HOME=str(tmp_path / "home"), TMPDIR=str(root), CLAUDE_ENV_FILE=str(env_file))
+    proc = subprocess.run(["bash", INIT], input=json.dumps({"session_id": SID}), capture_output=True, text=True,
+                          env=env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return root, env_file
+
+
+def test_the_session_start_points_tmpdir_at_the_main_agents_own_scratch(tmp_path):
+    """The session's programs, pytest's temp root among them, write in the main agent's own scratch directory."""
+    root, env_file = _session_scratch(tmp_path)
+    own = root / SID
+    assert (own / ".owner").is_file()
+    probe = "import tempfile; print(tempfile.gettempdir())"
+    out = subprocess.run(["bash", "-c", f". {env_file}; python3 -c '{probe}'"], capture_output=True, text=True,
+                         env={"PATH": os.environ["PATH"]}, timeout=60).stdout.strip()
+    assert out == str(own)
+
+
+def test_the_main_agents_own_scratch_is_its_session_scratch(tmp_path):
+    root, _env_file = _session_scratch(tmp_path)
+    own = root / SID
+    other = root / "0f0e0d0c-0b0a-4908-8706-050403020100"
+    other.mkdir()
+    (other / ".owner").write_text(json.dumps({"sid": other.name}))
+    sys.path.insert(0, os.path.join(ROOT, "hooks"))
+    try:
+        from lib import locations
+        spec = importlib.util.spec_from_file_location("_tool_policy_main", HOOK)
+        policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(policy)
+        policy._bootstrap_security()
+        os.environ["TMPDIR"], saved = str(root), os.environ.get("TMPDIR")
+        try:
+            main = {"session_id": SID}
+            assert policy._scratch_status(None, str(own / "pytest-of-root" / "x"), main) == "owner"
+            for path in (other / "x", root / "x", "/tmp/tmp.AbC123/x"):
+                assert policy._scratch_status(None, str(path), main) != "owner", path
+            assert policy._scratch_status("dev", str(own / "x"), dict(main, agent_id="a1")) != "owner"
+        finally:
+            os.environ.pop("TMPDIR") if saved is None else os.environ.__setitem__("TMPDIR", saved)
+        # With no TMPDIR (a default install), the policy and the session start agree on the root.
+        env = {k: v for k, v in os.environ.items() if k != "TMPDIR"}
+        out = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); from lib import "
+                              "locations; print(locations.session_scratch_dir('s'))", os.path.join(ROOT, "hooks")],
+                             capture_output=True, text=True, env=env, timeout=60).stdout.strip()
+        assert out == os.path.join(os.path.realpath(locations.SESSION_SCRATCH_ROOT), "s")
+        assert '"${TMPDIR:-' + locations.SESSION_SCRATCH_ROOT + '}"' in open(INIT, encoding="utf-8").read()
+    finally:
+        sys.path.remove(os.path.join(ROOT, "hooks"))
+
+
+def test_a_main_agent_write_in_its_session_scratch_is_allowed(tmp_path):
+    root, _env_file = _session_scratch(tmp_path)
+    proc = run(tmp_path, PROJECTS[0], "Write", {"file_path": str(root / SID / "notes.md"), "content": "x"}, None)
     assert proc.returncode == 0, proc.stderr

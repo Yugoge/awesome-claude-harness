@@ -10,7 +10,7 @@ refused, wherever its files lay. Now a removal runs when two things hold:
   uses for where that actor may write scratch files (hooks/pretool-tool-policy.py: `_scratch_status` == "owner").
 
 Every other removal is refused as before, and the refusal now names the caller's own scratch directory, in the write
-policy's own words. An actor the write policy gives no scratch directory (the main agent) owns none.
+policy's own words. The main agent's own is its session's scratch directory (hooks/session-scratch-init.sh).
 
 Projects are throwaway directories; no command is ever executed.
 """
@@ -33,6 +33,7 @@ import bash_execution_boundary as eb  # noqa: E402
 
 SID = "5e6f7a8b-1c2d-4e3f-9a0b-1c2d3e4f5a6b"
 AGENT, OTHER_AGENT = "a1b2c3d4e5f60718", "a9999999999999999"
+OTHER_SID = "0f0e0d0c-0b0a-4908-8706-050403020100"
 NAMED = re.compile(r"your own scratch directory is (/\S+?)/ ")
 REFUSED = "removal-policy — FORBIDDEN_REMOVAL filesystem_removal"
 
@@ -199,14 +200,44 @@ def test_the_named_directory_is_one_the_same_actor_may_write_and_delete_in(proje
         assert NAMED.search(err).group(1) != own, (other, err)
 
 
-def test_the_main_agent_has_no_scratch_directory_of_its_own(project):
-    """The write policy defines an own scratch directory for a subagent with a role; for the main agent it defines
-    none, so the main agent's removals stay refused and no directory can be named."""
+def test_a_main_agent_without_its_session_scratch_has_no_scratch_directory_of_its_own(project):
+    """The main agent's own scratch directory is its session's, made by hooks/session-scratch-init.sh; where that
+    was not made for the session, its removals stay refused and no directory can be named."""
     for command in ("rm -f " + project.own + "/a.txt", "rm /tmp/x.py",
                     "rm -f /var/tmp/claude-scratch/" + SID + "/notes.md"):
         code, err = project.bash(command, caller=None)
         assert code == 2 and REFUSED in err, (command, err)
         assert "own scratch directory" not in err, err
+
+
+@pytest.fixture(scope="module")
+def session(project):
+    """TMPDIR as the hooks see it, and in it the session's scratch directory and another session's, each with the
+    .owner record hooks/session-scratch-init.sh writes."""
+    root = project.base / "tmpdir"
+    for sid in (SID, OTHER_SID):
+        os.makedirs(root / sid / "sub")
+        (root / sid / ".owner").write_text(json.dumps({"sid": sid}))
+    os.makedirs(root / "not-a-session")
+    return str(root), str(root / SID), str(root / OTHER_SID)
+
+
+def test_a_main_agent_removes_inside_its_session_scratch(project, session):
+    root, own, _other = session
+    for command in ("rm -f " + own + "/a.txt", "rm -rf " + own + "/sub", "rm -rf " + own + "/pytest-of-root/x"):
+        code, err = project.bash(command, caller=None, TMPDIR=root)
+        assert code == 0 and "removal-policy" not in err, (command, err)
+
+
+def test_a_main_agent_removal_elsewhere_is_refused_naming_its_session_scratch(project, session):
+    """Another session's scratch, a mktemp directory under the system temp directory and a project file are not
+    the main agent's own; the refusal names its own directory."""
+    root, own, other = session
+    for command in ("rm -f " + other + "/a.txt", "rm -rf " + root + "/not-a-session/x", "rm -rf /tmp/tmp.AbC123",
+                    "rm " + project.root + "/src/main.py", "rm -rf " + own):
+        code, err = project.bash(command, caller=None, TMPDIR=root)
+        assert code == 2 and "BLOCKED: removal-policy" in err, (command, err)
+        assert NAMED.search(err).group(1) == own, (command, err)
 
 
 def test_without_a_verdict_a_removal_is_refused_wherever_its_files_lie(project):
@@ -250,7 +281,7 @@ def test_the_owner_test_is_the_write_policys_own(project, monkeypatch):
         owns, note = R._scratch_owner(payload)
         role = policy.resolve_agent_type(payload)
         for path in paths:
-            assert owns(path) == bool(role and policy._scratch_status(role, path, payload) == "owner"), (caller, path)
+            assert owns(path) == (policy._scratch_status(role, path, payload) == "owner"), (caller, path)
         assert bool(note) == bool(caller), (caller, note)
     source = open(os.path.join(HOOKS_DIR, "lib", "bash_safety_rules.py"), encoding="utf-8").read()
     body = source[source.index("def _scratch_owner(payload):"):source.index("def removal_policy(payload_text, command):")]
