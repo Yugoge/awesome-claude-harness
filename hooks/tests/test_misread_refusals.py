@@ -137,6 +137,16 @@ SIGNALS = [
     ("x=$(kill -0 4242 && kill -9 4242)", KILL_SIG),
     ("if kill -0 4242 > /etc/hosts; then echo alive; fi", KILL_SIG),   # no plain redirection: read as before
     ("uv run kill -0 4242; npx kill -9 4242", KILL_SIG),
+    # the remaining positions the probe passes in: an || list in a loop's condition, an && list in an if's, a list
+    # after a heredoc fed to an interpreter
+    ('until grep -q "FEEDBACK" out.txt || ! kill -9 4242 2>/dev/null; do sleep 5; done', KILL_SIG),
+    ('until ! kill -9 4242 2>/dev/null || grep -q "FEEDBACK" out.txt 2>/dev/null; do sleep 5; done', KILL_SIG),
+    ("if grep -q x <(tail -n +60 out.txt) && ! kill -TERM 4242 2>/dev/null; then echo y; fi", KILL_SIG),
+    ("python3 - <<'E'\nprint('ok')\nE\nsleep 1; kill -9 4242 && echo sent", KILL_SIG),
+    # the three real kills recorded beside the probes
+    ('kill 4242; sleep 1; ps aux | grep "[r]un_reconcile.py" | wc -l; tail -c 300 /srv/work/live_run.out', KILL_PID),
+    ("kill 4242; sleep 2; cd /srv/work/frontend; tail -3 /srv/work/next-start.log", KILL_PID),
+    ('pkill -f "next dev -p 18111" ; sleep 1; tail -5 /srv/work/next-build.log | cut -c1-200', RUNTIME_GUARD),
 ]
 
 
@@ -439,3 +449,37 @@ BAN_RUNS = [
 def test_a_run_of_the_banned_script_is_still_refused(sandbox, command):
     r = bash_safety(sandbox, command)
     assert r.returncode == 2 and BANNED in r.stderr, (command, r.stderr)
+
+
+# ── Three recorded refusals f199dfb1e no longer made: pinned so they stay gone ─
+# Text written into a file is no command: the word kill in a heredoc `cat` writes to a page, and the phrase
+# `npm install -g` in a heredoc that writes a Python file (both were the protected-runtime guard's refusals); and a
+# search of a file another dispatch declared writes nothing (the tool policy's D8 refusal came from a write target
+# read out of a grep pattern holding `\|` and the word install). These pass before this repair too.
+TEXT_IN_A_FILE = [
+    'cd "/srv/work/frontend/src/app/(product)/admin" && mkdir -p health && cat > health/loading.tsx <<\'E\'\n'
+    "// route loading state: quiet shimmer rows.\n// Server component; reduced-motion animation kill ships from the kit CSS.\n"
+    "export default function Loading() {\n  return null;\n}\nE\nls health",
+    "cat > /srv/work/report.py <<'E'\nimport json\nnotes = [\"run npm install -g svc-coder by hand\", \"then restart\"]\n"
+    "print(json.dumps(notes))\nE\necho ready",
+]
+
+
+@pytest.mark.parametrize("command", TEXT_IN_A_FILE)
+def test_text_written_into_a_file_is_no_kill_and_no_global_install(sandbox, command):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+def test_a_search_of_another_dispatchs_file_names_no_write_target():
+    import sys
+    sys.path.insert(0, str(HOOKS))
+    try:
+        from lib import bash_write_targets
+    finally:
+        sys.path.pop(0)
+    command = ('cd /srv/work; grep -n "registry" docs/dev/ticket-a.md docs/dev/ticket-b.md | cut -c1-400 | head -12; '
+               'grep -n "alpha-W\\|beta-blocks\\|gamma.*shard\\|install.*registry" docs/dev/ticket-c.md | cut -c1-500 | head')
+    assert bash_write_targets.extract_bash_write_targets_with_modes(command) == []
+    written = bash_write_targets.extract_bash_write_targets_with_modes("install -m 644 notes.md docs/dev/ticket-c.md")
+    assert written and "docs/dev/ticket-c.md" in {bash_write_targets._render(t, "") for t in written}
