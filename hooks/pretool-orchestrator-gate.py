@@ -390,7 +390,7 @@ def read_only_bash(data: dict) -> bool:
 SCRATCH_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
                        "NotebookEdit": "notebook_path"}
 # The harness session scratch root when TMPDIR is unset: hooks/session-scratch-init.sh's.
-HARNESS_SCRATCH_DEFAULT_ROOT = "/var/tmp/claude-scratch"
+from lib.locations import SESSION_SCRATCH_ROOT as HARNESS_SCRATCH_DEFAULT_ROOT  # noqa: E402
 # A session id usable as one path component (hooks/doc_sync/notice.py's guard).
 _SCRATCH_SID = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 

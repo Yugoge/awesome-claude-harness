@@ -52,6 +52,7 @@ CONFIG_DIR_NAME = ".claude"                       # a project's configuration di
 CONFIG_HOME_VARS = ("CLAUDE_HOME", "CLAUDE_CONFIG_DIR")
 CONFIG_FOLDERS = ("hooks", "commands")
 SCRATCH_PARTS = (CONFIG_DIR_NAME, "scratch")      # the managed scratch, below a project
+SESSION_SCRATCH_ROOT = os.path.join(SYSTEM_TEMP_DIRS[1], "claude-scratch")  # hooks/session-scratch-init.sh's, TMPDIR unset
 SPEC_DIRS = (("docs", "dev", "specs"), (CONFIG_DIR_NAME, "specs"))  # below a project
 
 
@@ -189,6 +190,16 @@ def temp_root_of(path, cwd: Optional[str] = None, roots: Optional[Tuple[str, ...
             if below(view, root) and (best is None or len(root) > len(best)):
                 best = root
     return best
+
+
+def session_scratch_dir(session_id) -> Optional[str]:
+    """The session's scratch directory, <TMPDIR or SESSION_SCRATCH_ROOT>/<session id>, which
+    hooks/session-scratch-init.sh creates; None for an id that is no single name."""
+    sid = session_id if isinstance(session_id, str) else ""
+    if not sid.strip(".") or os.path.basename(sid) != sid:
+        return None
+    root = _abs_var("TMPDIR") or SESSION_SCRATCH_ROOT
+    return os.path.join(_real(root) or root, sid)
 
 
 def in_system_temp(path, cwd: Optional[str] = None) -> bool:

@@ -4783,8 +4783,9 @@ def _scratch_owner(payload):
     """The write policy's answers about the calling actor's own scratch directory: (owner test for a path, the note
     naming that directory or ""). Both are hooks/pretool-tool-policy.py's own (_scratch_status, _note_own_scratch),
     loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an actor may write
-    scratch files, with no second one here. An actor the write policy gives no directory (the main agent, a
-    subagent whose role does not resolve) owns nothing, and so does any failure to ask."""
+    scratch files, with no second one here. An actor the write policy gives no directory (a main agent whose
+    session scratch was not made, a subagent whose role does not resolve) owns nothing, and so does any failure
+    to ask."""
     import importlib.util
     import io
     try:
@@ -4801,7 +4802,7 @@ def _scratch_owner(payload):
 
     def owns(path):
         try:
-            return bool(role) and policy._scratch_status(role, path, payload) == "owner"
+            return policy._scratch_status(role, path, payload) == "owner"
         except Exception:  # noqa: BLE001
             return False
     return owns, note.getvalue().strip()
