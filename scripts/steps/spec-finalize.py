@@ -51,9 +51,9 @@ def emit(**facts: object) -> None:
 def project_dir(given: str | None) -> Path:
     if given:
         return Path(given).resolve()
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks" / "lib"))
-    import locations  # noqa: E402 -- the one project-root resolution
-    return locations.project_root(bash=True).resolve()
+    # locations.project_root(bash=True)'s rule, spelled here: this step runs copied alone, without hooks/lib
+    # (tests/test_state_item_locations.py pins the two together).
+    return Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()).resolve()
 
 
 def spec_dir_id(spec: str, project: Path) -> str:

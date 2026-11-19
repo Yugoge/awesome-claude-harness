@@ -149,9 +149,9 @@ def _resolve_project_root(project_dir: str | None = None) -> Path:
     """
     if project_dir is not None:
         return Path(project_dir).resolve()
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "lib"))
-    import locations  # noqa: E402 -- the one project-root resolution
-    return locations.project_root(bash=True)
+    # locations.project_root(bash=True)'s rule, spelled here: this source is also exec'd into a bare namespace
+    # with no __file__ and no hooks/lib (tests/test_state_item_locations.py pins the two together).
+    return Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
 
 
 def _resolve_dev_dir(project_root: Path) -> Path:
