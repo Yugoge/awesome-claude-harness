@@ -62,7 +62,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
-    AWK_NAMES, AWK_SOURCE_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
+    AWK_NAMES, AWK_SOURCE_OPTS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
     OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
     _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
@@ -311,13 +311,8 @@ _RELOCATE_WHY = "file relocation/copy: argv words are source and destination pat
 _DATA_VAL_WHY = ("declared data value: read as a regex, a pattern file, a "
                  "count, a glob or a label; never as a program name")
 
-_GREP_CORE_DATA = ("-e", "--regexp", "-f", "--file", "-m", "--max-count",
-                   "-A", "--after-context", "-B", "--before-context",
-                   "-C", "--context")
-_GREP_DATA = _GREP_CORE_DATA + ("-d", "--directories", "--binary-files",
-                                "--include", "--exclude", "--exclude-dir",
-                                "--exclude-from", "--label",
-                                "--group-separator")
+_GREP_CORE_DATA = GREP_CORE_VALUE_OPTS  # shell_parse's grep value options
+_GREP_DATA = GREP_VALUE_OPTS
 
 # Long options of a non-removal git subcommand whose value git reads as DATA:
 # a regex, an author name, a message, a date. None of them names a program.
@@ -368,7 +363,7 @@ INERT_ARGV_CONSUMERS = {
                       "--ascii", "--global-apropos", "--no-hyphenation",
                       "--no-justification", "--names-only", "--regex", "--wildcard",
                       "--ignore-case", "--match-case", "--no-subpages"),
-               exec_=("-P", "--pager", "-H", "--html", "-B", "--browser")),
+               exec_=MAN_PROGRAM_OPTS),
     "whatis": _ic(_LOOKUP_WHY, bool_=("-d", "-v", "-a", "-l", "-w", "-r", "-e"),
                   exec_=("-P", "--pager")),
     "apropos": _ic(_LOOKUP_WHY, bool_=("-d", "-v", "-a", "-l", "-w", "-r", "-e"),

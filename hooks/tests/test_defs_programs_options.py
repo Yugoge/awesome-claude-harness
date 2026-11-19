@@ -66,3 +66,20 @@ def test_the_removal_analyzer_reads_every_awk_program_option(project, command):
 
 def test_a_plain_awk_read_stays_free(project):
     assert _hook("pretool-bash-safety.sh", "awk -F: -v x=1 '{print $1}' /etc/hostname", project) == 0
+
+
+def _grep_guard():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("grep_guard_options", HOOKS / "pretool-grep-backtrack-guard.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("tokens", [["grep", "--color", "(a+)+$", "f"], ["grep", "--color=always", "(a+)+$", "f"],
+                                    ["grep", "--line-number", "(a+)+$", "f"], ["grep", "-D", "skip", "(a+)+$", "f"]])
+def test_the_grep_guard_reads_grep_value_options_as_grep_does(tokens):
+    """GNU grep 3.11: --color[=WHEN] takes a value only after `=`, -D/--devices always takes one; the
+    guard's own table had --color as taking the next word and no long flag at all, so the pattern
+    after them was missed (one shared table now, shell_parse.GREP_VALUE_OPTS)."""
+    assert _grep_guard()._extract_patterns(tokens) == ["(a+)+$"]
