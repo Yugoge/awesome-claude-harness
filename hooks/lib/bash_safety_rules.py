@@ -5979,10 +5979,14 @@ def _wide_path_after_dashdash(args):
     return path in (".", "*") or (path or "").endswith("/")
 
 
+# The first words after `git stash` that save the working tree (and with -u/-a its untracked files) and reset it.
+_STASH_SAVE_WORDS = ("push", "save", "create", "store", "-u", "--include-untracked", "-a", "--all")
+_STASH_SAVE_ALT = "|".join(map(re.escape, _STASH_SAVE_WORDS))
+
+
 def _stash_pushes(args):
-    bad = {"push", "save", "create", "store", "-u", "--include-untracked", "-a", "--all"}
     first = args[0] if args else None
-    return first is not None and (first in bad or (
+    return first is not None and (first in _STASH_SAVE_WORDS or (
         first.startswith("-") and not first.startswith("--") and any(c in first[1:] for c in "ua")))
 
 
@@ -6087,7 +6091,7 @@ def _worktree_raw_fallback(command, globals_=False):
         return _worktree_global_scan(command)
     g = r"git\s+"
     return {
-        "push": grep(g + r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command)
+        "push": grep(g + r"stash\s+(" + _STASH_SAVE_ALT + r")\b", command)
         or grep(g + r"stash\s+-[ua]+\b", command),
         "bare": grep(g + r"stash\s*($|[;&|])", command),
         "checkout": grep(g + r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])", command),
@@ -6193,7 +6197,7 @@ _WT_VALOPTS = frozenset(["-C", "-c"] + ["--" + n for n in GC_VALOPT_NAMES.split(
 _WT_VALUE_SHAPED_RE = re.compile(rf"[{GC_VMARK}]")
 _WT_SEPS = frozenset(";&|()`")
 _WT_SUB_RE = re.compile(r"(stash|checkout|restore)\b")
-_WT_PUSH_RE = re.compile(r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b")
+_WT_PUSH_RE = re.compile(r"stash\s+(" + _STASH_SAVE_ALT + r")\b")
 _WT_PUSH_FLAGS_RE = re.compile(r"stash\s+-[ua]+\b")
 _WT_BARE_RE = re.compile(r"stash\s*($|[;&|])")
 _WT_CHECKOUT_RE = re.compile(r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])")
