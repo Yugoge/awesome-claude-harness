@@ -66,6 +66,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
+        INPLACE_EDITORS,
         PKG_LINK_WORDS,
         PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
@@ -89,6 +90,7 @@ except ImportError:  # executed as a top-level script (no package context)
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
+        INPLACE_EDITORS,
         PKG_LINK_WORDS,
         PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
@@ -784,7 +786,7 @@ def _is_inplace_editor_args(head: str, args: list) -> bool:
     contain `i` (`-Ei`, `-ri`, `-nei`), and Perl `-i`/`-iSUFFIX`/clustered
     `-pi`/`-0pi`/`-Tpi`. A plain `sed s/a/b/ file` (stream to stdout, no -i) is
     NOT in-place and must not match (it reads, does not mutate)."""
-    if head not in ("sed", "perl"):
+    if head not in INPLACE_EDITORS:
         return False
     for a in args:
         if a == "--in-place" or a.startswith("--in-place"):
@@ -1077,7 +1079,7 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
         # no -d: members extracted into cwd; with no explicit members the whole
         # archive is unpacked into cwd (caller's cwd resolution handles relative).
         return members
-    if head in ("sed", "perl") and _is_inplace_editor_args(head, args):
+    if head in INPLACE_EDITORS and _is_inplace_editor_args(head, args):
         return barewords
     if head in ("chmod", "chown", "chgrp"):
         # chmod MODE FILE… / chown OWNER FILE… / chgrp GROUP FILE… — the first
@@ -1644,7 +1646,7 @@ def _step0_self_protection(ctx: "Context") -> Optional[Verdict]:
         # `perl -i` MUTATE the file in place — the inspection gate would wrongly skip
         # them. (Behind a wrapper the head is the wrapper, so the head-agnostic
         # anchor below also catches it; this branch covers the bare head form.)
-        if head in ("sed", "perl") and _is_inplace_editor_args(head, list(rest)):
+        if head in INPLACE_EDITORS and _is_inplace_editor_args(head, list(rest)):
             for tgt in [t for t in rest if not t.startswith("-")]:
                 for cand in _resolve_rel(tgt, cwd, cwd_det):
                     if _path_matches_any(cand, list(_config_path_variants())):
