@@ -825,7 +825,7 @@ def p_push(span, root, payload) -> list[str]:
     the URL, tracking ref and upstream from the repository). BRANCH's tip is
     published when a remote (the typed one, else any the opener recorded: a
     typed name that is no remote of the repository, which push.sh refuses,
-    yields to the remote the push on the owner's answer took) took it or a value
+    ends the run: reported, nobody asked) took it or a value
     the branch had from the opener on; or it is at or behind the typed remote's
     branch (none typed: BRANCH's upstream at the opener; none for such a name);
     or push.md refuses the
@@ -933,8 +933,8 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=F
 
     values = {head, _value_at(local, since)} | {sha for sha, t, _m in local if t >= since}
     for commit in [head] + ([opened] if opened and not _ancestor(root, opened, head) else []):
-        if unknown and again:
-            continue  # Step 5: push.sh refused the typed name, which git lists as no remote; reported, nobody asked
+        if unknown:
+            continue  # push.sh refuses a typed name git lists as no remote; reported, nobody asked (push.md)
         if (up and tip(*up) and _ancestor(root, commit, tip(*up))) or any(
                 took(value, remote) for remote in considered for value in (values if commit == head else {commit})
                 if value):
@@ -960,7 +960,6 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=F
         fix = ("" if now == branch else f"; HEAD is not on it: check out {branch}") + (
             "" if commit == head else f"; {branch} is at {head}, which does not hold it: put {branch} back at it")
         gaps.append(f"push: {branch} at {commit} is not published on {ref or 'a remote'} since the /push opener"
-                    + (f"; the typed name {unknown} is no remote of this repository" if unknown else "")
                     + "".join(f"; {remote}: {why}" for remote, why in errors.items())
                     + (fix and fix + ", then push it"))
     return gaps

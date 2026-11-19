@@ -1179,25 +1179,22 @@ def test_a6_typed_push_counts_only_the_typed_remote(env, remotes):
 
 
 @pytest.mark.parametrize("typed", ["upstrem", "fork"])
-def test_m_a_typed_push_remote_that_is_no_remote_yields_to_the_remote_the_push_took(env, remotes, typed):
-    """P5 review M: the owner mistypes the /push remote (`upstrem`, no remote of the repository, which
-    push.sh refuses); the agent asks, the owner's answer names origin, and the branch is pushed there.
-    The Stop holds naming the typed name and the unpublished commit until a remote's ref takes HEAD
-    after the opener (git's reflog; the owner's answer is no fact, D23), then passes with the push-gate
-    token still naming HEAD. A typed remote that is one (fork) stays the target: origin does not
-    clear it."""
+def test_m_a_typed_push_remote_that_is_no_remote_ends_with_its_refusal(env, remotes, typed):
+    """P5 review M, 2026-11-19: the owner mistypes the /push remote (`upstrem`, no remote of the repository,
+    which push.sh refuses). Nobody is asked: the refusal is reported and the run ends, the gate's own reading
+    (git lists no such remote) releasing it. A typed remote that is one (fork) stays the target: the Stop
+    holds naming it until fork's ref takes HEAD, and origin does not clear it."""
     head = commit(remotes, "t2.txt")
     opener_now(env, "push", typed)
+    if typed == "upstrem":
+        assert run(env) == (0, "")
+        return
     code, text = run(env)
-    named = ("a remote since the /push opener; the typed name upstrem is no remote of this repository"
-             if typed == "upstrem" else "refs/remotes/fork/topic since the /push opener")
-    assert code == 2 and f"- push: topic at {head} is not published on {named}\n" in text, text
-    env.tx.ask("origin")
-    assert run(env)[0] == 2
+    assert code == 2 and f"- push: topic at {head} is not published on refs/remotes/fork/topic since the /push " \
+        "opener\n" in text, text
     git(remotes, "push", "-q", "origin", "topic")
-    if typed == "fork":
-        assert run(env)[0] == 2
-        git(remotes, "push", "-q", "fork", "topic")
+    assert run(env)[0] == 2
+    git(remotes, "push", "-q", "fork", "topic")
     assert run(env) == (0, "")
 
 
