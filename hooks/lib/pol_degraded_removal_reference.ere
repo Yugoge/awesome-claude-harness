@@ -1,12 +1,17 @@
 # POL degraded-mode removal-reference predicate — SINGLE SOURCE OF TRUTH.
 #
-# This file holds "degraded question 1" of hooks/pretool-bash-safety.sh: does
-# the RAW command text name a removal front end or a removal action? The hook
-# reads this file when the execution-boundary analyzer is unavailable, and the
+# This file holds the one question hooks/pretool-bash-safety.sh asks of a
+# command its removal policy cannot prove safe: does the RAW command text name
+# a removal front end or a removal action? The hook reads this file when the
+# execution-boundary analyzer answers UNRESOLVED (the primary path) and when it
+# is unavailable (the degraded path): a match refuses the command, no match
+# lets it run and hands it to the record (owner's rule, 2026-11-19). The
 # differential test (AC-R02-10) reads the SAME file. A copy of the pattern in
-# either consumer is forbidden: the invariant "primary never allows what the
+# any consumer is forbidden: the invariant "primary never allows what the
 # degraded path denies, inside the removal-reference domain" is only meaningful
-# while both sides quantify over one definition.
+# while both sides quantify over one definition. (What the primary path allows
+# inside that domain, it has proven: hooks/tests/fixtures/
+# pol_primary_laxity_ledger.json.)
 #
 # The bare library names (remove, rmtree, unlinkSync, rm_rf, ...) are here
 # because of QA finding F5: python3 -c 'import os; getattr(os,"remove")("X")'

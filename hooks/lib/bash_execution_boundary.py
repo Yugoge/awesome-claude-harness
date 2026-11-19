@@ -13,13 +13,24 @@ boundary in a command ends in exactly one of:
     UNRESOLVED           the analyzer could not PROVE which of the above holds
 
 Precedence: FORBIDDEN_REMOVAL > UNRESOLVED > PROVEN_SAFE_REMOVAL > PROVEN_INERT.
-The command is authorized by the removal policy only when every boundary is
+This module reports a command ``allowed`` only when every boundary is
 terminal-safe.  There is deliberately NO code path from "no adapter matched",
-"parser gave up", "unsupported syntax", or "analyzer crashed" to *allow* — that
-inversion is the whole point.  The analyzer enumerates what is PROVABLY SAFE
-and denies on silence; it never enumerates what is FORBIDDEN and allows on
-silence.  Consequently every lookup table below may only ever move a
-boundary toward SAFE: absence from a table falls to UNRESOLVED, never to allow.
+"parser gave up", "unsupported syntax", or "analyzer crashed" to *allowed* —
+that inversion is the whole point.  The analyzer enumerates what is PROVABLY
+SAFE and answers UNRESOLVED on silence; it never enumerates what is FORBIDDEN
+and allows on silence.  Consequently every lookup table below may only ever
+move a boundary toward SAFE: absence from a table falls to UNRESOLVED, never to
+allowed.
+
+WHAT THE POLICY DOES WITH UNRESOLVED (owner's rule, 2026-11-19).  The reader of
+this verdict, lib/bash_safety_rules.py::removal_policy, no longer refuses on
+that silence alone.  A command this module leaves UNRESOLVED, like one for
+which it gives no verdict at all, is refused when its raw text holds a removal
+word (lib/pol_degraded_removal_reference.ere) and otherwise runs, handed to the
+record as let through unproven.  FORBIDDEN_REMOVAL is refused whatever the text
+holds.  So a proof here now decides whether a command that NAMES a removal may
+run, and a FORBIDDEN_REMOVAL finding still refuses a removal the text does not
+name (``r''m x``).
 
 Two failure classes are distinguished so the deny surface stays proportionate:
 
