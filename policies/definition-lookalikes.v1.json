@@ -3154,6 +3154,34 @@
      }
     ]
    ]
+  },
+  {
+   "id": "wrapper-cwd-options",
+   "source": "defs-shell lane, audit f199dfb1e family wrapper-cwd-options (undecided)",
+   "reason": "runtime_guard._WRAPPER_CWD_OPTS is the union of the cwd options of every wrapper (env -C/--chdir, sudo -D/--chdir, doas -C, systemd-run --working-directory) and _WRAPPER_CWD_SHORT_FUSABLE its short ones that fuse a value; the config guard's (-C, --chdir) are env's own, read on an env wrapper only; _mutation_targets_for_verb's (-C, --directory) are tar's archive directory, not a wrapper option.",
+   "sides": [
+    [
+     {
+      "name": "<module>._WRAPPER_CWD_OPTS",
+      "fingerprint": "4dde60fb1b0d7911",
+      "at": "hooks/lib/runtime_guard/_core.py:510"
+     }
+    ],
+    [
+     {
+      "name": "_CdScopes.run_cmd:in",
+      "fingerprint": "2dd39aa98b5a6867",
+      "at": "hooks/pretool-claude-config-guard.py:634"
+     }
+    ],
+    [
+     {
+      "name": "_mutation_targets_for_verb:in",
+      "fingerprint": "25977e8c8c2ab9f5",
+      "at": "hooks/lib/runtime_guard/_core.py:1169"
+     }
+    ]
+   ]
   }
  ]
 }
