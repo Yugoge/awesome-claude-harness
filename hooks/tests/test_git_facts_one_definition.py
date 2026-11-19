@@ -259,3 +259,25 @@ class TestGitRunOrWriteOptions:
         from lib import bash_safety_rules as bsr, git_facts
         assert set(bsr._DG_GIT_ALL) == git_facts.GIT_ARGV_RUN_OR_WRITE_OPTIONS < git_facts.GIT_RUN_OR_WRITE_OPTIONS
         assert bsr._dg_git_runs(["git", "diff", "--output=o"]) and not bsr._dg_git_runs(["git", "log", "--textconv"])
+
+
+class TestGitRemoteReadFlags:
+    """git-remote-read-flags (undecided in the audit): the orchestrator's gate allowed --all/--push on
+    `remote get-url` and -v/--verbose on a bare `remote`, the disk guard all five anywhere. One fact:
+    each flag only reads where git takes it, and git refuses it (exit 129, nothing run) elsewhere."""
+
+    @pytest.mark.parametrize("cmd", ["git remote -v", "git remote --verbose", "git remote get-url --all origin",
+                                     "git remote get-url --push origin"])
+    def test_both_read(self, cmd):
+        from lib.bash_read_only import is_read_only
+        from lib import bash_safety_rules as bsr
+        words = cmd.split()
+        assert is_read_only(cmd)
+        assert bsr._dg_git(None, words)
+
+    @pytest.mark.parametrize("cmd", ["git remote add x y", "git remote set-url origin y", "git remote -v rm x"])
+    def test_both_refuse(self, cmd):
+        from lib.bash_read_only import is_read_only
+        from lib import bash_safety_rules as bsr
+        assert not is_read_only(cmd)
+        assert not bsr._dg_git(None, cmd.split())

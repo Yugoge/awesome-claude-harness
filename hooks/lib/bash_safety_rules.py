@@ -5114,7 +5114,7 @@ def _dg_git(t, words):
         return False
     if sub == "remote":  # listing only: `git remote [-v]`, `git remote [-v] show|get-url [options] name`
         words_ = [w for w in rest if not w.startswith("-")]
-        return all(w in ("-v", "--verbose", "-n", "--push", "--all") for w in rest if w.startswith("-")) and (
+        return all(w in git_facts.GIT_REMOTE_READ_FLAGS for w in rest if w.startswith("-")) and (
             not words_ or words_[0] in ("show", "get-url"))
     if sub == "config":  # reading only, in the old and the subcommand syntax; never set, unset or edit
         reads = git_facts.GIT_CONFIG_READ_OPTIONS | git_facts.GIT_CONFIG_READ_MODIFIERS

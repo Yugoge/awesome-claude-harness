@@ -65,3 +65,7 @@ GIT_ARGV_RUN_OR_WRITE_OPTIONS = frozenset({
 # (the editor) and --paginate (the pager).
 GIT_RUN_OR_WRITE_OPTIONS = GIT_ARGV_RUN_OR_WRITE_OPTIONS | {
     "--ext-diff", "--textconv", "--filters", "--edit", "--paginate"}
+
+# `git remote` flags that keep it a read: -v/--verbose (list with URLs), -n (`show` without asking the
+# remote), --push and --all (`get-url`). Where a form does not take one, git refuses it and runs nothing.
+GIT_REMOTE_READ_FLAGS = frozenset({"-v", "--verbose", "-n", "--push", "--all"})

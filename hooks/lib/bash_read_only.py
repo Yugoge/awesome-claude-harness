@@ -52,7 +52,7 @@ from shell_parse import (  # noqa: E402
 from shell_parse import GIT_INERT_FLAGS  # noqa: E402
 from git_facts import GIT_LISTING_SUBCOMMANDS, GIT_READ_SUBCOMMANDS  # noqa: E402
 from git_facts import GIT_CONFIG_READ_MODIFIERS, GIT_CONFIG_READ_OPTIONS, GIT_CONFIG_READ_SUBCOMMANDS  # noqa: E402
-from git_facts import GIT_RUN_OR_WRITE_OPTIONS  # noqa: E402
+from git_facts import GIT_REMOTE_READ_FLAGS, GIT_RUN_OR_WRITE_OPTIONS  # noqa: E402
 sys.path.pop(0)
 
 MAX_COMMAND_LEN = 8192
@@ -307,8 +307,8 @@ def _git_sub(sub: str, args) -> bool:
         return _listing(args, _TAG_FLAGS, _LISTING_VALUED, ("--list", "-l"), count_flag=True)
     if sub == "remote":
         if positional and positional[0] == "get-url":
-            return all(a in ("--all", "--push") for a in args if a.startswith("-")) and len(positional) == 2
-        return not positional and all(a in ("-v", "--verbose") for a in args)
+            return all(a in GIT_REMOTE_READ_FLAGS for a in args if a.startswith("-")) and len(positional) == 2
+        return not positional and all(a in GIT_REMOTE_READ_FLAGS for a in args)
     if sub == "config":
         flags = [a for a in args if a.startswith("-")]
         if not all(a in _CONFIG_FLAGS or a.startswith("--type=") for a in flags):
