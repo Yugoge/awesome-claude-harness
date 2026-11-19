@@ -331,7 +331,7 @@
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
-      "fingerprint": "8efae8045d4a288a",
+      "fingerprint": "3d4ad66a4c6628a8",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
       "rationale": "def _config_ancestor_dirs() — illustrative literal inside documentation/usage text; not executed as a path."

@@ -2,7 +2,6 @@
 
 Public API:
     classify_report(report_path) -> "productive" | "low_yield" | "clean_sweep"
-    compute_yield(specialist_type, current_report_path, history_window=5) -> dict
     record_yield(report_artifact_path, specialist_type, session_id, cycle_id,
                  classification, action) -> None
     get_degradation_state(specialist_type, session_id=None) -> dict

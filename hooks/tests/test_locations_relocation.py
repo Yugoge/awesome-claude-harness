@@ -692,3 +692,37 @@ def test_bash_safety_reads_the_state_root_from_the_one_resolution(tmp_path):
                                             "CLAUDE_STATE_DIR": "/srv/state//hooks/./x/"})
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.split() == ["/srv/state/hooks/x", "/srv/state/hooks/x"], proc.stdout
+
+
+# --- the installer's own loads ---------------------------------------------------------------------
+
+INSTALLER_LOAD = r"""
+import sys
+sys.path.insert(0, sys.argv[1])
+import config
+print(len(config.REQUIRED_KEYS), config.SCHEMA_VERSION, callable(config._read_config), bool(config.DATA_FILE_PATH))
+"""
+
+
+def test_the_installer_loads_the_runtime_guard_config_with_pathmatch_alone(tmp_path):
+    """scripts/bootstrap step 4 and scripts/install/render-settings load runtime_guard/config.py from
+    a home, with its directory alone on sys.path. A home that holds only the installer's files (as
+    the landing tests make one: config.py and pathmatch.py) must still load it: asking
+    hooks/lib/locations.py or the shared parser at import made init step 4 fail there, and the
+    landing then never installed the git hooks."""
+    guard = tmp_path / "home" / "hooks" / "lib" / "runtime_guard"
+    guard.mkdir(parents=True)
+    for name in ("config.py", "pathmatch.py"):
+        (guard / name).write_bytes((HOOKS / "lib" / "runtime_guard" / name).read_bytes())
+    proc = subprocess.run([sys.executable, "-B", "-I", "-c", INSTALLER_LOAD, str(guard)], capture_output=True, text=True,
+                          cwd=str(tmp_path), timeout=60, env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path / "home")})
+    assert proc.returncode == 0, proc.stderr
+    keys, schema, reads, has_path = proc.stdout.split()
+    assert int(keys) >= 10 and schema == "1" and reads == "True" and has_path == "True", proc.stdout
+    # in the whole tree the guard still asks the one place when a stop root is needed
+    probe = ("import sys; sys.path.insert(0, sys.argv[1]); from runtime_guard import config; "
+             "print(sorted(config._config_ancestor_dirs())[:1], config._locations().__name__)")
+    proc = subprocess.run([sys.executable, "-B", "-c", probe, str(HOOKS / "lib")], capture_output=True, text=True,
+                          cwd=str(tmp_path), timeout=60, env={"PATH": "/usr/bin:/bin", "HOME": f"/srv/{NEVER}/home"})
+    assert proc.returncode == 0 and f"/srv/{NEVER}/home/.config" in proc.stdout and "locations" in proc.stdout, \
+        proc.stdout + proc.stderr

@@ -87,8 +87,7 @@ dot-claude/
 │   │   ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 │   │   ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 │   │   ├── `task-tools-migration-plan.md` - Task tools migration plan — TodoWrite → TaskCreate / TaskUpdate / TaskList / TaskGet
-│   │   ├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
-│   │   └── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+│   │   └── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 │   ├── `ADVERSARIAL-CORPUS.md` - Adversarial Bypass Corpus — claude-code-guardrails
 │   ├── `ENFORCEMENT-LEDGER.md` - Enforcement Ledger — claude-code-guardrails
 │   ├── `extending.md` - Extending the harness
@@ -454,7 +453,6 @@ dot-claude/
 │   ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 │   ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 │   ├── `git-fswatch@.service` - service file
-│   ├── `install-protection-all.sh` - LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
 │   ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 │   ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
 │   ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
@@ -524,7 +522,6 @@ dot-claude/
 │   ├── `pretool-write-gate.py` - It replaces seven parallel hooks (hooks-audit O4) with one process: the rules of
 │   ├── `pretool-write-guard.sh` - STUB: settings.json no longer registers it (P12); hooks/pretool-write-gate.py runs its checks as the
 │   ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
-│   ├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 │   ├── `pull.sh` - pull.sh - Executable version of /pull command
 │   ├── `push.sh` - push.sh - Executable version of /push command
 │   ├── `QUICKSTART.md` - Quick Start — the hooks layer
@@ -536,7 +533,6 @@ dot-claude/
 │   ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 │   ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
 │   ├── `sessionstart-launch.py` - Every Python hook registered on SessionStart runs here, each as `python3 <file>` would have run it
-│   ├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 │   ├── `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 │   ├── `stop-command-gate.py` - The Stop coordinator's completion phase runs it with its mode
 │   ├── `stop-completion-gate.py` - blocked compliant /dev Stops with GATE_ERROR and its only release was a
@@ -737,7 +733,6 @@ dot-claude/
 │   ├── `readme_facts.py` - Description: One function per fact (FACTS below), one source per function, nothing the pages do not
 │   ├── `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
 │   ├── `regen-folder-docs.py` - doc-sync regenerates a folder's INDEX.md and README.md AUTO regions only when a live harness
-│   ├── `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 │   ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 │   ├── `resolve-commit-repos.py` - The normal ``/commit`` workflow uses this helper before it writes any commit
 │   ├── `resolve-dev-artifact-chain.py` - The resolver never creates, refreshes, or rewrites artifacts.  It validates the
@@ -836,7 +831,8 @@ dot-claude/
 │   │   ├── late_repair_golden/
 │   │   ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 │   │   ├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
-│   │   └── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
+│   │   ├── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
+│   │   └── `post-commit-lfs-auto-push` - post-commit - Combined hook: Git LFS + Auto-Push
 │   ├── instructions/
 │   │   ├── `execution-guide.md` - AI Test Execution Guide
 │   │   └── `validation-guide.md` - AI-Driven Validation Guide

@@ -376,7 +376,6 @@ hooks/
 ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 ├── `git-fswatch@.service` - service file
-├── `install-protection-all.sh` - LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
 ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
@@ -446,7 +445,6 @@ hooks/
 ├── `pretool-write-gate.py` - It replaces seven parallel hooks (hooks-audit O4) with one process: the rules of
 ├── `pretool-write-guard.sh` - STUB: settings.json no longer registers it (P12); hooks/pretool-write-gate.py runs its checks as the
 ├── `prompt-workflow.py` - UserPromptSubmit Hook: Checklist Injection for Slash Commands
-├── `protection-status.sh` - protection-status.sh - Display protection status for all git repositories
 ├── `pull.sh` - pull.sh - Executable version of /pull command
 ├── `push.sh` - push.sh - Executable version of /push command
 ├── `QUICKSTART.md` - Quick Start — the hooks layer
@@ -458,7 +456,6 @@ hooks/
 ├── `session-tmpfs-banner.sh` - session-tmpfs-banner.sh — SessionStart hook (6th in the SessionStart hooks block).
 ├── `sessionend-scratch-sweep.sh` - sessionend-scratch-sweep.sh — SessionEnd hook (Scratch Lifecycle Contract
 ├── `sessionstart-launch.py` - Every Python hook registered on SessionStart runs here, each as `python3 <file>` would have run it
-├── `start-fswatch-all.sh` - start-fswatch-all.sh - Start fswatch monitoring for all important repositories
 ├── `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 ├── `stop-command-gate.py` - The Stop coordinator's completion phase runs it with its mode
 ├── `stop-completion-gate.py` - blocked compliant /dev Stops with GATE_ERROR and its only release was a
