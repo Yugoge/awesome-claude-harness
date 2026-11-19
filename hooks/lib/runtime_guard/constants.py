@@ -53,6 +53,7 @@ _WRAPPER_LEADING_POSITIONAL = frozenset({"timeout", "chrt", "taskset", "setarch"
 # Subset whose leading positional is SUPPRESSED if a value option already
 # consumed an operand (so `taskset -c 0 <cmd>` exposes <cmd>, not skips it).
 _WRAPPER_POSITIONAL_OPTIONAL = frozenset({"chrt", "taskset"})
+NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
 RUNTIMES = frozenset({"node", "nodejs", "tsx", "bun", "deno", "ts-node", "ts-node-esm"})
 # Per-runtime leading SUBCOMMANDS that precede the script positional and must be
 # skipped so `deno run <path>`, `tsx watch <path>`, `bun run <path>` reach the
