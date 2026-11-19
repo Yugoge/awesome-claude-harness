@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """locations.py -- the one place that answers where things are.
 
-A decision about a location asks here: what is a device, what is system temp, where the harness
-home, the project, the state root and the temp root are, whether a path lies in a directory,
-which Claude configuration folder or spec root it is in. No other file of hooks/ or scripts/
-compares a path with an absolute system directory or lists one (tests/test_location_literals.py):
-the literals below are the only copy. Pure: reads os.environ and the filesystem, writes nothing.
+What is a device or system temp, where the harness's roots are, what lies in which directory.
+A decision about a location asks here: where the harness home, the project, the state root and
+the temp root are, whether a path lies in a directory, which Claude configuration folder or spec
+root it is in. No other file of hooks/ or scripts/ compares a path with an absolute system
+directory or lists one (tests/test_location_literals.py): the literals below are the only copy.
+Pure: reads os.environ and the filesystem, writes nothing.
 """
 
 from __future__ import annotations

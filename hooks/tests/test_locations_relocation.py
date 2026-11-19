@@ -1,5 +1,6 @@
 """The nine location findings of the hardcode audit (2026-11-19), relocated.
 
+Each location decision is the same wherever the project and the harness home are, by every spelling.
 hooks/lib/locations.py is the one place that answers where things are. Each decision that
 used to test a literal is taken here with the project under /dev/shm, /root, /home/<user>,
 /var/tmp, /run/user/<uid> and at a path with a space, and, where a harness home is named,

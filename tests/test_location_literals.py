@@ -1,5 +1,6 @@
 """Absolute system directories are named in one file: hooks/lib/locations.py.
 
+Fails when a comparison or a table names an absolute system directory outside that one file.
 A hook that decides by a location asks that file. This check holds the rest of hooks/ and
 scripts/ to it with the method of the hardcode audit's inventory (2026-11-19): in every
 tracked non-test Python file, each comparison of text against a literal (startswith and
