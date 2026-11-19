@@ -716,8 +716,9 @@ def test_ac_r02_10_degradation_modes_deny_the_adversarial_domain(mode, tmp_path)
         if command in inside:
             assert code == 2, "%s allowed under %s" % (command, mode)
             assert err.strip()
-        else:
-            assert code == 0, "%s refused under %s: %s" % (command, mode, err)
+        else:  # the removal rule lets it run; `rg --pre <program>` is refused by another rule (_read_made_to_run)
+            assert "removal-policy" not in err, "%s refused by the removal rule under %s: %s" % (command, mode, err)
+            assert code == 0 or "makes it run a program" in err, "%s refused under %s: %s" % (command, mode, err)
 
 
 # ---------------------------------------------------------------------------

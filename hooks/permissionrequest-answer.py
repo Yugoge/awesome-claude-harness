@@ -1,29 +1,10 @@
 #!/usr/bin/env python3
 """PermissionRequest: answer every permission request by rule, so no tool call waits for a person.
 
-Claude Code raises this event where it would ask a person to approve a call: an ask rule, its own
-critical-path removal check (`rm`/`rmdir`, which no allow rule or PreToolUse "allow" approves, even in
-bypassPermissions mode), or, outside bypassPermissions, a call no allow rule covers. The PreToolUse
-hooks have already run on the call and not refused it. The answer:
-
-- Bash and Monitor: the harness's Bash rules (lib/bash_safety_rules.py, the rules of
-  hooks/pretool-bash-safety.sh, its removal rule among them) are asked again of the command. A refusal
-  is a deny with their text, and so is a command whose text holds what a Bash deny rule of settings.json
-  refuses (Claude Code asks for one it cannot split). A command they let run is allowed in bypassPermissions mode, and in any
-  mode when its text holds a removal word (lib/pol_degraded_removal_reference.ere): the removal rule
-  lets such a command run only when it proves it, today an own-scratch removal (every file written out
-  and inside the caller's own scratch directory) or a command proven inert.
-- Any other tool: allowed in bypassPermissions mode (the mode runs every call the hooks and deny rules
-  let through; Claude Code asks only for its own checks), refused in any other mode, where it asks
-  because no allow rule in settings covers the call.
-- AskUserQuestion and ExitPlanMode ask the person a question rather than for a permission: left to
-  the hooks that decide those tools.
-
-Failure: any error of this file, and a decision not reached within DEADLINE seconds, is a deny. Where
-this process itself dies or is killed (no decision printed), Claude Code applies no decision: a run
-without a prompt host refuses the call, and a session whose host answers prompts (--permission-prompt-tool
-stdio) leaves the request to that host. While /harness off holds, the launcher answers nothing, so
-the prompt goes to the person as without the harness.
+The rules it applies, its failure behaviour and what it leaves to other hooks are stated once, in
+docs/how-it-works.md ("Permission prompts") and the ledger row H-101; decide() below is that table.
+An error or no decision within DEADLINE seconds is a deny; exit 2 is never used (at this event it would
+leave the request to a person).
 """
 from __future__ import annotations
 
