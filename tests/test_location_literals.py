@@ -175,7 +175,7 @@ PLANTED = [
     ('ok = head in ("/bin", "/usr/bin")', 2, 1),
     ('ok = head not in frozenset({"/dev/null", "/dev/tty"})', 2, 1),
     ('ROOTS = ("/tmp", "/var/tmp")', 0, 1),
-    ('ROOTS: tuple = frozenset(["/root", "/home"])', 0, 1),
+    ('ROOTS: tuple = frozenset(["/etc", "/usr"])', 0, 1),
     ('import re\nok = re.search(r"^/proc/[^/]+/fd", text)', 1, 0),
     ('import re\nRX = re.compile(r"(/bin/|/usr/bin/)?(bash|sh)")', 1, 0),
     # not a system directory, or not a decision the method reads

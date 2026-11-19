@@ -4258,7 +4258,7 @@ def _plain_dd(vals, sv):
         if not path or path.startswith("~") or (not path.startswith("/") and sv.named("cd", "pushd", "popd")):
             return False
         p = _abs_norm(path, sv.cwd)
-        if locations.FD_PATH.fullmatch(p):
+        if locations.FD_PATH.match(p):
             continue  # its command's redirections are plain (fd 1 and 2 only), so N is inherited or stdout/stderr
         if locations.is_system_path(p):
             return False

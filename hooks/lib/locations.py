@@ -27,7 +27,8 @@ NULL_DEVICE = "/dev/null"
 STD_SINKS = frozenset({NULL_DEVICE, "/dev/stdout", "/dev/stderr"})
 TERMINAL_SINKS = STD_SINKS | {"/dev/tty"}
 FD_DIR = "/dev/fd/"                               # /dev/fd/N: a descriptor of the process
-FD_PATH = re.compile(r"/dev/fd/[0-9]+")
+FD_PATH = re.compile(r"^/dev/fd/[0-9]+$")
+PROC_DIR = "/proc"
 PROC_FD = re.compile(r"/proc/[^/]+/fd(/|$)")      # a descriptor of some process
 STDIN_DEVICE = "/dev/stdin"
 STDIN_DEVICES = (STDIN_DEVICE, "/dev/fd/0", "/proc/self/fd/0")
@@ -141,10 +142,10 @@ def device_name(path: str) -> Optional[str]:
 
 def is_device(path, cwd: Optional[str] = None) -> bool:
     """Whether ``path`` names a device: the device directory or anything in it (a node, stdout,
-    fd/N, a shell's tcp/...), but not the shared-memory tmpfs mounted there. Its files are ordinary
-    files, made or not yet: a project can be checked out on it."""
+    fd/N, a shell's tcp/...), but nothing below the shared-memory tmpfs mounted there. Its files
+    are ordinary files, made or not yet: a project can be checked out on it."""
     full = absolute(path, cwd)
-    return bool(full) and below(full, DEVICE_DIR) is not None and below(full, SHM_DIR) is None
+    return bool(full) and below(full, DEVICE_DIR) is not None and not below(full, SHM_DIR)
 
 
 def is_system_path(path: str) -> bool:
@@ -188,8 +189,8 @@ def temp_root_of(path, cwd: Optional[str] = None, roots: Optional[Tuple[str, ...
 
 
 def in_system_temp(path, cwd: Optional[str] = None) -> bool:
-    """Whether a write of ``path`` lands strictly below a system temp directory, both sides resolved."""
-    return any(inside(path, root, cwd) for root in system_temp_roots())
+    """Whether ``path`` is a system temp directory or a write of it lands in one, both sides resolved."""
+    return any(inside(path, root, cwd) is not None for root in system_temp_roots())
 
 
 def is_system_temp_root(directory: str) -> bool:
@@ -295,6 +296,8 @@ def data_parts(path: str) -> Optional[Tuple[str, ...]]:
     if path.startswith("~"):
         return None
     if os.path.isabs(path):
+        if is_device(path) or below(os.path.normpath(path), PROC_DIR) is not None:
+            return None  # a name the kernel keeps for a process (fd/N, self/fd/N), not where a file lies
         for place in (str(project_root()), os.curdir) + tuple(sorted(temp_roots(), key=len, reverse=True)):
             rel = inside(path, place)
             if rel is not None:

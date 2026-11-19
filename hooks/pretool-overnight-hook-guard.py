@@ -1681,7 +1681,7 @@ def _build_bwrap_argv(command: str, main_root: str, worktree_path: str,
     ]
     # A TMPDIR outside /tmp (settings.json pins one) is private and writable too, as /tmp is, or
     # every mktemp of the command fails on the RO host; never one holding main or the worktree.
-    tmp = os.path.realpath(locations.temp_root())
+    tmp = os.path.realpath(os.environ.get('TMPDIR') or locations.DEFAULT_TEMP_DIR)
     if os.path.isdir(tmp) and not _path_under_prefix(tmp, locations.DEFAULT_TEMP_DIR) and not any(
             _path_under_prefix(r, tmp) or _path_under_prefix(tmp, r) for r in (main_real, wt_real)):
         argv += ['--tmpfs', tmp]

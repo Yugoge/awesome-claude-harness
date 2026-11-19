@@ -60,10 +60,13 @@ import shlex
 import sys
 
 try:
-    from lib import locations, shell_parse
+    from lib import shell_parse
 except ImportError:  # run as a script: hooks/lib is on sys.path
-    import locations
     import shell_parse
+try:
+    from . import locations
+except ImportError:  # no package: hooks/lib itself is on sys.path
+    import locations
 
 # One table each, in the parser.
 GIT_GLOBAL_FLAGS = shell_parse.GIT_GLOBAL_FLAGS

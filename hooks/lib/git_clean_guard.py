@@ -67,11 +67,13 @@ import re
 import sys
 
 try:
-    from lib import locations
     from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
-    import locations
     from shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
+try:
+    from . import locations
+except ImportError:  # no package: hooks/lib itself is on sys.path
+    import locations
 
 # git globals that point the invocation at a DIFFERENT repository / work tree.
 _REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})

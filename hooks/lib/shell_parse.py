@@ -29,8 +29,8 @@ import re
 import sys
 
 try:
-    from lib import locations
-except ImportError:  # hooks/lib itself is on sys.path
+    from . import locations
+except ImportError:  # no package: hooks/lib itself is on sys.path
     import locations
 
 # ---------------------------------------------------------------------------

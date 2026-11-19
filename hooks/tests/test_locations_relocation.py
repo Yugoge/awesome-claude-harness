@@ -2,16 +2,17 @@
 
 Each location decision is the same wherever the project and the harness home are, by every spelling.
 hooks/lib/locations.py is the one place that answers where things are. Each decision that
-used to test a literal is taken here with the project under /dev/shm, /root, /home/<user>,
-/var/tmp, /run/user/<uid> and at a path with a space, and, where a harness home is named,
-with the home addressed by its real path, as ~/.claude and through an account's symlinked
-directory: the answer is the same in every cell.
+used to test a literal is taken here with the project on the shared-memory tmpfs, under the
+superuser's home, under a user's home, in a system temp directory, in a user's runtime
+directory and at a path with a space (PROJECTS), and, where a harness home is named, with the
+home addressed by its real path, as ~/.claude and through an account's symlinked directory:
+the answer is the same in every cell.
 
 No directory is made at a project location. The hooks judge paths, and the roots are
 injected the way a session gives them (CLAUDE_PROJECT_DIR, the payload's cwd, HOME,
 CLAUDE_HOME, CLAUDE_CONFIG_DIR, CLAUDE_STATE_DIR, TMPDIR); the home's links are made
-under pytest's own tmp_path. On f199dfb1e the /dev/shm, /var/tmp, real-path and
-account-link cells fail.
+under pytest's own tmp_path. Before hooks/lib/locations.py the tmpfs, system-temp, real-path
+and account-link cells fail. The last section pins each other decision the one place changed.
 """
 from __future__ import annotations
 
@@ -221,7 +222,7 @@ def test_f13_a_symlinked_temp_directory_answers_alike(tmp_path, monkeypatch):
         assert locations.in_arbitrary_temp(str(spelling / "x.txt"), "/work/proj")
         assert not locations.in_arbitrary_temp(str(spelling / "proj" / "x.txt"), str(link / "proj"))
     assert not locations.in_system_temp(str(tmp_path / "elsewhere" / "x.txt"))
-    assert not locations.in_system_temp(str(link))  # the root itself is not below it
+    assert locations.in_system_temp(str(link))  # the directory itself, as the literal comparison had it
     # judged where the write lands: a link kept in temp that leads out of it, and one leading into it
     (real / "out").symlink_to(tmp_path / "elsewhere")
     (tmp_path / "in").symlink_to(real / "scratch")
@@ -235,7 +236,7 @@ def test_f13_a_symlinked_temp_directory_answers_alike(tmp_path, monkeypatch):
 def home_layout(tmp_path):
     """This machine in miniature: the home's real directory has no `.claude` in its name,
     ~/.claude links to it, and an account's configuration directory links its hooks and commands."""
-    real = tmp_path / "dot-claude-real"
+    real = tmp_path / "harness-real"
     for sub in ("hooks", "commands"):
         (real / sub).mkdir(parents=True)
     (tmp_path / "home").mkdir()
@@ -321,7 +322,7 @@ def test_f8_overnight_exemption_follows_the_session_temp_and_state_roots(tmp_pat
     def allowed(path) -> bool:
         return overnight._is_path_allowed_during_overnight(str(path), [worktree])
 
-    sid = "0b0f6d0e-1111-4222-8333-444455556666"
+    sid = "11111111-2222-4333-8444-555555555555"
     assert allowed(os.path.join(worktree, "src", "x.py"))
     assert allowed(session_tmp / sid / "notes.md")                           # the session's scratch directory
     assert allowed(session_tmp / "claude-0" / "-p" / sid / "scratchpad" / "n.md")  # the CLI's scratchpad
@@ -359,7 +360,9 @@ def test_f9_a_note_written_into_the_project_is_data_wherever_the_project_is(tmp_
     # code, as before: a hidden or hooks component, and an absolute path outside the project and temp
     for dest in (os.path.join(project, ".git", "hooks", "pre-push"), os.path.join(project, "hooks", "x.sh"),
                  ".claude/notes.md", os.path.join(project, ".claude", "settings.json"),
-                 f"/etc/{NEVER}/notes.md", "~/.bashrc"):
+                 f"/etc/{NEVER}/notes.md", "~/.bashrc",
+                 # a descriptor's name is no place: it is never resolved to where this process's own output goes
+                 "/proc/self/fd/1", "/dev/fd/3"):
         assert _heredoc_runs_git(classifier, dest), dest
 
 
@@ -397,9 +400,9 @@ def test_f11_overnight_bash_write_onto_git_config_is_refused_wherever_main_is(tm
     overnight._enforce_overnight_git_command("printf x > /dev/null", main, worktree, git_dir)  # a device: no refusal
 
 
-# --- finding 14: the spec roots named one machine's directory, dot-claude --------------------------
+# --- finding 14: the spec roots named one machine's directory --------------------------------------
 
-@pytest.mark.parametrize("name", ["dot-claude", "claude-harness"])
+@pytest.mark.parametrize("name", ["harness-home", "another-name"])
 def test_f14_the_harness_homes_specs_are_a_spec_root_whatever_the_home_is_named(tmp_path, project, name):
     real = tmp_path / name
     (real / "specs" / "s1").mkdir(parents=True)
@@ -457,7 +460,7 @@ def test_f16_a_relative_path_entry_makes_every_file_a_planted_program_wherever_i
     assert guard._classify_bash_target(command, project) == "hooks"
 
 
-# --- finding 17: the runtime guard's stop roots held /root and /home, never the user's home --------
+# --- finding 17: the runtime guard's stop roots held two fixed homes, never the user's own ---------
 
 GUARD_PROBE = r"""
 import os, sys
@@ -467,8 +470,8 @@ cfg = {"schema_version": 1, **{k: [] for k in config.REQUIRED_KEYS}}
 for command in sys.argv[2:]:
     print(_core.evaluate(command, os.environ["HOME"], cfg)[0])
 """
-HOMES = ["/root", "/home/alice", "/Users/alice", f"/var/tmp/{NEVER}/home", f"/dev/shm/{NEVER}/home",
-         f"/run/user/1000/{NEVER}/home", f"/srv/{NEVER} with space/home"]
+HOMES = ["/root", "/home/alice", "/Users/alice"] + [  # the superuser's home, a user's home, a macOS one
+    f"/var/tmp/{NEVER}/home", f"/dev/shm/{NEVER}/home", f"/run/user/1000/{NEVER}/home", f"/srv/{NEVER} with space/home"]
 
 
 @pytest.mark.parametrize("home", HOMES)
@@ -491,14 +494,14 @@ def test_f17_the_users_home_is_a_broad_root_whoever_the_user_is(tmp_path, home):
 def test_a_file_on_the_shared_memory_tmpfs_is_no_device(tmp_path):
     from lib import locations
     for device in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/2", "/dev", "/dev/tcp/host/80",
-                   "/dev/sda1", "/dev/mapper/not-made-yet", "/dev/shm/../sda"):
+                   "/dev/sda1", "/dev/mapper/not-made-yet", "/dev/shm/../sda", "/dev/shm"):
         assert locations.is_device(device), device
-    for ordinary in ("/dev/shm", f"/dev/shm/{NEVER}/proj/docs/x.json", "/dev/../etc/hostname", "/dev/shmem/x/../../shm/x",
+    for ordinary in (f"/dev/shm/{NEVER}/proj/docs/x.json", "/dev/../etc/hostname", "/dev/shmem/x/../../shm/x",
                      str(tmp_path / "x"), "docs/x.json", "", "/devices/x"):
         assert not locations.is_device(ordinary), ordinary
     assert locations.is_device("x", cwd="/dev") and not locations.is_device("x", cwd="/dev/shm")
     assert locations.is_system_path("/dev/sda1") and locations.is_system_path("/etc/hostname")
-    assert not locations.is_system_path("/dev/shm/proj/x") and not locations.is_system_path("/root/proj/x")
+    assert not locations.is_system_path("/dev/shm/proj/x") and not locations.is_system_path("/srv/proj/x")
 
 
 def test_is_inside_resolves_both_sides(tmp_path):
@@ -537,3 +540,155 @@ def test_the_roots_have_one_resolution_each(tmp_path, monkeypatch):
     assert locations.temp_root() == locations.DEFAULT_TEMP_DIR
     monkeypatch.setenv("TMPDIR", "/")
     assert os.sep not in locations.session_temp_roots() and os.sep not in locations.temp_roots()
+
+
+# --- the other decisions the one place changed -----------------------------------------------------
+# Each is a consequence of asking one place; each test fails on the tree before it.
+
+def test_only_a_device_is_skipped_not_a_spelling_that_starts_like_one():
+    """tool-policy's three stages skipped every target whose text starts with the device directory:
+    one that leaves it again was skipped too, and the directory itself was not."""
+    policy = _load("pretool-tool-policy.py", "tool_policy_relocation_spellings")
+    policy._bootstrap_security()
+    assert policy._write_targets("Write", ["/dev/../etc/x", "/dev", "/dev/null"]) == ["/dev/../etc/x"]
+
+
+def test_f2_the_folder_itself_is_a_protected_target(tmp_path, monkeypatch, project):
+    """A write aimed at the folder, not at a file in it: refused by both guards (the text test
+    needed the slash after the folder's name)."""
+    folder = os.path.join(project, ".claude", "hooks")
+    proc = _hook("pretool-claude-config-guard.py", _payload(project, "Write", {"file_path": folder, "content": "x"}),
+                 _env(tmp_path, project), tmp_path)
+    assert proc.returncode == 2, proc.stderr
+    for key, value in _env(tmp_path, project).items():
+        monkeypatch.setenv(key, value)
+    overnight = _load("pretool-overnight-hook-guard.py", "overnight_guard_relocation_folder")
+    assert overnight.is_hooks_path(folder) and overnight.is_commands_path(os.path.join(project, ".claude", "commands"))
+
+
+HOME_REPO_WRITES = ["git checkout -- hooks/x.py", "git restore commands/dev.md", "git rm hooks/x.py",
+                    "sed -i s/a/b/ hooks/x.py", "rm hooks/x.py", "touch hooks/x.py", "chmod +x hooks/x.sh",
+                    "echo x > hooks/tests/test_new.py", "echo x | tee commands/new.md"]
+HOME_REPO_READS = ["ls hooks", "cat hooks/x.py", "grep -rn foo hooks/ commands/", "git diff hooks/x.py",
+                   "git log --oneline -- hooks/ commands/", "git add hooks/x.py", "wc -l commands/dev.md",
+                   "cp hooks/x.py docs/copy.py", "echo x > scripts/new.py", "echo x > docs/notes.md"]
+
+
+def test_f2_in_the_harness_repository_itself_writes_are_refused_and_reads_pass(tmp_path, home_layout):
+    """A session whose project is the harness home, named by no `.claude`: a Bash write into its
+    hooks/ or commands/ is refused as `~/.claude/hooks/` always was (the sentinel
+    `.claude/.hook-refactor-allow` at the project root lifts it); reading them is not."""
+    real = home_layout["real path"]
+    env = _home_env(tmp_path, str(real), home_layout)
+
+    def run(command):
+        return _hook("pretool-claude-config-guard.py", _payload(str(real), "Bash", {"command": command}), env, real)
+
+    for command in HOME_REPO_WRITES:
+        proc = run(command)
+        assert proc.returncode == 2, (command, proc.stderr)
+    for command in HOME_REPO_READS:
+        proc = run(command)
+        assert proc.returncode == 0, (command, proc.stderr)
+    (real / ".claude").mkdir()
+    (real / ".claude" / ".hook-refactor-allow").write_text("")
+    for command in HOME_REPO_WRITES:
+        proc = run(command)
+        assert proc.returncode == 0, (command, proc.stderr)
+
+
+def test_f2_moving_the_harness_home_away_is_not_proven_harmless(tmp_path, monkeypatch):
+    """The proof that lets a command past the raw-text reading knows the harness home's own folders,
+    wherever the home is: a move of the home takes them with it."""
+    for key, value in _env(tmp_path, str(tmp_path / "proj")).items():
+        monkeypatch.setenv(key, value)
+    guard = _load("pretool-claude-config-guard.py", "config_guard_relocation_proof")
+    assert not guard._proven_harmless(f"mv {shlex.quote(str(ROOT))} /srv/{NEVER}", str(tmp_path))
+    assert guard._proven_harmless(f"mv {shlex.quote(str(tmp_path / 'proj' / 'docs'))} /srv/{NEVER}", str(tmp_path))
+
+
+def test_f9_home_and_call_directory_spellings_answer_as_the_relative_one(tmp_path, monkeypatch):
+    """A `~` path and an absolute path that name a file of the project or of the call directory are
+    data as their relative spelling is; before, both were code whatever they named."""
+    home = tmp_path / "home"
+    for key, value in _env(tmp_path, str(home / "proj")).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.chdir(tmp_path)
+    from lib import git_command_classifier as classifier
+    classifier._shell_layers.cache_clear()
+    assert not _heredoc_runs_git(classifier, "~/proj/docs/notes.md")
+    assert _heredoc_runs_git(classifier, "~/.profile") and _heredoc_runs_git(classifier, "~/proj/.git/hooks/pre-push")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", f"/srv/{NEVER}/proj")
+    monkeypatch.setenv("TMPDIR", f"/srv/{NEVER}/tmp")
+    monkeypatch.chdir("/usr/share")  # a call directory outside the project and every temp root
+    assert not _heredoc_runs_git(classifier, "/usr/share/notes.md") and not _heredoc_runs_git(classifier, "notes.md")
+    assert _heredoc_runs_git(classifier, "/usr/lib/notes.md")
+
+
+def test_f13_the_resource_layer_takes_a_project_in_system_temp_for_a_project(tmp_path, monkeypatch):
+    """lib/session_resources.classify_target, the twin of tool-policy's own reading."""
+    from lib import locations, session_resources
+    system_tmp = tmp_path / "system-tmp"
+    project = system_tmp / "proj"
+    project.mkdir(parents=True)
+    monkeypatch.setattr(locations, "SYSTEM_TEMP_DIRS", (str(system_tmp),))
+    binding = {"claude_session_id": "s1", "resource_session_id": "r1", "role": "dev", "dispatch_id": "a1"}
+    assert session_resources.locations is locations
+
+    def status(target):
+        return session_resources.classify_target(project, binding, target)["status"]
+
+    assert status("src/app.py") == "outside" and status(str(project / "src" / "app.py")) == "outside"
+    assert status(str(system_tmp / "stray.txt")) == "system_temp" and status(str(system_tmp)) == "system_temp"
+    assert status(".claude/scratch/r1/dev/a1/notes.md") == "owner"
+    assert status(".claude/scratch/r1/qa/a2/notes.md") == "sibling"
+
+
+def test_f13_a_state_root_that_is_another_name_of_system_temp_is_system_temp(tmp_path, monkeypatch):
+    """A role's own `*/` entries hold in a state root that is not a system temp directory; a link to
+    one is one (the literal comparison took the link for a directory of its own)."""
+    policy = _load("pretool-tool-policy.py", "tool_policy_relocation_state_alias")
+    policy._bootstrap_security()
+    alias, own = tmp_path / "tmp-alias", tmp_path / "state"
+    alias.symlink_to(policy.locations.DEFAULT_TEMP_DIR)
+    own.mkdir()
+    monkeypatch.setenv("CLAUDE_STATE_DIR", str(own))
+    assert any(e.startswith(str(own) + "/") for e in policy._role_temp_exceptions("dev"))
+    monkeypatch.setenv("CLAUDE_STATE_DIR", str(alias))
+    assert not any(e.startswith(str(alias) + "/") for e in policy._role_temp_exceptions("dev"))
+
+
+GUARD_FILE_PROBE = r"""
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from runtime_guard import _core, config
+cfg = {"schema_version": 1, **{k: [] for k in config.REQUIRED_KEYS}}
+print(*[_core.evaluate(command, os.environ["HOME"], cfg)[0] for command in sys.argv[2:4]])
+print(*[_core._container_glob_too_broad(parent) for parent in sys.argv[4:]])
+"""
+
+
+def test_f17_a_directory_above_the_home_is_broad_also_as_the_data_files_own_directory(tmp_path):
+    """The data file kept in a directory above the user's home: that directory is not guarded as an
+    ancestor (the file is), and a protected container glob whose parent is the home is dropped as
+    one whose parent is a system directory always was."""
+    env = {"PATH": "/usr/bin:/bin", "HOME": f"/srv/{NEVER}/box/home", "PYTHONDONTWRITEBYTECODE": "1",
+           "CLAUDE_PROTECTED_RUNTIME_FILE": f"/srv/{NEVER}/box/protected-runtime.json"}
+    proc = subprocess.run([sys.executable, "-c", GUARD_FILE_PROBE, str(HOOKS / "lib"), f"chmod 700 /srv/{NEVER}/box",
+                           f"rm /srv/{NEVER}/box/protected-runtime.json", f"/srv/{NEVER}/box/home",
+                           f"/srv/{NEVER}/box/home/apps/tool"],
+                          capture_output=True, text=True, cwd=str(tmp_path), timeout=120, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == ["ALLOW BLOCK", "True False"], proc.stdout
+
+
+def test_bash_safety_reads_the_state_root_from_the_one_resolution(tmp_path):
+    """lib/bash_safety_rules.state_dir kept a resolver of its own that left `//` and `/./` in place."""
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); sys.path.insert(0, sys.argv[1] + '/lib')\n"
+            "import bash_safety_rules as rules\nfrom lib.harness_state_dir import harness_state_dir\n"
+            "print(rules.state_dir()); print(harness_state_dir())")
+    proc = subprocess.run([sys.executable, "-c", code, str(HOOKS)], capture_output=True, text=True, cwd=str(tmp_path),
+                          timeout=120, env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "PYTHONDONTWRITEBYTECODE": "1",
+                                            "CLAUDE_STATE_DIR": "/srv/state//hooks/./x/"})
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.split() == ["/srv/state/hooks/x", "/srv/state/hooks/x"], proc.stdout
