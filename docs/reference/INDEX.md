@@ -34,8 +34,7 @@ reference/
 ├── `rename-execution-plan.md` - Rename execution plan — `awesome-claude-harness` → `claude-code-guardrails`
 ├── `roadmap-decomposition-productization.md` - Roadmap: Monolith Decomposition + Productization
 ├── `task-tools-migration-plan.md` - Task tools migration plan — TodoWrite → TaskCreate / TaskUpdate / TaskList / TaskGet
-├── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
-└── `venv-repair.md` - venv-repair — restoring `~/.claude/venv` when interpreter symlinks break
+└── `tmp-cleanup-convention.md` - Ad-hoc scratch directory convention
 ```
 <!-- /AUTO:index-stats -->
 
