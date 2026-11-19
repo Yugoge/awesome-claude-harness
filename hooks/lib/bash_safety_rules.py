@@ -4837,17 +4837,22 @@ def removal_policy(payload_text, command):
     PROVEN_SAFE_REMOVAL) passes; a filesystem removal it finds (FORBIDDEN_REMOVAL) is refused, unless the analyzer
     knows every file the command removes and each lies inside the calling actor's own scratch directory as the
     write policy defines it (the owner, 2026-11-19: one's own temp folder may be deleted). A command it cannot
-    prove safe, because it answers UNRESOLVED (the primary path) or gives no usable verdict (timeout, memory
-    ceiling, crash, bad JSON: the degraded path), is refused when its text holds a removal word, by the single
-    definition in lib/pol_degraded_removal_reference.ere, and otherwise runs. Both paths ask that one question of the
-    same text, so they give an unproven command the same answer, and the primary path lets through unproven nothing
-    the degraded path denies.
+    prove safe is judged on one of two paths, which are two rules, not one:
+      primary  — the analyzer answers UNRESOLVED. It has already refused every removal it sees where it would be
+                 executed (a removal program in command position, find -delete, git rm/clean, a removal call in
+                 Python it reads with ast). What is left runs, unless the analyzer names residue: a computed
+                 program or command text, or inline code in a language with no reader. Only there is the word list
+                 (lib/pol_degraded_removal_reference.ere) asked, and only of the text that can become that command
+                 (the analyzer's `unresolved_scopes`): never of a heredoc written to a file, another command's
+                 arguments, a variable name or a message.
+      degraded — the analyzer gives no usable verdict (timeout, memory ceiling, crash, bad JSON): nothing has been
+                 read, so the word list is asked of the whole command text.
 
     Returns None for a proven command and, for an unproven one let run, the entry described at
     let_through_unproven().
     """
     analyzer = os.path.join(LIB, "bash_execution_boundary.py")
-    decision, proof = "", None
+    decision, proof, scopes = "", None, None
     limit = duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "15s")
     if os.access(analyzer, os.R_OK) and limit is not None:
         try:
@@ -4874,8 +4879,9 @@ def removal_policy(payload_text, command):
                         and v.get("allowed") is False:
                     decision = "DENY " + verdict + " " + str(v.get("reason", ""))[:200]
                     proof = v.get("removal_targets") if verdict == "FORBIDDEN_REMOVAL" else None
+                    scopes = v.get("unresolved_scopes") if verdict == "UNRESOLVED" else None
         except Exception:  # noqa: BLE001 - timeout, memory ceiling, crash, bad JSON: degraded mode
-            decision, proof = "", None
+            decision, proof, scopes = "", None, None
     if decision == "ALLOW":
         return None
     unproven = not decision or decision.startswith("DENY UNRESOLVED ")
@@ -4890,7 +4896,8 @@ def removal_policy(payload_text, command):
         if not rmref:
             refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
                        f"missing or empty. Denied conservatively.", f"Command: {command}")
-        named = grep(rmref, command)
+        primary = isinstance(scopes, list) and all(isinstance(t, str) for t in scopes)
+        named = any(grep(rmref, t) for t in scopes) if decision and primary else grep(rmref, command)
     own = ()
     if named:
         try:
@@ -4907,8 +4914,8 @@ def removal_policy(payload_text, command):
                    "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. "
                    "git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no "
                    "submodule); this command has a boundary that is none of these."
-                   + (" It could not be proven, and its text holds a removal word (an unproven command that holds none "
-                      "runs)." if unproven else ""), released_line(), *own)
+                   + (" It could not be proven, and the text that can become a command it could not resolve holds a "
+                      "removal word." if unproven else ""), released_line(), *own)
     if named:
         refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
                    "usable verdict, and this command's text holds a removal word. Denied conservatively.",
