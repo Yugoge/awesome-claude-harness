@@ -21,15 +21,26 @@ import os
 import re
 from typing import Optional
 
-try:
-    from ..shell_parse import QUOTE_CHARS
-except ImportError:  # loaded beside _core run as a script: hooks/lib is on sys.path
-    from shell_parse import QUOTE_CHARS
+_QUOTE_CHARS = None
+
+
+def _quote_chars():
+    """shell_parse.QUOTE_CHARS, the one definition, loaded on first use and never at import: the
+    installer loads config.py with this file alone beside it (scripts/bootstrap step 4,
+    scripts/install/render-settings), from a home that may hold no shell_parse.py."""
+    global _QUOTE_CHARS
+    if _QUOTE_CHARS is None:
+        try:
+            from ..shell_parse import QUOTE_CHARS
+        except ImportError:  # loaded beside _core run as a script: hooks/lib is on sys.path
+            from shell_parse import QUOTE_CHARS
+        _QUOTE_CHARS = QUOTE_CHARS
+    return _QUOTE_CHARS
 
 
 def _strip_quotes(tok: str) -> str:
     """`tok` without one pair of enclosing single or double quotes."""
-    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in QUOTE_CHARS:
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in _quote_chars():
         return tok[1:-1]
     return tok
 
