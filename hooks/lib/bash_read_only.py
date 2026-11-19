@@ -275,11 +275,10 @@ _GIT_READ = frozenset({
 
 _BRANCH_FLAGS = frozenset({"-a", "-r", "-v", "-vv", "--all", "--remotes", "--verbose", "--show-current",
                            "--no-color", "--color", "--no-column"})
-_BRANCH_VALUED = ("--format=", "--sort=", "--contains=", "--no-contains=", "--merged=", "--no-merged=",
-                  "--points-at=")
+# The attached-value options branch and tag share in their listing form.
+_LISTING_VALUED = ("--format=", "--sort=", "--contains=", "--no-contains=", "--merged=", "--no-merged=",
+                   "--points-at=")
 _TAG_FLAGS = frozenset({"--no-color", "--color", "--no-column"})
-_TAG_VALUED = ("--format=", "--sort=", "--contains=", "--no-contains=", "--merged=", "--no-merged=",
-               "--points-at=")
 _CONFIG_FLAGS = frozenset({"--list", "-l", "--get", "--get-all", "--get-regexp", "--show-origin",
                            "--show-scope", "--global", "--local", "--system", "--worktree", "--null", "-z",
                            "--name-only", "--includes", "--no-includes", "--bool", "--int", "--path"})
@@ -313,9 +312,9 @@ def _git_sub(sub: str, args) -> bool:
     positional = [a for a in args if not a.startswith("-")]
     if sub == "branch":
         # Only --list: before git 2.23 `git branch -l NAME` created NAME.
-        return _listing(args, _BRANCH_FLAGS, _BRANCH_VALUED, ("--list",))
+        return _listing(args, _BRANCH_FLAGS, _LISTING_VALUED, ("--list",))
     if sub == "tag":
-        return _listing(args, _TAG_FLAGS, _TAG_VALUED, ("--list", "-l"), count_flag=True)
+        return _listing(args, _TAG_FLAGS, _LISTING_VALUED, ("--list", "-l"), count_flag=True)
     if sub == "remote":
         if positional and positional[0] == "get-url":
             return all(a in ("--all", "--push") for a in args if a.startswith("-")) and len(positional) == 2
