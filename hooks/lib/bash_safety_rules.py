@@ -673,8 +673,6 @@ def _http_runs_client(command, sites):
     return False
 
 
-HTTP_LIFT_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", "xhs"})
-"""The clients whose request URL is their literal argument; a raw socket client (nc, socat, telnet) is not one."""
 HTTP_LIFT_PIPE = HTTP_STOP_FILTERS | {"grep", "egrep", "fgrep"}
 HTTP_STOP_PATH = re.compile(r"/stop(?![A-Za-z0-9])", re.I)
 
@@ -720,6 +718,9 @@ HTTP_LIFT_OPTIONS = {
 }
 for _alias in ("https", "httpie", "xh", "xhs"):
     HTTP_LIFT_OPTIONS[_alias] = HTTP_LIFT_OPTIONS["http"]
+HTTP_LIFT_CLIENTS = frozenset(HTTP_LIFT_OPTIONS)
+"""The clients whose request URL is their literal argument, those HTTP_LIFT_OPTIONS reads; a raw socket client (nc,
+socat, telnet) is not one."""
 HTTP_LIFT_URL = re.compile(r"(?:https?://)?(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):[0-9]{1,5}"
                            r"(?:/[A-Za-z0-9._~/-]*)?(?:\?[A-Za-z0-9._~=&+,-]*)?")
 """The only URL shape (b) lifts: an http(s) URL on a localhost host with a port, a path and an optional query of
@@ -3740,8 +3741,6 @@ _SENSITIVE_COPIERS = frozenset(INTO_DIR_VERBS)
 # of theirs (`sed -i ... src/password_reset.py`, `mv docs/password-reset.md docs/pw.md`) is no secret file
 # (lib/sensitive_names.is_code_or_doc_operand).
 _OPERAND_WRITERS = _SENSITIVE_COPIERS | {"sed"}
-# The network clients whose non-output arguments may be URLs: a URL there names no local file.
-_NETWORK_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", "aria2c"})
 # The verbs whose source operand, copied into a path that is not sensitive, may be a template (`.env.example`).
 _TEMPLATE_COPIERS = frozenset({"cp", "cat"})
 # How each network client reads its options: which long options take a value and which take none, which short
@@ -3827,6 +3826,9 @@ _CLIENT_OPTIONS = {
                {"o": "out", "Z": "force-sequential", "i": "input-file"}),
     "http": _HTTPIE_OPTIONS, "https": _HTTPIE_OPTIONS, "httpie": _HTTPIE_OPTIONS, "xh": _HTTPIE_OPTIONS,
 }
+# The network clients whose non-output arguments may be URLs (a URL there names no local file): those
+# _CLIENT_OPTIONS reads.
+_NETWORK_CLIENTS = frozenset(_CLIENT_OPTIONS)
 _HTTPIE_CLIENTS = frozenset({"http", "https", "httpie", "xh"})
 # curl's URL globbing (`{a,b}`, `[1-3]`) and aria2c's parameterized URIs: with them an output name may be built from
 # the URL (`curl "https://x/{.env}" -o "#1"` writes ./.env).
