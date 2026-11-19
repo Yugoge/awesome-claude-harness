@@ -200,7 +200,8 @@ def test_an_over_block_is_fixed_and_its_rule_still_refuses(sandbox, fixed, refus
 ])
 def test_a_read_of_a_grant_namespace_passes_and_a_write_is_refused(sandbox, namespace, label):
     """O6: reading the /commit user-intent flag or the daemon-restart grant flag is not a write of it."""
-    ns = namespace.format(state=sandbox["env"]["CLAUDE_STATE_DIR"], tmp=sandbox["env"]["TMPDIR"])
+    ns = namespace.format(state=sandbox["env"]["CLAUDE_STATE_DIR"],
+                          tmp=sandbox["env"].get("CLAUDE_DAEMON_RESTART_SENTINEL_DIR") or "/tmp")
     for read in (f"ls {ns}x.flag 2>/dev/null", f"cat {ns}x.flag", f"cat {ns}x.flag | cat"):
         assert run(sandbox, SAFETY, read).returncode == 0, read
     for write in (f"echo x > {ns}x.flag", f"touch {ns}x.flag", f"cp /etc/hostname {ns}x.flag"):

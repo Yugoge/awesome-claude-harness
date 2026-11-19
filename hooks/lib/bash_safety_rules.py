@@ -7517,14 +7517,13 @@ def session_dirs_rule(command):
 # ── Entry ────────────────────────────────────────────────────────────────────
 
 def environment():
-    tmp = os.environ.get("CLAUDE_TMPDIR") or os.environ.get("TMPDIR") or "/tmp"
     helper = os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_HELPER", "")
     return {
         "prefix": os.environ.get("CLAUDE_PROTECTED_DAEMON_PREFIX", ""),
         "targets": os.environ.get("CLAUDE_PROTECTED_DAEMON_TARGETS", ""),
         "family": os.environ.get("CLAUDE_PROTECTED_PROCESS_FAMILY", ""),
         "dev_systemd": os.environ.get("CLAUDE_DEV_SYSTEMD", ""),
-        "grant_dir": os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_DIR") or tmp,
+        "grant_dir": os.environ.get("CLAUDE_DAEMON_RESTART_SENTINEL_DIR") or "/tmp",  # the helper's own rule
         "grant_hint": helper or "<daemon-restart grant helper>",
     }
 

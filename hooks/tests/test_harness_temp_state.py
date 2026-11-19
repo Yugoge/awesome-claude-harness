@@ -339,7 +339,7 @@ def test_xdg_runtime_capability_dir(roots, tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("var,rel,name", [
     ("CLAUDE_USERINTENT_SENTINEL_DIR", "claude-commit-userintent-s.flag", "userintent-flag"),
-    ("CLAUDE_DAEMON_RESTART_GRANT_DIR", "claude-allow-daemon-restart-web.flag", "daemon-restart-grant"),
+    ("CLAUDE_DAEMON_RESTART_SENTINEL_DIR", "claude-allow-daemon-restart-web.flag", "daemon-restart-grant"),
     ("CLAUDE_DOC_SYNC_STATE_ROOT", "sid1/doc-sync-notices-main.json", "doc-sync-notices"),
 ])
 def test_name_root_overrides(roots, tmp_path, monkeypatch, var, rel, name):
@@ -401,7 +401,7 @@ def test_root_slash_is_a_name_root_but_never_a_temp_root(roots, monkeypatch):
 @pytest.mark.parametrize("var,rel,name", [
     ("TMPDIR", "claude-git-blessed/t.grant", "git-blessed-grants"),
     ("CLAUDE_TMPDIR", "claude-allow-daemon-restart-web.flag", "daemon-restart-grant"),
-    ("CLAUDE_DAEMON_RESTART_GRANT_DIR", "claude-allow-daemon-restart-web.flag", "daemon-restart-grant"),
+    ("CLAUDE_DAEMON_RESTART_SENTINEL_DIR", "claude-allow-daemon-restart-web.flag", "daemon-restart-grant"),
     ("TMP", "sid1/doc-sync-notices-main.json", "doc-sync-notices"),
     ("TEMP", "sid1/doc-sync-notices-main.json", "doc-sync-notices"),
 ])

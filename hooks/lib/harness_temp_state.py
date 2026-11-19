@@ -64,7 +64,7 @@ TEMP_ROOT_VARS: Tuple[str, ...] = ("TMPDIR", "CLAUDE_TMPDIR", "CLAUDE_CODE_TMPDI
 NAME_ROOT_VARS: Tuple[str, ...] = (
     "TMP", "TEMP",                      # tempfile.gettempdir(): hooks/doc_sync/notice.py:241
     "CLAUDE_USERINTENT_SENTINEL_DIR",   # hooks/pretool-wrapper-userintent.py:82
-    "CLAUDE_DAEMON_RESTART_GRANT_DIR",  # hooks/pretool-bash-safety.sh:25
+    "CLAUDE_DAEMON_RESTART_SENTINEL_DIR",  # hooks/lib/bash_safety_rules.py environment()
     "CLAUDE_DOC_SYNC_STATE_ROOT",       # hooks/doc_sync/notice.py:238
 )
 
