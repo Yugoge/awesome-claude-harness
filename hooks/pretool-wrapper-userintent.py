@@ -205,6 +205,7 @@ from lib.git_facts import GIT_CONFIG_READ_OPTIONS as _GIT_CONFIG_READS  # noqa: 
 from lib.git_facts import GIT_CONFIG_READ_SUBCOMMANDS as _GIT_CONFIG_READ_SUBS  # noqa: E402
 from lib.git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS as _GIT_SHELL_PAYLOAD_SUBS  # noqa: E402
 _GH_MESSAGE_SUBS = frozenset(('pr', 'issue', 'release'))
+_DEFAULT_MAKEFILES = ('GNUmakefile', 'makefile', 'Makefile')  # what make reads with no -f, in its order
 _RC_FILES = frozenset(('.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_logout',
                        '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.kshrc', '.mkshrc',
                        '.cshrc', '.tcshrc', '.inputrc', 'config.fish', 'environment',
@@ -2947,11 +2948,11 @@ class _Scan:
                         self.match = self.match or 'stop'
                         return
         texts, unreadable, blind = [], shell_unknown, False
-        if not files and any(os.path.basename(ov or '') in ('GNUmakefile', 'makefile', 'Makefile')
+        if not files and any(os.path.basename(ov or '') in _DEFAULT_MAKEFILES
                              for _ow, ov in self.others):
             texts.append(self.command)  # the default makefile is written by this command
             for _ow, ov in self.others:
-                if ov and os.path.basename(ov) not in ('GNUmakefile', 'makefile', 'Makefile'):
+                if ov and os.path.basename(ov) not in _DEFAULT_MAKEFILES:
                     texts.extend(self._file_texts(ov))
         for v, w in files:
             if v is None:
