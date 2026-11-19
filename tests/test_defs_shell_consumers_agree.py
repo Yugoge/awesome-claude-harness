@@ -102,6 +102,10 @@ CASES = [
     ("wrapper-option-specs", "systemd-run -H V {}", ("gp", "bs", "tp")),
     ("wrapper-option-specs", "sudo -U V {}", ("gp", "bs", "tp")),
     ("privilege-wrappers", "runuser -u root -- {}", ("gp", "bs", "tp")),
+    # the git classifier's hidden-code reading knows the interpreters its _INTERPRETERS knows
+    ("interpreters", "php -r 'system(\"{}\");'", ("gp", "bs")),
+    ("interpreters", "lua -e 'os.execute(\"{}\")'", ("gp", "bs")),
+    ("interpreters", "Rscript -e 'system(\"{}\")'", ("gp", "bs")),
     ("exec-env-variables", "GIT_PAGER='{}' git -p log", ("gp", "bs", "ui")),
     ("exec-env-variables", "PAGER='{}' man ls", ("gp", "bs", "ui")),
     ("shell-state-builtins", "trap '{}' EXIT", ("gp", "bs", "tp")),

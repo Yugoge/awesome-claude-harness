@@ -1918,7 +1918,7 @@ def classify_git_command(command_text):
 # command runs (`bash push.sh`) is not shell text it sees. hidden_git_texts
 # yields, for each, shell text the caller judges as it judges a command:
 #   - inline code (python/pypy -c, perl -e/-E, ruby -e, node -e/-p/--eval/
-#     --print): the token `git`, then words separated only by blanks, quotes,
+#     --print, php -r/-B/-R/-E, lua -e, Rscript -e): the token `git`, then words separated only by blanks, quotes,
 #     commas, `[` or backquotes, whose subcommand is in _HIDDEN_GIT_SUBCOMMANDS,
 #     read as `git <words>`. Lexical and conservative: `print("git push")` reads
 #     as a push.
@@ -1945,6 +1945,10 @@ _HIDDEN_CODE_OPTIONS = (
     (re.compile(r'perl[0-9.]*\Z'), 'eE', ()),
     (re.compile(r'ruby[0-9.]*\Z'), 'e', ()),
     (re.compile(r'node(?:js)?[0-9.]*\Z'), 'ep', ('--eval', '--print')),
+    # the code options _INTERPRETERS reads for these too (php -r/-B/-R/-E, lua -e, Rscript -e)
+    (re.compile(r'php[0-9.]*\Z'), 'rBRE', ()),
+    (re.compile(r'lua(?:jit)?[0-9.]*\Z'), 'e', ()),
+    (re.compile(r'Rscript\Z'), 'e', ()),
 )
 _HIDDEN_SHELLS = shell_parse.SCRIPT_RUNNERS
 _HIDDEN_SHELL_VALUE_OPTS = frozenset({'-o', '+o', '-O', '+O', '--rcfile', '--init-file'})
