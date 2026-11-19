@@ -3,14 +3,13 @@
 
 - Finding 15, devices no write changes: the overnight boundary knew /dev/null, tool-policy's rows
   /dev/null, /dev/stderr, /dev/stdout, so `echo warn > /dev/stderr` was refused by one and passed by
-  the other, and `> /dev/tty` or `> /dev/fd/2` the other way round. Both read
-  lib/shell_parse.is_sink_device.
+  the other, and `> /dev/tty` or `> /dev/fd/2` the other way round. Both read lib/locations.is_sink.
 - Finding 20, the names of standard input: the session_dirs.txt mention rule took `git commit -F -`
   and `-F /dev/stdin` for a message from stdin, not `-F /dev/fd/0` or `-F /proc/self/fd/0`. It reads
-  lib/shell_parse._STDIN_FILES.
+  lib/locations.STDIN_DEVICES.
 - Finding 21, the directories a plain program is written with: /usr/local/bin/rg was a plain program
   for the mention rule and not for the bulk sentinel's strict shape. The three patterns of
-  lib/bash_safety_rules read its one list, _SD_HEAD_DIRS.
+  lib/bash_safety_rules read one list, lib/locations.BIN_DIRS.
 """
 from __future__ import annotations
 
@@ -25,7 +24,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 HOOKS = REPO / "hooks"
 sys.path.insert(0, str(HOOKS))
-from lib import bash_safety_rules as rules, shell_parse as sp  # noqa: E402
+from lib import bash_safety_rules as rules, locations  # noqa: E402
 from lib.runtime_guard.config import REQUIRED_KEYS  # noqa: E402
 
 SINKS = ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/2", "/dev/fd/9"]
@@ -38,8 +37,8 @@ GIT_ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_AU
 # ---------------------------------------------------------------------------------- finding 15
 
 def test_the_one_definition_of_a_device_no_write_changes():
-    assert all(sp.is_sink_device(p) for p in SINKS)
-    assert not any(sp.is_sink_device(p) for p in NOT_SINKS)
+    assert all(locations.is_sink(p) for p in SINKS)
+    assert not any(locations.is_sink(p) for p in NOT_SINKS + [None, 3])
 
 
 @pytest.fixture(scope="module")
@@ -168,7 +167,7 @@ def test_a_commit_that_reads_the_file_or_another_descriptor_stays_refused(bash_s
 
 
 def test_one_list_of_the_directories_a_plain_program_is_written_with():
-    assert rules._SD_HEAD_DIRS == ("/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
+    assert rules._SD_HEAD_DIRS is locations.BIN_DIRS == ("/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
     for d in rules._SD_HEAD_DIRS:
         assert rules._SHAPE_HEAD_RE.fullmatch(d + "/rg") and rules._HB_SHELL_WORD.fullmatch(d + "/bash"), d
     for word in ("./rg", "/tmp/x/rg", "/usr/bin/x/rg", "bin/rg", "/usr/local/bin/"):

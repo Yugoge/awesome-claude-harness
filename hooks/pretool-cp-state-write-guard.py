@@ -2,8 +2,8 @@
 """PreToolUse hook: deny direct subagent writes to cp-state-*.json.
 
 Only a direct Write/Edit/MultiEdit/NotebookEdit of a cp-state path exits 2: a
-`cp-state-*.json` below a spec root (a `.claude/specs/`, `docs/dev/specs/` or
-`dot-claude/specs/` directory). A relative path is read from the call's directory
+`cp-state-*.json` below a spec root (a `.claude/specs/` or `docs/dev/specs/` directory, or
+the `specs/` of the harness home wherever it is: lib/locations.spec_rest). A relative path is read from the call's directory
 (the payload's cwd); the path is matched normalised and by the real path of its unfolded
 spelling (a symlink is resolved before a `..` after it, as the kernel does), so `./`, `../`,
 absolute spellings, a symlink landing in a spec root and `link/../<id>/` are refused alike,
@@ -22,15 +22,15 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib import locations  # noqa: E402
+
 # Remediation paths are derived from THIS hook's own on-disk location
 # (<harness-home>/hooks/<name>.py), so the message names the spec-check.py that
 # actually exists for the invoking user instead of an author-absolute literal.
 SPEC_CHECK = Path(__file__).resolve().parent.parent / "scripts" / "spec-check.py"
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-
-# The spec roots, as path components (compared casefolded).
-SPEC_ROOTS = ((".claude", "specs"), ("docs", "dev", "specs"), ("dot-claude", "specs"))
 
 
 def _read_payload() -> dict:
@@ -61,18 +61,9 @@ def _path_candidates(path: str, call_dir: str) -> list:
 
 
 def _is_cp_state_under_root(candidate: str) -> bool:
-    parts = [p.casefold() for p in candidate.replace("\\", "/").split("/") if p]
-    if not parts:
-        return False
-    name = parts[-1]
-    if not (name.startswith("cp-state-") and name.endswith(".json")):
-        return False
-    for i in range(len(parts)):
-        for root in SPEC_ROOTS:
-            # the root, then at least a spec id, then the file
-            if tuple(parts[i:i + len(root)]) == root and len(parts) >= i + len(root) + 2:
-                return True
-    return False
+    rest = locations.spec_rest(candidate) or ""  # below the root: at least a spec id, then the file
+    name = rest.rsplit("/", 1)[-1]
+    return "/" in rest and name.startswith("cp-state-") and name.endswith(".json")
 
 
 def _is_cp_state_path(path: str, call_dir: str) -> bool:

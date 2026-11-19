@@ -28,6 +28,12 @@ import os
 import re
 import sys
 
+try:
+    from . import locations
+except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import locations
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -2667,6 +2673,7 @@ def resolve(cmd, depth=None):
 
 
 _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
+_FIND_EXEC_END = (";", "+")  # the word that ends the command such an action runs
 _FIND_FILE = ("-fprint", "-fprint0", "-fprintf", "-fls")  # the next word names a file the action writes
 FIND_ACTIONS = _FIND_EXEC + _FIND_FILE + ("-delete",)  # each action that runs a program, writes a file or deletes
 
@@ -2680,7 +2687,7 @@ def _resolve_find(r, head, words, cmd, depth):
     while k < len(words):
         if words[k].value() in _FIND_EXEC:
             j = k + 1
-            while j < len(words) and words[j].value() not in (";", "+"):
+            while j < len(words) and words[j].value() not in _FIND_EXEC_END:
                 j += 1
             argv_words = words[k + 1:j]
             if argv_words:
@@ -2811,13 +2818,7 @@ def _resolve_shell(r, head, words, cmd, depth):
     return r
 
 
-_STDIN_FILES = ("/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "-")
-
-
-def is_sink_device(path):
-    """True for a write target that is no file: the null device, the writer's own streams or terminal, /dev/fd/N."""
-    return path in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty") or (
-        path.startswith("/dev/fd/") and path[8:].isdigit())
+_STDIN_FILES = locations.STDIN_DEVICES + ("-",)
 
 
 def _script_operand(r, w, cmd, depth):
@@ -2839,7 +2840,7 @@ def _script_operand(r, w, cmd, depth):
             r.unresolved = "generated_code"
         r.payload_kind = "pipe_shell"
         return
-    if v is None or (v or "").startswith("/dev/fd/"):
+    if v is None or (v or "").startswith(locations.FD_DIR):
         r.unresolved = "script_file_computed"
 
 
@@ -3570,7 +3571,7 @@ def _find_write_targets(args, env, context):
     while k < len(args):
         v = args[k].value()
         if v in _FIND_EXEC:
-            while k < len(args) and args[k].value() not in (";", "+"):
+            while k < len(args) and args[k].value() not in _FIND_EXEC_END:
                 k += 1
         elif v in _FIND_FILE and k + 1 < len(args):
             k += 1
