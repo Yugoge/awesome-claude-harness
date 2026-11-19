@@ -1646,28 +1646,13 @@
   {
    "id": "printer-builtins",
    "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "Four identical {echo, printf}; _TEXT_ONLY_COMMANDS adds grep.",
+   "reason": "shell_parse.PRINTERS {echo, printf} (the programs that print their arguments, read by every Python consumer); _TEXT_ONLY_COMMANDS adds grep.",
    "sides": [
     [
      {
-      "name": "consent_flag_verdict:in",
+      "name": "<module>.PRINTERS",
       "fingerprint": "5b5dc64a22da2ee4",
-      "at": "hooks/lib/bash_safety_rules.py:2867"
-     },
-     {
-      "name": "<module>._PRINTERS",
-      "fingerprint": "5b5dc64a22da2ee4",
-      "at": "hooks/lib/git_command_classifier.py:1401"
-     },
-     {
-      "name": "_stage_output:in",
-      "fingerprint": "5b5dc64a22da2ee4",
-      "at": "hooks/lib/shell_parse.py:2083"
-     },
-     {
-      "name": "_Scan._feeder_texts:in",
-      "fingerprint": "5b5dc64a22da2ee4",
-      "at": "hooks/pretool-wrapper-userintent.py:3044"
+      "at": "hooks/lib/shell_parse.py:466"
      }
     ],
     [
@@ -3206,20 +3191,13 @@
   {
    "id": "wrapper-cwd-options",
    "source": "defs-shell lane, audit f199dfb1e family wrapper-cwd-options (undecided)",
-   "reason": "runtime_guard._WRAPPER_CWD_OPTS is the union of the cwd options of every wrapper (env -C/--chdir, sudo -D/--chdir, doas -C, systemd-run --working-directory) and _WRAPPER_CWD_SHORT_FUSABLE its short ones that fuse a value; the config guard's (-C, --chdir) are env's own, read on an env wrapper only; _mutation_targets_for_verb's (-C, --directory) are tar's archive directory, not a wrapper option.",
+   "reason": "runtime_guard._WRAPPER_CWD_OPTS is the union of the cwd options of every wrapper (env -C/--chdir, sudo -D/--chdir, doas -C, systemd-run --working-directory) and _WRAPPER_CWD_SHORT_FUSABLE its short ones that fuse a value; _mutation_targets_for_verb's (-C, --directory) are tar's archive directory, not a wrapper option.",
    "sides": [
     [
      {
       "name": "<module>._WRAPPER_CWD_OPTS",
       "fingerprint": "4dde60fb1b0d7911",
       "at": "hooks/lib/runtime_guard/_core.py:510"
-     }
-    ],
-    [
-     {
-      "name": "_CdScopes.run_cmd:in",
-      "fingerprint": "2dd39aa98b5a6867",
-      "at": "hooks/pretool-claude-config-guard.py:634"
      }
     ],
     [
@@ -3374,6 +3352,48 @@
       "name": "<module>._PY_SAFE_MODULES",
       "fingerprint": "e94c5dc8f1a0e1b7",
       "at": "hooks/pretool-wrapper-userintent.py:139"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "printers-shell-script",
+   "source": "defs-shell lane, check group on integration a839e0c9a",
+   "reason": "shell_parse.PRINTERS (echo, printf: programs that print their arguments and run nothing) is the one definition the Python hooks read; scripts/canary-verify.sh asks the same of a script's lines with grep -E in bash and cannot import a Python table, so its pattern is the shell-side copy.",
+   "sides": [
+    [
+     {
+      "name": "<module>.PRINTERS",
+      "fingerprint": "5b5dc64a22da2ee4",
+      "at": "hooks/lib/shell_parse.py:466"
+     }
+    ],
+    [
+     {
+      "name": "check_advisory_prerequisites:re",
+      "fingerprint": "5b5dc64a22da2ee4",
+      "at": "scripts/canary-verify.sh:257"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "unjoined-path-prefixes",
+   "source": "defs-shell lane, check group on integration a839e0c9a",
+   "reason": "shell_parse.WriteTarget.placed leaves a path that starts with /, ~, $ or a backquote as written when it reports where a write lands (a computed path cannot be joined to a cd directory); the config guard's _parsed_kind decides which candidate paths to test against the protected folders and joins every text but an absolute, home or $-led one to each cd directory, a backquote-led one included, so it tests more candidates and refuses at least as often. Different questions; merging would drop the guard's extra candidates.",
+   "sides": [
+    [
+     {
+      "name": "WriteTarget.placed:in",
+      "fingerprint": "533b6b29b01a43b7",
+      "at": "hooks/lib/shell_parse.py:3304"
+     }
+    ],
+    [
+     {
+      "name": "_parsed_kind:in",
+      "fingerprint": "407cad7a32e5eb89",
+      "at": "hooks/pretool-claude-config-guard.py:544"
      }
     ]
    ]
