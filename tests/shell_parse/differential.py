@@ -62,6 +62,9 @@ def _safe(f):
         return "EXC:" + type(exc).__name__
 
 
+_UNKNOWN_DIR = re.compile(r"\bcd\s+\S*\$|\bssh\b|-execdir\b|-okdir\b")
+
+
 def _as_rendered(text):
     """A path text as lib/bash_write_targets.py renders it: `~`, `$HOME`, `$CLAUDE_PROJECT_DIR` expanded."""
     for name, value in WT._known().items():
@@ -106,6 +109,8 @@ def new_facts(c):
         "view": sp.executable_view(c),
         "targets": [t.path for t in targets if t.path],
         "resolved_targets": [WT._render(t, c) for t in targets if t.path],
+        # where each write lands (WriteTarget.placed: at the directory a cd moved to, `$(pwd)/` unknown)
+        "placed": [x for t in sp.write_targets(s, env=WT._known(), raw=c) for x in t.placed(WT._render(t, c))],
         "undecidable": [(t.path, t.word.text if t.word is not None else "") for t in targets if not t.decidable],
         "dynamic": any(site.dynamic or site.templated for site in sites),
         "git": [[g.subcommand, g.unresolved] for g in sp.git_invocations(s, strings=True)],
@@ -294,6 +299,12 @@ def differences(c, m, n):
             label = "covered:the same path under another HOME"
         elif re.search(r"\$\w+", c) and re.search(r"(^|[;&|\s])\w+=", c):
             label = "covered:assignment projected into $X"
+        elif all(p in n["placed"] and any(p.endswith("/" + q) for q in newp)
+                 and (not p.startswith("$(pwd)/") or _UNKNOWN_DIR.search(c)) for p in lost):
+            # lib/bash_write_targets.py places a relative write at the directory its command runs
+            # in; the directory is unknown, so `$(pwd)/`, only after a computed cd, on ssh's remote
+            # host and in find -execdir/-okdir's per-match directory.
+            label = "placed:the write at the directory its command runs in"
         elif key == "wt_touched" and " mv " in " " + c and all(
                 any(p.startswith(q.rstrip("/") + "/") for q in newp) for p in lost):
             label = "derived:<dest>/<basename(source)> from WriteTarget.source"
