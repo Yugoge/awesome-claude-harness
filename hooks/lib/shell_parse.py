@@ -52,6 +52,12 @@ RESERVED = frozenset({
     "select", "case", "esac", "in", "function", "{", "}", "[[", "]]", "!",
     "time", "coproc",
 })
+# The reserved words (and `!`) after which the grammar puts a command word, so a
+# `[[` or a command name may follow (`time [[ a ]]`, `coproc [[ a ]]` run). for,
+# select, case, in and function are followed by a name; fi, done, esac, }, ]] end
+# a construct.
+COMMAND_PREFIX_WORDS = frozenset({"!", "{", "if", "then", "elif", "else", "while", "until",
+                                  "do", "time", "coproc"})
 
 
 def _digits(text):

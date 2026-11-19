@@ -4940,15 +4940,15 @@ def _dg_ends_on_option(line):
     return bool(parsed) and any(w[:1] in OPTION_SIGNS for words in parsed[0] for w in _dg_last_words(words))
 
 
-_DG_RESERVED = frozenset(("if", "then", "else", "elif", "while", "until", "do", "!", "{", "time"))
 
 
 def _dg_quoted_head(line):
     """A command head that, quotes removed, holds whitespace or shell syntax (`'bash -c' x`, `env\\ -S x`)."""
+    from lib.shell_parse import COMMAND_PREFIX_WORDS
     parsed = _dg_commands(line)
     for words in (parsed[0] if parsed else ()):
         for w in words:
-            if re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", w) or w in _DG_RESERVED:
+            if re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", w) or w in COMMAND_PREFIX_WORDS:
                 continue
             if _DG_META.search(w):
                 return True

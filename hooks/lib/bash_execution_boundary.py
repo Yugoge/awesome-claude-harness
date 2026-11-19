@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    CD_TARGET_BUILTINS, COMMAND_OPTS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS, OPTION_SIGNS,
+    CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS, OPTION_SIGNS,
     PARALLEL_SEPARATORS, PIPE_OPS, REEXPAND_OPS, XARGS_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
@@ -730,8 +730,7 @@ COND_SHELLS = {"bash", "zsh", "ksh", "ksh93", "mksh", "rbash", "bash5"}
 # word of a command (`if [[`, `! [[`, `while ! [[`, `{ [[` ...). Any other word,
 # an assignment or a redirection before it makes `[[` an argument or a command
 # name, and then nothing inside it is a conditional expression.
-COND_OPENER_PREFIX = frozenset(("!", "if", "then", "else", "elif", "while",
-                                "until", "do", "{"))
+COND_OPENER_PREFIX = COMMAND_PREFIX_WORDS
 # Builtins that can stop `[[` from being read as the reserved word on a later
 # line: an alias named `[[` (or `if`, `while` ...) turns it into a simple
 # command, and zsh's `disable -r` switches the reserved word off.

@@ -169,13 +169,9 @@ _WRAPPERS = set(_WRAPPER_SPECS) | {'eval'}
 _WRAPPER_VALUE_FLAGS = {name: {o for o in spec['val'] if spec['nargs'].get(o, 1)}
                         for name, (spec, _fixed) in _WRAPPER_SPECS.items()}
 _WRAPPER_POSITIONALS = {name: fixed for name, (_spec, fixed) in _WRAPPER_SPECS.items() if fixed}
+# The reserved words after which the grammar puts a command word (shell_parse).
+_SHELL_PREFIX_KEYWORDS = shell_parse.COMMAND_PREFIX_WORDS
 
-# Reserved words (and `!`) after which the grammar puts a command word. `for`,
-# `select`, `case`, `in` and `function` are followed by a name, and `fi`,
-# `done`, `esac`, `}`, `]]`, `[[` end a construct, so they are not here.
-_SHELL_PREFIX_KEYWORDS = {
-    'if', 'elif', 'then', 'else', 'while', 'until', 'do', '!', '{', 'coproc',
-}
 
 # Leading redirections, attached (`2>/dev/null`, `{fd}>f`) or bare (`2> f`).
 _REDIRECT_RE = re.compile(
