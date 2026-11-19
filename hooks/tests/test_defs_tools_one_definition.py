@@ -69,3 +69,44 @@ def test_launchers_select_the_dispatch_rules_for_every_dispatch_name():
                 seen.append(path)
                 assert DISPATCH <= set(tools), f"{launcher}: {path} selects {tools}"
     assert {"pretool-dispatch-gate.py", "posttool-dispatch-record.py", "posttool-close-rating.py"} <= set(seen)
+
+
+# ---------------------------------------------------------------- subagent-recognition
+import importlib.util  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import subprocess  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+def _hook(name: str):
+    sys.path.insert(0, str(HOOKS))
+    try:
+        spec = importlib.util.spec_from_file_location(f"_defs_tools_{name.replace('-', '_')[:-3]}", HOOKS / name)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    finally:
+        sys.path.pop(0)
+
+
+# ---------------------------------------------------------------- subagent-env-variables
+SPAWNED_AGENT_ENV = ("CLAUDE_AGENT_ID", "CLAUDE_SUBAGENT_ID", "CODEX_AGENT_ID", "CODEX_AGENT_PATH", "OPENAI_AGENT_ID")
+
+
+@pytest.mark.parametrize("name", SPAWNED_AGENT_ENV)
+def test_one_list_of_spawned_agent_environment_names(name, monkeypatch, tmp_path):
+    """scripts/write-git-residual-override.py refused an agent by CLAUDE_AGENT_ID and
+    CLAUDE_SUBAGENT_ID; lib/subagent knew CLAUDE_AGENT_ID and three Codex names. Each name now
+    marks a subagent for both."""
+    for key in SPAWNED_AGENT_ENV + ("CLAUDE_COMPAT_RUNTIME",):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(name, "x")
+    assert _lib("subagent").is_subagent_context({}) is True
+    run = subprocess.run([sys.executable, str(ROOT / "scripts" / "write-git-residual-override.py"),
+                          "--command-sha256", "not-a-digest", "--residual-kinds", "x", "--reason", "r",
+                          "--dir", str(tmp_path / "override")],
+                         capture_output=True, text=True, env=dict(os.environ))
+    assert run.returncode == 1 and f"{name} is set" in run.stderr, run.stderr
+    assert not (tmp_path / "override").exists()

@@ -24,14 +24,18 @@ SUBAGENT_ID_KEYS: tuple[str, ...] = (
     "parent_agent_id",
 )
 
+# Environment names that mark the process as a spawned agent's.
 SUBAGENT_ENV_KEYS: tuple[str, ...] = (
     "CLAUDE_AGENT_ID",
+    "CLAUDE_SUBAGENT_ID",
     "CODEX_AGENT_ID",
     "CODEX_AGENT_PATH",
     "OPENAI_AGENT_ID",
-    # presence signals a non-conventional-development compat runtime child environment
-    "CLAUDE_COMPAT_RUNTIME",
 )
+
+# Set for every call of a compat runtime ("codex": its main session and its children alike),
+# so it marks the runtime, not a subagent; is_subagent_context exempts it as before.
+COMPAT_RUNTIME_ENV = "CLAUDE_COMPAT_RUNTIME"
 
 
 def _truthy(value) -> bool:
@@ -81,7 +85,7 @@ def is_subagent_context(data: dict) -> bool:
     """
     if any(_truthy(data.get(key)) for key in SUBAGENT_ID_KEYS):
         return True
-    if any(_truthy(os.environ.get(key)) for key in SUBAGENT_ENV_KEYS):
+    if any(_truthy(os.environ.get(key)) for key in SUBAGENT_ENV_KEYS + (COMPAT_RUNTIME_ENV,)):
         return True
 
     if _transcript_meta_says_subagent(str(data.get("transcript_path") or "").strip()):
