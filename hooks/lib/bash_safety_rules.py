@@ -1160,6 +1160,7 @@ def _relaxation_shape_ok(command, carries):
     target, no here-string carrying a name, nothing that runs a file beside the writer script's name). Fail closed:
     anything not read is not ok.
     """
+    from lib.shell_parse import DEFINER_KINDS
     if _SHAPE_HISTORY_RE.search(_unquoted_single(command)):
         return False
     params = _shape_params(command)
@@ -1172,7 +1173,7 @@ def _relaxation_shape_ok(command, carries):
         if k.kind in ("cond", "arith"):
             continue
         text = command[k.span[0]:k.span[1]]
-        if k.kind in ("function", "coproc") or not text or piped or k.redirects or "<<" in command \
+        if k.kind in DEFINER_KINDS or not text or piped or k.redirects or "<<" in command \
                 or "$'" in text or carries(text) or carries(re.sub(r"""[\\'"]""", "", text)):
             return False
     sites = _parsed_sites(command)
@@ -7184,7 +7185,7 @@ def _sd_output_safety(script, traced=False):
     shell may trace (traced), the trace of a command goes to the stderr it inherits, so its stdout counts as safe only
     with that stderr safe too. A command inside a substitution, a function body, a coproc or code the walk reaches
     another way is absent. An `exec` that moves the shell's own stdout or stderr leaves nothing safe."""
-    from lib.shell_parse import Compound, SimpleCommand, resolve
+    from lib.shell_parse import DEFINER_KINDS, Compound, SimpleCommand, resolve
     found, moved = {}, []
 
     def visit(scr, out_ok, err_ok, ctx):
@@ -7213,7 +7214,7 @@ def _sd_output_safety(script, traced=False):
                     if res.payload is not None and res.payload_kind:
                         visit(res.payload, o, e, ctx + (res.payload_kind,))
                 elif isinstance(st, Compound):
-                    inner = st.kind not in ("function", "coproc")
+                    inner = st.kind not in DEFINER_KINDS
                     for body in st.body:
                         visit(body, o and inner, e and inner, ctx)
 

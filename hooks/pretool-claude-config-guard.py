@@ -645,7 +645,7 @@ class _CdScopes:
             self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
             self._record(cmd.span, states)
             scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, sp.Script)]
-            self.functions = self.functions or cmd.kind in ('function', 'coproc')
+            self.functions = self.functions or cmd.kind in sp.DEFINER_KINDS
             if cmd.kind in ('subshell', 'coproc'):
                 for s in scripts:
                     self.run_script(s, states)
