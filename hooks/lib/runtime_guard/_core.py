@@ -1746,7 +1746,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
                 _fi = next((i for i, t in enumerate(tokens)
                             if os.path.basename(_strip_quotes(t)) == "fuser"), None)
                 if _fi is not None and any(
-                        _strip_quotes(t) in ("-k", "--kill") or
+                        _strip_quotes(t) in _KILL_FLAG_HEADS["fuser"] or
                         (_strip_quotes(t).startswith("-") and not _strip_quotes(t).startswith("--")
                          and "k" in _strip_quotes(t)[1:])
                         for t in tokens[_fi + 1:]):
@@ -4451,7 +4451,7 @@ def _p0_anchor(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None,
             # `fuser -k` is a kill executor too (not in KILL_VERBS). Behind a novel
             # wrapper its head is the wrapper, so detect a fuser + -k in the tail.
             if not kill_in_tail and any(os.path.basename(st) == "fuser" for _i, st in exec_toks):
-                if any(_strip_quotes(t) in ("-k", "--kill") or
+                if any(_strip_quotes(t) in _KILL_FLAG_HEADS["fuser"] or
                        (_strip_quotes(t).startswith("-") and "k" in _strip_quotes(t).lstrip("-")) for t in tokens):
                     kill_in_tail = True
             if kill_in_tail:
