@@ -838,10 +838,10 @@ def _call_dirs(script, sp, cwd: str):
     dirs, unknown, first = [cwd], False, True
     for site in sp.walk(script):
         r = sp.resolve(site.cmd)
-        if r.name not in ("cd", "pushd"):
+        if r.name not in sp.CD_TARGET_BUILTINS:
             continue
         first, was_first = False, first
-        operands = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+        operands = [w for w in r.args if (w.value() or "") not in sp.CD_OPTIONS]
         if not operands:
             dest = os.environ.get("HOME") or os.path.expanduser("~")
         else:
@@ -964,7 +964,7 @@ def _bash_report_writes(command: str, cwd: str) -> list:
     # command that names a report, may write it.
     for site in sites:
         words = [sp.basename(w.value() or "") for w in site.cmd.words]
-        if tokens and words and words[0] in ("xargs", "parallel") and (
+        if tokens and words and words[0] in sp.ITEM_RUNNERS and (
                 _WRITER_NAMES & set(words[1:]) or any(">" in (w.text or "") for w in site.cmd.words[1:])):
             found.append(tokens[0])
     for t in writes:
@@ -1107,7 +1107,6 @@ _HOOK_ENTRY = re.compile(r"(?:pretool|subagentstop|subagentstart)-[\w.-]*\.(?:py
 _PROVENANCE_TEXT = re.compile(r"report_provenance|report-provenance|observe_call")
 _RUNNERS = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh|"
                       r"source|\.)\Z")
-_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "source", "."})
 _SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 _INLINE_FLAGS = re.compile(r"-[A-Za-z]*[ceEr]\Z")
 _PY_VALUE_OPTS = frozenset({"-W", "-X", "-Q"})
@@ -1300,20 +1299,20 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             if name.startswith(("python", "pypy")) and a in _PY_VALUE_OPTS:
                 i += 2
                 continue
-            if name in _SHELLS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
+            if name in sp.SCRIPT_RUNNERS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
                 operand = None
                 break  # `sh -c CODE`: walked as commands of its own
-            if name in _SHELLS and a in _SHELL_VALUE_OPTS:
+            if name in sp.SCRIPT_RUNNERS and a in _SHELL_VALUE_OPTS:
                 if a in ("-o", "+o") and i + 1 < len(args) and (args[i + 1] or "") == "noexec":
                     noexec = a == "-o"
                 i += 2
                 continue
-            if name in _SHELLS and len(a) > 1 and a[0] in "-+" and not a.startswith("--"):
+            if name in sp.SCRIPT_RUNNERS and len(a) > 1 and a[0] in "-+" and not a.startswith("--"):
                 if "n" in a[1:]:
                     noexec = a[0] == "-"  # `-n` reads without running; a later `+n` runs
                 i += 1
                 continue
-            if name not in _SHELLS and _INLINE_FLAGS.fullmatch(a):
+            if name not in sp.SCRIPT_RUNNERS and _INLINE_FLAGS.fullmatch(a):
                 if i + 1 < len(args):
                     inline.append(texts[i + 1] if args[i + 1] is None else args[i + 1])
                 break
@@ -1330,12 +1329,12 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
                 return f"-m {module} from the harness hooks directory"
             continue
         if operand not in (None, "-"):
-            if noexec and name in _SHELLS and name not in ("source", "."):
+            if noexec and name in sp.SCRIPT_RUNNERS and name not in ("source", "."):
                 continue  # a syntax check (`bash -n`) runs nothing
             if _hook_entry_path(operand, dirs):
                 return operand
             continue
-        if name in _SHELLS:
+        if name in sp.SCRIPT_RUNNERS:
             continue  # a shell's code is walked as commands of its own
         if operand == "-" or not inline:
             for red in site.cmd.redirects:

@@ -58,6 +58,12 @@ RESERVED = frozenset({
     "select", "case", "esac", "in", "function", "{", "}", "[[", "]]", "!",
     "time", "coproc",
 })
+# The reserved words (and `!`) after which the grammar puts a command word, so a
+# `[[` or a command name may follow (`time [[ a ]]`, `coproc [[ a ]]` run). for,
+# select, case, in and function are followed by a name; fi, done, esac, }, ]] end
+# a construct.
+COMMAND_PREFIX_WORDS = frozenset({"!", "{", "if", "then", "elif", "else", "while", "until",
+                                  "do", "time", "coproc"})
 
 
 def _digits(text):
@@ -266,7 +272,7 @@ class Part:
         if self.kind != "param":
             return False
         t = self.text
-        return t.startswith("!") or ("@" in t and t.rsplit("@", 1)[1][:1] in ("P", "E", "A"))
+        return t.startswith("!") or ("@" in t and t.rsplit("@", 1)[1][:1] in REEXPAND_OPS)
 
     def __repr__(self):
         return "Part(%s,%r,%s)" % (self.kind, self.text, self.quote)
@@ -385,7 +391,7 @@ class Redir:
             return int(self.io)
         if self.op in ("<", "<<", "<<-", "<<<", "<&", "<>"):
             return 0 if self.fd_var is None else None
-        if self.op in ("&>", "&>>"):
+        if self.op in BOTH_STREAMS_OPS:
             return None
         return 1 if self.fd_var is None else None
 
@@ -409,7 +415,7 @@ class Redir:
 
     def writes(self):
         """True when this redirection opens a file for writing."""
-        if self.op in (">", ">>", ">|", "&>", "&>>", "<>"):
+        if self.op in WRITE_REDIRECT_OPS:
             return True
         return self.op == ">&" and self.dup is None and not self.close
 
@@ -426,6 +432,81 @@ _OP_CHARS = ";&|()"
 _WORD_BREAK = " \t\n" + _OP_CHARS + "<>"
 _OPS = (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")")
 _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
+BOTH_STREAMS_OPS = ("&>>", "&>")  # redirect stdout and stderr together (they take no fd)
+REDIRECT_OPS = BOTH_STREAMS_OPS + _REDIR_OPS  # every redirection operator, longest first
+OUTPUT_REDIRECT_OPS = (">", ">>", ">|") + BOTH_STREAMS_OPS  # send output to their target
+WRITE_REDIRECT_OPS = OUTPUT_REDIRECT_OPS + ("<>",)  # open their target for writing (<> read-write)
+PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
+OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
+OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (standard input)
+CD_OPTIONS = ("-L", "-P", "-e", "-@", "--")  # bash: cd [-L|[-P [-e]] [-@]] [--] [dir]
+CD_TARGET_BUILTINS = ("cd", "pushd")  # move to the directory their operand names (popd returns to one listed)
+CWD_BUILTINS = ("cd", "pushd", "popd")  # change the working directory of what follows
+LOOP_VAR_KINDS = ("for", "select")  # Compound kinds whose header binds a variable to each listed word
+DEFINER_KINDS = ("function", "coproc")  # Compound kinds whose body runs later or apart, not in line
+QUOTE_CHARS = ("'", '"')  # the characters that open a quoted string
+COMMAND_OPTS = ("-c", "--command")  # su, runuser, flock, script: the option whose value is shell code
+ENV_SPLIT_OPTS = ("-S", "--split-string")  # env: the option whose value env splits into the command line
+GIT_RESTORE_SOURCE_OPTS = ("-s", "--source")  # git restore: the tree the files are restored from
+COMMAND_LOOKUP_OPTS = ("-v", "-V")  # `command -v NAME` / `-V NAME` describe NAME, run nothing
+ITEM_RUNNERS = ("xargs", "parallel")  # run their command once per input item, operands built at run time
+REEXPAND_OPS = ("P", "E", "A")  # ${x@P} ${x@E} ${x@A}: the value is read again as shell text
+PARALLEL_SEPARATORS = (":::", ":::+", "::::", "::::+")  # GNU parallel: the input sources after the command
+SUBST_OPENERS = ("$(", "<(", ">(")  # open a command or process substitution (so does a lone backquote)
+# The common POSIX-family shells, by the narrow readings that name them (SHELLS is every
+# shell the parser knows), and with `source` and `.` the commands that run a script file
+# operand as shell text in this or a new shell.
+COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
+SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
+DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
+LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
+NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
+RUNUSER_USER_OPTS = ("-u", "--user")  # runuser: the option naming the user COMMAND runs as
+# Package runners (pnpx is `pnpm dlx`) and the package-manager subcommands that run another
+# command: their argv after `--`, and npm's `-c` / `--call` string, is a nested invocation.
+NODE_PKG_MANAGERS = frozenset({"yarn", "npm", "pnpm", "bun"})  # the node package managers
+PM_EXEC_RUNNERS = frozenset({"npx", "pnpx", "bunx"})
+PM_EXEC_SUBCMDS = frozenset({"exec", "x", "dlx"})
+PM_CALL_OPTS = ("-c", "--call")  # npm exec / npx: the option whose value is a shell command
+# node's long options that take a value (`node --help`, v22: the options shown with `=...`;
+# node reads the value attached or as the next word). Read by the git classifier and the
+# runtime guard.
+NODE_VALUE_OPTIONS = frozenset({
+    '--allow-fs-read', '--allow-fs-write', '--build-snapshot-config', '--conditions',
+    '--cpu-prof-dir', '--cpu-prof-interval', '--cpu-prof-name', '--diagnostic-dir',
+    '--disable-proto', '--disable-warning', '--dns-result-order', '--env-file',
+    '--env-file-if-exists', '--experimental-config-file', '--experimental-default-type',
+    '--experimental-loader', '--experimental-sea-config', '--experimental-test-isolation',
+    '--heap-prof-dir', '--heap-prof-interval', '--heap-prof-name',
+    '--heapsnapshot-near-heap-limit', '--heapsnapshot-signal', '--icu-data-dir', '--import',
+    '--input-type', '--inspect-publish-uid', '--loader', '--localstorage-file',
+    '--max-http-header-size', '--max-old-space-size-percentage',
+    '--network-family-autoselection-attempt-timeout', '--openssl-config',
+    '--redirect-warnings', '--report-filename', '--report-signal', '--require',
+    '--secure-heap', '--secure-heap-min', '--snapshot-blob', '--test-concurrency',
+    '--test-coverage-branches', '--test-coverage-exclude', '--test-coverage-functions',
+    '--test-coverage-include', '--test-coverage-lines', '--test-name-pattern',
+    '--test-reporter', '--test-reporter-destination', '--test-shard', '--test-skip-pattern',
+    '--test-timeout', '--title', '--tls-cipher-list', '--tls-keylog',
+    '--trace-event-categories', '--trace-event-file-pattern', '--trace-require-module',
+    '--unhandled-rejections', '--use-largepages', '--v8-pool-size', '--watch-kill-signal',
+    '--watch-path',
+})
+# Environment variables whose VALUE is executed by the command that follows
+# them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
+# a fixture-pinned safe row -- but these named vectors are documented command
+# hooks, so `GIT_EXTERNAL_DIFF=/bin/rm git diff` runs the removal. Read by the
+# removal analyzer and the git classifier.
+EXEC_ASSIGNMENT_VARS = frozenset({
+    "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_SSH", "GIT_SSH_COMMAND",
+    "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_ASKPASS", "GIT_MERGE_TOOL",
+    "GIT_DIFF_TOOL", "GIT_TEXTCONV", "GIT_PROXY_COMMAND", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "PAGER", "MANPAGER", "LESSOPEN", "LESSCLOSE", "LESSEDIT", "EDITOR",
+    "VISUAL", "FCEDIT", "BROWSER", "SSH_ASKPASS", "SUDO_EDITOR", "SUDO_ASKPASS",
+    "DIFFPROG", "MERGE", "PERL5OPT", "PYTHONSTARTUP", "BASH_ENV", "ENV",
+    "SHELL", "RSYNC_RSH", "CVS_RSH", "SVN_SSH", "HGEDITOR", "P4EDITOR",
+    "SYSTEMD_PAGER", "SYSTEMD_EDITOR", "DEBUGINFOD_URLS", "LD_PRELOAD",
+})
 
 
 def _match_pair(t, i, opener, closer):
@@ -1204,8 +1285,11 @@ def ansi_decode(text):
 # Option splitting
 # ---------------------------------------------------------------------------
 
-def _spec(bools=(), vals=(), nargs=None):
-    return {"bool": set(bools), "val": set(vals), "nargs": dict(nargs or {})}
+def _spec(bools=(), vals=(), nargs=None, attached=()):
+    """An option spec: flags, options taking a value, and (``attached``) options whose
+    value is optional and only ever attached (`-m/path`, `--mount=/path`), nargs 0."""
+    return {"bool": set(bools), "val": set(vals) | set(attached),
+            "nargs": {**dict(nargs or {}), **{o: 0 for o in attached}}}
 
 
 def _resolve_long(name, spec):
@@ -1228,7 +1312,7 @@ def split_opts(ws, spec, start=0):
             return i, None
         if lit == "--":
             return i + 1, None
-        if lit in ("-", "+"):
+        if lit in OPTION_SIGNS:
             return i, None
         if len(lit) > 1 and lit[:2] == "--":
             name = lit.split("=", 1)[0]
@@ -1282,7 +1366,7 @@ def split_options(words, spec, start=0, permute=False, lenient=False):
     while i < n:
         w = words[i]
         lit = w.value()
-        if lit is None or lit in ("-", "+") or len(lit) < 2 or lit[0] not in "-+":
+        if lit is None or lit in OPTION_SIGNS or len(lit) < 2 or lit[0] not in "-+":
             operands.append(w)
             i += 1
             if not permute:
@@ -1303,8 +1387,8 @@ def split_options(words, spec, start=0, permute=False, lenient=False):
                 i += 1
                 continue
             if res in spec["val"]:
-                if eq:
-                    opts.append((res, _synthetic_word(val, w)))
+                if eq or spec["nargs"].get(res, 1) == 0:
+                    opts.append((res, _synthetic_word(val, w) if eq else None))
                     i += 1
                     continue
                 if i + 1 >= n:
@@ -1322,6 +1406,8 @@ def split_options(words, spec, start=0, permute=False, lenient=False):
             if ch in spec["val"]:
                 if j + 1 < len(lit):
                     opts.append((ch, _synthetic_word(lit[j + 1:], w)))
+                elif spec["nargs"].get(ch, 1) == 0:
+                    opts.append((ch, None))
                 else:
                     if i + 1 >= n:
                         return opts, operands, "missing_option_value:" + ch
@@ -2218,26 +2304,32 @@ WRAPPERS = {
     "stdbuf": (_spec((), ("-i", "-o", "-e", "--input", "--output", "--error")), 0),
     "timeout": (_spec(("-f", "--foreground", "--preserve-status", "-v", "--verbose"),
                       ("-s", "--signal", "-k", "--kill-after")), 1),
-    "chroot": (_spec((), ("--userspec", "--groups", "--skip-chdir")), 1),
-    "strace": (_spec(("-f", "-ff", "-c", "-C", "-T", "-t", "-tt", "-y", "-yy")),
+    # each spec below from the program's --help (util-linux 2.39, strace 6.8, coreutils) or manual
+    "chroot": (_spec(("--skip-chdir",), ("--userspec", "--groups")), 1),
+    "strace": (_spec(("-f", "-ff", "-c", "-C", "-T", "-t", "-tt", "-ttt", "-y", "-yy", "-Y", "-D", "-i",
+                      "-k", "-n", "-A", "-q", "-r", "-v", "-x", "-xx", "-z", "-Z", "-w", "-d"),
+                     ("-e", "-E", "-p", "-u", "-I", "-b", "-P", "-a", "-o", "-s", "-X", "-O", "-S", "-U")),
                0),
-    "ltrace": (_spec(("-f", "-c", "-C", "-S", "-t", "-tt")), 0),
+    "ltrace": (_spec(("-f", "-c", "-C", "-S", "-t", "-tt", "-ttt", "-T", "-b", "-i", "-r", "-L"),
+                     ("-a", "-A", "-D", "-e", "-F", "-l", "-n", "-o", "-p", "-s", "-u", "-w", "-x")), 0),
     "taskset": (_spec(("-a", "--all-tasks", "-p", "--pid", "-c", "--cpu-list")), 1),
-    "prlimit": (_spec((), ("--pid", "--core", "--cpu", "--data", "--fsize",
-                           "--nofile", "--nproc", "--as", "--stack", "--locks",
-                           "--memlock", "--msgqueue", "--nice", "--rtprio",
-                           "--rttime", "--sigpending")), 0),
-    "unshare": (_spec(("-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net",
-                       "-p", "--pid", "-U", "--user", "-C", "--cgroup", "-T", "--time",
-                       "-f", "--fork", "--mount-proc", "-r", "--map-root-user",
-                       "--kill-child", "--keep-caps"),
-                      ("--propagation", "--setgroups", "--wd", "-S", "--setuid",
-                       "-G", "--setgid")), 0),
-    "nsenter": (_spec(("-a", "--all", "-F", "--no-fork"),
-                      ("-t", "--target", "-m", "--mount", "-u", "--uts", "-i", "--ipc",
-                       "-n", "--net", "-p", "--pid", "-U", "--user", "-C", "--cgroup",
-                       "-S", "--setuid", "-G", "--setgid", "-w", "--wd", "-r", "--root")),
-                0),
+    "prlimit": (_spec(("--noheadings", "--raw", "--verbose"), ("-p", "--pid", "-o", "--output"),
+                      attached=("--core", "--cpu", "--data", "--fsize", "--nofile", "--nproc", "--as",
+                                "--stack", "--locks", "--memlock", "--msgqueue", "--nice", "--rtprio",
+                                "--rttime", "--sigpending", "--rss")), 0),
+    "unshare": (_spec(("-f", "--fork", "-r", "--map-root-user", "-c", "--map-current-user",
+                       "--map-auto", "--keep-caps"),
+                      ("--map-user", "--map-group", "--map-users", "--map-groups", "--propagation",
+                       "--setgroups", "-R", "--root", "-w", "--wd", "-S", "--setuid", "-G",
+                       "--setgid", "--monotonic", "--boottime"),
+                      attached=("-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net", "-p",
+                                "--pid", "-U", "--user", "-C", "--cgroup", "-T", "--time",
+                                "--kill-child", "--mount-proc")), 0),
+    "nsenter": (_spec(("-a", "--all", "-F", "--no-fork", "-e", "--env", "--preserve-credentials",
+                       "-Z", "--follow-context"), ("-t", "--target", "-W", "--wdns"),
+                      attached=("-m", "--mount", "-u", "--uts", "-i", "--ipc", "-n", "--net", "-p",
+                                "--pid", "-U", "--user", "-C", "--cgroup", "-T", "--time", "-S",
+                                "--setuid", "-G", "--setgid", "-r", "--root", "-w", "--wd")), 0),
     "setarch": (_spec(("-v", "--verbose", "-3", "--3gb", "-B", "--32bit", "-L",
                        "--addr-compat-layout", "-F", "--fdpic-funcptrs",
                        "-I", "--short-inode", "-R", "--addr-no-randomize",
@@ -2250,9 +2342,10 @@ WRAPPERS = {
     "eatmydata": (_spec(), 0),
     "valgrind": (_spec(("-q", "--quiet", "-v", "--verbose"),
                        ("--tool", "--log-file", "--error-exitcode")), 0),
-    "xvfb-run": (_spec(("-a", "--auto-servernum", "-d", "--auto-display", "-h", "-w"),
-                       ("-n", "--server-num", "-s", "--server-args", "-e",
-                        "--error-file", "-f", "--auth-file", "-p", "--wait")), 0),
+    "xvfb-run": (_spec(("-a", "--auto-servernum", "-d", "--auto-display", "-h", "--help", "-l",
+                        "--listen-tcp"),
+                       ("-n", "--server-num", "-s", "--server-args", "-e", "--error-file", "-f",
+                        "--auth-file", "-p", "--xauth-protocol", "-w", "--wait")), 0),
     "dbus-run-session": (_spec((), ("--config-file", "--dbus-daemon")), 0),
     "daemonize": (_spec(("-v",), ("-a", "-c", "-e", "-o", "-p", "-l", "-u", "-g",
                                   "-E", "-P")), 0),
@@ -2263,7 +2356,8 @@ WRAPPERS = {
                            "--slice", "--on-active", "--on-boot", "--on-calendar",
                            "--timer-property", "--setenv", "-E", "--service-type",
                            "--uid", "--gid", "--nice", "--working-directory",
-                           "--machine", "-M", "--expand-environment")), 0),
+                           "--machine", "-M", "--expand-environment", "--host", "-H",
+                           "--on-startup", "--on-unit-active", "--on-unit-inactive")), 0),
     "chpst": (_spec(("-P", "-v", "-0", "-1", "-2", "-/"),
                     ("-u", "-U", "-b", "-e", "-m", "-d", "-o", "-p", "-f", "-c",
                      "-r", "-n", "-l", "-L")), 0),
@@ -2286,7 +2380,7 @@ WRAPPERS = {
                     "-s", "--shell", "-k", "--reset-timestamp", "-K", "--remove-timestamp",
                     "-v", "--validate", "-l", "--list", "-A", "--askpass", "-P",
                     "--preserve-groups", "-N", "--no-update"),
-                   ("-u", "--user", "-g", "--group", "-p", "--prompt", "-C",
+                   ("-u", "--user", "-g", "--group", "-p", "--prompt", "-C", "-U", "--other-user",
                     "--close-from", "-h", "--host", "-D", "--chdir", "-R", "--chroot",
                     "-T", "--command-timeout", "-r", "--role", "-t", "--type")), 0),
     "doas": (_spec(("-n", "-s", "-L"), ("-u", "-a", "-C")), 0),
@@ -2297,7 +2391,7 @@ WRAPPERS = {
     "time": (_spec(("-p", "--portability", "-v", "--verbose", "-a", "--append",
                     "-q", "--quiet"),
                    ("-f", "--format", "-o", "--output")), 0),
-    "perf": (_spec(), 1),
+    "perf": (_spec((), ("-o", "--output", "-p", "--pid", "-e", "--event", "-C", "--cpu")), 1),
     "machinectl": None,
     "start-stop-daemon": None,
     "flock": None,
@@ -2318,6 +2412,17 @@ WRAPPERS = {
     "podman": None,
     "coproc": None,
 }
+
+# GNU xargs (findutils 4.9): the options that take the next word as their value,
+# and those whose value is optional and only ever attached (`-i{}`, `-e`, `-l5`,
+# `--eof=E`, `--replace=R`, `--max-lines=N`): `xargs -i cmd` runs cmd.
+XARGS_VALUES = ("-n", "--max-args", "-P", "--max-procs", "-I", "-L", "-s", "--max-chars",
+                "-d", "--delimiter", "-E", "-a", "--arg-file", "--process-slot-var")
+XARGS_ATTACHED = ("-i", "--replace", "-e", "--eof", "-l", "--max-lines")
+XARGS_REPLACE_OPTS = ("-I", "-i", "--replace")  # run the command once per item, the item put in place
+XARGS_SPEC = _spec(("-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p",
+                    "--interactive", "-x", "--exit", "-o", "--open-tty", "--show-limits"),
+                   XARGS_VALUES + XARGS_ATTACHED, {o: 0 for o in XARGS_ATTACHED})
 
 # Wrappers the removal analyzer gives no generic reading but ``resolve`` peels:
 # the option spec and the fixed operands before the command word.
@@ -2344,19 +2449,31 @@ PEEL = {
                       ("-i", "--interleave", "-w", "--weighted-interleave", "-N", "--cpunodebind",
                        "-C", "--physcpubind", "-m", "--membind", "-p", "--preferred",
                        "-P", "--preferred-many")), 0),
-    "xargs": (_spec(("-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose", "-p",
-                     "--interactive", "-x", "--exit", "-o", "--open-tty"),
-                    ("-n", "--max-args", "-P", "--max-procs", "-I", "--replace", "-L",
-                     "--max-lines", "-s", "--max-chars", "-d", "--delimiter", "-E", "-a",
-                     "--arg-file", "-i", "-e", "-l")), 0),
+    "xargs": (XARGS_SPEC, 0),
     "flock": (_spec(("-s", "--shared", "-x", "--exclusive", "-e", "-u", "--unlock", "-n",
-                     "--nb", "--nonblock", "-o", "--close", "-F", "--no-fork"),
+                     "--nb", "--nonblock", "-o", "--close", "-F", "--no-fork", "--verbose"),
                     ("-w", "--wait", "--timeout", "-E", "--conflict-exit-code", "-c",
                      "--command")), 1),
     "command": (_spec(("-p",)), 0),
-    "runuser": (_spec(("-l", "--login", "-m", "-p", "--preserve-environment", "-P", "--pty"),
-                      ("-u", "--user", "-g", "--group", "-G", "--supp-group", "-s", "--shell",
-                       "-w", "--whitelist-environment", "-c", "--command")), 0),
+    # programs that only run the command after their options (each one's --help / manual)
+    "watch": (_spec(("-b", "--beep", "-c", "--color", "-C", "--no-color", "-d", "--differences",
+                     "-e", "--errexit", "-g", "--chgexit", "-t", "--no-title", "-x", "--exec",
+                     "-p", "--precise", "-w", "--no-wrap", "-r", "--no-rerun", "-h", "--help",
+                     "-v", "--version"),
+                    ("-n", "--interval", "-q", "--equexit")), 0),
+    "faketime": (_spec(("-m", "-f", "--exclude-monotonic", "--disable-shm"),
+                       ("--date-prog", "-p")), 1),
+    "pkexec": (_spec(("--keep-cwd", "--disable-internal-agent"), ("--user",)), 0),
+    "proxychains": (_spec(("-q",), ("-f",)), 0),
+    "proxychains4": (_spec(("-q",), ("-f",)), 0),
+    "torsocks": (_spec(("-d", "--debug", "-i", "--isolate", "-q", "--quiet", "-6"),
+                       ("-u", "--user", "-p", "--pass", "-a", "--address", "-P", "--port")), 0),
+    "trickle": (_spec(("-h", "-v", "-V", "-s"), ("-d", "-u", "-w", "-t", "-l", "-n")), 0),
+    "cpulimit": (_spec(("-z", "--lazy", "-i", "--include-children", "-k", "--kill", "-r",
+                        "--restore", "-v", "--verbose", "-q", "--quiet"),
+                       ("-l", "--limit", "-c", "--cpu", "-p", "--pid", "-e", "--exe")), 0),
+    "tsp": (_spec(("-n", "-f", "-d", "-B", "-E", "-g"), ("-L", "-D", "-W", "-N")), 0),
+    "ssh-agent": (_spec(("-c", "-s", "-D", "-d"), ("-a", "-E", "-O", "-P", "-t")), 0),
 }
 
 SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ksh93", "mksh", "ash", "rbash", "yash",
@@ -2371,10 +2488,18 @@ SHELL_SPEC = _spec(("-e", "-x", "-u", "-v", "-n", "-f", "-h", "-k", "-m", "-p", 
                     "--noediting", "--verbose", "--debugger", "--dump-strings",
                     "--dump-po-strings", "--help", "--version", "-c"),
                    ("-o", "-O", "--rcfile", "--init-file"))
+# su and runuser (util-linux --help): runuser adds -u/--user; -c, --command and
+# --session-command pass the command to the shell.
+SU_COMMAND_OPTS = COMMAND_OPTS + ("--session-command",)
 _SU_SPEC = _spec(("-l", "--login", "-m", "-p", "--preserve-environment", "-P", "--pty",
-                  "-f", "--fast", "-"),
-                 ("-c", "--command", "-s", "--shell", "-g", "--group", "-G", "--supp-group",
-                  "-w", "--whitelist-environment", "--session-command"))
+                  "-f", "--fast", "-", "-h", "--help", "-V", "--version"),
+                 SU_COMMAND_OPTS + ("-s", "--shell", "-g", "--group", "-G", "--supp-group",
+                                    "-w", "--whitelist-environment"))
+PEEL["runuser"] = (_spec(_SU_SPEC["bool"], _SU_SPEC["val"] | set(RUNUSER_USER_OPTS)), 0)
+_SCRIPT_SPEC = _spec(("-a", "--append", "-e", "--return", "-f", "--flush", "-q", "--quiet"),
+                     ("-c", "--command", "-E", "--echo", "-I", "--log-in", "-O", "--log-out",
+                      "-B", "--log-io", "-T", "--log-timing", "-m", "--logging-format",
+                      "-o", "--output-limit"))
 _SSH_SPEC = _spec(("-4", "-6", "-A", "-a", "-C", "-f", "-G", "-g", "-K", "-k", "-M", "-N",
                    "-n", "-q", "-s", "-T", "-t", "-V", "-v", "-X", "-x", "-Y", "-y"),
                   ("-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l",
@@ -2490,10 +2615,10 @@ def resolve(cmd, depth=None):
                 if _ASSIGN_RE.match(rest[0].value()):
                     r.assignments = r.assignments + (Assignment(rest[0]),)
                 rest = rest[1:]
-            split = [v for o, v in opts if o in ("-S", "--split-string")]
+            split = [v for o, v in opts if o in ENV_SPLIT_OPTS]
             if not split and rest and rest[0].value() is None:
                 for j in range(1, len(rest) - 1):
-                    if rest[j].value() in ("-S", "--split-string"):
+                    if rest[j].value() in ENV_SPLIT_OPTS:
                         split = [rest[j + 1]]
                         r.unresolved = "computed-env-option"
                         rest = rest[j + 2:]
@@ -2509,9 +2634,9 @@ def resolve(cmd, depth=None):
                     return _merge(r, resolve(cmds[0].cmd, depth))
             words = rest
             continue
-        if name in ("command", "builtin") and len(words) > 1:
+        if name in LOOKUP_BUILTINS and len(words) > 1:
             first = words[1].value()
-            if name == "command" and first in ("-v", "-V"):
+            if name == "command" and first in COMMAND_LOOKUP_OPTS:
                 r.head = head
                 r.args = tuple(words[1:])
                 return r
@@ -2588,6 +2713,44 @@ def resolve(cmd, depth=None):
             return r
         if name == "find":
             return _resolve_find(r, head, words, cmd, depth)
+        if name in PM_EXEC_RUNNERS or (name in NODE_PKG_MANAGERS and len(words) > 1
+                                       and words[1].value() in PM_EXEC_SUBCMDS):
+            tail = words[1 if name in PM_EXEC_RUNNERS else 2:]
+            vals = [w.value() for w in tail]
+            call = next((k for k, v in enumerate(vals) if v in PM_CALL_OPTS), None)
+            if call is not None and call + 1 < len(tail):
+                r.head = head
+                r.args = tuple(words[1:])
+                _set_payload(r, [tail[call + 1]], "shell_c", depth, "pm_call_dynamic")
+                return r
+            if "--" in vals:
+                r.wrappers.append((name, []))
+                words = tail[vals.index("--") + 1:]
+                continue
+        if name == "sg":
+            # sg [-] GROUP [-c] COMMAND: /bin/sh -c COMMAND with GROUP as the group
+            ops = [w for w in words[1:] if w.value() not in ("-", "-c")]
+            if len(ops) > 1:
+                r.head = head
+                r.args = tuple(words[1:])
+                _set_payload(r, ops[1:], "shell_c", depth, "sg_dynamic")
+                return r
+        if name == "script":
+            # script [options] [FILE]: -c/--command runs COMMAND in a shell (util-linux)
+            opts, rest, err = split_options(words, _SCRIPT_SPEC, 1, permute=True, lenient=True)
+            code = [v for o, v in opts if o in COMMAND_OPTS]
+            if code:
+                r.head = head
+                r.args = tuple(words[1:])
+                _set_payload(r, [code[-1]], "shell_c", depth, "script_c_dynamic")
+                return r
+        if name == "runuser" and not _has_c(words):
+            # runuser -u USER [--] COMMAND [ARG...] runs COMMAND as USER, with no shell
+            opts, rest, err = split_options(words, PEEL["runuser"][0], 1)
+            if rest and any(o in RUNUSER_USER_OPTS for o, _v in opts):
+                r.wrappers.append((name, opts))
+                words = rest
+                continue
         if name in ("su", "runuser", "sg") and not _has_c(words):
             r.head = head
             r.args = tuple(words[1:])
@@ -2598,7 +2761,7 @@ def resolve(cmd, depth=None):
             opts, rest, err = split_options(words, spec, 1, permute=True)
             r.head = head
             r.args = tuple(words[1:])
-            code = [v for o, v in opts if o in ("-c", "--command")]
+            code = [v for o, v in opts if o in SU_COMMAND_OPTS]
             if code:
                 _set_payload(r, [code[-1]], "shell_c", depth, name + "_c_dynamic")
             return r
@@ -2615,11 +2778,11 @@ def resolve(cmd, depth=None):
             return r
         if name == "flock":
             opts, rest, err = split_options(words, PEEL["flock"][0], 1, permute=False)
-            code = [v for o, v in opts if o in ("-c", "--command")]
+            code = [v for o, v in opts if o in COMMAND_OPTS]
             if not code and len(rest) > 1:
                 after = rest[1:]
                 lead = after[0].value()
-                if lead in ("-c", "--command") and len(after) > 1:
+                if lead in COMMAND_OPTS and len(after) > 1:
                     code = [after[1]]
             if code:
                 r.head = head
@@ -2636,7 +2799,7 @@ def resolve(cmd, depth=None):
         if entry is None or name in ("command",):
             entry = PEEL.get(name)
         if entry is not None and name not in ("git", "find", "docker", "podman", "kubectl",
-                                              "watch", "parallel", "su", "sg", "script",
+                                              "parallel", "su", "sg", "script",
                                               "bwrap", "ssh", "machinectl", "start-stop-daemon",
                                               "coproc", "runuser"):
             spec, fixed = entry
@@ -2706,9 +2869,6 @@ def cmd_source(cmd):
     return " ".join(w.text for w in cmd.words)
 
 
-_XARGS_VALUES = ("-n", "--max-args", "-P", "--max-procs", "-I", "--replace", "-L", "--max-lines",
-                 "-s", "--max-chars", "-d", "--delimiter", "-E", "-a", "--arg-file",
-                 "--process-slot-var")
 
 
 def _peel_xargs(r, words):
@@ -2724,10 +2884,10 @@ def _peel_xargs(r, words):
             k += 1
             break
         name = v.split("=", 1)[0]
-        if name in _XARGS_VALUES and "=" not in v and (v.startswith("--") or len(v) == 2):
+        if name in XARGS_VALUES and "=" not in v and (v.startswith("--") or len(v) == 2):
             val = words[k + 1].value() if k + 1 < len(words) else None
             opts.append((name, words[k + 1] if k + 1 < len(words) else None))
-            if name in ("-I", "--replace"):
+            if name == "-I":
                 replace = val
             k += 2
             continue
@@ -2751,7 +2911,7 @@ def _merge(outer, inner):
 def _has_c(words):
     for w in words[1:]:
         v = w.value()
-        if v in ("-c", "--command") or (v and v.startswith("--command=")):
+        if v in SU_COMMAND_OPTS or (v and v.startswith(("--command=", "--session-command="))):
             return True
         if v and len(v) > 1 and v[0] == "-" and v[1] != "-" and "c" in v[1:]:
             return True
@@ -2784,7 +2944,7 @@ def _resolve_shell(r, head, words, cmd, depth):
                 _set_payload(r, [words[later[0] + 1]], "shell_c", depth, "shell_c_dynamic")
             r.unresolved = "computed-shell-option"
             return r
-        if v in ("--", "-"):
+        if v in OPTION_ENDS:
             k += 1
             break
         if len(v) > 1 and v[0] in "-+" and not v.startswith("--"):
@@ -2947,7 +3107,7 @@ def executable_view(text):
         script_interp = bool(_SCRIPT_INTERP_RE.match(name)) and not res.wrappers and \
             res.head is cmd.head()
         for w in res.args:
-            opens_quoted = w.text[:1] in ("'", '"')
+            opens_quoted = w.text[:1] in QUOTE_CHARS
             if script_interp and not opens_quoted and all(
                     p.kind == "lit" for p in w.parts) and not any(c in w.text for c in "<>()`"):
                 _blank(out, *w.span)
@@ -3221,8 +3381,7 @@ _PKG_MANAGERS = frozenset({
 })
 
 
-def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_shell",
-                                   "pipe_shell", "shell_c", "eval", "exec_argv"), env=None):
+def write_targets(script, *, into=_DEFAULT_INTO, env=None):
     """Every path ``script`` writes, from redirections and from the VERBS table.
 
     An assignment earlier in the same list (`X=/p; ... > $X`) projects into a
@@ -3329,7 +3488,7 @@ _COPY_MOVE_WORD_RE = re.compile(r"(?:cp|mv)(?!\w)")
 
 def _appends_args(res):
     """True when xargs appends words after the written operands, so the last is no destination."""
-    return any(name == "xargs" and not any(o in ("-I", "-i", "--replace") or (o or "").startswith("--replace=")
+    return any(name == "xargs" and not any(o in XARGS_REPLACE_OPTS or (o or "").startswith("--replace=")
                                            for o, _v in opts)
                for name, opts in res.wrappers)
 
@@ -3683,7 +3842,7 @@ def _git_write_targets(res, env, context):
                         paths.append(args[k])
                     elif v == "--":
                         after = True
-                    elif v in ("-s", "--source"):
+                    elif v in GIT_RESTORE_SOURCE_OPTS:
                         k += 1
                     elif v is not None and v.startswith("-"):
                         pass

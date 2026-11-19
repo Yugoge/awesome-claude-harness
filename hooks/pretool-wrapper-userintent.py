@@ -184,6 +184,9 @@ _CODE_RUNNERS = frozenset(('perl', 'ruby', 'node', 'nodejs', 'php', 'lua', 'tcls
 _STDIN_RUNNERS = frozenset(('at', 'batch', 'crontab'))
 _OTHER_SHELLS = frozenset(('fish', 'tcsh', 'csh', 'elvish', 'nu', 'xonsh', 'rc', 'es'))
 _PY_RUNNERS = frozenset(('pytest', 'py.test', 'coverage', 'ipython', 'ipython3', 'pdb', 'pdb3'))
+# less runs these over each file it opens.
+_LESS_HOOK_VARS = ('LESSOPEN', 'LESSCLOSE')
+_HOME_PARAMS = ('HOME', '{HOME}')  # the parameter texts of $HOME and ${HOME}
 # Variables whose value is a command or a file some program runs.
 _CMD_VAR_RE = re.compile(
     r'^(?:BASH_ENV|ENV|PYTHONSTARTUP|PROMPT_COMMAND|PS[0-4]|SHELL|LESSOPEN|LESSCLOSE|'
@@ -492,7 +495,7 @@ class _Scan:
                     self.feeders[id(pl.stages[k + 1])] = st
                 if isinstance(st, _sp.Compound):
                     w = writes or any(_writes_file(r) for r in st.redirects)
-                    if st.kind in ('for', 'select') and st.header and st.body:
+                    if st.kind in _sp.LOOP_VAR_KINDS and st.header and st.body:
                         var = st.header[0].value()
                         if var and re.match(r'^[A-Za-z_]\w*$', var):
                             self.loops.append((var, list(st.header[1:]), st.body))
@@ -551,7 +554,7 @@ class _Scan:
                 if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
                     t = self.home + t[1:]
                 alts = [(t, glob.escape(t), False)]
-            elif p.kind == 'param' and p.text in ('HOME', '{HOME}') and self.home:
+            elif p.kind == 'param' and p.text in _HOME_PARAMS and self.home:
                 alts = [(self.home, glob.escape(self.home), False)]
             elif p.kind == 'glob':
                 alts = [(p.text, p.text, True)]
@@ -584,8 +587,7 @@ class _Scan:
                 continue
             if v.startswith('PATH=') or v.startswith('PATH+='):
                 self.path_assigned = True
-            if (v.startswith('CDPATH=') and v != 'CDPATH=') and res.name in (
-                    'export', 'declare', 'typeset', 'local', 'readonly'):
+            if (v.startswith('CDPATH=') and v != 'CDPATH=') and res.name in _sp.DECLARATION_BUILTINS:
                 self.cdpath = True
             if not reader:
                 self.others.append((w, v))
@@ -619,7 +621,7 @@ class _Scan:
         words = [w.value() for w in cmd.words]
         if not words:
             return True
-        if words[0] == 'command' and len(words) > 1 and words[1] in ('-v', '-V'):
+        if words[0] == 'command' and len(words) > 1 and words[1] in _sp.COMMAND_LOOKUP_OPTS:
             return True
         res = _sp.resolve(cmd)
         last_open = res.unresolved == 'computed-shell-option' and (
@@ -659,7 +661,7 @@ class _Scan:
                                        list(res.args), self._lead_checker(cmd, res, res.args))
         if _PYTHON_RE.match(name):
             return self._py_reader(cmd, vals)
-        if name in ('node', 'nodejs'):
+        if name in _sp.NODE_NAMES:
             return self._code_opt(vals, ('-e', '--eval', '-p', '--print'), _node_inert, ())
         if name in _AWK_NAMES:
             return self._awk_reader(vals)
@@ -708,7 +710,7 @@ class _Scan:
                     if lead_ok is not None and lead_ok(k):
                         return True
                 return noexec and last_open and k == len(vals) - 1
-            if v in ('--', '-'):
+            if v in _sp.OPTION_ENDS:
                 break
             if v.startswith('--'):
                 if v in ('--rcfile', '--init-file'):
@@ -786,7 +788,7 @@ class _Scan:
                         if got is None:
                             return False
                         firsts.extend(got)
-                if any(f[:1] in ('-', '+') for f in firsts):
+                if any(f[:1] in _sp.OPTION_SIGNS for f in firsts):
                     return False
             if not empty:
                 return True
@@ -1202,7 +1204,7 @@ class _Scan:
                 if self._built(args[k]):
                     self.computed_run = True  # a script operand built at run time
                 return
-            if v in ('--', '-'):
+            if v in _sp.OPTION_ENDS:
                 k += 1
                 break
             if len(v) > 1 and v[0] in '-+' and not v.startswith('--'):
@@ -1511,7 +1513,7 @@ class _Scan:
             return
         name = os.path.basename(head)
         args = list(res.args)
-        if name in ('cd', 'pushd'):
+        if name in _sp.CD_TARGET_BUILTINS:
             self._cd(args)
             return
         if name in ('source', '.'):
@@ -1526,7 +1528,7 @@ class _Scan:
             self._python(site, res, args)
             return
         if name in _OTHER_SHELLS:
-            ops = [w for w in args if not (w.value() or '-').startswith(('-', '+'))]
+            ops = [w for w in args if not (w.value() or '-').startswith(_sp.OPTION_SIGNS)]
             if ops and not any((w.value() or '') in ('-c', '-n') for w in args):
                 self._path_target(ops[0])
         if name in _PY_RUNNERS:
@@ -1571,9 +1573,9 @@ class _Scan:
                 for v in vals[cut + 1:]:
                     if v is None:
                         self.unsure = True
-                    elif v not in (':::', '::::'):
+                    elif v not in _sp.PARALLEL_SEPARATORS:
                         self._sub(v)
-            vals = [v for v in vals if v not in (':::', '::::')]
+            vals = [v for v in vals if v not in _sp.PARALLEL_SEPARATORS]
         if not reader and named:
             if name in _CODE_RUNNERS or name in _STDIN_RUNNERS or _sp._SCRIPT_INTERP_RE.match(name):
                 self.unsure = True
@@ -1674,19 +1676,19 @@ class _Scan:
         cmd = site.cmd
         res = self.res[id(site)]
         for a in tuple(cmd.assignments) + tuple(res.assignments):
-            if a.name in ('LESSOPEN', 'LESSCLOSE'):
+            if a.name in _LESS_HOOK_VARS:
                 self.lessopen = True
         for w in cmd.words:
             t = w.value()
             t = w.text if t is None else t
-            if re.match(r'''^["']?(?:LESSOPEN|LESSCLOSE)\+?=''', t or ''):
+            if re.match(r'''^["']?(?:%s)\+?=''' % '|'.join(_LESS_HOOK_VARS), t or ''):
                 self.lessopen = True
         # RIPGREP_CONFIG_PATH the command sets (prefix, env, export/declare/typeset/readonly)
         for a in tuple(cmd.assignments) + tuple(res.assignments):
             if a.name == 'RIPGREP_CONFIG_PATH':
                 self.rgconf.append(a.value)
             self._pager_assign(a)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+        if res.name in _sp.DECLARATION_BUILTINS:
             for w in res.args:
                 if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''):
                     a = _sp.Assignment(w)
@@ -1715,7 +1717,7 @@ class _Scan:
         cmd = site.cmd
         res = self.res[id(site)]
         assigns = list(cmd.assignments) + list(res.assignments)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+        if res.name in _sp.DECLARATION_BUILTINS:
             assigns.extend(_sp.Assignment(w) for w in res.args
                            if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''))
         for a in assigns:
@@ -2106,7 +2108,7 @@ class _Scan:
 
     def _less(self, args):
         """less with a LESSOPEN/LESSCLOSE the command sets runs it over each file it opens."""
-        ops = [w for w in args if not (w.value() or 'x').startswith(('-', '+'))]
+        ops = [w for w in args if not (w.value() or 'x').startswith(_sp.OPTION_SIGNS)]
         self._words_hold_wrapper(ops)
 
     def _loop(self, var, items, body):
@@ -2167,7 +2169,7 @@ class _Scan:
                 if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
                     t = self.home + t[1:]
                 prefix += t
-            elif p.kind == 'param' and p.text in ('HOME', '{HOME}') and self.home:
+            elif p.kind == 'param' and p.text in _HOME_PARAMS and self.home:
                 prefix += self.home
             else:
                 break
@@ -2210,7 +2212,7 @@ class _Scan:
         for site in self.sites:
             cmd, res = site.cmd, self.res[id(site)]
             assigns = list(cmd.assignments) + list(res.assignments)
-            if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+            if res.name in _sp.DECLARATION_BUILTINS:
                 assigns.extend(_sp.Assignment(w) for w in res.args
                                if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''))
             for a in assigns:
@@ -3183,7 +3185,7 @@ class _Scan:
         res = self.res[id(site)]
         inert = self._inert(cmd)
         assigns = list(cmd.assignments) + list(res.assignments)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly', 'env'):
+        if res.name in _sp.DECLARATION_BUILTINS + ('env',):
             for w in res.args:
                 if _sp._ASSIGN_PARTS_RE.match(w.raw.text):
                     assigns.append(_sp.Assignment(w))
