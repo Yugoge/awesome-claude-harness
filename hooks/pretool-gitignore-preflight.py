@@ -732,9 +732,9 @@ def is_report_of_task(report_rel, task_id, repo_root):
 
 
 def get_repo_root():
-    """The project the dispatch works in (CLAUDE_PROJECT_DIR), whose docs/dev reports and .gitignore
-    the rule reads; this file's own repository (hooks/ is one level below its root) without one."""
-    return os.environ.get('CLAUDE_PROJECT_DIR') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    """The project the dispatch works in (CLAUDE_PROJECT_DIR, else the cwd), whose docs/dev reports and
+    .gitignore the rule reads."""
+    return os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()
 
 
 def is_gitignored(path, repo_root):

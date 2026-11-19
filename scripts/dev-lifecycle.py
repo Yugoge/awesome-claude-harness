@@ -652,7 +652,7 @@ class Progress:
 
 
 def _default_project_dir() -> str:
-    return str(Path(__file__).resolve().parent.parent)
+    return os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()  # the hooks' project root
 
 
 def main(argv: Optional[list[str]] = None) -> int:

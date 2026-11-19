@@ -51,11 +51,7 @@ def emit(**facts: object) -> None:
 def project_dir(given: str | None) -> Path:
     if given:
         return Path(given).resolve()
-    env = os.environ.get("CLAUDE_PROJECT_DIR")
-    if env:
-        return Path(env).resolve()
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    return Path(top.stdout.strip() if top.returncode == 0 and top.stdout.strip() else os.getcwd()).resolve()
+    return Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()).resolve()  # the hooks' project root
 
 
 def spec_dir_id(spec: str, project: Path) -> str:

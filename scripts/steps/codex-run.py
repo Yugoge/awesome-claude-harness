@@ -64,14 +64,7 @@ def resolve_wrapper(env) -> str:
 
 
 def _project_root(env) -> str:
-    if env.get("CLAUDE_PROJECT_DIR"):
-        return env["CLAUDE_PROJECT_DIR"]
-    try:
-        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                             check=False, env=env).stdout.strip()
-    except OSError:
-        top = ""
-    return top
+    return env.get("CLAUDE_PROJECT_DIR") or os.getcwd()  # the hooks' project root
 
 
 def resolve_output_path(env) -> Path:
