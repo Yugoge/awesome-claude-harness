@@ -56,6 +56,18 @@ def test_a_call_of_the_one_writer_counts_as_a_write(tmp_path):
     assert spec_path.last_spec_write(t) == SPEC
 
 
+def test_a_writer_line_whose_project_path_holds_a_space_names_the_whole_path(tmp_path):
+    """spec-write prints the absolute path, and a project directory may hold a space: the reader takes
+    the rest of the line (it stopped at the first space before, and the Stop command gate did not)."""
+    spaced = "/work/my proj/docs/dev/specs/spec-20261028-101010.md"
+    t = _transcript(tmp_path, [_bash_writer(spaced)], cwd="/work/my proj")
+    assert spec_path.last_spec_write(t) == spaced
+    gate = importlib.util.spec_from_file_location("_gate_writer_line", HOOKS / "stop-command-gate.py")
+    module = importlib.util.module_from_spec(gate)
+    gate.loader.exec_module(module)
+    assert module._WRITER_LINE.findall(f"spec-write: create {spaced}\n") == [spaced]
+
+
 def test_relative_paths_resolve_against_the_record_cwd(tmp_path):
     t = _transcript(tmp_path, [("MultiEdit", {"file_path": "docs/dev/specs/spec-20261028-101010.md"}, "ok", False)])
     assert spec_path.last_spec_write(t) == SPEC
