@@ -7,7 +7,7 @@ strict: the one block is that refusal, no deviation passes anything, no hook err
 its NO_TARGET: line (Step 2), the owner types `/commit <task>`, and the hook's refusal ends that run on Step 7's
 REFUSED: line, with the hook's output and the remedy it names; `/commit --auto --force` ends on Step 1's
 NO_TARGET: line. No AskUserQuestion is made and every Stop passes (the Stop gate's no_target_end and
-hook_refused_landing).
+hook_refused_tasks).
 """
 from __future__ import annotations
 
