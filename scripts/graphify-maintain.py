@@ -61,26 +61,6 @@ from graphify_lib import (
 VALID_CONFIDENCES = {"EXTRACTED", "INFERRED", "AMBIGUOUS"}
 
 
-def _detect_semantic_backend() -> str | None:
-    """Return a semantic backend name reachable in THIS environment, or None.
-
-    Auto-detect honours API-key env vars via graphify's own detect_backend;
-    absent any key, the keyless `claude-cli` backend is usable iff /usr/bin/claude
-    (the `claude` CLI) is on PATH. GRAPHIFY_TRIAGE_BACKEND forces a choice.
-    """
-    forced = os.environ.get("GRAPHIFY_TRIAGE_BACKEND", "").strip()
-    if forced:
-        return forced
-    for env_key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "MOONSHOT_API_KEY",
-                    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
-        if os.environ.get(env_key):
-            return None  # let graphify auto-detect the keyed backend via `extract`
-    import shutil
-    if shutil.which("claude"):
-        return "claude-cli"
-    return None
-
-
 def _canonicalize(value) -> object:
     """Canonicalize a link field so a 7-tuple signature stays hashable (codex #5).
 

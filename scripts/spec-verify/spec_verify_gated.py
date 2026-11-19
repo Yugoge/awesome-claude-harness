@@ -60,7 +60,6 @@ _META_BULLET_RE = re.compile(
     r"(?P<desc>.+?)\s*$"
 )
 _NEXT_H2_RE = re.compile(r"^\s*##\s+\S")
-_HEADING_LINE_RE = re.compile(r"^\s*#{1,6}\s+\S")
 
 # R5.2 recognized operators. Detection is substring-based so authors
 # can phrase rules in prose ("views should cite by line-range, not

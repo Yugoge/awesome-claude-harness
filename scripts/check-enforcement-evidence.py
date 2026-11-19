@@ -156,7 +156,6 @@ AUTHORED_ROW_FIELDS = ["row_id", "mode/precondition", "behavior", "exercise_stat
 
 # Values recorded at the revision named below. Any drift from them is a FAILURE, not an update:
 # the published claim must break loudly rather than silently describe a boundary that moved.
-RECORDED_AT = "4c33f2f5"
 
 # Re-recorded 2026-09-03: _command_token_index() was taught the shell reserved
 # words, leading redirections and wrapper option flags it never handled, so the

@@ -152,7 +152,6 @@ REASON_UNSUPPORTED_SCHEMA_DIALECT = "unsupported_schema_dialect"
 REASON_COMPOSER_SUPPLIED_DIGEST = "composer_supplied_content_sha256"
 REASON_UNRESOLVED_EVALUATION = "unresolved_evaluation"
 REASON_ALL_ENTRY_FORMS_NOT_RUN = "all_discovered_entry_forms_not_run"
-REASON_IDENTITY_MISMATCH = "candidate_identity_mismatch"
 
 # The no-blame sentinels. Three, not two: the third closes the branch in which
 # the search terminated under its own bound before any admissible set was
@@ -211,58 +210,6 @@ _BASH_LINE_RE = re.compile(r":\s*line\s+(\d+):")
 # ===========================================================================
 # Vocabulary introspection (AC5)
 # ===========================================================================
-
-def gate_vocabulary(records=None):
-    """Every name this module DEFINES, derived by introspection.
-
-    Two sources, both derived rather than maintained by hand: the module's own
-    upper-case string constants, and -- when records are supplied -- every
-    dict KEY those records actually emit. A constant added later is in the set
-    the moment it exists; a field added later is in the set the moment it is
-    emitted. Producer diagnostics and candidate-authored text are values, not
-    keys or declared constants, and are therefore exempt by construction.
-    """
-    vocabulary = set()
-    for name, value in sorted(globals().items()):
-        if not name.isupper():
-            continue
-        vocabulary.add(name.lower())
-        for item in _flatten_strings(value):
-            vocabulary.add(item)
-    for record in (records or []):
-        vocabulary |= _dict_keys_deep(record)
-    return frozenset(vocabulary)
-
-
-def _flatten_strings(value):
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        out = []
-        for key, sub in value.items():
-            out.extend(_flatten_strings(key))
-            out.extend(_flatten_strings(sub))
-        return out
-    if isinstance(value, (list, tuple, set, frozenset)):
-        out = []
-        for sub in value:
-            out.extend(_flatten_strings(sub))
-        return out
-    return []
-
-
-def _dict_keys_deep(value):
-    keys = set()
-    if isinstance(value, dict):
-        for key, sub in value.items():
-            if isinstance(key, str):
-                keys.add(key)
-            keys |= _dict_keys_deep(sub)
-    elif isinstance(value, (list, tuple)):
-        for sub in value:
-            keys |= _dict_keys_deep(sub)
-    return keys
-
 
 # ===========================================================================
 # Discovery adapter -- replaceable, and null by default so the gate is
@@ -1929,8 +1876,6 @@ def _record_template(evaluation_cap=DEFAULT_EVALUATION_CAP, discovery=None):
         "gate_coverage_claim": GATE_COVERAGE_CLAIM,
     }
 
-
-RECORD_FIELDS = tuple(sorted(_record_template()))
 
 
 def evaluate(composer, discovery=None, evaluation_cap=DEFAULT_EVALUATION_CAP,

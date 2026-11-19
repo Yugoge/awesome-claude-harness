@@ -50,8 +50,6 @@ _TOKEN_DELIMS = frozenset(" \t\n\r\f\v;&|()<>'\"")
 FATAL_UNBALANCED = "unbalanced"
 FATAL_UNTERMINATED_HEREDOC = "unterminated_heredoc"
 
-_NAME_START = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
-
 
 def _skip_matching(text: str, i: int, opener: str, closer: str) -> int:
     """Return index just past the balanced closer, or -1 when unterminated.

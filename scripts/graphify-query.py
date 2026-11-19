@@ -62,8 +62,6 @@ PREQUERY_SCHEMA = "graphify-prequery.v1"  # pre_query.json's schema: checked bef
 
 # Hard token cap for structural_context
 HARD_TOKEN_CAP = 2000
-TARGET_TOKEN_MIN = 800
-TARGET_TOKEN_MAX = 1500
 
 # Rough token estimate: 1 token ≈ 4 chars
 def _estimate_tokens(text: str) -> int:
