@@ -152,6 +152,7 @@ from lib.git_command_classifier import (  # noqa: E402
 # hooks/pretool-commit-dispatch-attest.py. See _grant_provenance_refusal.
 from lib import commit_pipeline  # noqa: E402
 from lib import shell_parse  # noqa: E402
+from lib import git_facts  # noqa: E402
 # The per-event pointer a spent grant hands to the PostToolUse finalizer, which
 # appends the commit-event journal entry from it.
 from lib import commit_journal  # noqa: E402
@@ -178,7 +179,7 @@ GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 # one -C directory, where the grant's repo/branch/HEAD binding is checked. No
 # committer uses them, so a commit under a grant that carries one is refused.
 _GIT_REDIRECT_ENV_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')
-_GIT_REDIRECT_FLAGS = ('--git-dir', '--work-tree', '--namespace')
+_GIT_REDIRECT_FLAGS = shell_parse.GIT_REDIRECT_OPTS
 # Builtins that move a later commit to another cwd than the guard probes.
 _CWD_CHANGE_CMDS = ('cd', 'pushd', 'popd')
 
@@ -536,10 +537,9 @@ def _push_forces_or_deletes(args):
     return False
 
 
-# Commit options whose value is the next word when it is not attached.
-_COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fixup', '--squash',
-                      '--reuse-message', '--reedit-message', '--template', '--trailer',
-                      '--pathspec-from-file'}
+# Commit options whose value is the next word when it is not attached, but the message options
+# (-m/--message, -F/--file), which the walks below read on their own.
+_COMMIT_VALUE_OPTS = (git_facts.GIT_COMMIT_VALUE_OPTIONS - {'--message', '--file'}) | {'-C', '-c', '-t'}
 
 
 # ---------------------------------------------------------------------------
@@ -1196,7 +1196,7 @@ def _branch_writes(inv):
         return False, []
     if sub in ('merge', 'cherry-pick', 'revert', 'am', 'reset'):
         return sub != 'reset' or _reset_moves(args), []
-    if sub in ('pull', 'fetch'):  # a refspec's destination is a local ref
+    if sub in _FETCHING:  # a refspec's destination is a local ref
         return sub == 'pull', [o.rpartition(':')[2] for o in ops if ':' in o]
     if sub == 'rebase':
         ops = _operands(args, ('--onto', '-x', '--exec', '-s', '--strategy', '-X',

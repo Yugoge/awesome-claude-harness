@@ -233,19 +233,7 @@ def _command_token_index(toks):
     return None
 
 
-def _git_subcommand_index(args):
-    """Index of the subcommand among git's args (global options skipped), or None."""
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a in GIT_GLOBAL_VALUE_OPTS:
-            i += 2
-            continue
-        if a.startswith('-'):
-            i += 1
-            continue
-        return i
-    return None
+_git_subcommand_index = shell_parse.git_subcommand_index
 
 
 def _git_subcommand(args):
