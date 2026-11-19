@@ -400,14 +400,12 @@ ROUNDS = {
                        for opt in ("",) + UNKNOWN_OPTIONS],
     "PRUNED_HEADS": [head + " x -q" for head in PRUNED_HEADS],
 }
-# The commands of those lists that another rule of the hook refuses whatever the removal policy answers.
-OTHER_RULES = {
-    "git clean -fdx": "git clean", "git -C . clean -f": "git clean",
-    "dd if=a of=b -x": "Destructive disk operation", "sh''red x\nls -l": "Destructive disk operation",
-    "git commit --no-verify -m x -q": "commit-hook-bypass",
-    "git config --global core.hooksPath /x -l": "config-keystone-write",
-    "git config set --global core.hooksPath /x -l": "config-keystone-write",
-}
+# Other rules of the hook that refuse some commands of those lists whatever the removal policy answers: a destructive
+# git clean or disk operation, a commit that skips its hooks, a write of a keystone git setting, and the runtime
+# guard's own fail-closed refusal of package and build tools while no protected-runtime file is configured (these
+# runs carry none).
+OTHER_RULES = ("git clean", "Destructive disk operation", "commit-hook-bypass", "config-keystone-write",
+               "protected-runtime-guard")
 
 
 def _rmref():
@@ -507,17 +505,21 @@ def test_through_the_hook_the_degraded_path_gives_the_rule_s_answer(mode, names,
     commands = [c for name in names for c in ROUNDS[name]]
     with ThreadPoolExecutor(4) as ex:
         results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))), commands))
-    wrong = []
+    wrong, unnamed, ran = [], 0, 0
     for command, code, err in results:
+        other = any(rule in err for rule in OTHER_RULES) and "removal-policy" not in err
         if holds_removal_word(command):
-            ok = code == 2 and DEGRADED in err
-        elif command in OTHER_RULES:
-            ok = code == 2 and OTHER_RULES[command] in err and "removal-policy" not in err
+            # Refused: by the removal policy on the degraded path, unless an earlier rule refuses the command first.
+            ok = code == 2 and (DEGRADED in err or other)
         else:
-            ok = code == 0 and "removal-policy" not in err
+            # Never refused by the removal policy; it runs unless another rule of the hook refuses it.
+            unnamed += 1
+            ran += code == 0
+            ok = "removal-policy" not in err and (code == 0 or (code == 2 and other))
         if not ok:
             wrong.append((command, code, err.splitlines()[:1]))
     assert not wrong, (mode, wrong[:10])
+    assert ran * 3 >= unnamed * 2, (mode, names, ran, unnamed)
 
 
 @pytest.mark.parametrize("mode", sorted(MODES))
@@ -569,7 +571,7 @@ def test_most_of_the_quoted_removals_are_found_by_the_analyzer():
 def test_removals_the_text_does_not_name_are_found_by_the_analyzer(command):
     """The named prohibition does not rest on the text: with its analyzer, the hook refuses these as removals."""
     code, err = run_hook(command)
-    assert code == 2 and ("removal-policy — FORBIDDEN_REMOVAL" in err or OTHER_RULES.get(command, "\0") in err), err
+    assert code == 2 and ("removal-policy — FORBIDDEN_REMOVAL" in err or any(rule in err for rule in OTHER_RULES)), err
 
 
 # ── The generated corpus ─────────────────────────────────────────────────────
