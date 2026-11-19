@@ -121,14 +121,10 @@ def below(path: str, root: str, fold: bool = False) -> Optional[Tuple[str, ...]]
 
 def inside(path, directory, cwd: Optional[str] = None) -> Optional[Tuple[str, ...]]:
     """Components of ``path`` below ``directory`` when it is that directory or lies in it, else
-    None: the directory resolved and the path in each resolved view, so a symlink or another
-    spelling on either side answers alike."""
-    root = _real(absolute(str(directory), cwd))
-    for view in resolved_views(path, cwd) if root else ():
-        rel = below(view, root)
-        if rel is not None:
-            return rel
-    return None
+    None. Both sides are resolved, so a symlink or another spelling on either side answers alike,
+    and a write through ``path`` is judged where it lands."""
+    real, root = _real(absolute(str(path), cwd)), _real(absolute(str(directory), cwd))
+    return below(real, root) if real and root else None
 
 
 def is_inside(path, directory, cwd: Optional[str] = None) -> bool:
@@ -191,8 +187,8 @@ def temp_root_of(path, cwd: Optional[str] = None, roots: Optional[Tuple[str, ...
 
 
 def in_system_temp(path, cwd: Optional[str] = None) -> bool:
-    """Whether ``path`` lies strictly below a system temp directory, both sides resolved."""
-    return temp_root_of(path, cwd, system_temp_roots()) is not None
+    """Whether a write of ``path`` lands strictly below a system temp directory, both sides resolved."""
+    return any(inside(path, root, cwd) for root in system_temp_roots())
 
 
 def is_system_temp_root(directory: str) -> bool:
@@ -298,8 +294,8 @@ def data_parts(path: str) -> Optional[Tuple[str, ...]]:
     if path.startswith("~"):
         return None
     if os.path.isabs(path):
-        for place in (str(project_root()), os.curdir, temp_root_of(path)):
-            rel = inside(path, place) if place else None
+        for place in (str(project_root()), os.curdir) + tuple(sorted(temp_roots(), key=len, reverse=True)):
+            rel = inside(path, place)
             if rel is not None:
                 break
         else:

@@ -221,6 +221,11 @@ def test_f13_a_symlinked_temp_directory_answers_alike(tmp_path, monkeypatch):
         assert not locations.in_arbitrary_temp(str(spelling / "proj" / "x.txt"), str(link / "proj"))
     assert not locations.in_system_temp(str(tmp_path / "elsewhere" / "x.txt"))
     assert not locations.in_system_temp(str(link))  # the root itself is not below it
+    # judged where the write lands: a link kept in temp that leads out of it, and one leading into it
+    (real / "out").symlink_to(tmp_path / "elsewhere")
+    (tmp_path / "in").symlink_to(real / "scratch")
+    assert not locations.in_system_temp(str(link / "out" / "x.txt"))
+    assert locations.in_system_temp(str(tmp_path / "in" / "x.txt"))
 
 
 # --- finding 2: the hooks and commands folders were the text `.claude/hooks/` ----------------------
@@ -325,6 +330,8 @@ def test_f8_overnight_exemption_follows_the_session_temp_and_state_roots(tmp_pat
     assert allowed("/dev/null")
     assert not allowed(os.path.join(project, "src", "x.py"))                 # main, outside the worktree
     assert not allowed(f"/etc/{NEVER}/x")
+    (state_real / "escape").symlink_to(f"/etc/{NEVER}")                      # a link kept in the state root
+    assert not allowed(state_link / "escape" / "x.py")                       # is judged where the write lands
 
 
 # --- finding 9: a here-document was data only below the literals /tmp/ and /var/tmp/ ---------------
@@ -505,6 +512,10 @@ def test_is_inside_resolves_both_sides(tmp_path):
         assert not locations.is_inside(str(tmp_path / "realistic" / "f"), str(directory))
         assert not locations.is_inside(str(real / ".." / "other"), str(directory))
     assert locations.is_inside("link/sub/f", "real", cwd=str(tmp_path))
+    # a write through a link is judged where it lands, not where the link lies
+    (real / "sub" / "out").symlink_to(tmp_path / "elsewhere")
+    assert not locations.is_inside(str(real / "sub" / "out"), str(real))
+    assert not locations.is_inside(str(real / "sub" / "out" / "f"), str(link))
 
 
 def test_the_roots_have_one_resolution_each(tmp_path, monkeypatch):
