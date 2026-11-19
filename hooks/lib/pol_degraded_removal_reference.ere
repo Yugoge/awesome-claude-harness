@@ -1,17 +1,20 @@
 # POL degraded-mode removal-reference predicate — SINGLE SOURCE OF TRUTH.
 #
-# This file holds the one question hooks/pretool-bash-safety.sh asks of a
-# command its removal policy cannot prove safe: does the RAW command text name
-# a removal front end or a removal action? The hook reads this file when the
-# execution-boundary analyzer answers UNRESOLVED (the primary path) and when it
-# is unavailable (the degraded path): a match refuses the command, no match
-# lets it run and hands it to the record (owner's rule, 2026-11-19). The
-# differential test (AC-R02-10) reads the SAME file. A copy of the pattern in
-# any consumer is forbidden: the invariant "primary never allows what the
-# degraded path denies, inside the removal-reference domain" is only meaningful
-# while both sides quantify over one definition. (What the primary path allows
-# inside that domain, it has proven: hooks/tests/fixtures/
-# pol_primary_laxity_ledger.json.)
+# This file holds the word list the removal policy (hooks/lib/bash_safety_rules.py
+# removal_policy) asks of a command it cannot prove safe. It is asked of
+# DIFFERENT TEXT on the two paths, which are two rules (owner's rule,
+# 2026-11-19):
+#   primary  - the execution-boundary analyzer answered UNRESOLVED, having
+#              already refused every removal it sees where it would run. The
+#              list is asked only of the text that can become a command the
+#              analyzer left unresolved (its `unresolved_scopes`): never of a
+#              heredoc written to a file, another command's arguments, a
+#              variable name, a comment or a message.
+#   degraded - the analyzer gave no usable verdict, or the parser could not
+#              read the command: the list is asked of the whole raw text.
+# A match refuses; no match lets the command run and hands it to the record.
+# The differential test (AC-R02-10) reads the SAME file. A copy of the pattern
+# in any consumer is forbidden.
 #
 # The bare library names (remove, rmtree, unlinkSync, rm_rf, ...) are here
 # because of QA finding F5: python3 -c 'import os; getattr(os,"remove")("X")'

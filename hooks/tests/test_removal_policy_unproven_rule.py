@@ -1,11 +1,13 @@
 """The owner's rule for a command the removal policy cannot prove safe (lib/bash_safety_rules.py::removal_policy).
 
-The rule (owner, 2026-11-19): when the guard cannot prove a command safe, it refuses if the command text holds a
-removal word, by the single definition in lib/pol_degraded_removal_reference.ere, and otherwise lets the command
-run and hands one entry to the record. A removal the analyzer finds (FORBIDDEN_REMOVAL) is refused as before.
+The rule (owner, 2026-11-19): when the guard cannot prove a command safe, it refuses if a removal word, by the single
+definition in lib/pol_degraded_removal_reference.ere, is in the text that can become the command, and otherwise lets
+the command run and hands one entry to the record. A removal the analyzer finds (FORBIDDEN_REMOVAL) is refused as before.
 
-"Cannot prove" has two forms and one answer: the analyzer answers UNRESOLVED (the primary path), or it gives no
-usable verdict (timeout, memory ceiling, crash: the degraded path). Before this rule every UNRESOLVED command was
+"Cannot prove" has two forms and two rules: the analyzer answers UNRESOLVED (the primary path: the word list is asked
+of the analyzer's unresolved_scopes, the text that can become each command it left unresolved), or it gives no usable
+verdict (timeout, memory ceiling, crash: the degraded path: the word list is asked of the whole text).
+hooks/tests/test_removal_policy_parsed_rule.py holds the text-only shapes that run on the primary path alone. Before this rule every UNRESOLVED command was
 refused, also when its text held no removal word: a variable assigned inside a loop, a program name held in a
 variable, inline Python, a pattern with wildcard characters. The commands below are those shapes, written with
 neutral names. No command is ever executed: each is data handed to the hook or the policy.
@@ -93,17 +95,19 @@ UNPROVEN_WITH_REMOVAL_WORD = [
     "$TOOL remove pkg",
     "$CLEANER --delete old",
     "PY=venv/bin/python; $PY tools/rm.py",
-    "for d in a b; do t=$d/x; echo \"rmdir $t\"; done",
     "for f in a b; do git rm \"$f\"; done",
-    "source ./env.sh; echo unlink",
-    "python3 -c 'import shutil; shutil.rmtree(\"build\")'",
-    "python3 -c 'import os; getattr(os, \"remove\")(\"x\")'",
 ]
+
+# Unproven, and the removal word is only text (an echo's argument, after a sourced file): the primary path reads
+# the command and lets it run; the degraded path, which reads nothing, refuses it.
+UNPROVEN_TEXT_ONLY = ["for d in a b; do t=$d/x; echo \"rmdir $t\"; done", "source ./env.sh; echo unlink"]
 
 # A removal the analyzer finds: the named prohibition. The last three name no removal word in their raw text.
 FORBIDDEN_REMOVALS = [
     "rm -rf build", "find . -name '*.tmp' -delete", "git rm -f x", "for f in a b; do rm \"$f\"; done",
     "r''m -rf build", "un''link x", "find . -name x -de''lete",
+    # Python read with ast (they were unproven and refused on their text before)
+    "python3 -c 'import shutil; shutil.rmtree(\"build\")'", "python3 -c 'import os; getattr(os, \"remove\")(\"x\")'",
 ]
 
 # Proven by the analyzer although the text holds a removal word (hooks/tests/fixtures/pol_primary_laxity_ledger.json).
@@ -160,8 +164,8 @@ def run_hook(command, hook=H.HOOK, **env_extra):
 @pytest.fixture(scope="module")
 def hook_runs():
     """Every corpus command through the real hook on the primary path and under each degraded mode, run once."""
-    commands = (UNPROVEN_NO_REMOVAL_WORD + UNPROVEN_WITH_REMOVAL_WORD + FORBIDDEN_REMOVALS + PROVEN_WITH_REMOVAL_WORD
-                + PROVEN_PLAIN)
+    commands = (UNPROVEN_NO_REMOVAL_WORD + UNPROVEN_WITH_REMOVAL_WORD + UNPROVEN_TEXT_ONLY + FORBIDDEN_REMOVALS
+                + PROVEN_WITH_REMOVAL_WORD + PROVEN_PLAIN)
     jobs = [(c, mode) for c in commands for mode in ["primary"] + sorted(DEGRADED_ENV)]
     with ThreadPoolExecutor(4) as ex:
         results = list(ex.map(lambda job: run_hook(job[0], **MODE_ENV[job[1]]), jobs))
@@ -173,6 +177,8 @@ def hook_runs():
 def test_the_corpus_is_unproven_by_the_live_analyzer_and_split_by_the_single_definition():
     assert not [c for c in UNPROVEN_NO_REMOVAL_WORD if holds_removal_word(c)]
     assert not [c for c in UNPROVEN_WITH_REMOVAL_WORD if not holds_removal_word(c)]
+    for command in UNPROVEN_WITH_REMOVAL_WORD + UNPROVEN_TEXT_ONLY:
+        assert holds_removal_word(command)
     for command in UNPROVEN_WITH_REMOVAL_WORD:
         assert eb.analyze(command)["verdict"] == eb.UNRESOLVED, command
     # An analyzer that learns to prove some of the first list leaves the rule nothing to decide for those; the list
@@ -206,12 +212,18 @@ def test_an_unproven_command_holding_no_removal_word_runs_on_the_degraded_path(h
 def test_an_unproven_command_holding_a_removal_word_is_refused_on_the_primary_path(hook_runs, command):
     code, err = hook_runs[(command, "primary")]
     assert code == 2 and PRIMARY_REFUSAL in err, (command, err)
-    assert "its text holds a removal word" in err, err
+    assert "a command it could not resolve holds a removal word" in err, err
+
+
+@pytest.mark.parametrize("command", UNPROVEN_TEXT_ONLY)
+def test_an_unproven_command_whose_removal_word_is_only_text_runs_on_the_primary_path(hook_runs, command):
+    code, err = hook_runs[(command, "primary")]
+    assert code == 0 and "removal-policy" not in err, (command, err)
 
 
 @pytest.mark.parametrize("mode", sorted(DEGRADED_ENV))
-@pytest.mark.parametrize("command", UNPROVEN_WITH_REMOVAL_WORD + [c for c in FORBIDDEN_REMOVALS if holds_removal_word(c)]
-                         + PROVEN_WITH_REMOVAL_WORD)
+@pytest.mark.parametrize("command", UNPROVEN_WITH_REMOVAL_WORD + UNPROVEN_TEXT_ONLY
+                         + [c for c in FORBIDDEN_REMOVALS if holds_removal_word(c)] + PROVEN_WITH_REMOVAL_WORD)
 def test_a_command_holding_a_removal_word_is_refused_on_the_degraded_path(hook_runs, mode, command):
     code, err = hook_runs[(command, mode)]
     assert code == 2 and DEGRADED_REFUSAL in err, (mode, command, err)
@@ -230,39 +242,46 @@ def test_a_proven_command_still_passes(hook_runs, command):
     assert code == 0 and "removal-policy" not in err, (command, err)
 
 
-# ── Both paths give an unproven command the same answer ──────────────────────
+# ── The primary path refuses an unproven command only where the degraded path does too ────────────
 
-def test_the_primary_and_the_degraded_path_give_an_unproven_command_the_same_answer():
+def scopes_name_removal(command):
+    """The primary path's question: does the text that can become an unresolved command hold a removal word?"""
+    scopes = eb.analyze(command).get("unresolved_scopes") or []
+    return any(G.degraded_denies_removal_reference(t) for t in scopes)
+
+
+def test_on_an_unproven_command_the_primary_path_asks_the_word_list_of_its_scopes_and_the_degraded_path_of_the_text():
+    """Two rules, not one (owner, 2026-11-19): the primary path refuses an unproven command exactly when its
+    unresolved_scopes hold a removal word, the degraded path exactly when its text does. Each scope is text of the
+    command, so the primary path never refuses what the degraded path lets run."""
     named, unnamed = generated_unproven()
-    corpus = UNPROVEN_NO_REMOVAL_WORD + UNPROVEN_WITH_REMOVAL_WORD + named + unnamed
+    corpus = UNPROVEN_NO_REMOVAL_WORD + UNPROVEN_WITH_REMOVAL_WORD + UNPROVEN_TEXT_ONLY + named + unnamed
     assert len(named) >= 10 and len(unnamed) >= 10
-    differing, let_through, refused = [], 0, 0
+    wrong, let_through, refused, text_only = [], 0, 0, 0
     for command in corpus:
         if eb.analyze(command)["verdict"] != eb.UNRESOLVED:
-            continue  # proven by now: nothing for the rule to decide
+            continue  # proven, or a removal found: nothing for the rule to decide
         p_refused, p_entry, p_err = policy(command)
         d_refused, d_entry, d_err = policy(command, degraded=True)
-        # One question, asked of the same text, by the definition's own file.
-        if not (p_refused == d_refused == holds_removal_word(command)):
-            differing.append((command, p_refused, d_refused, holds_removal_word(command)))
+        if p_refused != scopes_name_removal(command) or d_refused != holds_removal_word(command) \
+                or p_refused and not d_refused:
+            wrong.append((command, p_refused, d_refused))
             continue
         if p_refused:
             refused += 1
             assert PRIMARY_REFUSAL in p_err and DEGRADED_REFUSAL in d_err, (command, p_err, d_err)
         else:
             let_through += 1
+            text_only += d_refused
             assert p_entry["path"] == "primary" and p_entry["reason"].startswith("UNRESOLVED "), p_entry
-            assert d_entry["path"] == "degraded" and d_entry["reason"].startswith("NO_VERDICT "), d_entry
-            assert {p_entry["rule"], d_entry["rule"]} == {"removal-policy"}
-            assert {p_entry["kind"], d_entry["kind"]} == {"let_through_unproven"}
-    assert not differing, differing[:10]
-    assert let_through >= 30 and refused >= 25, (let_through, refused)
+            assert {p_entry["rule"], p_entry["kind"]} == {"removal-policy", "let_through_unproven"}
+    assert not wrong, wrong[:10]
+    assert let_through >= 30 and refused >= 10 and text_only >= 5, (let_through, refused, text_only)
 
 
-def test_inside_the_removal_reference_domain_the_primary_path_allows_only_what_it_proves():
-    """The invariant lib/pol_degraded_removal_reference.ere states: the primary path never allows what the degraded
-    path denies, inside the removal-reference domain, apart from the ledgered proofs (AC-R02-10). The new let-through
-    never fires there: every command of the domain that the primary path allows is one the analyzer proved."""
+def test_inside_the_removal_reference_domain_the_primary_path_lets_run_only_what_its_scopes_do_not_name():
+    """Over the generated shell forms that hold a removal word: the degraded path denies every one; the primary path
+    allows a form only when the analyzer proved it, or left it unresolved with no removal word in any scope."""
     named, _unnamed = generated_unproven()
     forms = [c for c in G.shell_form_sweep() if holds_removal_word(c)]
     assert len(forms) >= 500, len(forms)
@@ -274,23 +293,25 @@ def test_inside_the_removal_reference_domain_the_primary_path_allows_only_what_i
         d_refused, d_entry, _err = policy(command, degraded=True)
         assert d_refused and d_entry is None, command  # the degraded path denies the whole domain
         p_refused, p_entry, _err = policy(command)
-        assert p_entry is None, (command, p_entry)  # never let through unproven
-        if not p_refused:
+        verdict = eb.analyze(command)["verdict"]
+        if p_entry is not None:
+            assert verdict == eb.UNRESOLVED and not scopes_name_removal(command), command
+        elif not p_refused:
             proven += 1
-            assert eb.analyze(command)["verdict"] in (eb.PROVEN_INERT, eb.PROVEN_SAFE_REMOVAL), command
+            assert verdict in (eb.PROVEN_INERT, eb.PROVEN_SAFE_REMOVAL), command
     assert proven >= len(PROVEN_WITH_REMOVAL_WORD)
 
 
 # ── The pinned 436-row matrix ────────────────────────────────────────────────
 
 def test_the_matrix_rows_the_rule_lets_run_are_exactly_the_unproven_ones_holding_no_removal_word():
-    """The fixture pins 21 of its rows at exit 2 on silence alone. pol_replay_harness.OWNER_RULE_LET_THROUGH lists
-    them by id; this derives the same set from the rule, so the list can neither grow nor shrink by hand."""
+    """The fixture pins 17 of its rows at exit 2 that the rule lets run. pol_replay_harness.OWNER_RULE_LET_THROUGH
+    lists them by id; this derives the same set from the rule, so the list can neither grow nor shrink by hand."""
     rows = H.load_fixture()["rows"]
     by_rule = {r["id"] for r in rows if r["expected_hook_exit_code"] == 2
-               and eb.analyze(r["command"])["verdict"] == eb.UNRESOLVED and not holds_removal_word(r["command"])}
+               and eb.analyze(r["command"])["verdict"] == eb.UNRESOLVED and not scopes_name_removal(r["command"])}
     assert by_rule == set(H.OWNER_RULE_LET_THROUGH)
-    assert len(by_rule) == 21
+    assert len(by_rule) == 17
     assert all(H.expected_exit(r) == r["expected_hook_exit_code"] for r in rows if r["id"] not in by_rule)
     assert all(H.expected_exit(r) == 0 for r in rows if r["id"] in by_rule)
     # A removal the analyzer finds stays pinned at exit 2, whether or not its text names it.
