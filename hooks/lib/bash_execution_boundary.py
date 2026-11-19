@@ -768,7 +768,7 @@ SHELL_SHORT_BOOL = set("abBCefhHiklmnpPrstTuvxD")
 SHELL_LONG_BOOL = {"--posix", "--norc", "--noprofile", "--login", "--restricted",
                    "--verbose", "--debugger", "--dump-strings", "--dump-po-strings",
                    "--help", "--version", "--noediting", "--protected", "--pretty-print"}
-SHELL_LONG_VAL = SHELL_FILE_OPTS
+SHELL_LONG_VAL = set(SHELL_FILE_OPTS)
 
 INTERPRETERS = {
     "python": ("-c",), "python2": ("-c",), "python3": ("-c",),
@@ -860,7 +860,7 @@ WATCH = PEEL["watch"][0]
 
 SSH_SPEC = _SSH_SPEC
 
-FIND_EXEC_OPS = FIND_EXEC
+FIND_EXEC_OPS = set(FIND_EXEC)
 FIND_DELETE_OPS = {"-delete"}
 
 BWRAP_NARGS = {
