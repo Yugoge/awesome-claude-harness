@@ -3105,6 +3105,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "shell-set-options",
+   "source": "defs-shell lane, audit f199dfb1e family shell-set-options (undecided)",
+   "reason": "bash_safety_rules._HB_INERT_SET lists the -o values a shell invocation (bash -o X -c ...) may carry and stay readable, noexec and posix included because that reader follows noexec and needs no later word read differently; the degraded set reader's value_ok list (_DG_SET_OPTS) accepts on a later `set -o` only the four that change nothing a later word means, so noexec (later commands not run) and posix (parsing changes) are out.",
+   "sides": [
+    [
+     {
+      "name": "<module>._HB_INERT_SET",
+      "fingerprint": "a5e37477665a6369",
+      "at": "hooks/lib/bash_safety_rules.py:3385"
+     }
+    ],
+    [
+     {
+      "name": "<module>:in",
+      "fingerprint": "677de015dea86fa5",
+      "at": "hooks/lib/bash_safety_rules.py:5243"
+     }
+    ]
+   ]
   }
  ]
 }
