@@ -2779,7 +2779,7 @@
   {
    "id": "pipelines-exempt-preflight-vs-codex",
    "source": "lane defs-git (defs-83)",
-   "reason": "READING_PIPELINES asks which pipelines dispatch agents the gitignore preflight lets read their own obligation; subagentstop-codex-enforce asks which pipelines dispatch agents that are not bound by /dev --codex. Both are close and commit today, but each is its own guard exemption.",
+   "reason": "READING_PIPELINES asks which pipelines dispatch agents the gitignore preflight lets read their own obligation; subagentstop-codex-enforce asks which pipelines dispatch agents that are not bound by /dev --codex; stop-command-gate's no_target_end asks which commands may end on a NO_TARGET line. All are close and commit today, but each is its own rule's scope.",
    "sides": [
     [
      {
@@ -2793,6 +2793,13 @@
       "name": "main:in",
       "fingerprint": "f760bc7563f8dcc5",
       "at": "hooks/subagentstop-codex-enforce.py:109"
+     }
+    ],
+    [
+     {
+      "name": "no_target_end:in",
+      "fingerprint": "f760bc7563f8dcc5",
+      "at": "hooks/stop-command-gate.py:402"
      }
     ]
    ]
