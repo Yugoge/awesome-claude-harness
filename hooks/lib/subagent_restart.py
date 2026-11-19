@@ -550,16 +550,26 @@ def _read_parent_calls(
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, list[Any]] = {}
     latest_notifications: dict[str, dict[str, Any]] = {}
+    try:  # the one reading of calls; at the call, since a harness tree without command sets imports this module
+        from . import command_span
+    except ImportError:
+        import command_span  # type: ignore[no-redef]
     try:
         lines = transcript.open("r", encoding="utf-8", errors="replace")
     except OSError as exc:
         raise RestartError(f"cannot read parent transcript: {exc}") from exc
     with lines:
         for line_no, line in enumerate(lines, 1):
+            try:
+                record = json.loads(line)
+            except ValueError:
+                record = None
             # Notifications can appear as top-level queue-operation content,
             # message.content, or attachment.prompt. Scan the complete JSONL line
-            # before walking message blocks so all three persisted forms count.
-            for block in _iter_notification_blocks(line):
+            # so all three persisted forms count; a record of another kind (the
+            # CLI's api-request-blob copy of a message) delivered nothing.
+            copy = isinstance(record, dict) and record.get("type") not in ("user", "attachment", "queue-operation")
+            for block in () if copy else _iter_notification_blocks(line):
                 match = TASK_NOTIFICATION_RE.search(block)
                 if not match:
                     continue
@@ -573,19 +583,7 @@ def _read_parent_calls(
                         "status": match.group(2).lower(),
                         "quota_interrupted": signals.is_quota_text(tail),
                     }
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            message = record.get("message") if isinstance(record, dict) else None
-            content = message.get("content") if isinstance(message, dict) else None
-            if isinstance(content, str):
-                continue
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
+            for block in command_span._blocks(record, sidechain=True):
                 if block.get("type") == "tool_use" and block.get("name") in {"Agent", "Task"}:
                     tool_id = block.get("id")
                     if isinstance(tool_id, str) and tool_id:
