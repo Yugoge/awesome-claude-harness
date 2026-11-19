@@ -100,6 +100,13 @@ def test_a_notebook_edit_of_an_overnight_state_file_is_refused_for_every_session
         assert r.returncode == 2 and "OVERNIGHT STATE PROTECTION" in r.stderr, (tool, r.stderr)
 
 
+def test_a_notebook_edit_under_hooks_or_commands_is_refused_while_a_run_is_live(repo):
+    for folder, label in (("hooks", "OVERNIGHT HOOK PROTECTION"), ("commands", "OVERNIGHT COMMANDS PROTECTION")):
+        for tool, tool_input in _calls(repo / ".claude" / folder / "notes.ipynb"):
+            r = _hook(repo, tool, tool_input, repo, session="someone-else")
+            assert r.returncode == 2 and label in r.stderr, (tool, r.stderr)
+
+
 def test_the_gate_sends_every_file_writing_tool_to_the_rule():
     sys.path.insert(0, str(HOOKS))
     try:

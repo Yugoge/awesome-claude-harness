@@ -21,6 +21,7 @@ from lib import attribution_journal, shell_parse as sp  # noqa: E402
 from lib.bash_write_targets import extract_bash_touched_paths, extract_bash_write_paths  # noqa: E402
 
 POLICY = ROOT / "hooks" / "pretool-tool-policy.py"
+VIEWS = ROOT / "hooks" / "pretool-bash-views-guard.py"
 WRITES = [  # (command, the file it writes, the mechanism)
     ("find . -maxdepth 0 -fprintf src/planted.py 'import os\\n'", "src/planted.py", "find-fprintf"),
     ("find . -maxdepth 0 -fprint src/planted.py", "src/planted.py", "find-fprint"),
@@ -77,13 +78,15 @@ def test_the_attribution_journal_sees_the_write(tmp_path):
     assert attribution_journal.extract_targets("Bash", {"command": READS[0]}, str(tmp_path)) == []
 
 
-def _policy(tmp_path, command, role="qa"):
+def _policy(tmp_path, command, role="qa", hook=POLICY):
     proj = tmp_path / "proj"
     (proj / "src").mkdir(parents=True, exist_ok=True)
-    payload = {"session_id": "s", "cwd": str(proj), "hook_event_name": "PreToolUse", "agent_id": "a1",
-               "agent_type": role, "subagent_type": role, "tool_name": "Bash", "tool_input": {"command": command}}
+    payload = {"session_id": "s", "cwd": str(proj), "hook_event_name": "PreToolUse", "tool_name": "Bash",
+               "tool_input": {"command": command}}
+    if role:  # None: the main agent
+        payload.update(agent_id="a1", agent_type=role, subagent_type=role)
     env = dict(os.environ, CLAUDE_PROJECT_DIR=str(proj))
-    return subprocess.run([sys.executable, str(POLICY)], input=json.dumps(payload), capture_output=True, text=True,
+    return subprocess.run([sys.executable, str(hook)], input=json.dumps(payload), capture_output=True, text=True,
                           cwd=str(proj), env=env, timeout=120)
 
 
@@ -95,6 +98,19 @@ def test_a_role_that_may_not_write_there_is_refused_through_find(tmp_path, comma
     proc = _policy(tmp_path, command)
     assert proc.returncode == 2 and '"target":"%s"' % path in proc.stderr, proc.stderr
     assert "denied_write_path_prefixes" in proc.stderr, proc.stderr
+
+
+def test_the_other_readers_of_the_shared_targets_see_the_write_too(tmp_path):
+    """Each guard that reads shell_parse.write_targets now judges the file: a cp-state file or a view
+    (the views guard), a QA report the main agent may not write and a raw temp path (tool-policy)."""
+    for target in (".claude/specs/s1/cp-state-dev.json", "docs/dev/specs/s1/views/dev.md"):
+        proc = _policy(tmp_path, "find . -maxdepth 0 -fprint " + target, hook=VIEWS)
+        assert proc.returncode == 2 and "write-bypass into views/cp-state" in proc.stderr, (target, proc.stderr)
+    assert _policy(tmp_path, "find . -name '*.md' -print", hook=VIEWS).returncode == 0
+    report = _policy(tmp_path, "find . -maxdepth 0 -fprint docs/dev/qa-report-20260101-000000.json", role=None)
+    assert report.returncode == 2 and "qa-report-20260101-000000.json" in report.stderr, report.stderr
+    raw_temp = _policy(tmp_path, "find . -maxdepth 0 -fprint /tmp/list.txt", role="dev")
+    assert raw_temp.returncode == 2 and '"target":"/tmp/list.txt"' in raw_temp.stderr, raw_temp.stderr
 
 
 @pytest.mark.parametrize("command", READS)

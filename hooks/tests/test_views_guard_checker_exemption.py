@@ -32,6 +32,7 @@ NAMED_NOT_RUN = [  # the checker's name is in the text; the command that writes 
     f"cat .claude/scripts/spec-check.py > {CP_STATE}",
     f"echo {CHANNEL} > {VIEW}",
     f"python3 -c \"print(1)\" .claude/scripts/spec-check.py > {CP_STATE}",
+    f"python3 -u -m json.tool .claude/scripts/spec-check.py > {CP_STATE}",
 ]
 RUN_BESIDE_A_WRITE = [  # the checker does run; another command of the same line writes
     f"echo x > {VIEW} && python3 ~/.claude/scripts/spec-check.py status --spec-id s1",
@@ -40,6 +41,7 @@ RUN_BESIDE_A_WRITE = [  # the checker does run; another command of the same line
     f"{{ python3 ~/.claude/scripts/spec-check.py status --spec-id s1; }} > {CP_STATE}",
     f"python3 {CHANNEL} status --spec-id \"$(printf '{{}}' > {CP_STATE})\"",
     f"python3 {CHANNEL} mark --spec-id s1 --agent dev --agent-id a1 --cp-id cp-01 && cp /tmp/a.md {VIEW}",
+    f"python3 {CHANNEL} status --spec-id s1 && echo 'next -> {VIEW}'",  # the echo, read as it is alone
 ]
 CHECKER_RUNS = [  # the legal writer, in the spellings the commands and agents use
     f"python3 {CHANNEL} mark --spec-id s1 --agent dev --agent-id a1 --cp-id cp-01",
@@ -52,6 +54,8 @@ CHECKER_RUNS = [  # the legal writer, in the spellings the commands and agents u
     f"python3 bin/spec-check.py checkpoints --spec-id s1 --agent dev --agent-id a1 --action '-> {VIEW}'",
     f"python3 ~/.claude/scripts/spec-check.py mark --spec-id s1 --agent dev --agent-id a1 --cp-id cp-01 > {CP_STATE}",
     f"python3 {CHANNEL} status --spec-id s1 && echo done > notes.txt",
+    f"python3 -u ~/.claude/scripts/spec-check.py checkpoints --spec-id s1 --agent dev --agent-id a1 --action 'x -> {VIEW}'",
+    f"python3 -uB {CHANNEL} checkpoints --spec-id s1 --agent dev --agent-id a1 --action \"x -> {VIEW}\"",
 ]
 
 

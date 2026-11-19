@@ -92,12 +92,14 @@ def _extract_command(data):
 
 def _checker_spans(script):
     """(context, span) of each simple command that runs spec-check.py, the cp-state writer: the
-    script is the command's own name or python's first argument, spelled as WHITELIST_PATTERNS."""
+    script is the command's own name or python's first argument (after flags that take no value,
+    as -u or -B; -c and -m run something else), spelled as WHITELIST_PATTERNS."""
     out = []
     for site in _sp.walk(script):
         res = _sp.resolve(site.cmd)
-        python = res.args and re.fullmatch(r"python[\d.]*", res.name or "")
-        for word in ([res.head] if res.head is not None else []) + ([res.args[0]] if python else []):
+        operand = [w for w in res.args if not re.fullmatch(r"-[bBdEIOqsSuvx]+", w.raw.text)][:1] \
+            if re.fullmatch(r"python[\d.]*", res.name or "") else []
+        for word in ([res.head] if res.head is not None else []) + operand:
             raw = word.raw.text
             if raw.rstrip("'\"").endswith("spec-check.py") and any(p.search(raw) for p in WHITELIST_PATTERNS):
                 out.append((site.context, site.cmd.span))

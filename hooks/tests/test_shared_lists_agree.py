@@ -88,6 +88,31 @@ def test_a_redirect_to_such_a_device_gets_one_answer_from_both_guards(overnight,
     assert (boundary.returncode, rows.returncode) == (0, 0), (boundary.stderr, rows.stderr)
 
 
+@pytest.mark.parametrize("role", ["dev", "qa"])
+@pytest.mark.parametrize("command", ["echo warn > /dev/stderr", "ls 2>/dev/stderr", "echo x | tee /dev/stdout",
+                                     "echo warn > /dev/fd/2"])
+def test_a_redirect_to_a_standard_stream_passes_the_registered_gate(tmp_path, role, command):
+    """Through the gate a rule's own stderr is a file under the temp root, and /dev/stderr was read
+    through it: the raw-temp rule refused the redirect for every role, dev's `*` row included."""
+    payload = {"session_id": "s", "cwd": "/nonexistent-shared-lists/proj", "hook_event_name": "PreToolUse",
+               "agent_id": "a1", "agent_type": role, "subagent_type": role, "tool_name": "Bash",
+               "tool_input": {"command": command}}
+    proc = subprocess.run([sys.executable, str(HOOKS / "pretool-write-gate.py")], input=json.dumps(payload),
+                          capture_output=True, text=True, cwd=str(tmp_path), timeout=300,
+                          env=dict(os.environ, CLAUDE_PROJECT_DIR="/nonexistent-shared-lists/proj"))
+    assert proc.returncode == 0 and "BLOCKED" not in proc.stderr, proc.stderr
+
+
+def test_a_write_tool_aimed_at_the_terminal_meets_no_role_row(tmp_path):
+    payload = {"session_id": "s", "cwd": str(tmp_path), "hook_event_name": "PreToolUse", "agent_id": "a1",
+               "agent_type": "qa", "subagent_type": "qa", "tool_name": "Write",
+               "tool_input": {"file_path": "/dev/tty", "content": "x"}}
+    proc = subprocess.run([sys.executable, str(HOOKS / "pretool-tool-policy.py")], input=json.dumps(payload),
+                          capture_output=True, text=True, cwd=str(tmp_path), timeout=120,
+                          env=dict(os.environ, CLAUDE_PROJECT_DIR=str(tmp_path)))
+    assert proc.returncode == 0, proc.stderr
+
+
 def test_a_file_and_a_device_that_holds_data_stay_refused(overnight, tmp_path):
     for target in (str(overnight.main / "planted.txt"), "/dev/shm/planted-by-a-test", "/dev/sda"):
         assert overnight("echo x > " + target).returncode == 2, target

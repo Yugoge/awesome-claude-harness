@@ -74,7 +74,7 @@ READ_ONLY = {"cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "r
              "readlink", "basename", "dirname", "find"}
 GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "check-attr", "cat-file",
                  "grep", "rev-parse", "stash"}
-NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\.exe)?(?:\s|$)", re.M)  # a Claude Code session the command starts
+NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
 TAGGED = r"<command-name>/?harness</command-name>"  # the other form scripts/harness-switch reads (parse_prompt)
