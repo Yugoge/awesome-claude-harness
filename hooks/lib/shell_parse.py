@@ -429,6 +429,7 @@ CWD_BUILTINS = ("cd", "pushd", "popd")  # change the working directory of what f
 LOOP_VAR_KINDS = ("for", "select")  # Compound kinds whose header binds a variable to each listed word
 DEFINER_KINDS = ("function", "coproc")  # Compound kinds whose body runs later or apart, not in line
 QUOTE_CHARS = ("'", '"')  # the characters that open a quoted string
+COMMAND_OPTS = ("-c", "--command")  # su, runuser, flock, script: the option whose value is shell code
 
 
 def _match_pair(t, i, opener, closer):
@@ -2601,7 +2602,7 @@ def resolve(cmd, depth=None):
             opts, rest, err = split_options(words, spec, 1, permute=True)
             r.head = head
             r.args = tuple(words[1:])
-            code = [v for o, v in opts if o in ("-c", "--command")]
+            code = [v for o, v in opts if o in COMMAND_OPTS]
             if code:
                 _set_payload(r, [code[-1]], "shell_c", depth, name + "_c_dynamic")
             return r
@@ -2618,11 +2619,11 @@ def resolve(cmd, depth=None):
             return r
         if name == "flock":
             opts, rest, err = split_options(words, PEEL["flock"][0], 1, permute=False)
-            code = [v for o, v in opts if o in ("-c", "--command")]
+            code = [v for o, v in opts if o in COMMAND_OPTS]
             if not code and len(rest) > 1:
                 after = rest[1:]
                 lead = after[0].value()
-                if lead in ("-c", "--command") and len(after) > 1:
+                if lead in COMMAND_OPTS and len(after) > 1:
                     code = [after[1]]
             if code:
                 r.head = head
@@ -2751,7 +2752,7 @@ def _merge(outer, inner):
 def _has_c(words):
     for w in words[1:]:
         v = w.value()
-        if v in ("-c", "--command") or (v and v.startswith("--command=")):
+        if v in COMMAND_OPTS or (v and v.startswith("--command=")):
             return True
         if v and len(v) > 1 and v[0] == "-" and v[1] != "-" and "c" in v[1:]:
             return True

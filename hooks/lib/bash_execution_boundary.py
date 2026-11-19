@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    CD_TARGET_BUILTINS, OPTION_SIGNS, PIPE_OPS, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    CD_TARGET_BUILTINS, COMMAND_OPTS, OPTION_SIGNS, PIPE_OPS, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -2708,7 +2708,7 @@ class Analyzer:
         i += 1  # the lock file / directory / fd operand
         if self._swallowed_removal("flock", args[:i]):
             return
-        if i < len(args) and args[i].literal() in ("-c", "--command"):
+        if i < len(args) and args[i].literal() in COMMAND_OPTS:
             self._shell_code_operand(args, i + 1, env, "flock")
             return
         payload = args[i:]
@@ -2722,10 +2722,8 @@ class Analyzer:
                       "-P", "--pty", "-f", "--fast"),
                      ("-c", "--command", "-s", "--shell", "-g", "--group",
                       "-G", "--supp-group", "-w", "--whitelist-environment"))
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "su")
-                return
+        if self._command_option(args, env, "su"):
+            return
         i, err = split_opts(args, spec)
         if err:
             self.scoped(err, "su")
@@ -2733,10 +2731,8 @@ class Analyzer:
         self._terminal_inert("su_without_command", "su", args)
 
     def _h_runuser(self, name, args, redirs, env, piped):
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "runuser")
-                return
+        if self._command_option(args, env, "runuser"):
+            return
         spec = _spec(("-l", "--login", "-p", "--preserve-environment", "-m",
                       "-P", "--pty", "-f", "--fast"),
                      ("-u", "--user", "-g", "--group", "-G", "--supp-group",
@@ -2762,10 +2758,8 @@ class Analyzer:
         self._terminal_inert("sg_without_command", "sg", args)
 
     def _h_script(self, name, args, redirs, env, piped):
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "script")
-                return
+        if self._command_option(args, env, "script"):
+            return
         # `-c` is matched EXACTLY above, so `script -qc '<code>'` (a clustered
         # short option, the canonical documented form) misses it. Falling to a
         # residual-proof terminal is what makes the miss deny instead of allow.
@@ -2993,6 +2987,20 @@ class Analyzer:
         self.eval_argv(payload, [], env)
 
     # -- shells --------------------------------------------------------------
+
+    def _command_option(self, args, env, who):
+        """Analyze the code of a `-c CODE`, `--command CODE` or `--command=CODE` among args."""
+        for idx, a in enumerate(args):
+            lit = a.literal()
+            if lit in COMMAND_OPTS:
+                self._shell_code_operand(args, idx + 1, env, who)
+                return True
+            if lit is not None and lit.startswith("--command="):
+                content = a.content()
+                start = len(content.text) - (len(lit) - len("--command="))
+                self.analyze_code(content.slice(start, len(content.text)), Env(env.hashed, env.aliases))
+                return True
+        return False
 
     def _shell_code_operand(self, args, idx, env, who):
         if idx >= len(args):

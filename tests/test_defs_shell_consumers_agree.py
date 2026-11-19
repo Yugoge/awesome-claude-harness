@@ -77,6 +77,9 @@ CASES = [
     ("env-split-string-option", "env --split-string='{}'", ("gp", "bs", "tp")),
     ("su-command-option", "su -c '{}'", ("gp", "bs", "tp")),
     ("su-command-option", "runuser -c '{}'", ("gp", "bs", "tp")),
+    # the removal analyzer reads the attached spelling from the same COMMAND_OPTS
+    ("su-command-option", "su --command='{}'", ("gp", "bs", "tp")),
+    ("su-command-option", "runuser --command='{}'", ("bs",)),
     ("xargs-value-options", "xargs -i {} < /dev/null", ("gp", "tp")),
     ("xargs-value-options", "xargs -e {} < /dev/null", ("gp", "tp")),
     ("xargs-value-options", "xargs -l {} < /dev/null", ("gp", "tp")),
