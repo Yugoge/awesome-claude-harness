@@ -622,7 +622,8 @@ write_checkpoint() {
     # Refuse what the pre-commit hook refuses, by its own engines on the temp index (they print no
     # literal or value): the private-literal rule when its list is not empty, and in this harness
     # home the settings check when settings.json differs from HEAD. Callers get only rule names.
-    # A file the rule names is left out (HEAD's version, if any, stays) and the rule runs again.
+    # A file the rule names is left out (HEAD's version, if any, stays): the rule scanned every other
+    # added line clean, so the snapshot is refused only when a named file still differs from HEAD.
     local hits="${TMP_INDEX}.hits"
     if [ -s "${common%/*}/private-literals.txt" ] && ! report="$(cd "$top" && GIT_INDEX_FILE="$TMP_INDEX" \
         PRIVATE_LITERAL_HITS="$hits" bash "$h/scripts/check-public-core.sh" --private-literals 2>&1)"; then
@@ -630,8 +631,9 @@ write_checkpoint() {
         checkpoint_left_out=$(printf '%s\n' "$report" | sed -n 's/^FAIL: private literal (.*) -> \(.*\)\(:[0-9]*\| (path name)\)$/\1/p' | sort -u)
         checkpoint_left_out="$(sort -u "$hits" 2>/dev/null | wc -l | tr -d ' ') file(s) holding a private literal: ${checkpoint_left_out//$'\n'/, }"
         if [ -s "$hits" ] && GIT_LITERAL_PATHSPECS=1 GIT_INDEX_FILE="$TMP_INDEX" $git_cmd reset -q --pathspec-from-file="$hits" \
-            2>>"$CHECKPOINT_LOG_FILE" && (cd "$top" && GIT_INDEX_FILE="$TMP_INDEX" bash "$h/scripts/check-public-core.sh" \
-            --private-literals >/dev/null 2>&1); then
+            2>>"$CHECKPOINT_LOG_FILE" && report=$(GIT_INDEX_FILE="$TMP_INDEX" $git_cmd -c core.quotePath=off diff-index \
+            --cached --no-renames --name-only "${seed_parent_tree:-$($git_cmd hash-object -t tree /dev/null)}") \
+            && ! printf '%s\n' "$report" | grep -qxFf "$hits"; then
             _checkpoint_log WARN "left out ${checkpoint_left_out} (ref=${ref})"
         else
             checkpoint_refused_by="the private-literal rule" checkpoint_left_out=""
