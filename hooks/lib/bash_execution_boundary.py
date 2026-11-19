@@ -66,6 +66,7 @@ from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
 from shell_parse import GIT_LONG_OPTIONS  # noqa: E402
+from git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS  # noqa: E402
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -361,11 +362,11 @@ GIT_DATA_OPTIONS = frozenset((
 ))
 
 # Subcommands that HAND A COMMAND LINE ONWARD (`git bisect run <cmd>`,
-# `git submodule foreach <cmd>`). For these, NO option may declare its value
+# `git submodule foreach <cmd>`, `git rebase -x <cmd>`, `git difftool -x <cmd>`). For these, NO option may declare its value
 # data: otherwise `git bisect run -m '/bin/rm -rf T'` and `git submodule
 # foreach --message '/bin/rm -rf T'` would read as PROVEN_INERT. Scoping the
 # table by subcommand can only ever remove allows.
-GIT_PAYLOAD_FORWARDING_SUBCOMMANDS = frozenset(("bisect", "submodule"))
+GIT_PAYLOAD_FORWARDING_SUBCOMMANDS = GIT_SHELL_PAYLOAD_SUBCOMMANDS
 
 INERT_ARGV_CONSUMERS = {
     # ---- name / documentation lookup -------------------------------------

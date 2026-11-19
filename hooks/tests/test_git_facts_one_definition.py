@@ -303,3 +303,22 @@ def test_git_commit_value_options_one_definition():
     assert bsr._SD_COMMIT_LONG_VALUES == longs
     assert gp._COMMIT_VALUE_OPTS == (longs - {"--message", "--file"}) | {"-C", "-c", "-t"}
     assert longs <= set(sp.GIT_LONG_OPTIONS["commit"])
+
+
+class TestGitShellPayloadSubcommands:
+    """git-shell-payload-subcommands: which subcommands run a shell command given as an argument.
+
+    The removal policy listed bisect and submodule, userintent those plus rebase, difftool,
+    filter-branch and mergetool. The removal policy marked an option's value of rebase or difftool
+    data, so `git rebase -x -m '<removal>'` read as inert."""
+
+    @pytest.mark.parametrize("cmd", ["git rebase -x -m 'rm -rf build'", "git difftool -x -m 'rm -rf build'",
+                                     "git bisect run -m 'rm -rf build'", "git submodule foreach -m 'rm -rf build'"])
+    def test_removal_policy_does_not_call_the_payload_inert(self, cmd):
+        from lib import bash_execution_boundary as beb
+        assert beb.analyze(cmd)["verdict"] != beb.PROVEN_INERT
+
+    def test_one_table(self):
+        from lib import bash_execution_boundary as beb, git_facts
+        assert beb.GIT_PAYLOAD_FORWARDING_SUBCOMMANDS == git_facts.GIT_SHELL_PAYLOAD_SUBCOMMANDS
+        assert "mergetool" not in git_facts.GIT_SHELL_PAYLOAD_SUBCOMMANDS

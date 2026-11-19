@@ -76,3 +76,8 @@ GIT_COMMIT_VALUE_OPTIONS = frozenset({
     "--message", "--file", "--reuse-message", "--reedit-message", "--template", "--author", "--date",
     "--cleanup", "--fixup", "--squash", "--trailer", "--pathspec-from-file",
 })
+
+# The subcommands that run a shell command given on their own command line: `bisect run <cmd>`,
+# `submodule foreach <cmd>`, `rebase --exec/-x <cmd>`, `difftool --extcmd/-x <cmd>` and filter-branch's
+# --*-filter <cmd>. Not mergetool: it runs the tool the configuration names, and takes no command.
+GIT_SHELL_PAYLOAD_SUBCOMMANDS = frozenset({"bisect", "difftool", "filter-branch", "rebase", "submodule"})
