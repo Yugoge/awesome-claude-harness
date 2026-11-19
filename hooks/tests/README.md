@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 257
+- **Total files**: 256
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -31,7 +31,7 @@
 - `test_bash_safety_consent_flag.py` - The flag is <state dir>/claude-orchestrator-consent-<session id>.flag. Its one writer is hooks/pr...
 - `test_bash_safety_context.py` - They were written for hooks/lib/bash_context_strip.py's
 - `test_bash_safety_context_rules.py` - hooks/pretool-bash-safety.sh that read the context-stripped view
-- `test_bash_safety_degraded_fallback.py` - Until 2026-11-19 a command passed the degraded path only when it was provably plain: no removal r...
+- `test_bash_safety_degraded_fallback.py` - When the execution-boundary analyzer gives no verdict (timeout, memory ceiling, crash) the fallba...
 - `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
 - `test_bash_safety_http_stop_npm_global.py` - The HTTP /stop rule (BS-02, search-15) refuses a request to a localhost port's /stop path segment...
 - `test_bash_safety_preclean_stdin.py` - An exec'd process gets its environment and argv strings through the kernel, which refuses one str...
@@ -187,7 +187,6 @@
 - `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 - `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
 - `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
-- `test_removal_policy_unproven_rule.py` - The rule (owner, 2026-11-19): when the guard cannot prove a command safe, it refuses if the comma...
 - `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 - `test_report_provenance_gate.py` - The orchestrator could forge ``docs/dev/qa-report-*.json`` (an ``e2e_enforcement.status`` of
 - `test_report_provenance_reads.py` - the fifth verifier's findings, through the registered PreToolUse launcher in a throwaway project,
