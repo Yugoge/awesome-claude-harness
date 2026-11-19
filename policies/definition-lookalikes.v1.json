@@ -3310,6 +3310,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "programs-tar-archive-vs-grep-pattern-file",
+   "source": "lane defs-programs reading",
+   "reason": "tar's -f/--file names the archive it reads or writes; grep's -f/--file names a file of patterns: two programs' options spelled alike.",
+   "sides": [
+    [
+     {
+      "name": "_mutation_targets_for_verb:in",
+      "fingerprint": "06d0e39aa823d723",
+      "at": "hooks/lib/runtime_guard/_core.py:1167"
+     }
+    ],
+    [
+     {
+      "name": "<module>.GREP_PATTERN_FILE_OPTS",
+      "fingerprint": "06d0e39aa823d723",
+      "at": "hooks/lib/shell_parse.py:3373"
+     }
+    ]
+   ]
   }
  ]
 }

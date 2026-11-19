@@ -3009,7 +3009,8 @@ def build_parser():
     # pass an explicit --registry-dir pytest tmp_path whenever it declares
     # an eligible teardown, exactly as paseo-daemon-timers.py's own tests
     # always override its --registry-dir.
-    s.add_argument("--registry-dir", default=str(Path.home() / ".paseo" / "schedules"),
+    s.add_argument("--registry-dir",
+                   default=str(Path(os.environ.get("PASEO_HOME") or Path.home() / ".paseo") / "schedules"),
                    help="timer schedule registry dir for the self-heal branch (resume + "
                         "re-arm tick ONLY when the ledger's latest teardown-declare was "
                         "--for-restart with no --keep-down); defaults to the real registry "

@@ -3,7 +3,7 @@
 The shared parser's table of find actions held the four that run a program; `-fprint`, `-fprint0`,
 `-fprintf` and `-fls` write the file the next word names, and `shell_parse.write_targets` named
 none of them: the role rows of tool-policy let a role write where it may not, and the attribution
-journal did not record the write. One table (shell_parse.FIND_ACTIONS) now holds the nine.
+journal did not record the write. The parser now names the file each of the four writes.
 """
 from __future__ import annotations
 
@@ -66,9 +66,14 @@ def test_the_exec_actions_are_read_as_before():
         assert [(t.path, t.mode) for t in targets] == [("{}", sp.DELETE)]
 
 
-def test_one_table_holds_every_action_that_runs_writes_or_deletes():
-    assert set(sp.FIND_ACTIONS) == {"-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
-                                    "-fls", "-delete"}
+def test_the_parser_and_the_read_only_proof_know_the_same_file_writing_actions():
+    """The four the parser names a target for are the parser's one table, and the shared proof that a
+    command only reads (hooks/lib/bash_read_only.py, which the switch rule asks) refuses each of them."""
+    from lib import bash_read_only
+    assert set(sp._FIND_FILE) == {"-fprint", "-fprint0", "-fprintf", "-fls"}
+    for action in sp._FIND_FILE + sp._FIND_EXEC + ("-delete",):
+        assert not bash_read_only.reads_only("find", [".", action, "x"]), action
+    assert bash_read_only.reads_only("find", [".", "-name", "*.py", "-print"])
 
 
 def test_the_attribution_journal_sees_the_write(tmp_path):

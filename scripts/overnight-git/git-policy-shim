@@ -218,9 +218,6 @@ _OBP_SET=""            # newline-delimited protected names
 
 _obp_subdirs() {
   printf '%s\n' '.claude'
-  if [ -n "${OVERNIGHT_STATE_SUBDIR:-}" ] && [ "${OVERNIGHT_STATE_SUBDIR}" != ".claude" ]; then
-    printf '%s\n' "${OVERNIGHT_STATE_SUBDIR}"
-  fi
 }
 # Each record is read by its one function, hooks/lib/overnight.py, run as a
 # script: a record contributes its protected_branch unless the function's

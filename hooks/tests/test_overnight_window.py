@@ -295,7 +295,7 @@ def test_a_forged_token_and_the_helper_release_nothing_a_typed_stop_does(tmp_pat
     (tokens / f"claude-stop-helper-auth-{SID}.json").write_text(
         json.dumps({"cmd": "stop", "session_id": SID, "expires_at": int(time.time()) + 30}))
     env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")}
-    env.update({"CLAUDE_PROJECT_DIR": str(tmp_path), "CLAUDE_USERINTENT_SENTINEL_DIR": str(tokens)})
+    env.update({"CLAUDE_PROJECT_DIR": str(tmp_path), "CLAUDE_STATE_DIR": str(tokens)})
     helper = subprocess.run([sys.executable, str(BREAK_LOCK)], capture_output=True, text=True, env=env,
                             cwd=str(tmp_path), timeout=30)
     assert helper.returncode == 0, helper.stderr

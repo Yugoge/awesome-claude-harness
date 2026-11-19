@@ -2836,9 +2836,9 @@ def resolve(cmd, depth=None):
 
 
 _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
-_FIND_EXEC_END = (";", "+")  # the word that ends the command such an action runs
+FIND_SYMLINK_OPTS = ("-H", "-L", "-P")  # find's symlink options, before the start paths
+FIND_EXEC_ENDS = (";", "+")  # the words that end the command of a find -exec/-ok (every reader reads this one)
 _FIND_FILE = ("-fprint", "-fprint0", "-fprintf", "-fls")  # the next word names a file the action writes
-FIND_ACTIONS = _FIND_EXEC + _FIND_FILE + ("-delete",)  # each action that runs a program, writes a file or deletes
 
 
 def _resolve_find(r, head, words, cmd, depth):
@@ -2850,7 +2850,7 @@ def _resolve_find(r, head, words, cmd, depth):
     while k < len(words):
         if words[k].value() in _FIND_EXEC:
             j = k + 1
-            while j < len(words) and words[j].value() not in _FIND_EXEC_END:
+            while j < len(words) and words[j].value() not in FIND_EXEC_ENDS:
                 j += 1
             argv_words = words[k + 1:j]
             if argv_words:
@@ -3250,6 +3250,8 @@ class WriteTarget:
 _REDIR_MODE = {">": TRUNCATE, ">|": TRUNCATE, "&>": TRUNCATE, ">&": TRUNCATE,
                ">>": APPEND, "&>>": APPEND, "<>": CREATE}
 
+WGET_OUTPUT_OPTS = ("-O", "--output-document")  # wget's option naming the file the download is written to
+
 # Write verbs: name -> (option spec, reading). The reading names which operands
 # are written and how: "all" every operand, "last" the last operand (with the
 # others as sources), "first" the first operand, or an option whose value is
@@ -3315,15 +3317,74 @@ VERBS = {
                    "--separate", "-u", "--unbuffered", "-z", "--null-data", "--posix",
                    "--debug", "--sandbox", "--follow-symlinks"),
                   ("-e", "--expression", "-f", "--file", "-l", "--line-length")), "sed", IN_PLACE),
+    "touch": (_spec(("-a", "-c", "--no-create", "-f", "-h", "--no-dereference", "-m"),
+                    ("-d", "--date", "-r", "--reference", "-t", "--time")), "all", CREATE),
+    "sort": (_spec(("-b", "--ignore-leading-blanks", "-d", "--dictionary-order", "-f", "--ignore-case",
+                    "-g", "--general-numeric-sort", "-i", "--ignore-nonprinting", "-M", "--month-sort",
+                    "-h", "--human-numeric-sort", "-n", "--numeric-sort", "-R", "--random-sort", "-r",
+                    "--reverse", "-V", "--version-sort", "-c", "-C", "--check", "-m", "--merge", "-s",
+                    "--stable", "-u", "--unique", "-z", "--zero-terminated", "--debug"),
+                   ("-k", "--key", "-o", "--output", "-S", "--buffer-size", "-t", "--field-separator",
+                    "-T", "--temporary-directory", "--batch-size", "--compress-program", "--files0-from",
+                    "--parallel", "--random-source", "--sort")), "value:-o,--output", TRUNCATE),
+    "uniq": (_spec(("-c", "--count", "-d", "--repeated", "-D", "--all-repeated", "--group", "-i",
+                    "--ignore-case", "-u", "--unique", "-z", "--zero-terminated"),
+                   ("-f", "--skip-fields", "-s", "--skip-chars", "-w", "--check-chars")), "second", TRUNCATE),
+    "sponge": (_spec(("-a",)), "all", TRUNCATE),
+    "perl": (None, "perl", IN_PLACE),
+    "gawk": (None, "gawk", IN_PLACE),
     "dd": (_spec(), "dd", TRUNCATE),
     "curl": (_spec(), "opt:-o,--output", TRUNCATE),
-    "wget": (_spec(), "opt:-O,--output-document", TRUNCATE),
+    "wget": (_spec(), "opt:" + ",".join(WGET_OUTPUT_OPTS), TRUNCATE),
     "chmod": (None, "attr", IN_PLACE),
     "chown": (None, "attr", IN_PLACE),
     "chgrp": (None, "attr", IN_PLACE),
     "chattr": (None, "attr", IN_PLACE),
     "setfacl": (None, "attr", IN_PLACE),
 }
+VERBS["gsed"] = VERBS["sed"]  # GNU sed's name where sed is another one
+# The copy, move and link verbs: cp and mv (CP_MV), the copiers (COPY_VERBS: cp, install), the
+# coreutils that define -t/--target-directory (TARGET_DIR_VERBS), and those whose destination may be
+# a directory the sources land in (INTO_DIR_VERBS: rsync too).
+CP_MV = ("cp", "mv")
+COPY_VERBS = ("cp", "install")
+TARGET_DIR_VERBS = ("cp", "mv", "install", "ln")
+INTO_DIR_VERBS = TARGET_DIR_VERBS + ("rsync",)
+# cp, mv, ln and install's option that names the destination directory (every guard reads this one).
+TARGET_DIR_OPTS = ("-t", "--target-directory")
+NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the written file, never a directory
+INSTALL_DIR_OPTS = ("-d", "--directory")  # install makes every operand a directory (no source)
+TAR_NAMES = ("tar", "bsdtar", "gtar")  # the program names that are tar
+AWK_NAMES = ("awk", "gawk", "mawk", "nawk")  # the program names that are awk
+# The host names that are the local machine as a network client's destination (0.0.0.0 connects to it on
+# Linux; ::1 is bare in a socket client's arguments and bracketed in a URL).
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0")
+# awk's options that take a value (POSIX awk and gawk), by what the value is:
+AWK_DATA_OPTS = ("-F", "--field-separator", "-v", "--assign")  # a separator or an assignment
+AWK_SOURCE_OPTS = ("-e", "--source")  # program text
+AWK_PROGFILE_OPTS = ("-f", "--file", "-E", "--exec")  # a file holding the program
+AWK_LIB_OPTS = ("-i", "--include", "-l", "--load")  # a source library or extension it loads
+AWK_VALUE_OPTS = AWK_DATA_OPTS + AWK_SOURCE_OPTS + AWK_PROGFILE_OPTS + AWK_LIB_OPTS
+# ripgrep: the options whose value is a program it runs, and every option that makes it run
+# one (--search-zip, short -z, runs the decompressors; --pre-glob selects the files a --pre
+# preprocessor, perhaps from a config file, is run on).
+RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
+# grep's (and rg's) options that carry the pattern, and a file of patterns; their long forms.
+GREP_PATTERN_OPTS = ("-e", "--regexp")
+GREP_PATTERN_FILE_OPTS = ("-f", "--file")
+GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
+RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip", "--pre-glob")
+# ripgrep's options that take a value: the short letters and the long names.
+RG_VALUE_SHORT = frozenset("efgtTmABCMjrEd")
+RG_VALUE_LONG = frozenset((
+    "--regexp", "--file", "--glob", "--iglob", "--type", "--type-not", "--max-count", "--after-context",
+    "--before-context", "--context", "--max-columns", "--threads", "--pre", "--pre-glob", "--type-add",
+    "--type-clear", "--replace", "--colors", "--encoding", "--sort", "--sortr", "--max-depth", "--maxdepth",
+    "--max-filesize", "--path-separator", "--ignore-file", "--dfa-size-limit", "--regex-size-limit",
+    "--context-separator", "--field-match-separator", "--field-context-separator", "--engine", "--hostname-bin",
+    "--hyperlink-format", "--color", "--generate"))
+VERBS["awk"] = VERBS["gawk"]  # where awk is gawk, `awk -i inplace` edits in place
+
 # The commands that change a file's mode, owner, attributes or ACL: the file
 # keeps its bytes, but `chmod -x` of a hook turns the hook off, so each path
 # operand is written in place. Per verb: the short flags (letters that take no
@@ -3483,7 +3544,7 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None):
     return out
 
 
-_COPY_MOVE_WORD_RE = re.compile(r"(?:cp|mv)(?!\w)")
+_COPY_MOVE_WORD_RE = re.compile(r"(?:%s)(?!\w)" % "|".join(CP_MV))
 
 
 def _appends_args(res):
@@ -3637,6 +3698,11 @@ def _verb_targets(name, verb, args, env, context):
         for w, path, dec in _flag_values(args, short, long_opt, env):
             out.append(WriteTarget(path, mode, name + "-output", None, dec, w, None, context))
         return out
+    if reading in ("perl", "gawk"):
+        for w in (_perl_in_place if reading == "perl" else _gawk_in_place)(args):
+            path, dec = _project(w, env)
+            out.append(WriteTarget(path, IN_PLACE, reading + "-in-place", None, dec, w, None, context))
+        return out
     if reading == "sed":
         in_place = False
         script_given = False
@@ -3679,7 +3745,7 @@ def _verb_targets(name, verb, args, env, context):
         out.extend(WriteTarget(_project(w, env)[0], mode, name, None, False, w, None, context)
                    for w in args if not (w.value() or "").startswith("-"))
         return out
-    target_dir = [v for o, v in opts if o in ("-t", "--target-directory")]
+    target_dir = [v for o, v in opts if o in TARGET_DIR_OPTS]
     if name == "tee":
         append = any(o in ("-a", "--append") for o, _v in opts)
         for w in operands:
@@ -3692,13 +3758,25 @@ def _verb_targets(name, verb, args, env, context):
             path, dec = _project(w, env)
             out.append(WriteTarget(path, TRUNCATE, "truncate", None, dec, w, None, context))
         return out
+    if reading.startswith("value:"):
+        for o, w in opts:
+            if o in reading[6:].split(",") and w is not None:
+                path, dec = _project(w, env)
+                out.append(WriteTarget(path, mode, name + "-output", None, dec, w, None, context))
+        return out
+    if reading == "second":
+        for w in operands[1:2]:
+            if w.value() != "-":
+                path, dec = _project(w, env)
+                out.append(WriteTarget(path, mode, name + "-output", None, dec, w, None, context))
+        return out
     if reading == "all":
         for w in operands:
             path, dec = _project(w, env)
             out.append(WriteTarget(path, mode, name, None, dec, w, None, context))
         return out
     if reading == "last":
-        if name == "install" and any(o in ("-d", "--directory") for o, _v in opts):
+        if name == "install" and any(o in INSTALL_DIR_OPTS for o, _v in opts):
             for w in operands:
                 path, dec = _project(w, env)
                 out.append(WriteTarget(path, CREATE, name, None, dec, w, None, context))
@@ -3730,7 +3808,7 @@ def _find_write_targets(args, env, context):
     while k < len(args):
         v = args[k].value()
         if v in _FIND_EXEC:
-            while k < len(args) and args[k].value() not in _FIND_EXEC_END:
+            while k < len(args) and args[k].value() not in FIND_EXEC_ENDS:
                 k += 1
         elif v in _FIND_FILE and k + 1 < len(args):
             k += 1
@@ -3738,6 +3816,60 @@ def _find_write_targets(args, env, context):
             out.append(WriteTarget(path, TRUNCATE, "find" + v, None, dec, args[k], None, context))
         k += 1
     return out
+
+
+def perl_operands(args):
+    """(in_place, code words, file operands) of one perl call: -i set in a cluster before its
+    e/E code letter; the -e/-E code words; the operands after the code (after the script file
+    operand when no -e/-E is given). The one reading of perl's command line."""
+    inplace, code, k = False, [], 0
+    while k < len(args):
+        v = args[k].value() or ""
+        if v == "--":
+            k += 1
+            break
+        if not v.startswith("-") or v == "-":
+            break
+        if v == "-I":  # `-I dir`: the directory is the option's value, not the script
+            k += 2
+            continue
+        flags = v[1:]
+        if not v.startswith("--") and flags[:1] not in ("M", "m", "I", "x", "C", "d", "D"):
+            inplace = inplace or "i" in re.split(r"[eE]", flags, 1)[0]
+            if flags[-1:] in ("e", "E") and k + 1 < len(args):
+                code.append(args[k + 1])
+                k += 2
+                continue
+        k += 1
+    return inplace, code, args[k:] if code else args[k + 1:]
+
+
+def _perl_in_place(args):
+    """The files `perl -i` edits in place."""
+    inplace, _code, operands = perl_operands(args)
+    return operands if inplace else []
+
+
+def _gawk_in_place(args):
+    """The files `gawk -i inplace` (also -iinplace, --include=inplace) edits: its file operands
+    (not var=value), after the program text unless -e, -f or -E gave the program."""
+    vals = [w.value() or "" for w in args]
+    if not any(v in ("-iinplace", "--include=inplace") or (v in ("-i", "--include") and nxt == "inplace")
+               for v, nxt in zip(vals, vals[1:] + [""])):
+        return []
+    given, operands, k = False, [], 0
+    while k < len(args):
+        v, k = vals[k], k + 1
+        if v == "--":
+            operands += args[k:]
+            break
+        if v in AWK_VALUE_OPTS:
+            given, k = given or v in AWK_SOURCE_OPTS + AWK_PROGFILE_OPTS, k + 1
+        elif v.startswith("-") and v != "-":
+            given = given or v.startswith(("-e", "-f", "-E", "--source=", "--file=", "--exec="))
+        else:
+            operands.append(args[k - 1])
+    return [w for w in operands[0 if given else 1:] if not _ASSIGN_RE.match(w.value() or "") and w.value() != "-"]
 
 
 def _flag_values(args, short, long_opt, env):

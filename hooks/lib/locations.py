@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 from typing import Optional, Tuple
+from pathlib import Path
 
 try:
     from .harness_state_dir import harness_state_dir
@@ -230,8 +231,17 @@ def harness_home():
     return _claude_home().resolve()
 
 
-def project_root():
-    """The project root (lib/claude_home.project_dir)."""
+def config_home():
+    """Where per-harness records live whichever configuration directory runs (lib/claude_home.config_home)."""
+    return _claude_home().config_home()
+
+
+def project_root(bash: bool = False):
+    """The project root (lib/claude_home.project_dir). bash=True: for a program the Bash tool runs,
+    whose environment carries no CLAUDE_PROJECT_DIR and whose cwd is the session's directory (the
+    hooks' root): CLAUDE_PROJECT_DIR, else the cwd, never the harness home."""
+    if bash:
+        return Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
     return _claude_home().project_dir()
 
 

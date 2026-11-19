@@ -258,7 +258,7 @@ Open the product in a browser, perform real user actions, assert real outcomes a
 
 #### Project E2E scripts
 
-Before opening a browser look for the project's own E2E scripts: `ls "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"/*-e2e-test.py 2>/dev/null || true`. Run each one (`python3 <script-path>`, in the project's virtualenv if it has one), record stdout, stderr and exit code in `e2e_script_results[]`, record a non-zero exit as a major finding, and set `e2e_enforcement.script_discovered` and `script_path`. They never replace the Playwright run.
+Before opening a browser look for the project's own E2E scripts: `ls "${CLAUDE_PROJECT_DIR:-$PWD}"/*-e2e-test.py 2>/dev/null || true`. Run each one (`python3 <script-path>`, in the project's virtualenv if it has one), record stdout, stderr and exit code in `e2e_script_results[]`, record a non-zero exit as a major finding, and set `e2e_enforcement.script_discovered` and `script_path`. They never replace the Playwright run.
 
 #### App understanding flow
 

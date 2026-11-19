@@ -62,7 +62,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
-    WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
+    AWK_NAMES, AWK_SOURCE_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
     OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
     _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
@@ -85,14 +85,16 @@ MAX_BOUNDARIES = 400
 
 # Filesystem-removal front ends. This set defines the POLICY SCOPE (what is
 # forbidden), not the authorization mechanism. Widening it widens the deny
-# surface. It is the SINGLE shared definition of "removal binary": the degraded
-# fallback in hooks/pretool-bash-safety.sh names the same four, so the primary
-# path can never be laxer than the fallback.
-REMOVAL_EXES = {"rm", "unlink", "shred", "srm"}
+# surface. The one definition of "removal binary" is the census's
+# REMOVAL_BINARIES (the census, an independent backstop, imports nothing from
+# here; this analyzer reads its set): the degraded fallback in
+# hooks/pretool-bash-safety.sh names the same four, so the primary path can
+# never be laxer than the fallback.
+REMOVAL_EXES = frozenset(census_mod.REMOVAL_BINARIES)
 
 # Removal evidence gates the REMOVAL-SCOPED failure class only.
 _REMOVAL_EVIDENCE_RE = re.compile(
-    r"(?:^|[^A-Za-z0-9_])(rm|unlink|shred|srm)(?![A-Za-z0-9_])")
+    r"(?:^|[^A-Za-z0-9_])(%s)(?![A-Za-z0-9_])" % "|".join(map(re.escape, sorted(REMOVAL_EXES))))
 
 # Library-level removal in interpreter payloads. These carry NO rm/unlink/
 # shred/srm token, so _REMOVAL_EVIDENCE_RE is structurally blind to them; this
@@ -754,7 +756,7 @@ INTERPRETERS = {
     "nodejs": ("-e", "--eval", "-p"), "php": ("-r",), "lua": ("-e",),
     "lua5.1": ("-e",), "lua5.3": ("-e",), "deno": ("eval",),
 }
-AWKS = {"awk", "gawk", "mawk", "nawk", "busybox-awk"}
+AWKS = set(AWK_NAMES) | {"busybox-awk"}  # and busybox's applet, as this reader names it
 
 # Calls that only render text. A removal token reaching one of these and
 # nothing else is PROVEN inert; anything else is not proven and denies.
@@ -2899,7 +2901,7 @@ class Analyzer:
                 payload = []
                 while j < len(args):
                     jl = args[j].literal()
-                    if jl in (";", "+"):
+                    if jl in FIND_EXEC_ENDS:
                         break
                     payload.append(args[j])
                     j += 1
@@ -3112,7 +3114,11 @@ class Analyzer:
                 lit = args[i].literal()
                 if lit is None or not lit.startswith("-") or lit == "-":
                     break
-                if lit in ("-f", "--file", "-v", "--assign"):
+                if lit in AWK_SOURCE_OPTS or lit.startswith(tuple(o + "=" for o in AWK_SOURCE_OPTS if o[1] == "-")):
+                    # the program text: the next word, or the value attached with `=`
+                    i += 0 if "=" in lit else 1
+                    break
+                if lit in AWK_VALUE_OPTS:
                     i += 2
                     continue
                 if lit == "--":

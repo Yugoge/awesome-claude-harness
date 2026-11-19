@@ -34,8 +34,8 @@ from harness_state_dir import harness_state_dir  # noqa: E402
 import overnight  # noqa: E402
 
 # Where the PreTool user-intent guard mints the helper-auth token
-# (claude-stop-helper-auth-<sid>.json). Overridable for sandbox tests.
-_SENTINEL_DIR = os.environ.get("CLAUDE_USERINTENT_SENTINEL_DIR", harness_state_dir())
+# (claude-stop-helper-auth-<sid>.json).
+_SENTINEL_DIR = harness_state_dir()
 
 
 def _consume_helper_auth() -> tuple:

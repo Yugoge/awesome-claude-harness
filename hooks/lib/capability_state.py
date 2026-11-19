@@ -198,12 +198,8 @@ def harness_home(explicit: str | os.PathLike | None = None) -> Path:
 
 def state_dir() -> Path:
     """Owner-controlled runtime directory, created 0700."""
-    override = os.environ.get("CLAUDE_CAPABILITY_STATE_DIR")
-    if override:
-        d = Path(override)
-    else:
-        xdg = os.environ.get("XDG_RUNTIME_DIR")
-        d = Path(xdg) / "claude-capability" if xdg else Path(f"{harness_state_dir()}/claude-capability-{os.geteuid()}")
+    # Not XDG_RUNTIME_DIR: a login shell has it and a daemon-launched session does not (S29).
+    d = Path(os.environ.get("CLAUDE_CAPABILITY_STATE_DIR") or f"{harness_state_dir()}/claude-capability-{os.geteuid()}")
     d.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         os.chmod(d, 0o700)
