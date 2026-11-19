@@ -35,8 +35,8 @@ import refusal_record as R  # noqa: E402
 MARGIN = 300  # seconds a refusal's record and its transcript line may lie apart, across a bound of the period too
 STOPS = ("Stop", "SubagentStop")
 UNSHOWN = ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure")  # no tool result or feedback message shows these
-_HOOK = re.compile(r"(PreToolUse|PostToolUse|PostToolUseFailure):(\S+) hook error: \[")
-_FEEDBACK = re.compile(r"(Stop|SubagentStop) hook feedback:")
+_HOOK = re.compile(r"(\w+):(\S+) hook error: \[")  # the event is one of the writer's (R.EVENTS), named there only
+_FEEDBACK = re.compile("(%s) hook feedback:" % "|".join(STOPS))
 
 
 def _seconds(stamp) -> float:
@@ -177,7 +177,7 @@ def transcript_refusals(roots, since: str) -> tuple[list, int]:
                             if isinstance(text, list):
                                 text = "\n".join(x.get("text", "") for x in text if isinstance(x, dict))
                             hit = _HOOK.match(str(text))
-                            if hit:
+                            if hit and hit.group(1) in R.EVENTS:
                                 found.setdefault(block.get("tool_use_id"), dict(
                                     base, id=block.get("tool_use_id"), event=hit.group(1), tool=hit.group(2)))
                             elif str(text).startswith("Permission to use "):
