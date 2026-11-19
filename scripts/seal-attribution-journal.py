@@ -178,10 +178,8 @@ def autoseal_if_due(dest: Optional[Path] = None, interval: Optional[float] = Non
     refusal, is itself recorded as an error evidence entry."""
     dest = dest if dest is not None else default_dest()
     interval = DEFAULT_AUTOSEAL_INTERVAL_SECONDS if interval is None else interval
-    dest.mkdir(parents=True, exist_ok=True)
-    lock = open(dest / "seal.lock", "a")  # one seal at a time: the others skip; the lock ends with its
-    try:                                   # holder (this function's return, or the process, killed or not)
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:  # one seal at a time, the others skip; the lock ends with its holder (return, or killed)
+        dest.mkdir(parents=True, exist_ok=True); lock = open(dest / "seal.lock", "a"); fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         return None
     now = time.time()
