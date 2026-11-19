@@ -955,7 +955,7 @@ def _dynamic_only_in_directory(word):
         return False
     directory, slash, name = ''.join(p.text for p in tail).rpartition('/')
     lowered = name.lower()
-    return (bool(slash) and name not in ('', '.', '..')
+    return (bool(slash) and name not in locations.NAMELESS_PARTS
             and not lowered.startswith(_GIT_LIKE_PREFIX) and lowered not in _GIT_LIKE_NAMES)
 
 

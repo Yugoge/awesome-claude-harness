@@ -1022,7 +1022,7 @@ def _proven_harmless(command: str, start: str) -> bool:
                     if '$' in text.rsplit('/', 1)[-1]:
                         return False  # a copied name the guard cannot read
                 base = os.path.basename(text.rstrip('/'))
-                if base not in ('', '.', '..'):  # `cp -r src/. dest` writes dest itself, judged above
+                if base not in locations.NAMELESS_PARTS:  # `cp -r src/. dest` writes dest itself, judged above
                     written |= {os.path.join(p, base) for p in paths}
         if not outside(written, subtree):
             return False
