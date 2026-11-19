@@ -588,7 +588,7 @@ def config_dir():
     """The configuration directory and the home of the settings.json its CLI loads (claude_home.config_home)."""
     sys.path.insert(0, os.path.join(HOME, "hooks", "lib"))
     try:
-        from claude_home import config_home
+        from locations import config_home
     finally:
         sys.path.pop(0)
     return os.path.realpath(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")), str(config_home())

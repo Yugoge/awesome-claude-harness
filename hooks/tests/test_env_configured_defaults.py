@@ -253,8 +253,11 @@ def test_default_hard_bans_block_running_the_scripts(sandbox, command, name):
 
 
 # An explicit value (e.g. one the migration wrote from the previous built-in rules) keeps the old meaning:
-# each '|'-separated ERE is its own rule `echo "$COMMAND" | grep -qE '<ERE>'`, matched anywhere.
+# each '|'-separated ERE is its own rule `echo "$COMMAND" | grep -qE '<ERE>'`, matched anywhere, in every command
+# that is not read-only as a whole: a search, listing or print of the script's file runs nothing.
 OLD_STYLE_BANS = "acct-test-123-recovery|acct-test-123-restart"
+ONLY_READS = ("cat docs/acct-test-123-recovery.md", "grep -rn 'acct-test-123-restart' .", "echo acct-test-123-restart",
+              "cat scripts/acct-test-123-recovery.sh")
 
 
 @pytest.mark.parametrize("command", (
@@ -266,23 +269,26 @@ OLD_STYLE_BANS = "acct-test-123-recovery|acct-test-123-restart"
     "ls notes",
     "bash scripts/session-recovery.sh",  # a set value replaces the default names
     "cat docs/session-recovery.md",
-    "cat scripts/acct-test-123-recovery.sh",  # unlike the default, a set value also matches a mention
-    'git commit -m "remove acct-test-123-restart.sh"',
+    "cat scripts/acct-test-123-recovery.sh",  # a read of the script's file: runs nothing
+    'git commit -m "remove acct-test-123-restart.sh"',  # unlike the default, a set value also matches a mention
+    "cat scripts/acct-test-123-recovery.sh | sh",
+    "grep -l x scripts/acct-test-123-restart.sh > /tmp/found.txt",
 ))
 def test_explicit_hard_ban_value_keeps_match_anywhere_semantics(sandbox, command):
     _, env = sandbox
     old_rules = [subprocess.run(["grep", "-qE", "--", ere], input=command + "\n", text=True).returncode == 0
                  for ere in OLD_STYLE_BANS.split("|")]
+    refused = any(old_rules) and command not in ONLY_READS
     r = hook(env, command, CLAUDE_HARD_BANNED_SCRIPTS=OLD_STYLE_BANS)
-    assert r.returncode == (2 if any(old_rules) else 0), r.stderr
-    assert ("hard-banned script 'acct-test-123-" in r.stderr) == any(old_rules)
+    assert r.returncode == (2 if refused else 0), r.stderr
+    assert ("hard-banned script 'acct-test-123-" in r.stderr) == refused
 
 
 def test_hard_ban_empty_entries_never_match_and_session_dirs_ban_stays(sandbox):
     _, env = sandbox
     for value in ("demo-recovery|demo-restart||", "|", "||"):
         assert hook(env, "ls notes.txt", CLAUDE_HARD_BANNED_SCRIPTS=value).returncode == 0, value
-    r = hook(env, "ls demo-restart.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery|demo-restart||")
+    r = hook(env, "bash demo-restart.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery|demo-restart||")
     assert r.returncode == 2 and "hard-banned script 'demo-restart'" in r.stderr
     # The session_dirs.txt ban is settings.json's permissions.deny: Read and Edit refuse the file, and since OB-L16
     # per-command Bash entries refuse a command that reads, writes or runs it (a search or commit mention passes).

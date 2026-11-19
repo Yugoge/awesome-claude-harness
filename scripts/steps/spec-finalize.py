@@ -51,7 +51,9 @@ def emit(**facts: object) -> None:
 def project_dir(given: str | None) -> Path:
     if given:
         return Path(given).resolve()
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()).resolve()  # the hooks' project root
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks" / "lib"))
+    import locations  # noqa: E402 -- the one project-root resolution
+    return locations.project_root(bash=True).resolve()
 
 
 def spec_dir_id(spec: str, project: Path) -> str:

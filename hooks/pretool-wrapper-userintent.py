@@ -46,6 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib import locations  # noqa: E402
 try:
     from lib.shell_parse import without_heredoc_bodies
 except Exception:  # pragma: no cover - fail-soft when lib missing
@@ -111,7 +112,7 @@ _SENTINEL_DIR = harness_state_dir()
 
 _PYTHON_RE = re.compile(r'^(?:python[\d.]*|pypy[\d.]*)$')
 _PY_VALUE_OPTS = 'cmWXQ'
-_STDIN_FILES = ('/dev/stdin', '/dev/fd/0', '/proc/self/fd/0')
+_STDIN_FILES = locations.STDIN_DEVICES
 _SUBST_KINDS = frozenset(('cmdsub', 'backtick', 'procsub_in', 'procsub_out'))
 _UNSAFE_CONTEXTS = frozenset(('cmdsub', 'backtick', 'procsub', 'pipe_shell'))
 # Builtins and keywords that run no file.
@@ -403,7 +404,7 @@ def _writes_file(red) -> bool:
     except Exception:
         return True
     tgt = red.target.value() if red.target is not None else None
-    return tgt not in ('/dev/null', '/dev/stderr', '/dev/stdout', '/dev/tty')
+    return tgt not in locations.TERMINAL_SINKS
 
 
 class _Scan:
@@ -1243,7 +1244,7 @@ class _Scan:
 
     def _operand(self, site, res, word, shell):
         v, _g = self._expand(word)
-        if v in _STDIN_FILES or (v and v.startswith('/dev/fd/')):
+        if v in _STDIN_FILES or (v and v.startswith(locations.FD_DIR)):
             self._stdin(site, res, shell)
             return
         if any(p.kind.startswith('procsub') for p in word.parts):
@@ -2779,7 +2780,7 @@ class _Scan:
         if not words or re.search(r'[;&|`$()<>\\\'"\n*?{}\[\]]', prog):
             return False
         head = words[0]
-        if '/' in head and os.path.dirname(head) not in ('/bin', '/usr/bin', '/usr/local/bin'):
+        if '/' in head and os.path.dirname(head) not in locations.SYSTEM_BIN_DIRS:
             return False
         name = os.path.basename(head)
         if name not in self._PLAIN_PAGERS or (name in ('less', 'more') and (
@@ -2964,7 +2965,7 @@ class _Scan:
                     self.unsure = True
                     self.computed_run = True
                 continue
-            if v in ('-',) + _STDIN_FILES or v.startswith('/dev/fd/'):
+            if v in ('-',) + _STDIN_FILES or v.startswith(locations.FD_DIR):
                 got = False
                 for red in cmd.redirects:
                     if red.fd != 0:

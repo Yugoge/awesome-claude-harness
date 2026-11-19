@@ -202,10 +202,10 @@ def state_dir() -> Path:
     override = os.environ.get("CLAUDE_RESTART_STATE_DIR")
     if override:
         return Path(override)
-    try:  # one record per harness home, whichever account runs the session
-        from .claude_home import config_home
+    try:  # one record per harness home, whichever configuration directory runs the session
+        from .locations import config_home
     except ImportError:
-        from claude_home import config_home  # type: ignore[no-redef]
+        from locations import config_home  # type: ignore[no-redef]
     return config_home() / "restart-state"
 
 

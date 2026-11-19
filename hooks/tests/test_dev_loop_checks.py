@@ -128,6 +128,44 @@ def test_guard_removal_is_found_in_the_uncommitted_diff(proj):
     assert "UNAUTHORIZED GUARD REMOVAL\nFile: src/app.py\nGuard: raise ValueError('x')" in _run(proj, "PostToolUse")
 
 
+GUARD = {"file": "src/app.py", "code_snippet": "raise ValueError('x')", "purpose": "reject None",
+         "removal_authorized": False}
+
+
+def test_a_guard_still_in_its_file_is_not_reported_removed(proj):
+    """2026-11-18: 12 of 38 reported guards were still in their file: the line holding the guard
+    was edited (a keyword argument appended, re-indented), or another file's removed line held it."""
+    _ctx(proj, pre_existing_guards=[GUARD])
+    (proj / "src" / "old.py").write_text("raise ValueError('x')\n")
+    _git(proj, "add", "-A")
+    _git(proj, "commit", "-q", "-m", "old")
+    (proj / "src" / "old.py").unlink()
+    (proj / "src" / "app.py").write_text("def check(x):\n    if x is None:\n        raise ValueError('x')  # kept\n")
+    assert _run(proj, "PostToolUse") is None
+
+
+def test_a_guard_removed_before_the_dispatch_started_is_not_this_dispatchs(proj):
+    """2026-11-18: 13 of 38 reported guards were gone before the accused dev started (an earlier
+    round's dev, or uncommitted work two months old). The tree when the dispatch started is the
+    checkpoint before its dispatched_at (lib/checkpoint-core.sh), not HEAD."""
+    _ctx(proj, pre_existing_guards=[GUARD, {**GUARD, "code_snippet": "return x"}])
+    (proj / "src" / "app.py").write_text("def check(x):\n    return x\n")
+    _git(proj, "add", "-A")
+    tree = _git(proj, "write-tree").strip()
+    branch = _git(proj, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    commit = subprocess.run(["git", "-C", str(proj), "commit-tree", tree, "-m", "checkpoint"], capture_output=True,
+                            text=True, check=True, env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.invalid",
+                                                        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e.invalid",
+                                                        "GIT_COMMITTER_DATE": "2026-11-09T10:00:00Z"}).stdout.strip()
+    _git(proj, "update-ref", f"refs/checkpoints/{branch}", commit)
+    _git(proj, "read-tree", "HEAD")
+    assert _run(proj, "PostToolUse") is None
+    (proj / "src" / "app.py").write_text("def check(x):\n    pass\n")  # this dispatch removes the other
+    assert _run(proj, "PostToolUse") == ("UNAUTHORIZED GUARD REMOVAL\nFile: src/app.py\nGuard: return x\n"
+                                         "Purpose: reject None\nThis guard has removal_authorized=false. Removing it "
+                                         f"requires BA authorization.\nContext: docs/dev/context-{TASK}.json")
+
+
 def test_minimum_diff_counts_the_reports_files_and_never_head_5(proj):
     _ctx(proj, diagnosis_layer="L3")
     (proj / "notes.txt").write_text("".join(f"line {i}\n" for i in range(100)))

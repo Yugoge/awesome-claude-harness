@@ -82,8 +82,8 @@ def identity(role, pipeline) -> str | None:
 
 
 def log_path() -> Path:  # one log per harness home, whichever account runs the session
-    home = importlib.import_module(".claude_home" if __package__ else "claude_home", __package__ or None)
-    return home.config_home() / "logs" / "lifecycle.jsonl"
+    where = importlib.import_module(".locations" if __package__ else "locations", __package__ or None)
+    return where.config_home() / "logs" / "lifecycle.jsonl"
 
 
 @contextmanager

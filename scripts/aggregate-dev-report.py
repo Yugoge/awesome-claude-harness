@@ -170,7 +170,9 @@ def _resolve_project_root(project_dir: str | None = None) -> Path:
     """
     if project_dir is not None:
         return Path(project_dir).resolve()
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())  # the hooks' project root
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "lib"))
+    import locations  # noqa: E402 -- the one project-root resolution
+    return locations.project_root(bash=True)
 
 
 def _resolve_dev_dir(project_root: Path) -> Path:

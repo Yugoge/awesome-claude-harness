@@ -191,7 +191,9 @@ default location.
   `(`, `!`, `&`) — inside quotes that is only text, unless a word outside the quotes can run
   text (a shell, `eval`, `ssh`, an interpreter, a `-c` or `-e` option) — and a script piped into
   a shell or run by `find -exec` or an unlisted wrapper (`watch`) is not seen. A set value
-  replaces them with `|`-separated EREs, each matched anywhere in the command.
+  replaces them with `|`-separated EREs, each matched anywhere in the command, unless the whole
+  command provably only reads (a search, listing or print such as `grep`, `cat` or `ls`, piped
+  only into such readers and writing no file).
 - **The filter.** [`.gitattributes`](../.gitattributes) declares
   `/settings.json filter=claude-settings`; init registers its clean and smudge commands
   (`scripts/install/render-settings`) in the clone's local git config, with `required = true`.
