@@ -468,7 +468,7 @@ def _site_writes(sp, raw: str, res) -> list:
         out += dirs + outputs
         if not (outputs or dirs or ops) and res.head is not None:
             out.append(('.', res.head))  # the files the diff names, below the working directory
-    elif name in ('tar', 'bsdtar', 'gtar'):
+    elif name in sp.TAR_NAMES:
         out += _tar_writes(args, vals, res.head)
     elif name == 'unzip':
         dirs = option_values('-d')

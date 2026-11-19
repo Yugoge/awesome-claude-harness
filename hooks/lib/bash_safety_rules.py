@@ -6885,6 +6885,7 @@ def _sd_glob_operand(res, out_safe):
     """The glob a program applies to file names itself (find -name/-path/-regex, rg -g, grep --include, git
     pathspecs, tar --wildcards/--include, rsync --include/--filter) when it matches the file; None otherwise. A
     find that only lists names to the terminal is left alone."""
+    from lib.shell_parse import TAR_NAMES
     name = res.name
     vals = [w.value() if w.value() is not None else w.text for w in res.args]
     hits = []
@@ -6928,7 +6929,7 @@ def _sd_glob_operand(res, out_safe):
             m = re.match(r"(\+|include)[ ,_]\s*(.*)", r)
             if m:
                 hits.append(m.group(2))
-    elif name in ("tar", "bsdtar", "gtar"):
+    elif name in TAR_NAMES:
         hits = opt_values({"--include"})
         if "--wildcards" in vals:
             hits += [v for v in vals if not v.startswith("-")]
