@@ -365,6 +365,7 @@ no per-rule budget exists.
 | S-021 | permission-layer-ask:kubectl-apply-create-npm-publish | advisory | unexercised | source-level | settings.json:269 @e606277d | tests/test_permission_ask_dry_run.py | source-level |
 | S-022 | permission-layer-pipe-to-shell | advisory | unexercised | source-level | settings.json:288 @c42adf0c | tests/test_permission_pipe_to_shell.py | source-level |
 | S-024 | git-hidden-in-interpreter-code-or-script:pretool-git-privilege-guard.py | advisory | exercised | component-tested | hooks/pretool-git-privilege-guard.py:1 @ac4fe5ee | hooks/tests/test_git_hidden_code.py | component-tested |
+| S-030 | refusal-record:refusal_record.py | detected | unexercised | component-tested | hooks/lib/refusal_record.py:1 @ff60b2eb | tests/test_refusal_record_sites.py | component-tested |
 
 - **S-001** — no CI harness for actual Claude Code CLI builds exists in this environment or
   session. There is no build matrix to run against. This row is the disclosure of that gap.
@@ -895,6 +896,25 @@ no per-rule budget exists.
   code or git arguments built at run time, `eval` of a computed string, `make` and other build
   tools, git aliases and hooks from configuration, a file over the size cap, and a file changed
   between the hook and the run.
+- **S-030** — the refusal record. A registered command that refuses (exit 2 at PreToolUse,
+  PostToolUse, PostToolUseFailure, UserPromptSubmit, Stop or SubagentStop) leaves one line under
+  `~/.local/state/claude-harness/<harness home>/refusals/`, written by
+  `hooks/lib/refusal_record.py`, the one writer and the one definition of the place
+  (`directory()`): the launchers report their rules (`hooks/lib/hook_launch.py`), the gates the
+  rules of their tables (`hooks/pretool-write-gate.py`, `hooks/lib/gate_runner.py`),
+  `hooks/lib/bash_safety_rules.py` its own refusal, `hooks/stop-launch.py` the Stop coordinator's
+  block and the two shell hooks their exit 2 (`hooks/lib/refusal_record.sh`), each by running the
+  writer as a process of its own (`report()`, the writer's command line); the reports of one call
+  merge into one line. `detected`: it records and prevents nothing. The reporter waits a bounded
+  time for the writer and reads nothing back, and the writer returns where it cannot write, so a
+  missing, failing or full record changes no decision. `scripts/refusals` reads it: counts by rule, hook,
+  role, project and day, loops, and a reconcile against the session transcripts by tool-call id.
+  `tests/test_refusal_record_sites.py` runs every registered command with each file the replay
+  suite's enumeration (`tests/replay/sites.py`) finds a blocking site in standing in as a
+  refusal: the command exits 2 if and only if the record holds one line. **Not recorded:** a hook
+  file run on its own, outside these commands (a seat whose wrapper runs the hook files one by
+  one reports only through `pretool-bash-safety.sh` and `pretool-block-enterworktree.sh`); a
+  denial by the CLI's own permission rules, which no hook sees; a payload that names no event.
 
 ---
 
