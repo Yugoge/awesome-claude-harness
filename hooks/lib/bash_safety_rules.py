@@ -4856,8 +4856,8 @@ def let_through_unproven(entry, payload):
     prove the command safe (so not when a later rule of this hook refuses the call, and not under a /do or /allow
     release, which the removal policy never sees). `payload` is the parsed PreToolUse payload. `entry` is what
     removal_policy() returned:
-        {"rule": "removal-policy", "kind": "let_through_unproven",
-         "path": "primary" (the analyzer answered UNRESOLVED) or "degraded" (it gave no usable verdict),
+        {"rule": "removal-policy", "path": "primary" (the analyzer answered UNRESOLVED) or "degraded" (it gave no
+         usable verdict), "kind": "let_through_unproven",
          "reason": "UNRESOLVED <the analyzer's reason>" or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
     Before the command runs, a snapshot of the repository at the payload's cwd is taken and named in the entry
     (entry["snapshot"], see snapshot_before()), so what the command removes or overwrites there can be brought back
@@ -5077,7 +5077,7 @@ def removal_policy(payload_text, command):
                    "usable verdict, and this command's text holds a removal word. Denied conservatively.",
                    f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; an unproven command "
                    f"runs only when its text holds no removal word (lib/pol_degraded_removal_reference.ere).", *own)
-    return {"rule": "removal-policy", "kind": "let_through_unproven", "path": "primary" if decision else "degraded",
+    return {"rule": "removal-policy", "path": "primary" if decision else "degraded", "kind": "let_through_unproven",
             "reason": decision[5:] or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
 
 
