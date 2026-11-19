@@ -2074,7 +2074,7 @@ def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None
     subagent is started into a stop gate (G2) it cannot pass. Each declared file is put to this
     hook's own decision (_decide) as that subagent's Write of it, its dispatch recorded as the CLI
     records one (the call, the child's first record and meta) in a store of its own."""
-    prompt = tool_input.get("prompt") if tool_name in ("Agent", "Task") and isinstance(tool_input, dict) else None
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
     if not isinstance(prompt, str) or "<obligation" not in prompt:
         return
     import contextlib
@@ -2082,6 +2082,10 @@ def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None
     import shutil
     import tempfile
     from lib import obligation
+    from lib.send_policy import AGENT_TOOLS
+
+    if tool_name not in AGENT_TOOLS:
+        return
 
     parsed = obligation.parse_obligation(prompt)
     arts = parsed.obligation.get("artifacts") or [] if isinstance(parsed, obligation.ParsedObligation) else []
