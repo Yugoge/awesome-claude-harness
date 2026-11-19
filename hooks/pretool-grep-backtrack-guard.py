@@ -139,13 +139,7 @@ _MAX_DESCENT = 6
 
 # Flags (for grep/egrep/ugrep) that CONSUME a following value token, so the value
 # is not mistaken for the pattern.
-_VALUE_FLAGS = {
-    "-e", "--regexp", "-f", "--file", "-m", "--max-count", "-A", "--after-context",
-    "-B", "--before-context", "-C", "--context", "--color", "--colour",
-    "-d", "--directories", "--exclude", "--exclude-dir", "--exclude-from",
-    "--include", "--label", "--binary-files", "-D", "--devices", "--group-separator",
-    "--jobs", "-J",
-}
+_VALUE_FLAGS = set(shell_parse.GREP_VALUE_OPTS) | {"--jobs", "-J"}  # and ugrep's --jobs
 
 
 # Short option letters that CONSUME the rest of their cluster (or the next token)
@@ -257,6 +251,9 @@ def _extract_patterns(tokens):
                 i += 1
             else:
                 i += 2
+            continue
+        if t.startswith("--"):  # any other long option is a flag (--color[=WHEN] included), never the pattern
+            i += 1
             continue
         # SHORT option cluster (e.g. -niE, -Ee'PAT', -inef FILE). Walk letters
         # left-to-right; the FIRST value-consuming letter (e/f/m/A/B/C/d/D) takes
