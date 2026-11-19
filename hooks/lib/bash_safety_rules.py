@@ -4569,7 +4569,7 @@ def _production_systemctl(sv, env):
 
 def _workflow_state_removal(command, sv):
     """rm, mv, git rm or git mv naming a workflow state path; with computed operands, one the command names."""
-    from lib.shell_parse import _git_from_resolved
+    from lib.shell_parse import GIT_MV_RM, _git_from_resolved
     for name, args, site, r in sv.sites:
         if name == "git":
             # The subcommand as git reads it: past global options and their values (-C dir, -c k=v, --work-tree d).
@@ -4577,9 +4577,9 @@ def _workflow_state_removal(command, sv):
             if not invs:
                 continue
             sub, unresolved = invs[0].subcommand, invs[0].unresolved
-            if sub not in ("rm", "mv") and not (sub is None and unresolved):
+            if sub not in GIT_MV_RM and not (sub is None and unresolved):
                 continue
-        elif name not in ("rm", "mv"):
+        elif name not in GIT_MV_RM:
             continue
         if any(re.search(WORKFLOW_STATE_RE, w.text) for w in args):
             return True

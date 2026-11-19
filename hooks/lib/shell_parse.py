@@ -3585,7 +3585,7 @@ def _git_write_targets(res, env, context):
     for inv in _git_from_resolved(res, context):
         sub = inv.subcommand
         args = inv.arg_words
-        if sub in ("rm", "mv"):
+        if sub in GIT_MV_RM:
             vals = [a.value() for a in args]
             resolved = list(inv.args)
             if sub == "rm" and "--cached" in resolved[:vals.index("--") if "--" in vals else len(vals)]:
@@ -3732,7 +3732,8 @@ GIT_LONG_OPTIONS = {
                "--show-origin", "--show-scope", "--default", "--fixed-value"),
 }
 
-GIT_EXEC_SUBCOMMANDS = frozenset({"rm", "mv"})
+# The git subcommands that move or remove working-tree files as mv and rm do.
+GIT_MV_RM = frozenset({"rm", "mv"})
 
 
 class GitInvocation:
