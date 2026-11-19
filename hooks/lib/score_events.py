@@ -33,8 +33,7 @@ def _dispatches(span, tp):  # ok dispatches with an obligation: id, who (scored 
 
 def _walk(d):  # the content blocks of dispatch d's own transcript, in order
     for _, record in command_span._records(d["sub"]):
-        content = (record.get("message") or {}).get("content")
-        yield from (b for b in content if isinstance(b, dict)) if isinstance(content, list) else ()
+        yield from command_span._blocks(record, sidechain=True)
 
 
 def _once(ctx, fn, *args):  # fn(*args), answered once per sweep (the store and transcript reads behind it are slow)

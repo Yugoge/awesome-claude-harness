@@ -24,7 +24,7 @@
 #   version it prints the shape diff (tests/cli_shapes.py diff) from the shapes.json of the version
 #   CURRENT named before: what the upgrade changed in the records the hooks read.
 # Kept: hook attachment records, system/stop_hook_summary, system/compact_boundary, the
-#   queued_command attachment, the queue-operation, user and assistant envelopes, each event's
+#   queued_command attachment, the queue-operation, user, assistant and api-request-blob records, each event's
 #   hook stdin and the first subagent's meta file. Home, cwd, uuids, agent ids and timestamps
 #   become placeholders; every other string becomes "<redacted>" unless its key is a structural one
 #   (type, hookEvent, ...) or it is a marker this script's own hooks print; a task-notification
@@ -355,7 +355,7 @@ def clean(value, key=None, state=False):
 
 def wanted(rec):
     t = rec.get("type")
-    if t in ("user", "assistant", "queue-operation"):
+    if t in ("user", "assistant", "queue-operation", "api-request-blob"):
         return True
     if t == "attachment":
         a = rec.get("attachment")
