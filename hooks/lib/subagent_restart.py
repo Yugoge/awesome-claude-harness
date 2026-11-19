@@ -67,9 +67,9 @@ AGENT_ID_TEXT_RE = re.compile(r"agentId:\s*([A-Za-z0-9._-]+)")
 # was unwinnable by construction. See that module's docstring for the corpus
 # measurement and the three evidence tiers.
 try:  # package import (hooks.lib.subagent_restart)
-    from . import command_span, interruption_signals as signals
+    from . import interruption_signals as signals
 except ImportError:  # direct sys.path import (lib/ on path)
-    import command_span, interruption_signals as signals  # type: ignore[no-redef]  # noqa: E401
+    import interruption_signals as signals  # type: ignore[no-redef]
 
 
 def _is_quota_text(value: Any) -> bool:
@@ -550,6 +550,10 @@ def _read_parent_calls(
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, list[Any]] = {}
     latest_notifications: dict[str, dict[str, Any]] = {}
+    try:  # the one reading of calls; at the call, since a harness tree without command sets imports this module
+        from . import command_span
+    except ImportError:
+        import command_span  # type: ignore[no-redef]
     try:
         lines = transcript.open("r", encoding="utf-8", errors="replace")
     except OSError as exc:

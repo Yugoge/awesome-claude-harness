@@ -562,7 +562,7 @@ class Session:
         for k, v in (("userType", "external"), ("cwd", self.rp.layout.project), ("sessionId", self.sid),
                      ("version", CLI_VERSION), ("timestamp", now_iso())):
             rec.setdefault(k, v)
-        if self.rp.args.get("request_copies") == "1" and rec.get("type") in ("user", "assistant") \
+        if getattr(self.rp, "args", {}).get("request_copies") == "1" and rec.get("type") in ("user", "assistant") \
                 and cli_shapes._content(rec) is not None:
             uncopied = self._uncopied.setdefault(path, [])
             if rec["type"] == "assistant" and uncopied and uncopied[-1]["type"] == "user":  # a model request
