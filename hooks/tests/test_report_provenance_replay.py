@@ -38,7 +38,8 @@ MARK = "runs the harness's own hook code"
 
 @pytest.fixture()
 def world(tmp_path):
-    return tt.World(tmp_path)
+    with tt.base.project_outside_temp() as project:
+        yield tt.World(tmp_path, project)
 
 
 def _payloads(world, fake_tx: Path):
