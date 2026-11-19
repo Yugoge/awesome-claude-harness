@@ -31,23 +31,13 @@
   {
    "id": "bash-env-variables",
    "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "Three identical {BASH_ENV, ENV}; git_clean_guard._SHADOWING_NAMES adds PATH (names that shadow a later command).",
+   "reason": "shell_parse.SHELL_STARTUP_VARS {BASH_ENV, ENV} are the variables a non-interactive shell reads a startup file from; git_clean_guard._SHADOWING_NAMES adds PATH: the names that shadow a later command.",
    "sides": [
     [
      {
-      "name": "_resolve_shell:in",
+      "name": "<module>.SHELL_STARTUP_VARS",
       "fingerprint": "a70a1365a2e41fc0",
-      "at": "hooks/lib/shell_parse.py:2794"
-     },
-     {
-      "name": "_Scan._lead_checker:in",
-      "fingerprint": "a70a1365a2e41fc0",
-      "at": "hooks/pretool-wrapper-userintent.py:757"
-     },
-     {
-      "name": "_Scan._shell:in",
-      "fingerprint": "a70a1365a2e41fc0",
-      "at": "hooks/pretool-wrapper-userintent.py:1230"
+      "at": "hooks/lib/shell_parse.py:2896"
      }
     ],
     [
@@ -265,23 +255,13 @@
   {
    "id": "find-operators",
    "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "Three identical {! ( )}; _FIND_NONEXONERATING adds -not -o -or for another test.",
+   "reason": "shell_parse.FIND_OPERATORS {! ( )} are find's grouping and negation operators; _FIND_NONEXONERATING adds -not -o -or for another test (which operators keep a find from proving a path harmless).",
    "sides": [
     [
      {
-      "name": "_find_path_operands:in",
+      "name": "<module>.FIND_OPERATORS",
       "fingerprint": "2ff0a480f95afbce",
-      "at": "hooks/lib/runtime_guard/find_cmds.py:125"
-     },
-     {
-      "name": "_find_path_operands:in",
-      "fingerprint": "2ff0a480f95afbce",
-      "at": "hooks/lib/runtime_guard/find_cmds.py:130"
-     },
-     {
-      "name": "_Scan._find:in",
-      "fingerprint": "2ff0a480f95afbce",
-      "at": "hooks/pretool-wrapper-userintent.py:1405"
+      "at": "hooks/lib/shell_parse.py:2894"
      }
     ],
     [
@@ -745,19 +725,9 @@
    "sides": [
     [
      {
-      "name": "_p6_prockill:in",
+      "name": "<module>._NAME_KILL_HEADS",
       "fingerprint": "315f36bca1db7e64",
-      "at": "hooks/lib/runtime_guard/_core.py:2576"
-     },
-     {
-      "name": "_p6_prockill:in",
-      "fingerprint": "315f36bca1db7e64",
-      "at": "hooks/lib/runtime_guard/_core.py:2577"
-     },
-     {
-      "name": "_p0_anchor:in",
-      "fingerprint": "315f36bca1db7e64",
-      "at": "hooks/lib/runtime_guard/_core.py:4464"
+      "at": "hooks/lib/runtime_guard/_core.py:3502"
      }
     ],
     [
@@ -1121,21 +1091,6 @@
    "sides": [
     [
      {
-      "name": "_exec_subcommand_after_selector:in",
-      "fingerprint": "91b7c01c06df6d5c",
-      "at": "hooks/lib/runtime_guard/_core.py:1912"
-     },
-     {
-      "name": "_package_runner_invocation:in",
-      "fingerprint": "91b7c01c06df6d5c",
-      "at": "hooks/lib/runtime_guard/_core.py:2162"
-     },
-     {
-      "name": "_strip_selector_tokens.sel_flags",
-      "fingerprint": "91b7c01c06df6d5c",
-      "at": "hooks/lib/runtime_guard/_core.py:3104"
-     },
-     {
       "name": "<module>._PM_FLAGS_WITH_VALUE",
       "fingerprint": "91b7c01c06df6d5c",
       "at": "hooks/lib/runtime_guard/_core.py:3502"
@@ -1143,14 +1098,9 @@
     ],
     [
      {
-      "name": "_post_selector_tokens:in",
+      "name": "<module>._WS_SELECTOR_FLAGS",
       "fingerprint": "30fcac140e0219eb",
-      "at": "hooks/lib/runtime_guard/_core.py:3543"
-     },
-     {
-      "name": "_anchor_nonprotected_workspace_selector.sel_flags",
-      "fingerprint": "30fcac140e0219eb",
-      "at": "hooks/lib/runtime_guard/anchor.py:191"
+      "at": "hooks/lib/runtime_guard/anchor.py:176"
      }
     ],
     [
@@ -1370,7 +1320,7 @@
     ],
     [
      {
-      "name": "<module>:re",
+      "name": "<module>._KEY_NAME:re",
       "fingerprint": "d7439167d45ec3bf",
       "at": "hooks/lib/sensitive_names.py:47"
      }
@@ -1384,31 +1334,9 @@
    "sides": [
     [
      {
-      "name": "_verb_targets:in",
+      "name": "<module>.SED_SCRIPT_GIVEN_OPTS",
       "fingerprint": "17136385e7a2bad0",
-      "at": "hooks/lib/shell_parse.py:3484"
-     },
-     {
-      "name": "_sed_scripts:in",
-      "fingerprint": "17136385e7a2bad0",
-      "at": "hooks/pretool-claude-config-guard.py:306"
-     },
-     {
-      "name": "_sed_long_in_place:in",
-      "fingerprint": "17136385e7a2bad0",
-      "at": "hooks/pretool-claude-config-guard.py:358"
-     }
-    ],
-    [
-     {
-      "name": "_verb_targets:in",
-      "fingerprint": "0fdadac9ce526626",
-      "at": "hooks/lib/shell_parse.py:3483"
-     },
-     {
-      "name": "_sed_long_in_place:in",
-      "fingerprint": "0fdadac9ce526626",
-      "at": "hooks/pretool-claude-config-guard.py:357"
+      "at": "hooks/lib/shell_parse.py:2898"
      }
     ],
     [
@@ -1434,14 +1362,9 @@
     ],
     [
      {
-      "name": "_sed_long_in_place:in",
+      "name": "<module>.SED_SCRIPT_ATTACHED",
       "fingerprint": "c55c1bf21c0fd52f",
-      "at": "hooks/pretool-claude-config-guard.py:361"
-     },
-     {
-      "name": "_verb_targets:in",
-      "fingerprint": "c55c1bf21c0fd52f",
-      "at": "hooks/lib/shell_parse.py:3487"
+      "at": "hooks/lib/shell_parse.py:2899"
      }
     ]
    ]
@@ -2756,6 +2679,48 @@
    ]
   },
   {
+   "id": "mode-operators-vs-attr-operand-signs",
+   "source": "defs-tools lane, check group on integration edc54b6e7",
+   "reason": "runtime_guard's _mutation_targets_for_verb asks whether a chmod argument is a symbolic mode (+, - or = followed only by mode letters, so it is not a path the chmod changes); shell_parse's _attr_operands asks where the option words of chmod, chown, chattr and setfacl end and their path operands begin (a word led by -, + or = is an option or a chattr attribute change, not a path). One classifies a mode string, the other splits options from operands for four verbs; they share only the three sign characters.",
+   "sides": [
+    [
+     {
+      "name": "_mutation_targets_for_verb:in",
+      "fingerprint": "206ca566a91f492e",
+      "at": "hooks/lib/runtime_guard/_core.py:1088"
+     }
+    ],
+    [
+     {
+      "name": "_attr_operands:in",
+      "fingerprint": "206ca566a91f492e",
+      "at": "hooks/lib/shell_parse.py:3505"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "write-tools-vs-file-path-tools",
+   "source": "defs-tools lane, check group on integration edc54b6e7",
+   "reason": "harness_vocabulary.WRITE_TOOLS asks which tools write a file (the write gate's rules, tool-policy's role rows, the cp-state, config and switch guards), NotebookEdit included; spec_path.EDIT_TOOLS asks which tool calls name their target in tool_input.file_path: spec_path reads it to find the last write of a spec monolith (a markdown file, which NotebookEdit cannot write), report_provenance to find the main agent's previous file write, with NotebookEdit's notebook_path on a branch of its own. Different questions: adding NotebookEdit to EDIT_TOOLS would read file_path from a call that does not send it.",
+   "sides": [
+    [
+     {
+      "name": "<module>.WRITE_TOOLS",
+      "fingerprint": "95d7e6945ed2d49b",
+      "at": "hooks/lib/harness_vocabulary.py:18"
+     }
+    ],
+    [
+     {
+      "name": "<module>.EDIT_TOOLS",
+      "fingerprint": "d8533eb90bdb17ea",
+      "at": "hooks/lib/spec_path.py:21"
+     }
+    ]
+   ]
+  },
+  {
    "id": "git-ref-movers-guard-vs-overnight-shim",
    "source": "lane defs-git (defs-83)",
    "reason": "The git privilege guard asks which ref a git update-ref / symbolic-ref call moves, to judge a protected branch; the overnight policy shim asks the same of its own argv, but it is a bash script installed alone on the overnight PATH (verified with cmp) and cannot read a Python definition.",
@@ -2926,6 +2891,34 @@
       "name": "settings_stat:re",
       "fingerprint": "3f6d0d63ccd6b04e",
       "at": "scripts/install/land:252"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "non-negative-integer-shell-pattern",
+   "source": "lane defs-git (defs-83)",
+   "reason": "All three ask, by design, whether a word is a non-negative decimal integer, each of its own input: session-tmpfs-banner.sh (a SessionStart hook) a df use percentage, userprompt-tmpfs-pressure.sh (a UserPromptSubmit hook) a df percentage and its rate counter (one _uint check), prune-orphaned-workflow-bookmarks.sh (a maintenance script) its --min-age-days value. Each runs alone and the three source nothing in common; a new sourced helper for one case pattern would add a dependency and lines to three stand-alone shell files.",
+   "sides": [
+    [
+     {
+      "name": "<script>:case",
+      "fingerprint": "cc2f2184a29512e7",
+      "at": "hooks/session-tmpfs-banner.sh:30"
+     }
+    ],
+    [
+     {
+      "name": "_uint:case",
+      "fingerprint": "cc2f2184a29512e7",
+      "at": "hooks/userprompt-tmpfs-pressure.sh:76"
+     }
+    ],
+    [
+     {
+      "name": "usage:case",
+      "fingerprint": "cc2f2184a29512e7",
+      "at": "scripts/prune-orphaned-workflow-bookmarks.sh:78"
      }
     ]
    ]

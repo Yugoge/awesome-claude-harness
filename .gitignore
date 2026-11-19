@@ -51,7 +51,7 @@ Thumbs.db
 *.bak
 # scripts/bootstrap's backups of the venv and of settings.json, <name>.bak-<timestamp>
 /*.bak-*
-# hooks/install.sh's backup of settings.json
+# settings.json backups left by the retired installer hooks/install.sh (removed 2026-11-19)
 /settings.json.backup.*
 
 logs/*

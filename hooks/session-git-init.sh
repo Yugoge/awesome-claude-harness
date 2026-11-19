@@ -11,7 +11,12 @@
 set -e
 
 # Opt-in gate: truthy-only semantics — {1,true,TRUE,yes,YES} → enabled; everything else → skip
-_truthy() { case "$1" in 1|true|TRUE|yes|YES) return 0 ;; esac; return 1; }
+_truthy() {
+  case "$1" in
+    1|true|TRUE|yes|YES) return 0 ;;
+  esac
+  return 1
+}
 _truthy "${CLAUDE_SESSION_GIT_INIT:-}" || exit 0  # off (the default): silent, since a SessionStart hook's stdout enters the context
 
 # Its own messages go to the hook's stdout (fd 3), which a SessionStart hook adds to the model's

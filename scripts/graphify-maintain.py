@@ -332,7 +332,7 @@ def cmd_update() -> int:
 def _select_semantic_backend() -> tuple[str, str | None, str]:
     """Resolve the 4-case backend matrix (OBJ-3 / AC13-OBJ3).
 
-    Mirrors _detect_semantic_backend's precedence: forced -> key -> claude -> none.
+    Precedence: forced -> key -> claude -> none.
     Returns (kind, backend_flag, label) where:
       kind == "forced"  -> pass --backend <flag>, label "semantic:<flag>"
       kind == "keyed"   -> NO --backend arg (graphify auto-detects), label "semantic:auto"

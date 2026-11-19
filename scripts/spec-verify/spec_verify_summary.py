@@ -10,9 +10,6 @@ Public API (re-exported by spec-verify.py):
     format_summary_row     - render one "  name: STATUS (detail)" row
     print_summary          - emit the R1.3 verification summary block
     stub_mandate_result    - placeholder while T5 wires R3.0/R3.3
-    stub_utility_result    - placeholder while T6 wires R1.1
-    stub_meta_rule_result  - placeholder while T6 wires R5.3
-    stub_ambiguous_result  - placeholder while T6 wires R4a.3
 """
 
 import hashlib
@@ -110,15 +107,9 @@ def print_summary(results, exit_code):
     print(f"EXIT: {exit_code}")
 
 
-# T5 / T6 stubs ------------------------------------------------------
-# These functions return the N/A placeholder CheckResults that occupy
-# the summary slots for checks that are not yet wired up. T5 replaces
-# stub_mandate_result with R3.0/R3.3/R3.7; T6 replaces stub_utility_result,
-# stub_meta_rule_result, stub_ambiguous_result with R1.1/R5.3/R4a.3.
-#
-# Keeping them as functions (rather than module-level constants) lets T5/T6
-# swap them in-place by adding new imports or modifying main() without
-# needing to also adjust the summary block ordering.
+# T5 stub ------------------------------------------------------------
+# Returns the N/A placeholder CheckResult that occupies the mandate slot of
+# the summary until T5 wires R3.0/R3.3/R3.7.
 
 
 def stub_mandate_result():

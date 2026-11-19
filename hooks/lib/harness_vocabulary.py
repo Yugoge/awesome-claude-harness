@@ -13,3 +13,6 @@ RUN_CODE_TOOLS = frozenset({"mcp__playwright__browser_run_code", "mcp__paseo__br
 # CLAUDE_OBLIGATION_STOPGATE (hooks/subagentstop-artifact-contract-enforce.py). Any other value
 # is not a mode: each reader keeps its own default for it.
 GATE_MODES = ("block", "advisory", "off")
+
+# The tools that write a file (a path in tool_input: file_path, or notebook_path for NotebookEdit).
+WRITE_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})

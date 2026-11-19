@@ -24,14 +24,13 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import locations  # noqa: E402
+from lib.harness_vocabulary import WRITE_TOOLS  # noqa: E402
 from lib.subagent import is_subagent  # noqa: E402
 
 # Remediation paths are derived from THIS hook's own on-disk location
 # (<harness-home>/hooks/<name>.py), so the message names the spec-check.py that
 # actually exists for the invoking user instead of an author-absolute literal.
 SPEC_CHECK = Path(__file__).resolve().parent.parent / "scripts" / "spec-check.py"
-
-WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 
 
 def _read_payload() -> dict:

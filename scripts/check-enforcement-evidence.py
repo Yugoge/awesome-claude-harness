@@ -174,7 +174,7 @@ RECORDED_REDIRECTION_OPS = ["2>/dev/null", ">", ">>", "<", "2>&1", "&>", "1>"]
 # adding '/' to the class would change the residual class, so the published table must fail.
 RECORDED_PY_ANCHOR = "(?:^|[\\s;&|()`])git"
 
-# Gate-architecture census, counted at RECORDED_AT.
+# Gate-architecture census, counted at 4c33f2f5.
 #   A = classifier-primary with a MUTUALLY EXCLUSIVE regex fallback guarded by
 #       [ "$CLASSIFIER_STATUS" != "ok" ]. This is the shape where a successful-but-empty parse
 #       suppresses the backstop.
