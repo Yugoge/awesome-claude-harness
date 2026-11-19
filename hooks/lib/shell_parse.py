@@ -3590,10 +3590,11 @@ def _verb_targets(name, verb, args, env, context):
     return out
 
 
-def _perl_in_place(args):
-    """The files `perl -i` edits in place: the operands after the script (after the -e/-E code, or
-    after the script file operand), when a -i appears in a cluster before its e/E code letter."""
-    inplace, code, k = False, False, 0
+def perl_operands(args):
+    """(in_place, code words, file operands) of one perl call: -i set in a cluster before its
+    e/E code letter; the -e/-E code words; the operands after the code (after the script file
+    operand when no -e/-E is given). The one reading of perl's command line."""
+    inplace, code, k = False, [], 0
     while k < len(args):
         v = args[k].value() or ""
         if v == "--":
@@ -3601,18 +3602,24 @@ def _perl_in_place(args):
             break
         if not v.startswith("-") or v == "-":
             break
-        if v == "-I":
+        if v == "-I":  # `-I dir`: the directory is the option's value, not the script
             k += 2
             continue
         flags = v[1:]
         if not v.startswith("--") and flags[:1] not in ("M", "m", "I", "x", "C", "d", "D"):
             inplace = inplace or "i" in re.split(r"[eE]", flags, 1)[0]
-            if flags[-1:] in ("e", "E"):
-                code = True
+            if flags[-1:] in ("e", "E") and k + 1 < len(args):
+                code.append(args[k + 1])
                 k += 2
                 continue
         k += 1
-    return (args[k:] if code else args[k + 1:]) if inplace else []
+    return inplace, code, args[k:] if code else args[k + 1:]
+
+
+def _perl_in_place(args):
+    """The files `perl -i` edits in place."""
+    inplace, _code, operands = perl_operands(args)
+    return operands if inplace else []
 
 
 _GAWK_VALUES = ("-f", "--file", "-v", "--assign", "-F", "--field-separator", "-i", "--include", "-l", "--load",

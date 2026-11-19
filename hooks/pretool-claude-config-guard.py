@@ -456,27 +456,8 @@ def _site_writes(sp, raw: str, res) -> list:
         return found
 
     if name == 'perl':
-        code, ops, k = [], [], 0
-        while k < len(args):
-            v = vals[k]
-            if v == '--':
-                ops = args[k + 1:]
-                break
-            if not v.startswith('-') or v == '-':
-                ops = args[k:]
-                break
-            if v == '-I':  # `-I dir`: the directory is the option's value, not the script
-                k += 2
-                continue
-            flags = v[1:]
-            if not v.startswith('--') and flags[:1] not in ('M', 'm', 'I', 'x', 'C', 'd', 'D'):
-                if flags[-1:] in ('e', 'E') and k + 1 < len(args):
-                    code.append(args[k + 1])
-                    k += 2
-                    continue
-            k += 1
-        operand_words = ops if code else ops[1:]
-        if any(_PERL_WRITE.search(w.value() or w.text) for w in code):  # perl -i is the parser's
+        _inplace, code, operand_words = sp.perl_operands(args)  # perl -i is the parser's write target
+        if any(_PERL_WRITE.search(w.value() or w.text) for w in code):
             out += [(w.value() or w.text, w) for w in operand_words]
     elif name == 'patch':
         ops = operands(takes=('-p', '-d', '--directory', '-o', '--output', '-i', '--input', '-r',
