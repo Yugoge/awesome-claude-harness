@@ -455,6 +455,7 @@ SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
 NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
+RUNUSER_USER_OPTS = ("-u", "--user")  # runuser: the option naming the user COMMAND runs as
 # node's long options that take a value (`node --help`, v22: the options shown with `=...`;
 # node reads the value attached or as the next word). Read by the git classifier and the
 # runtime guard.
@@ -2706,7 +2707,7 @@ def resolve(cmd, depth=None):
         if name == "runuser" and not _has_c(words):
             # runuser -u USER [--] COMMAND [ARG...] runs COMMAND as USER, with no shell
             opts, rest, err = split_options(words, PEEL["runuser"][0], 1)
-            if rest and any(o in ("-u", "--user") for o, _v in opts):
+            if rest and any(o in RUNUSER_USER_OPTS for o, _v in opts):
                 r.wrappers.append((name, opts))
                 words = rest
                 continue

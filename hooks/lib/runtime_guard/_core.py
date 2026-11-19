@@ -3841,7 +3841,7 @@ def _peel_exec_frontend(toks: list):
     leading_pos = profile.get("leading_positionals", 0)
     consume_user = profile.get("consume_user_positional", False)
     # options that SUPPLY the user (so no leading user positional is expected).
-    _USER_OPTS = frozenset({"-u", "--user"})
+    _USER_OPTS = _sp.RUNUSER_USER_OPTS
     n = len(toks)
     i = head_idx + 1  # consume the front-end head
     consumed_pos = 0
