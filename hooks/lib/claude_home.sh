@@ -156,11 +156,12 @@ resolve_optional_file() {
   return 1
 }
 
-# claude_config_home -- twin of claude_home.py config_home(): the directory of the settings.json the
-# CLI loads from ${CLAUDE_CONFIG_DIR:-$HOME/.claude}, links followed; that directory when it is absent.
+# claude_config_home -- twin of claude_home.py config_home(): ${CLAUDE_CONFIG_DIR:-$HOME/.claude} as
+# written; when its settings.json is a link, the directory that link resolves into.
 claude_config_home() {
   local cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" s
-  if s="$(readlink -e -- "$cfg/settings.json" 2>/dev/null)"; then dirname -- "$s"; else printf '%s\n' "$cfg"; fi
+  if [ -L "$cfg/settings.json" ] && s="$(readlink -e -- "$cfg/settings.json")"; then dirname -- "$s"
+  else printf '%s\n' "$cfg"; fi
 }
 
 # When executed directly (not sourced), act as a tiny CLI so other languages /

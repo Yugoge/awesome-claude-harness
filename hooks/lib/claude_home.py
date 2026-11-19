@@ -232,13 +232,14 @@ def project_dir() -> Path:
 
 
 def config_home() -> Path:
-    """Where harness records that must not split by account live (score log, logs, restart state): the
-    directory of the settings.json Claude Code loads from its configuration directory (CLAUDE_CONFIG_DIR,
-    else ~/.claude), links followed. One home for every account whose settings.json links to it; the
-    configuration directory itself when its settings.json is absent. Shell twin: claude_config_home."""
+    """Where harness records that must not split by configuration directory live (score log, logs,
+    restart state). The configuration directory (CLAUDE_CONFIG_DIR, else ~/.claude) as written; when
+    its settings.json is a link, the directory that link resolves into, so configuration directories
+    linking to one harness home share its records. Shell twin: claude_config_home."""
     config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    settings = config / _SENTINEL_FILE
     try:
-        return (config / _SENTINEL_FILE).resolve(strict=True).parent
+        return settings.resolve(strict=True).parent if settings.is_symlink() else config
     except (OSError, RuntimeError):
         return config
 

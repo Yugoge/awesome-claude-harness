@@ -128,9 +128,9 @@ def _transcript_cwd(sid: str | None) -> Path | None:
     """The working directory a session's own transcript records, or None."""
     if not sid:
         return None
-    from subagent_restart import account_project_roots  # every account's projects/, not only the caller's
+    from subagent_restart import config_projects  # every configuration directory named, not only the caller's
     try:
-        for tp in (t for root in account_project_roots() for t in root.glob(f"*/{sid}.jsonl")):
+        for tp in (t for root in config_projects() for t in root.glob(f"*/{sid}.jsonl")):
             with open(tp, encoding="utf-8", errors="replace") as fh:
                 for _ in range(200):
                     line = fh.readline()

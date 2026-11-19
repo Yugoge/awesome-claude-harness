@@ -88,9 +88,9 @@ def transcript_offsets() -> dict[str, int]:
     nonce" would be satisfiable by history rather than by this probe window.
     """
     out: dict[str, int] = {}
-    from subagent_restart import account_project_roots  # every account's projects/, not only the caller's
+    from subagent_restart import config_projects  # every configuration directory named, not only the caller's
     try:
-        for p in (t for root in account_project_roots() for t in root.rglob("*.jsonl")):
+        for p in (t for root in config_projects() for t in root.rglob("*.jsonl")):
             try:
                 out[str(p)] = p.stat().st_size
             except OSError:

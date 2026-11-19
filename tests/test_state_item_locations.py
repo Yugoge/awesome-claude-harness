@@ -7,9 +7,9 @@ that side follows, cited -- in the environments the audit names, and returns (la
 pairs. The test fails when any pair differs.
 
 Situations, built under tmp_path, nothing outside it is written:
-  a  this machine: harness home H, HOME/.claude -> H, one configuration directory per account whose
+  a  this machine: harness home H, HOME/.claude -> H, one configuration directory per session whose
      settings.json links to HOME/.claude/settings.json; sessions get CLAUDE_CONFIG_DIR, CLAUDE_HOME,
-     TMPDIR/CLAUDE_CODE_TMPDIR (the committed settings) and the overlay's accounts root; the owner's
+     TMPDIR/CLAUDE_CODE_TMPDIR (the committed settings) and the optional CLAUDE_CONFIG_DIRS list; the owner's
      terminal gets HOME and XDG_RUNTIME_DIR only.
   b  default install: HOME/.claude is the harness home, no CLAUDE_CONFIG_DIR.
   c  the same under a non-root user's home; the uid is the runner's.
@@ -73,9 +73,8 @@ class World:
         for s in "bc":
             (self.homes[s] / ".claude").mkdir(parents=True)
             (self.homes[s] / ".claude" / "settings.json").write_text("{}\n")
-        self.accounts = tmp / "a" / "accounts"
-        for acct in ("acct1", "acct2"):
-            cfg = self.accounts / acct / "claude"
+        self.configs = {name: tmp / "a" / f"config-{name}" for name in ("one", "two")}
+        for cfg in self.configs.values():
             (cfg / "projects").mkdir(parents=True)
             (cfg / "settings.json").symlink_to(self.homes["a"] / ".claude" / "settings.json")
 
@@ -83,13 +82,12 @@ class World:
         return {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.homes[s]), "LANG": "C.UTF-8",
                 "PYTHONDONTWRITEBYTECODE": "1", "CLAUDE_STATE_DIR": str(self.state)}
 
-    def session(self, s, acct="acct1", **extra):
+    def session(self, s, cfg="one", **extra):
         env = {**self.base(s), "TMPDIR": str(self.scratch), "CLAUDE_CODE_TMPDIR": str(self.scratch),
                "CLAUDECODE": "1"}
         if s == "a":
-            env.update(CLAUDE_CONFIG_DIR=str(self.accounts / acct / "claude"), CLAUDE_HOME=str(self.harness),
-                       CLAUDE_RESTART_ACCOUNTS_ROOT=str(self.accounts),
-                       WORKFLOW_PRUNE_ACCOUNTS_DIR=str(self.accounts))
+            env.update(CLAUDE_CONFIG_DIR=str(self.configs[cfg]), CLAUDE_HOME=str(self.harness),
+                       CLAUDE_CONFIG_DIRS=os.pathsep.join(str(c) for c in self.configs.values()))
         env.update(extra)
         return {k: v for k, v in env.items() if v is not None}
 
@@ -101,7 +99,7 @@ class World:
         """(label, environment) of every context that writes or reads a per-harness record."""
         out = [(f"{s}/session", self.session(s)), (f"{s}/terminal", self.terminal(s))]
         if s == "a":
-            out.insert(1, ("a/session acct2", self.session("a", "acct2")))
+            out.insert(1, ("a/session config-two", self.session("a", "two")))
         return out
 
 
@@ -133,7 +131,7 @@ def p01(w):
         hook = w.session(s, CLAUDE_PROJECT_DIR=str(project))
         writer = py(script_fn(HOOKS / "prompt-workflow.py", f"ns['workflow_bookmark_path']({SID!r}).parent"),
                     hook, cwd=project)
-        accounts = w.accounts if s == "a" else w.tmp / s / "accounts"
+        accounts = w.tmp / s / "prune-root"  # the pruner's own <dir>/<name>/claude/projects scan
         (accounts / "x" / "claude").mkdir(parents=True, exist_ok=True)
         out = sh(f'bash {SCRIPTS / "prune-orphaned-workflow-bookmarks.sh"!s}',
                  w.session(s, WORKFLOW_PRUNE_ACCOUNTS_DIR=str(accounts)), cwd=project)
@@ -167,12 +165,12 @@ def c04(w):
 
 
 def c01(w):
-    cfg = w.accounts / "acct1" / "claude" / "projects" / "-work"
+    cfg = w.configs["one"] / "projects" / "-work"
     cfg.mkdir(parents=True, exist_ok=True)  # the CLI: <config dir>/projects/<folder>/<session>.jsonl
     (cfg / f"{SID}.jsonl").write_text(json.dumps({"type": "user", "cwd": "/work", "sessionId": SID}) + "\n")
     lookup = script_fn(SCRIPTS / "capability-doctor-strict.py", f"ns['_transcript_cwd']({SID!r})")
     return [(label, "/work", py(lookup, env)) for label, env in
-            (("acct1 session", w.session("a")), ("acct2 session", w.session("a", "acct2")))]
+            (("config-one session", w.session("a")), ("config-two session", w.session("a", "two")))]
 
 
 def t07(w):
@@ -191,7 +189,24 @@ def t07(w):
 
 
 def c13(w):
-    return same_everywhere(w, script_fn(SCRIPTS / "seal-attribution-journal.py", "ns['default_dest']()"))
+    # The sealer's harness tree is this repository: configuration directories whose settings.json links to
+    # its settings.json, and a terminal whose ~/.claude is it.
+    home = w.tmp / "c13-home"
+    home.mkdir()
+    (home / ".claude").symlink_to(REPO)
+    expr = script_fn(SCRIPTS / "seal-attribution-journal.py", "ns['default_dest']()")
+    pairs, first = [], None
+    for name in ("one", "two"):
+        cfg = w.tmp / f"c13-config-{name}"
+        cfg.mkdir()
+        (cfg / "settings.json").symlink_to(home / ".claude" / "settings.json")
+        got = real(py(expr, w.session("a", CLAUDE_CONFIG_DIR=str(cfg), HOME=str(home))))
+        first = first or got
+        pairs.append((f"session config-{name}", first, got))
+    pairs.append(("terminal", first, real(py(expr, w.terminal("a", HOME=str(home))))))
+    for s in "bc":  # a default install: one configuration directory, the harness home
+        pairs.append((f"{s} session vs terminal", py(expr, w.terminal(s)), py(expr, w.session(s))))
+    return pairs
 
 
 def c06(w):
@@ -224,7 +239,7 @@ def s29(w):
 
 
 def c12(w):
-    cfg = w.tmp / "acct-of-repo" / "claude"
+    cfg = w.tmp / "config-of-repo"
     cfg.mkdir(parents=True)
     (cfg / "settings.json").symlink_to(REPO / "settings.json")
     out = subprocess.run([sys.executable, str(SCRIPTS / "harness-switch"), "status"],
@@ -240,15 +255,15 @@ def c03(w):
 
 
 def r2(w):
-    # The configuration directory is per account here: a record the CLI keeps in acct1's directory is still
-    # found by the handshake's transcript snapshot run in an acct2 session.
-    cfg = w.accounts / "acct1" / "claude" / "projects" / "-work"
+    # One configuration directory per session here: a record the CLI keeps in config-one is still found by
+    # the handshake's transcript snapshot run in a config-two session (CLAUDE_CONFIG_DIRS names both).
+    cfg = w.configs["one"] / "projects" / "-work"
     cfg.mkdir(parents=True, exist_ok=True)
     (cfg / f"{SID}.jsonl").write_text("{}\n")
     seen = py(script_fn(SCRIPTS / "capability-handshake.py", "sorted(ns['transcript_offsets']())"),
-              w.session("a", "acct2"))
+              w.session("a", "two"))
     writer = str(cfg / f"{SID}.jsonl")
-    return [("acct2 session", writer, writer if writer in seen else seen)]
+    return [("config-two session", writer, writer if writer in seen else seen)]
 
 
 def s02(w):

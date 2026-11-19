@@ -949,6 +949,16 @@ def account_project_roots() -> list[Path]:
     return roots
 
 
+def config_projects() -> list[Path]:
+    """projects/ of this session's configuration directory, then of each directory CLAUDE_CONFIG_DIRS
+    names (os.pathsep-separated; an optional machine-local setting, absent by default: then only the
+    session's own). A lookup by session id reads these, the only directories it knows of."""
+    named = (os.environ.get("CLAUDE_CONFIG_DIRS")
+             or _settings_env("CLAUDE_CONFIG_DIRS").get("CLAUDE_CONFIG_DIRS") or "")
+    dirs = dict.fromkeys([config_dir()] + [Path(p) for p in named.split(os.pathsep) if os.path.isabs(p)])
+    return [d / "projects" for d in dirs if (d / "projects").is_dir()]
+
+
 DEFAULT_SIBLING_WINDOW_SECONDS = 86400
 
 
