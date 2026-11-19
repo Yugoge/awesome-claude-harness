@@ -8,7 +8,8 @@ started into a stop gate (G2) that demands a file it may not write.
 
 The projects are never created: only paths are judged. The RAM-disk project lies under /dev/shm,
 where a declared path never reaches the derived write permission (its targets drop /dev/ paths)
-and the role rows refuse it; the home project lies under /home, where the same dispatch goes on.
+and the role rows refuse it; the other project lies outside /dev, /tmp and /var/tmp, as one under a
+home path does, and the same dispatch goes on.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 POLICY = ROOT / "hooks" / "pretool-tool-policy.py"
 GATE = ROOT / "hooks" / "pretool-write-gate.py"
 RAM_DISK = "/dev/shm/nonexistent-dispatch-writes/toyproj"
-HOME = "/home/nonexistent-dispatch-writes/toyproj"
+ELSEWHERE = "/nonexistent-dispatch-writes/toyproj"  # outside /dev, /tmp and /var/tmp, as a home path is
 TASK = "20261119-101010"
 REPORT = f"docs/dev/qa-report-{TASK}.json"
 BLOCK = "BLOCKED by tool-policy.v1: "
@@ -86,8 +87,8 @@ def test_the_main_agent_meets_the_refusal_through_the_write_gate(tmp_path):
     assert f"declares {REPORT} for its qa subagent" in proc.stderr
 
 
-def test_the_same_dispatch_under_a_home_path_goes_on(tmp_path):
-    proc = _dispatch(tmp_path, HOME, _prompt("qa", QA_REPORT))
+def test_the_same_dispatch_outside_dev_goes_on(tmp_path):
+    proc = _dispatch(tmp_path, ELSEWHERE, _prompt("qa", QA_REPORT))
     assert proc.returncode == 0, proc.stderr
     assert proc.stderr == ""
 
@@ -110,4 +111,4 @@ def test_every_declared_file_is_asked_and_the_first_refused_one_named(tmp_path):
     proc = _dispatch(tmp_path, RAM_DISK, _prompt("ba", ticket, context), role="ba")
     assert proc.returncode == 2, proc.stderr
     assert f"declares docs/dev/ticket-{TASK}.md for its ba subagent" in proc.stderr
-    assert _dispatch(tmp_path, HOME, _prompt("ba", ticket, context), role="ba").returncode == 0
+    assert _dispatch(tmp_path, ELSEWHERE, _prompt("ba", ticket, context), role="ba").returncode == 0
