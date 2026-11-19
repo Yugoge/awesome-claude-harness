@@ -23,6 +23,7 @@ Layers, bottom up:
 from __future__ import annotations
 
 import bisect
+import importlib.util
 import json
 import os
 import re
@@ -454,7 +455,13 @@ CD_TARGET_BUILTINS = ("cd", "pushd")  # move to the directory their operand name
 CWD_BUILTINS = ("cd", "pushd", "popd")  # change the working directory of what follows
 LOOP_VAR_KINDS = ("for", "select")  # Compound kinds whose header binds a variable to each listed word
 DEFINER_KINDS = ("function", "coproc")  # Compound kinds whose body runs later or apart, not in line
-QUOTE_CHARS = ("'", '"')  # the characters that open a quoted string
+# the characters that open a quoted string: runtime_guard/pathmatch.py's, loaded by path (that leaf
+# imports only the standard library; importing the runtime_guard package would load the guard)
+_PATHMATCH = importlib.util.spec_from_file_location(
+    "_shell_parse_pathmatch", os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_guard", "pathmatch.py"))
+_pathmatch = importlib.util.module_from_spec(_PATHMATCH)
+_PATHMATCH.loader.exec_module(_pathmatch)
+QUOTE_CHARS = _pathmatch.QUOTE_CHARS
 COMMAND_OPTS = ("-c", "--command")  # su, runuser, flock, script: the option whose value is shell code
 ENV_SPLIT_OPTS = ("-S", "--split-string")  # env: the option whose value env splits into the command line
 GIT_RESTORE_SOURCE_OPTS = ("-s", "--source")  # git restore: the tree the files are restored from
