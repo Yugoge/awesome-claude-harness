@@ -204,6 +204,8 @@ _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 
                             'branch', 'tag', 'remote', 'fetch', 'push', 'pull', 'switch',
                             'checkout', 'mv', 'rm', 'init', 'clone', 'version', 'help'))
 _GIT_GLOBAL_VALUE = _sp.GIT_GLOBAL_VALUE_OPTS if _sp is not None else frozenset()  # read by _Scan, which needs _sp
+from lib.git_facts import GIT_CONFIG_READ_OPTIONS as _GIT_CONFIG_READS  # noqa: E402
+from lib.git_facts import GIT_CONFIG_READ_SUBCOMMANDS as _GIT_CONFIG_READ_SUBS  # noqa: E402
 _GH_MESSAGE_SUBS = frozenset(('pr', 'issue', 'release'))
 _RC_FILES = frozenset(('.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_logout',
                        '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.kshrc', '.mkshrc',
@@ -1620,8 +1622,8 @@ class _Scan:
             break
         sub = vals[k] if k < len(vals) else None
         rest = [x for x in vals[k + 1:] if x is not None]
-        if sub == 'config' and not any(r in ('--get', '--get-all', '--list', '-l', '--get-regexp',
-                                             '--show-origin', '--unset') for r in rest):
+        if sub == 'config' and not (any(r in _GIT_CONFIG_READS for r in rest) or rest[:1] and rest[0] in
+                                    _GIT_CONFIG_READ_SUBS):
             self.git_config_written = True  # it may set the pager git grep -O opens
             if any(_mentions(r) for r in rest):
                 self.persist = True

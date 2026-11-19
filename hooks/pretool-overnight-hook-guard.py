@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib import command_span, overnight, shell_parse as sp, stop_contract  # noqa: E402
 from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
+from lib import git_facts  # noqa: E402
 from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES  # noqa: E402
 
 try:  # optional contract runtime + agent resolver for the self_repair grant
@@ -1027,8 +1028,7 @@ def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
 
 
 # `git config` reads and the forms that open, remove or rename (a section of) the config.
-_CONFIG_READ_FLAGS = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color',
-                      '--get-colorbool', '-l', '--list'}
+_CONFIG_READ_FLAGS = git_facts.GIT_CONFIG_READ_OPTIONS
 _CONFIG_SECTION_OPS = {'--remove-section', '--rename-section', 'remove-section', 'rename-section'}
 _CONFIG_EDIT_OPS = {'-e', '--edit', 'edit'}
 _CONFIG_VALUE_OPTS = {'-f', '--file', '--blob', '--type', '--default', '--comment', '--url'}
@@ -1062,8 +1062,7 @@ def _config_key_operand(args: list[str]) -> str:
             skip = True
         elif not a.startswith('-'):
             words.append(a)
-    if words and words[0] in ('set', 'unset', 'get', 'add', 'replace-all', 'unset-all', 'edit', 'list',
-                              'remove-section', 'rename-section'):
+    if words and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS | git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS:
         words = words[1:]
     return words[0] if words else ''
 
@@ -1076,7 +1075,7 @@ def _config_args(inv) -> list[str]:
 def _config_reads(args: list[str]) -> bool:
     opts = args[:args.index('--')] if '--' in args else args
     words = [a for a in opts if not a.startswith('-')]
-    return any(a in _CONFIG_READ_FLAGS for a in opts) or (words[:1] in (['get'], ['list']))
+    return any(a in _CONFIG_READ_FLAGS for a in opts) or (words[:1] and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS)
 
 
 def _config_writes_keystone(inv) -> bool:

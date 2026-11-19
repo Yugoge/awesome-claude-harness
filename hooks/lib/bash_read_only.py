@@ -51,6 +51,7 @@ from shell_parse import (  # noqa: E402
     SimpleCommand, active_parts, parse, resolve, walk, write_targets)
 from shell_parse import GIT_INERT_FLAGS  # noqa: E402
 from git_facts import GIT_LISTING_SUBCOMMANDS, GIT_READ_SUBCOMMANDS  # noqa: E402
+from git_facts import GIT_CONFIG_READ_MODIFIERS, GIT_CONFIG_READ_OPTIONS, GIT_CONFIG_READ_SUBCOMMANDS  # noqa: E402
 sys.path.pop(0)
 
 MAX_COMMAND_LEN = 8192
@@ -271,10 +272,7 @@ _BRANCH_FLAGS = frozenset({"-a", "-r", "-v", "-vv", "--all", "--remotes", "--ver
 _LISTING_VALUED = ("--format=", "--sort=", "--contains=", "--no-contains=", "--merged=", "--no-merged=",
                    "--points-at=")
 _TAG_FLAGS = frozenset({"--no-color", "--color", "--no-column"})
-_CONFIG_FLAGS = frozenset({"--list", "-l", "--get", "--get-all", "--get-regexp", "--show-origin",
-                           "--show-scope", "--global", "--local", "--system", "--worktree", "--null", "-z",
-                           "--name-only", "--includes", "--no-includes", "--bool", "--int", "--path"})
-_CONFIG_READ = frozenset({"--list", "-l", "--get", "--get-all", "--get-regexp"})
+_CONFIG_FLAGS = GIT_CONFIG_READ_OPTIONS | GIT_CONFIG_READ_MODIFIERS
 
 
 def _listing(args, flags, valued, list_flags, count_flag=False) -> bool:
@@ -315,9 +313,9 @@ def _git_sub(sub: str, args) -> bool:
         flags = [a for a in args if a.startswith("-")]
         if not all(a in _CONFIG_FLAGS or a.startswith("--type=") for a in flags):
             return False  # --file, --blob, --add, --unset, --edit, ...
-        if positional and positional[0] in ("get", "list"):
+        if positional and positional[0] in GIT_CONFIG_READ_SUBCOMMANDS:
             return len(positional) <= 3
-        return any(a in _CONFIG_READ for a in flags) and len(positional) <= 2
+        return any(a in GIT_CONFIG_READ_OPTIONS for a in flags) and len(positional) <= 2
     if sub == "stash":
         return bool(positional) and args[0] in ("list", "show")
     if sub == "worktree":

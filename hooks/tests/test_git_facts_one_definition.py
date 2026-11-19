@@ -151,3 +151,36 @@ class TestGitReadSubcommands:
         assert sub in cg._GIT_READS
         assert is_read_only(f"git {sub}")
         assert not hs._read_only(["git", "stash", "push", "--", "f"])
+
+
+class TestGitConfigReadWrite:
+    """git-config-read-write: which `git config` forms read and which write."""
+
+    READS = ["git config --get-urlmatch http https://example.invalid", "git config --get-color color.ui red",
+             "git config --get-colorbool color.ui", "git config --get core.bare", "git config --list",
+             "git config get core.bare", "git config list"]
+    WRITES = ["git config --unset core.pager", "git config --add a.b c", "git config set a.b c",
+              "git config unset a.b", "git config --rename-section a b", "git config --remove-section a"]
+
+    @pytest.mark.parametrize("cmd", READS)
+    def test_reads_agree(self, cmd):
+        from lib.bash_read_only import is_read_only
+        og = _load("pretool-overnight-hook-guard.py")
+        args = cmd.split()[2:]
+        assert is_read_only(cmd)
+        assert og._config_reads(args)
+
+    @pytest.mark.parametrize("cmd", WRITES)
+    def test_writes_agree(self, cmd):
+        from lib.bash_read_only import is_read_only
+        og = _load("pretool-overnight-hook-guard.py")
+        assert not is_read_only(cmd)
+        assert not og._config_reads(cmd.split()[2:])
+
+    def test_unset_is_a_write_for_userintent(self):
+        """userintent counted `--unset` among the reads; it removes a setting (the pager git grep -O opens)."""
+        from lib import git_facts
+        assert "--unset" in git_facts.GIT_CONFIG_WRITE_OPTIONS
+        assert not git_facts.GIT_CONFIG_WRITE_OPTIONS & git_facts.GIT_CONFIG_READ_OPTIONS
+        ui = _load("pretool-wrapper-userintent.py")
+        assert ui._GIT_CONFIG_READS == git_facts.GIT_CONFIG_READ_OPTIONS

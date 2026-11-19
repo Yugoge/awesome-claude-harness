@@ -24,6 +24,7 @@ HOOKS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(o
 LIB = os.path.join(HOOKS, "lib")
 sys.path[:0] = [p for p in (HOOKS, LIB) if p not in sys.path]
 
+from lib import git_facts  # noqa: E402
 from lib.git_facts import GIT_DIR_CONFIG_FILES  # noqa: E402
 from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, GIT_INERT_FLAGS  # noqa: E402
 
@@ -190,10 +191,8 @@ def commit_guard(payload):
     commits, why, cfg, loc, ex = [], [], [], [], {}
     LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer')
     GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
-    CFGW = {'set', 'unset', 'unset-all', 'replace-all', 'add', 'rename-section', 'remove-section'}
-    CFGR = {'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list'}
-    WRF = {'--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section'}
-    RDF = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l'}
+    CFGW, CFGR = git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS, git_facts.GIT_CONFIG_READ_SUBCOMMANDS
+    WRF, RDF = git_facts.GIT_CONFIG_WRITE_OPTIONS, git_facts.GIT_CONFIG_READ_OPTIONS
 
     def prot(k):
         k = k.strip().strip('\'"').lower()
@@ -5116,14 +5115,13 @@ def _dg_git(t, words):
         return all(w in ("-v", "--verbose", "-n", "--push", "--all") for w in rest if w.startswith("-")) and (
             not words_ or words_[0] in ("show", "get-url"))
     if sub == "config":  # reading only, in the old and the subcommand syntax; never set, unset or edit
-        reads = ("-l", "--list", "--get", "--get-all", "--get-regexp", "--show-origin", "--show-scope", "--global",
-                 "--local", "--system", "--name-only", "-z", "--null")
+        reads = git_facts.GIT_CONFIG_READ_OPTIONS | git_facts.GIT_CONFIG_READ_MODIFIERS
         if not all(w in reads for w in rest if w.startswith("-")):
             return False
         ops = [w for w in rest if not w.startswith("-")]
-        if ops and ops[0] in ("get", "list"):  # `git config get KEY`, `git config list`
+        if ops and ops[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS:  # `git config get KEY`, `git config list`
             return len(ops) <= (2 if ops[0] == "get" else 1)
-        if ops and ops[0] in ("set", "unset", "edit", "rename-section", "remove-section"):
+        if ops and ops[0] in git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS:
             return False
         if any(w in ("-l", "--list") for w in rest):
             return not ops

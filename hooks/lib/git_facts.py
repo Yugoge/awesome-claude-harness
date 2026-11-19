@@ -34,3 +34,21 @@ GIT_LISTING_SUBCOMMANDS = frozenset({"branch", "config", "reflog", "remote", "st
 # read the named files into the index and a commit) and reflog (its expire and delete write only
 # under .git). Not stash: `git stash push -- <file>` saves the file and reverts it.
 GIT_KEEPS_NAMED_FILES = GIT_READ_SUBCOMMANDS | {"add", "commit", "reflog"}
+
+# `git config`: the options that read (the old action options) and those that write; the subcommands
+# (git 2.46) that read and those that write. get-all, get-regexp, get-urlmatch, add, replace-all and
+# unset-all are not subcommands: `git config add a.b` reads `add` as a key name and fails.
+GIT_CONFIG_READ_OPTIONS = frozenset({
+    "--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "--list", "-l",
+})
+GIT_CONFIG_WRITE_OPTIONS = frozenset({
+    "--add", "--replace-all", "--unset", "--unset-all", "--rename-section", "--remove-section",
+})
+GIT_CONFIG_READ_SUBCOMMANDS = frozenset({"get", "list"})
+GIT_CONFIG_WRITE_SUBCOMMANDS = frozenset({"set", "unset", "rename-section", "remove-section", "edit"})
+# The options that change only which scope a read looks in or how it prints what it finds.
+GIT_CONFIG_READ_MODIFIERS = frozenset({
+    "--global", "--local", "--system", "--worktree", "--show-origin", "--show-scope", "--null", "-z",
+    "--name-only", "--includes", "--no-includes", "--bool", "--int", "--bool-or-int", "--path",
+    "--expiry-date",
+})
