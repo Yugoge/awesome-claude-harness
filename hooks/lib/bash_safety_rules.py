@@ -509,6 +509,8 @@ def daemon_restart(command, payload, prefix):
         return grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) and grep(re.escape(prefix), command)
 
 
+from lib import bash_read_only as _bash_read_only  # noqa: E402 -- the programs that only read
+
 HTTP_STOP_URL = r"(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):[0-9]+/stop(?![A-Za-z0-9])"
 """A localhost port's stop endpoint: `/stop`, `/stop?x`, `/stop/now`, `/stop-now`, `/stop_server`; never `/stops`
 or `/stopwords`."""
@@ -526,7 +528,7 @@ HTTP_LIBRARIES = r"(http\.client|aiohttp|requests|urllib|httpx|fetch\(|axios|LWP
 HTTP_STOP_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "echo", "printf", "cat", "sed", "git"})
 """Commands that only print the text they are given or read (sed, git and uniq under the checks of _http_reader_ok).
 ag and ack are not readers: their `--pager` runs a command."""
-HTTP_STOP_FILTERS = frozenset({"head", "tail", "wc", "cut", "tr", "uniq", "nl", "column", "jq"})
+HTTP_STOP_FILTERS = _bash_read_only.FILTERS  # the one list of text filters (lib/bash_read_only.py)
 HTTP_STOP_CONTEXTS = frozenset({"top", "cmdsub", "backtick"})
 
 
@@ -614,6 +616,8 @@ def _http_reader_ok(site, r):
             and not (args[0] == "grep" and any(_git_grep_pager(a) for a in args[1:]))
     if name == "uniq":
         return _uniq_operands(args) < 2
+    if name == "sort":
+        return _bash_read_only.reads_only("sort", args)  # not -o, not --compress-program
     if name == "sed":
         quiet, scripts, operands, take = False, [], [], False
         for a in args:

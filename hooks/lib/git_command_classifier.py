@@ -60,8 +60,9 @@ import shlex
 import sys
 
 try:
-    from lib import shell_parse
+    from lib import bash_read_only, shell_parse
 except ImportError:  # run as a script: hooks/lib is on sys.path
+    import bash_read_only
     import shell_parse
 
 # One table each, in the parser.
@@ -721,9 +722,7 @@ _RG_PROGRAM_OPTS = shell_parse.RG_RUN_OPTS
 # absent: LESSOPEN and LESSCLOSE name an input preprocessor (`|-sh %s` runs
 # what it reads), and they may come from the inherited environment, which the
 # command line cannot show.
-_STDIN_CONSUMERS = frozenset({
-    'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'column', 'nl',
-})
+_STDIN_CONSUMERS = bash_read_only.FILTERS  # the one list of text filters
 
 
 def _long_opt_named(value, names):

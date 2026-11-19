@@ -435,6 +435,11 @@ ANY_ARGS = frozenset({
     ":", "od", "hexdump", "strings", "b2sum", "sha224sum", "sha384sum", "sum", "fmt", "jq", "type", "whereis",
 })
 
+# FILTERS: the readers that read standard input (or their files) as text and print a transform of it,
+# never reading it as code; sort and uniq among them read only in the forms their CHECKED entry admits
+# (sort --compress-program hands its input to a program, uniq IN OUT writes OUT).
+FILTERS = frozenset({"head", "tail", "wc", "cut", "tr", "nl", "column", "jq", "sort", "uniq"})
+
 # CHECKED: programs that read in some forms and write a file or run a program in
 # others (sort -o, uniq IN OUT, find -delete, rg --pre, sed w, awk system(), xxd IN
 # OUT, file -C, git ...). The bare name is in neither list: a call is a read only
