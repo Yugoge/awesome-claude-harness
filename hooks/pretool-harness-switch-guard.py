@@ -79,11 +79,14 @@ TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
 TAGGED = r"<command-name>/?harness</command-name>"  # the other form scripts/harness-switch reads (parse_prompt)
 PROMPT = re.compile(TYPED.pattern + "|" + TAGGED, re.M)  # a prompt that types /harness, anywhere in it
-WHOLE = re.compile(r"\s*(?:/harness(?:\s|\Z)|(?:<command-message>.*?</command-message>\s*)?" + TAGGED + ")", re.S)
-# The CLI's own tools whose input reaches no session as a prompt: they read, search, ask the owner or
-# keep this session's list. Any other tool may deliver its text to a session (check_prompt).
-NO_PROMPT = frozenset({"Read", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite", "AskUserQuestion",
-                       "ExitPlanMode"})
+WHOLE = re.compile(r"\s*(?:/harness(?:\s+\S+)?|(?:<command-message>.*?</command-message>\s*)?" + TAGGED + r".*)\s*",
+                   re.S)  # a prompt that is the command, as scripts/harness-switch acts on one
+# The CLI's own tools whose input reaches no session as a prompt: they read or search, keep the caller's own
+# lists and background tasks, or go to the owner; a Monitor's command meets the Bash rule
+# (hooks/pretool-monitor-command.py). Any other tool may deliver its text to a session (check_prompt).
+NO_PROMPT = frozenset({"Read", "Glob", "Grep", "WebFetch", "WebSearch", "ToolSearch", "TodoWrite", "TodoRead",
+                       "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "BashOutput", "TaskStop",
+                       "KillShell", "AskUserQuestion", "PushNotification", "ExitPlanMode", "Monitor"})
 SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
 NAMES_SETTINGS = re.compile(r"(?:^|[/'\"=>])" + SETTINGS_ANY.pattern + r"(?![\w-])")  # a word that names one
 PROTECTED = ("env", "hooks", "disableAllHooks", "permissions")  # a settings file's keys that switch hooks
@@ -542,7 +545,7 @@ def main() -> int:
     if tool in ("Skill", "SlashCommand"):
         return check_skill(tool, ti)
     if tool in ("Agent", "Task"):
-        return check_prompt(tool, ti, WHOLE.match)
+        return check_prompt(tool, ti, WHOLE.fullmatch)
     return 0 if tool in NO_PROMPT else check_prompt(tool, ti)
 
 
