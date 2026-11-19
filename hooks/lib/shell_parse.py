@@ -430,6 +430,7 @@ LOOP_VAR_KINDS = ("for", "select")  # Compound kinds whose header binds a variab
 DEFINER_KINDS = ("function", "coproc")  # Compound kinds whose body runs later or apart, not in line
 QUOTE_CHARS = ("'", '"')  # the characters that open a quoted string
 COMMAND_OPTS = ("-c", "--command")  # su, runuser, flock, script: the option whose value is shell code
+ENV_SPLIT_OPTS = ("-S", "--split-string")  # env: the option whose value env splits into the command line
 
 
 def _match_pair(t, i, opener, closer):
@@ -2494,10 +2495,10 @@ def resolve(cmd, depth=None):
                 if _ASSIGN_RE.match(rest[0].value()):
                     r.assignments = r.assignments + (Assignment(rest[0]),)
                 rest = rest[1:]
-            split = [v for o, v in opts if o in ("-S", "--split-string")]
+            split = [v for o, v in opts if o in ENV_SPLIT_OPTS]
             if not split and rest and rest[0].value() is None:
                 for j in range(1, len(rest) - 1):
-                    if rest[j].value() in ("-S", "--split-string"):
+                    if rest[j].value() in ENV_SPLIT_OPTS:
                         split = [rest[j + 1]]
                         r.unresolved = "computed-env-option"
                         rest = rest[j + 2:]
