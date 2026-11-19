@@ -26,8 +26,10 @@ def test_module_identity():
 # ── frozenset vocabularies: type + known members ─────────────────────────────
 
 def test_pkg_managers():
-    assert isinstance(constants.PKG_MANAGERS, frozenset)
-    assert {"yarn", "npm", "pnpm", "bun"} <= constants.PKG_MANAGERS
+    # the node package managers are one table in shell_parse, read by the guard
+    from lib.runtime_guard import _core
+    assert isinstance(_core.PKG_MANAGERS, frozenset)
+    assert {"yarn", "npm", "pnpm", "bun"} <= _core.PKG_MANAGERS
 
 
 def test_runtimes():

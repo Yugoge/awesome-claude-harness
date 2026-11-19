@@ -102,6 +102,11 @@ CASES = [
     ("wrapper-option-specs", "systemd-run -H V {}", ("gp", "bs", "tp")),
     ("wrapper-option-specs", "sudo -U V {}", ("gp", "bs", "tp")),
     ("privilege-wrappers", "runuser -u root -- {}", ("gp", "bs", "tp")),
+    ("pm-exec-runners", "npx -c '{}'", ("gp", "bs", "tp", "hs")),
+    ("pm-exec-runners", "pnpx -c '{}'", ("gp", "bs", "tp", "hs")),
+    ("pm-exec-runners", "npm exec -c '{}'", ("gp", "bs", "tp", "hs")),
+    ("pm-exec-runners", "pnpm dlx -c '{}'", ("gp", "bs", "tp", "hs")),
+    ("pm-exec-runners", "npm exec -- {}", ("gp", "bs", "tp", "hs")),
     ("opaque-runners", "script -c '{}'", ("gp", "bs", "tp", "hs")),
     ("opaque-runners", "sg root '{}'", ("gp", "bs", "tp", "hs")),
     # the git classifier's hidden-code reading knows the interpreters its _INTERPRETERS knows

@@ -1572,14 +1572,9 @@
    "sides": [
     [
      {
-      "name": "_pm_global_args:in",
+      "name": "<module>.PM_CALL_OPTS",
       "fingerprint": "1d20b55c6355c5bd",
-      "at": "hooks/lib/runtime_guard/_core.py:2876"
-     },
-     {
-      "name": "_runner_call_payloads:in",
-      "fingerprint": "1d20b55c6355c5bd",
-      "at": "hooks/lib/runtime_guard/_core.py:3790"
+      "at": "hooks/lib/shell_parse.py:464"
      }
     ],
     [
@@ -2630,9 +2625,9 @@
     ],
     [
      {
-      "name": "_peel_exec_frontend._USER_OPTS",
+      "name": "<module>.RUNUSER_USER_OPTS",
       "fingerprint": "3146bf8f288336af",
-      "at": "hooks/lib/runtime_guard/_core.py:3843"
+      "at": "hooks/lib/shell_parse.py:458"
      }
     ]
    ]
@@ -3088,7 +3083,7 @@
   {
    "id": "package-managers",
    "source": "defs-shell lane, audit f199dfb1e family package-managers (undecided)",
-   "reason": "runtime_guard._PM_AT_VERSION_RE names the package managers corepack proxies (corepack yarn|pnpm|npm[@version]; corepack has no bun shim), constants.PKG_MANAGERS the node package managers the runtime guard reads, bun included.",
+   "reason": "runtime_guard._PM_AT_VERSION_RE names the package managers corepack proxies (corepack yarn|pnpm|npm[@version]; corepack has no bun shim), shell_parse.NODE_PKG_MANAGERS the node package managers the runtime guard reads, bun included.",
    "sides": [
     [
      {
@@ -3099,9 +3094,9 @@
     ],
     [
      {
-      "name": "<module>.PKG_MANAGERS",
+      "name": "<module>.NODE_PKG_MANAGERS",
       "fingerprint": "44c99a4901e66f30",
-      "at": "hooks/lib/runtime_guard/constants.py:11"
+      "at": "hooks/lib/shell_parse.py:461"
      }
     ]
    ]

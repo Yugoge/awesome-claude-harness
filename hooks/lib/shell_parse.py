@@ -456,6 +456,12 @@ DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # 
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
 NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
 RUNUSER_USER_OPTS = ("-u", "--user")  # runuser: the option naming the user COMMAND runs as
+# Package runners (pnpx is `pnpm dlx`) and the package-manager subcommands that run another
+# command: their argv after `--`, and npm's `-c` / `--call` string, is a nested invocation.
+NODE_PKG_MANAGERS = frozenset({"yarn", "npm", "pnpm", "bun"})  # the node package managers
+PM_EXEC_RUNNERS = frozenset({"npx", "pnpx", "bunx"})
+PM_EXEC_SUBCMDS = frozenset({"exec", "x", "dlx"})
+PM_CALL_OPTS = ("-c", "--call")  # npm exec / npx: the option whose value is a shell command
 # node's long options that take a value (`node --help`, v22: the options shown with `=...`;
 # node reads the value attached or as the next word). Read by the git classifier and the
 # runtime guard.
@@ -2687,6 +2693,20 @@ def resolve(cmd, depth=None):
             return r
         if name == "find":
             return _resolve_find(r, head, words, cmd, depth)
+        if name in PM_EXEC_RUNNERS or (name in NODE_PKG_MANAGERS and len(words) > 1
+                                       and words[1].value() in PM_EXEC_SUBCMDS):
+            tail = words[1 if name in PM_EXEC_RUNNERS else 2:]
+            vals = [w.value() for w in tail]
+            call = next((k for k, v in enumerate(vals) if v in PM_CALL_OPTS), None)
+            if call is not None and call + 1 < len(tail):
+                r.head = head
+                r.args = tuple(words[1:])
+                _set_payload(r, [tail[call + 1]], "shell_c", depth, "pm_call_dynamic")
+                return r
+            if "--" in vals:
+                r.wrappers.append((name, []))
+                words = tail[vals.index("--") + 1:]
+                continue
         if name == "sg":
             # sg [-] GROUP [-c] COMMAND: /bin/sh -c COMMAND with GROUP as the group
             ops = [w for w in words[1:] if w.value() not in ("-", "-c")]

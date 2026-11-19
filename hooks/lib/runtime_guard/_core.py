@@ -66,7 +66,6 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
-        PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
         SERVICE_VERBS,
@@ -85,7 +84,6 @@ except ImportError:  # executed as a top-level script (no package context)
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
-        PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
         SERVICE_VERBS,
@@ -2624,10 +2622,9 @@ _WRAPPER_OPTS_WITH_ARG = {name: frozenset((_sp.WRAPPERS.get(name) or _sp.PEEL[na
 # not mistaken for the value, and a value is not mistaken for the script): node's
 # (shell_parse.NODE_VALUE_OPTIONS and the short -r, -C) and tsx's --tsconfig.
 _RUNTIME_OPTS_WITH_ARG = _sp.NODE_VALUE_OPTIONS | {"-r", "-C", "--tsconfig"}
-_PM_EXEC_SUBCMDS = frozenset({"exec", "x", "dlx"})
-"""Package-manager subcommands that run another command: their argv after `--`
-(and npm's `-c` / `--call` string) is a nested invocation, not a script's args."""
-_PM_EXEC_RUNNERS = frozenset({"npx", "pnpx", "bunx"})
+PKG_MANAGERS = _sp.NODE_PKG_MANAGERS
+_PM_EXEC_SUBCMDS = _sp.PM_EXEC_SUBCMDS
+_PM_EXEC_RUNNERS = _sp.PM_EXEC_RUNNERS
 _PM_RUN_SUBCMDS = ("run", "run-script")  # the subcommands that run a package.json script
 _PM_SUBCMDS = frozenset({
     "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add",
@@ -2874,7 +2871,7 @@ def _pm_global_args(args: list, depth: int = 0, pm: Optional[str] = None) -> boo
             k = next((j for j, t in enumerate(head) if t in _PM_EXEC_SUBCMDS or t == "run"), None)
             if k is not None:
                 nested = head[k + 1:] + nested
-        calls = [args[i + 1] for i, t in enumerate(args[:-1]) if t in ("-c", "--call")]
+        calls = [args[i + 1] for i, t in enumerate(args[:-1]) if t in _sp.PM_CALL_OPTS]
         calls += [t.split("=", 1)[1] for t in args if t.startswith(("--call=", "-c="))]
         if _pm_nested_global(nested, depth) or any(_pm_nested_global(_safe_shlex(c), depth + 1) for c in calls):
             return True
@@ -3788,7 +3785,7 @@ def _runner_call_payloads(simple_cmds: list, cfg: Optional[dict] = None,
         i = 0
         while i < len(runner_args):
             t = runner_args[i]
-            if t in ("-c", "--call") and i + 1 < len(runner_args):
+            if t in _sp.PM_CALL_OPTS and i + 1 < len(runner_args):
                 payloads.append((_strip_quotes(runner_args[i + 1]), cwd, cwd_det))
                 i += 2
                 continue

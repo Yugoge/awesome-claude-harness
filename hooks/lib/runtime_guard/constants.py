@@ -8,7 +8,6 @@ ZERO project identifiers.
 """
 
 # ── Generic verb / keyword vocabularies (no project names) ───────────────────
-PKG_MANAGERS = frozenset({"yarn", "npm", "pnpm", "bun"})
 # Generic command wrappers that prefix the real command. After consuming a
 # wrapper (and its own operands) the real command word follows. Includes
 # process-handoff wrappers (setsid/systemd-run/daemonize) so a launch through
