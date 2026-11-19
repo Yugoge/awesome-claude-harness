@@ -31,16 +31,12 @@ fi
 GIT_DIR="${GIT_CHECKPOINT_DIR:-$GIT_DIR}"
 
 # Build git command for counting only (no commit is issued here; the lib handles commits)
-if [ -n "$GIT_DIR" ]; then
-  GIT_CMD="git -C $GIT_DIR"
-else
-  GIT_CMD="git"
-fi
+if [ -n "$GIT_DIR" ]; then GIT_CMD=(git -C "$GIT_DIR"); else GIT_CMD=(git); fi
 
 # Count changes (threshold gating)
-STAGED=$($GIT_CMD diff --cached --name-only 2>/dev/null | wc -l)
-MODIFIED=$($GIT_CMD diff --name-only 2>/dev/null | wc -l)
-UNTRACKED=$($GIT_CMD ls-files --others --exclude-standard 2>/dev/null | wc -l)
+STAGED=$("${GIT_CMD[@]}" diff --cached --name-only 2>/dev/null | wc -l)
+MODIFIED=$("${GIT_CMD[@]}" diff --name-only 2>/dev/null | wc -l)
+UNTRACKED=$("${GIT_CMD[@]}" ls-files --others --exclude-standard 2>/dev/null | wc -l)
 TOTAL=$((STAGED + MODIFIED + UNTRACKED))
 
 # Exit if no changes
