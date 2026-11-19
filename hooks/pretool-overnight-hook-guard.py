@@ -541,7 +541,7 @@ class _Read:
         self.script = sp.parse(command)
         self.unreadable = bool(self.script.errors())
         self.resolved = [(site, sp.resolve(site.cmd)) for site in sp.walk(self.script)]
-        self.targets = sp.write_targets(self.script, env=env)
+        self.targets = sp.write_targets(self.script, env=env, raw=command)
 
 
 @functools.lru_cache(maxsize=8)
@@ -595,8 +595,8 @@ def _target_text(t) -> str:
 def _bash_write_paths(command: str, skip=frozenset()) -> list[str]:
     """The path of each file the command writes or creates (a deletion is not one), first seen order.
     ``skip`` holds the ids of target words not to report."""
-    found = (_target_text(t) for t in _read(command).targets
-             if t.mode != sp.DELETE and id(t.word) not in skip)
+    found = (p for t in _read(command).targets if t.mode != sp.DELETE and id(t.word) not in skip
+             for p in t.placed(_target_text(t)))  # at each directory a `cd` before it may have left
     return list(dict.fromkeys(p for p in found if p))
 
 
