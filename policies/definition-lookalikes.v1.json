@@ -2,8 +2,8 @@
  "version": 1,
  "description": "Definitions of hooks/ and scripts/ that look alike and are allowed to coexist because they answer different questions. Read by tests/defs_registry (python3 -m tests.defs_registry), which groups every literal definition by the sameness rule of tests/defs_registry/check.py and fails on a group the register does not split. Each entry: a reason (required) and two or more sides; the definitions of one side answer one question, so two copies on one side are still a duplicate. A definition is identified by its scope-qualified name and the fingerprint of its sorted members (sha256, 16 hex), never by file or line; `at` is where it was when registered. Seeded from the duplicate-definition audit of f199dfb1e: its 61 different-questions families (sides = the distinct member sets of the family) and its ruled-out look-alike pairs (sides = the named definitions).",
  "ceiling": {
-  "uncovered_groups": 198,
-  "definitions_in_uncovered_groups": 638,
+  "uncovered_groups": 195,
+  "definitions_in_uncovered_groups": 632,
   "note": "tests/defs_registry/test_defs_registry.py fails when this tree has more uncovered groups, or more definitions in them, than this; lower it as merges land, never raise it to admit a new copy. The goal is 0 and 0."
  },
  "entries": [
@@ -2997,6 +2997,69 @@
       "name": "<module>.SKIP_NAMES",
       "fingerprint": "f94d8ec4d2a7cbda",
       "at": "hooks/doc_sync/regen_readme.py:45"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "lane-glob-negation",
+   "source": "lane defs-registry reading",
+   "reason": "One asks whether a bracket expression of a shell glob is negated ([!...] or [^...]); the other whether a git pathspec's short magic excludes (:! or :^); two syntaxes that happen to share the characters.",
+   "sides": [
+    [
+     {
+      "name": "_glob_to_regex:in",
+      "fingerprint": "2d9c13bc02cdb7bc",
+      "at": "hooks/lib/bash_execution_boundary.py:1017"
+     }
+    ],
+    [
+     {
+      "name": "_sd_pattern_hits:in",
+      "fingerprint": "2d9c13bc02cdb7bc",
+      "at": "hooks/lib/bash_safety_rules.py:6875"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "lane-readme-regions-vs-prompt-dirs",
+   "source": "lane defs-registry reading",
+   "reason": "DOC_REGIONS['readme'] names the README hero regions (called after the folders they count); the size-ratchet pattern recognises prompt files under commands/ and agents/.",
+   "sides": [
+    [
+     {
+      "name": "<module>.DOC_REGIONS[readme]",
+      "fingerprint": "593a7b6cebd42862",
+      "at": "scripts/generate-hero-status.py:130"
+     }
+    ],
+    [
+     {
+      "name": "<module>:re",
+      "fingerprint": "593a7b6cebd42862",
+      "at": "scripts/size-ratchet.py:25"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "lane-status-doc-regions-vs-claims",
+   "source": "lane defs-registry reading",
+   "reason": "DOC_REGIONS['status'] is every region docs/status.md holds, proof included; CLAIM_REGIONS the regions that hold claims.",
+   "sides": [
+    [
+     {
+      "name": "<module>.CLAIM_REGIONS",
+      "fingerprint": "7e1532c8158e34aa",
+      "at": "scripts/generate-hero-status.py:124"
+     }
+    ],
+    [
+     {
+      "name": "<module>.DOC_REGIONS[status]",
+      "fingerprint": "1370eaf2a00f8342",
+      "at": "scripts/generate-hero-status.py:130"
      }
     ]
    ]
