@@ -1726,10 +1726,10 @@ class _ConsentView:
     def made(self, p):
         """The path `$(mktemp [-d] TEMPLATE)` prints, written as its template: mktemp makes that name new, below the
         template's directory, so it is never the state directory itself. None for any other substitution."""
-        cmds = list(self.sp.walk(p.body)) if p.body is not None and p.body.error is None else []
-        vals = [w.value() for w in cmds[0].cmd.words] if len(cmds) == 1 and not cmds[0].cmd.redirects else [None]
+        cmds = [s.cmd for s in self.sp.walk(p.body)] if p.body is not None and p.body.error is None else []
+        vals = [w.value() for w in cmds[0].words] if len(cmds) == 1 and not (cmds[0].redirects or cmds[0].assignments) else []
         ops = [v for v in vals[1:] if v not in ("-d", "-q", "--directory", "--quiet")]
-        return ops[0] if vals[0] == "mktemp" and None not in vals and len(ops) == 1 and ops[0][:1] != "-" else None
+        return ops[0] if vals[:1] == ["mktemp"] and None not in vals and len(ops) == 1 and ops[0][:1] not in ("-", "") else None
 
     def marks_state(self, text):
         """Does computed source text (a substitution's body, a read's input) point at the state directory?"""
@@ -4078,6 +4078,7 @@ def sensitive_redirect(command):
     from lib.sensitive_names import (RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_code_or_doc_operand,
                                      is_sensitive_name)
     try:
+        from lib.bash_read_only import is_read_only
         from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
         script = parse(command)
         if script.error is not None:
@@ -4102,9 +4103,9 @@ def sensitive_redirect(command):
             network = name in _NETWORK_CLIENTS
             writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
                                               if network else (False, False, {}))
-            if not network and all(r.target.value() == "/dev/null" for r in outputs) \
-                    and any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs):
-                outputs = []  # standard output thrown away and no other file opened: what it reads lands in no file
+            if any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs) and tuple(site.context) == ("top",) \
+                    and is_read_only(command[slice(*site.cmd.span)]):
+                outputs = []  # lib/bash_read_only.py's reader, its output thrown into /dev/null: what it reads lands nowhere
             if not outputs and network and writes:
                 # A client writing its own output file reads a `file:` URL into it (curl file:///.env -o /tmp/y).
                 if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
@@ -4187,7 +4188,7 @@ class ServiceView:
 
     def __init__(self, command, cwd=None):
         self.raw, self.sites, self.code, self.runners, self.redirect_sites = False, [], [], [], []
-        self.exec_redirects, self.plain, self.command, self.digits = [], False, command, {}
+        self.exec_redirects, self.plain, self.command, self.sets = [], False, command, {}
         self.cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
         try:
             from lib.shell_parse import _AssignScope, parse, resolve, walk
@@ -4202,8 +4203,8 @@ class ServiceView:
                 nested = nested or tuple(site.context) != ("top",)
                 self.redirect_sites.append(site)
                 if not site.cmd.words and tuple(site.context) == ("top",) and scope.certain(site, site.cmd):
-                    self.digits.update((a.name, a.word.span[0]) for a in site.cmd.assignments
-                                       if re.fullmatch("[0-9]+", a.static_value() or "") and not a.append)
+                    self.sets.update((a.name, (a.word.span[0], a.static_value())) for a in site.cmd.assignments
+                                     if a.static_value() and not a.append)
                 if [w.value() for w in site.cmd.words] == ["exec"]:
                     self.exec_redirects.extend(site.cmd.redirects)  # they hold for every later command
                 name = r.name
@@ -4228,6 +4229,17 @@ class ServiceView:
 
     def named(self, *names):
         return [(n, a, s, r) for n, a, s, r in self.sites if n in names]
+
+    def set_once(self, word, at, rx):
+        """True for a word that ends in one bare `$name` (or `${name}`) whose name the command sets once, to a static
+        value `rx` matches whole, unconditionally and before offset `at`, and names nowhere else but as `$name`, and
+        which sources and evals nothing: nothing else can have set it."""
+        p = word.parts[-1]
+        n = re.escape(p.text)
+        where, value = self.sets.get(p.text, (at, "")) if p.kind == "param" else (at, "")
+        return where < at and re.fullmatch(rx, value) is not None and not self.named("source", ".", "eval") \
+            and len(re.findall(rf"(?<![A-Za-z0-9_]){n}(?![A-Za-z0-9_])", self.command)) \
+            == 1 + len(re.findall(rf"\$(?:{n}(?![A-Za-z0-9_])|\{{{n}\}})", self.command))
 
     def without(self, view, name, whole):
         """`view` without the `name` commands the command-position reading reads whole (`whole(cmd, self)`): the
@@ -4398,26 +4410,24 @@ def _plain_kill_args(words):
 
 
 def _dd_whole(cmd, sv):
-    """dd that only reads: every word is one of its own operands as written (`if=$F` too) and none is of=, so its
-    output goes to standard output alone (a pipe, or the plain redirection `without` asks for)."""
-    return all(t.startswith(_DD_OPERANDS) and not t.startswith("of=") for t in (w.value() or w.text for w in cmd.words[1:]))
+    """dd that only reads: every word is one of its own operands and none is of=, so its output goes to standard
+    output alone (a pipe, or the plain redirection `without` asks for). A word is static, or an operand name and one
+    `$name` the command sets once to a plain path (ServiceView.set_once), which no splitting turns into an of=."""
+    return all(w.static_prefix().startswith(_DD_OPERANDS) and not w.static_prefix().startswith("of=") and (
+        w.value() is not None or len(w.parts) == 2 and sv.set_once(w, cmd.span[0], "[A-Za-z0-9_.,:+@%/-]+"))
+        for w in cmd.words[1:])
 
 
 def _kill_probe(cmd, sv):
     """The liveness probe, which sends no signal: `kill -0` and then only PIDs, as literal words that are no option,
-    one double-quoted bare parameter, or one bare parameter the command sets once to digits, unconditionally and
-    earlier, and names nowhere else but as `$name` (nothing else can have set it, and digits split into digits,
-    never into `-s SIG`)."""
+    one double-quoted bare parameter, or one `$name` alone that the command sets once to digits
+    (ServiceView.set_once: digits split into digits, never into `-s SIG`)."""
     rest = cmd.words[2:]
     if not rest or [w.value() if _plain_word(w) else None for w in cmd.words[:2]] != ["kill", "-0"] \
             or any((w.value() or w.text).startswith("-") for w in rest):
         return False
-    name = rest[0].parts[0].text if len(rest) == 1 and [p.kind for p in rest[0].parts] == ["param"] else ""
-    n = re.escape(name)
-    return _plain_kill_args(rest) or (
-        sv.digits.get(name, cmd.span[0]) < cmd.span[0] and not rest[0].substitutions()
-        and len(re.findall(rf"(?<![A-Za-z0-9_]){n}(?![A-Za-z0-9_])", sv.command))
-        == 1 + len(re.findall(rf"\$(?:{n}(?![A-Za-z0-9_])|\{{{n}\}})", sv.command)))
+    return _plain_kill_args(rest) or (len(rest) == 1 and len(rest[0].parts) == 1
+                                      and sv.set_once(rest[0], cmd.span[0], "[0-9]+"))
 
 
 def _plain_script(script, sv):

@@ -134,6 +134,7 @@ SIGNALS = [
     ("false && pid=4242; if kill -0 $pid; then echo alive; fi", KILL_SIG),
     ("pid=4242; if kill -0 $pid 4343; then echo alive; fi", KILL_SIG),
     ("pid=-9; if kill -0 $pid 4242; then echo alive; fi", KILL_SIG),
+    ("pid=4242; source ./env.sh; while kill -0 $pid; do sleep 1; done", KILL_SIG),   # a sourced file may set it
     ("x=$(kill -0 4242 && kill -9 4242)", KILL_SIG),
     ("if kill -0 4242 > /etc/hosts; then echo alive; fi", KILL_SIG),   # no plain redirection: read as before
     ("uv run kill -0 4242; npx kill -9 4242", KILL_SIG),
@@ -146,7 +147,7 @@ SIGNALS = [
     # the three real kills recorded beside the probes
     ('kill 4242; sleep 1; ps aux | grep "[r]un_reconcile.py" | wc -l; tail -c 300 /srv/work/live_run.out', KILL_PID),
     ("kill 4242; sleep 2; cd /srv/work/frontend; tail -3 /srv/work/next-start.log", KILL_PID),
-    ('pkill -f "next dev -p 18111" ; sleep 1; tail -5 /srv/work/next-build.log | cut -c1-200', RUNTIME_GUARD),
+    ('pkill -f "next dev -p 3000" ; sleep 1; tail -5 /srv/work/next-build.log | cut -c1-200', RUNTIME_GUARD),
 ]
 
 
@@ -234,7 +235,8 @@ DISK = "Destructive disk operation"
 DD_READS = [
     "F=/var/log/app.log\n" + "\n".join(
         f"dd if=$F bs=1M skip={n} count=1 status=none | sed -n '2p' | cut -c1-110" for n in (500, 1000, 2000)),
-    "for n in 1 2; do\ndd if=/var/log/app.log bs=1M skip=$n count=1 status=none | wc -c\ndone",
+    'F=/var/log/app.log\ndd if="$F" bs=1M skip=8 count=1 status=none | wc -c',
+    "echo sample\ndd if=/var/log/app.log bs=1M skip=8 count=1 status=none | cut -c1-110",
 ]
 
 
@@ -254,6 +256,12 @@ DD_WRITES = [
     "F=/var/log/app.log\ndd if=$F status=none | sudo dd of=/dev/sda",
     "dd if=/var/log/app.log status=none | head -c 10; mkfs.ext4 /dev/sdb1",
     "exec 3>/dev/sda; dd if=/dev/zero of=/dev/fd/3 status=none | cat",
+    # an operand the command does not set once to a plain path may split into an of=: read as before
+    "read F\ndd if=$F bs=1M count=1 status=none | wc -c",
+    'F="/var/log/app.log of=/dev/sda"\ndd if=$F bs=1M count=1 status=none | wc -c',
+    "F=/var/log/app.log; F=$(cat name.txt)\ndd if=$F bs=1M count=1 status=none | wc -c",
+    "F=/var/log/app.log\nsource ./env.sh\ndd if=$F bs=1M count=1 status=none | wc -c",
+    "for n in 1 2; do\ndd if=/var/log/app.log bs=1M skip=$n count=1 status=none | wc -c\ndone",
     # a dd that writes a file is not the reading dd: the whole-command reading refuses it as before
     "F=/var/log/app.log\ndd if=$F of=/etc/hosts bs=1M count=1",
     "F=/var/log/app.log\ndd if=$F bs=1M count=1 status=none > /etc/hosts",
@@ -268,8 +276,8 @@ def test_a_destructive_dd_is_still_refused_in_the_same_shape(sandbox, command):
 
 
 # ── A sensitive name whose reader writes no file ─────────────────────────────
-# 1 of 2 recorded refusals: `ls <dir>/.env >/dev/null 2>&1 && echo exists`. Standard output thrown into /dev/null,
-# with no other file opened, puts what the command reads in no file.
+# 1 of 2 recorded refusals: `ls <dir>/.env >/dev/null 2>&1 && echo exists`. A command hooks/lib/bash_read_only.py
+# proves a reader, its standard output thrown into /dev/null, puts what it reads in no file.
 SENSITIVE_READ = "Attempting to redirect from/to sensitive file via Bash"
 SENSITIVE_WRITE = "Attempting to write to sensitive file via Bash"
 
@@ -292,6 +300,12 @@ def test_a_command_whose_output_is_thrown_away_names_a_secret_file_freely(sandbo
     ("ls /srv/app >/dev/null 2>&1 && echo KEY=1 > /srv/app/.env", SENSITIVE_WRITE),
     ("echo KEY=1 > /srv/app/.env 2>/dev/null", SENSITIVE_WRITE),
     ("tee /srv/app/.env < x.txt > /dev/null", SENSITIVE_WRITE),
+    # a program that can write a file of its own is no proven reader, whatever its standard output does
+    ("tee /srv/work/copy.txt < /srv/app/.env > /dev/null", SENSITIVE_READ),
+    ("sed -n 'w /srv/work/copy.txt' /srv/app/.env > /dev/null", SENSITIVE_READ),
+    ("python3 keep.py /srv/app/.env > /dev/null", SENSITIVE_READ),
+    ("sort < /srv/app/secrets.yaml > /dev/null", SENSITIVE_READ),
+    ('bash -c "cat /srv/app/.env > /dev/null"', SENSITIVE_READ),      # not at the top level: read as before
 ])
 def test_a_write_or_a_kept_read_of_a_secret_file_is_still_refused(sandbox, command, label):
     r = bash_safety(sandbox, command)
@@ -357,6 +371,7 @@ CONSENT_WRITES = [
     'X=$(mktemp -d {S}/probe.XXXXXX | xargs dirname); tar -x -C "$X" < a.tar',
     'X=$(mktemp -d {S}/probe.XXXXXX); X={S}; tar -x -C "$X" < a.tar',
     'X=$(mktemp -d -p {S}); tar -x -C "$X" < a.tar',           # a form whose path is not the template's: as before
+    'X=$(Y=1); tar -x -C "$X" < a.tar; tar -x -C {S} < b.tar',  # a substitution with no command word reads on
     'X=$(mktemp -d {S}/probe.XXXXXX); touch "$X/../claude-orchestrator-consent-abc.flag"',
     'X=$(mktemp -d {S}/probe.XXXXXX); cp -r src/. "$X/.."',
     "touch {S}/claude-orchestrator-consent-abc.flag",
