@@ -584,3 +584,40 @@ def test_a_write_after_cd_out_of_the_roles_directories_is_refused(tmp_path, repo
 def test_a_write_whose_directory_is_not_the_roles_stays_refused(tmp_path, repo_project, command):
     r = tool_policy(tmp_path, repo_project, command.replace("{P}", str(repo_project)))
     assert r.returncode == 2 and "BLOCKED by tool-policy.v1" in r.stderr, (command, r.stderr)
+
+
+# ── Only a word that can be the source of the redirect is judged ─────────────
+# 1 recorded refusal: `docker exec <c> sh -c '<greps>' > file`, where token, password and cookie stand only in a
+# quoted grep pattern. The command line a shell or a runner is handed is read as the commands it holds; a search
+# pattern and echo's text are no files.
+RUNNER_GREP = ("cd /srv/work/reports && docker exec app-api sh -c 'cd /app && grep -rn --include=*.py -i -E "
+               '"stale|expire|max_age|closed_at" app pipeline/worker.py | grep -v -i -E '
+               '"jwt|token|cookie|session|oauth|redis|password|verify|reset|lock|ttl"\' > container__grep_staleness.txt; '
+               "wc -l container__grep_staleness.txt; cut -c1-230 container__grep_staleness.txt")
+
+
+@pytest.mark.parametrize("command", [
+    RUNNER_GREP,
+    "ssh build-host 'grep -v -i password /var/log/app.log | tail -5' > /srv/work/app-tail.txt",
+    "sh -c 'grep -c token src/auth.py' > /srv/work/count.txt",
+])
+def test_a_pattern_inside_a_command_line_handed_to_a_runner_passes(sandbox, command):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command,label", [
+    ("docker exec app-api sh -c 'cat /app/.env' > /srv/work/out.txt", SENSITIVE_READ),          # the file it reads
+    ("docker exec app-api cat /app/.env > /srv/work/out.txt", SENSITIVE_READ),
+    ("docker exec app-api sh -c 'grep -rn KEY /app/.env | grep -v -E \"jwt|token\"' > /srv/work/out.txt", SENSITIVE_READ),
+    ("docker exec app-api sh -c 'echo KEY=1 > /app/.env' > /srv/work/out.txt", SENSITIVE_WRITE),
+    ("ssh build-host 'cat ~/.aws/credentials' > /srv/work/out.txt", SENSITIVE_READ),
+    ("sh -c 'cat .env' > /srv/work/out.txt", SENSITIVE_READ),
+    ("grep -n token /srv/app/.env > /srv/work/hits.txt", SENSITIVE_READ),
+    ('echo "$(cat /srv/app/.env)" > /srv/work/out.txt', SENSITIVE_READ),                        # computed text
+    ("python3 -c 'print(open(\".env\").read())' > /srv/work/out.txt", SENSITIVE_READ),           # code, not a shell line
+    ("sometool password > /srv/work/out.txt", SENSITIVE_READ),    # a program with no table: any word may be a file it reads
+])
+def test_a_secret_file_read_into_a_kept_output_is_still_refused(sandbox, command, label):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
