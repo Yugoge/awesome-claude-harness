@@ -178,7 +178,6 @@ def commit_guard(payload):
     H = HOOKS
     from lib.git_command_classifier import _command_token_index, _git_subcommand
     from lib.claude_home import load_settings
-    from lib.shell_parse import CD_TARGET_BUILTINS, COMMON_SHELLS
     s = iu.spec_from_file_location('_overnight_guard', H + '/pretool-overnight-hook-guard.py')
     og = iu.module_from_spec(s)
     s.loader.exec_module(og)
@@ -993,7 +992,6 @@ def _relaxed_writes_namespace(command, ns_re):
     for one in (sites if sites is not None else [command.replace("\n", " ")]):
         if grep(ARTIFACT_WRITE_VERB_RE + ".*" + ns_re, one):
             return True
-    from lib.shell_parse import LOOP_VAR_KINDS
     one = command.replace("\n", " ")
     listed = any(c.kind in LOOP_VAR_KINDS and any(grep(ns_re, w.text) for w in c.header[1:])
                  for c in _compounds(command) or ())
@@ -1160,7 +1158,6 @@ def _relaxation_shape_ok(command, carries):
     target, no here-string carrying a name, nothing that runs a file beside the writer script's name). Fail closed:
     anything not read is not ok.
     """
-    from lib.shell_parse import DEFINER_KINDS
     if _SHAPE_HISTORY_RE.search(_unquoted_single(command)):
         return False
     params = _shape_params(command)
@@ -1331,7 +1328,6 @@ def _shape_strict_ok(command, carries, sites):
     names a protected name; no write target but /dev/null (a redirection, tee, sort -o, uniq's second operand, git
     --output); a `git -c` only with an exact display key (_git_config_inert); and, when a word names the writer script,
     no write target at all and no command that runs a file (an interpreter, a shell, sed, awk, make, find ...)."""
-    from lib.shell_parse import CWD_BUILTINS
     scripts = _shape_scripts(command)
     if scripts is None or any(sep == "&" for sc in scripts for _pl, sep in sc.items):
         return False
@@ -1527,6 +1523,10 @@ def commit_artifact_rules(command, state):
 # The flag's name has one definition, next to its reader (lib/allowlist.has_do_consent); hooks/prompt-workflow.py
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
+from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
+    BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, COMMAND_PREFIX_WORDS, COMMON_SHELLS, CWD_BUILTINS,
+    DECLARATION_BUILTINS, DEFINER_KINDS, GIT_RESTORE_SOURCE_OPTS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
+    OUTPUT_REDIRECT_OPS, PIPE_OPS, REDIRECT_OPS)
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
 # Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
@@ -3225,7 +3225,6 @@ def _base_bulk_sentinel_decision(cmd):
     if tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         return 'DENY'
     keywords = {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', 'select'}
-    from lib.shell_parse import REDIRECT_OPS
     if any(t in keywords or t in REDIRECT_OPS for t in tokens) or 'xargs' in tokens or 'tee' in tokens:
         return 'DENY'
     actions = {'-exec', '-execdir', '-delete', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'}
@@ -3269,7 +3268,6 @@ def _relaxed_bulk_sentinel_decision(cmd):
     sentinel is minted only by the userprompt-bulk-commit-capability hook, never from Bash. A command the parser
     cannot read is TOKENIZER_ERROR.
     """
-    from lib.shell_parse import LOOP_VAR_KINDS
     sites = _parsed_sites(cmd)
     if sites is None:
         return 'TOKENIZER_ERROR'
@@ -3395,7 +3393,6 @@ def _hb_shell_options(args):
     off), so the shell reads its script or `-c` string without running it; an interactive (`-i`) shell, which
     ignores noexec, runs. verbose is True when any `-v`, `-o verbose` or `--verbose` appears (the shell then echoes
     the script it reads). None for an option it cannot read."""
-    from lib.shell_parse import OPTION_ENDS
     noexec = interactive = has_c = has_s = verbose = False
     k = 0
     while k < len(args):
@@ -4226,7 +4223,6 @@ def _plain_file(w, sv):
 def _plain_redirects(cmd, sv, reads_ok=True):
     """Writes on fd 1 or 2 (or &>) to an ordinary file or /dev/null, 2>&1, >&2, N>&-; with `reads_ok` also a read
     on fd 0 of a static file and a heredoc or here-string that expands nothing."""
-    from lib.shell_parse import OUTPUT_REDIRECT_OPS
     for x in cmd.redirects:
         if x.fd_var is not None:
             return False
@@ -4935,7 +4931,6 @@ def _dg_ends_on_option(line):
     `"-c''"`), or before a redirection, a comment or a closing parenthesis (`docker create -l 2>/dev/null`)."""
     if DEGRADED_TRAILING_OPTION.search(line):
         return True
-    from lib.shell_parse import OPTION_SIGNS
     parsed = _dg_commands(line)
     return bool(parsed) and any(w[:1] in OPTION_SIGNS for words in parsed[0] for w in _dg_last_words(words))
 
@@ -4944,7 +4939,6 @@ def _dg_ends_on_option(line):
 
 def _dg_quoted_head(line):
     """A command head that, quotes removed, holds whitespace or shell syntax (`'bash -c' x`, `env\\ -S x`)."""
-    from lib.shell_parse import COMMAND_PREFIX_WORDS
     parsed = _dg_commands(line)
     for words in (parsed[0] if parsed else ()):
         for w in words:
@@ -5664,7 +5658,6 @@ _VISIBLE = {"top", "cmdsub", "backtick", "procsub"}
 def _interpreter_code(res, cmd):
     """The code an interpreter command runs from its own arguments (`-c CODE`, `-cCODE`, a cluster ending in the
     code option, `--eval=CODE`) or, with no script operand, from a heredoc or here-string; None if none."""
-    from lib.shell_parse import OPTION_ENDS
     name = res.name or ""
     spec = next(((c, v) for rx, c, v in _INTERP_CODE_OPTS if rx.match(name)), None)
     if spec is None:
@@ -5905,7 +5898,7 @@ def data_shape(command, invs):
     if invs is None:
         return False
     try:
-        from lib.shell_parse import PIPE_OPS, parse
+        from lib.shell_parse import parse
         script = parse(command)
         if script.error is not None or script.errors() or not script.items:
             return False
@@ -6207,7 +6200,6 @@ _WT_PUSH_RE = re.compile(r"stash\s+(push|save|create|store|-u|--include-untracke
 _WT_PUSH_FLAGS_RE = re.compile(r"stash\s+-[ua]+\b")
 _WT_BARE_RE = re.compile(r"stash\s*($|[;&|])")
 _WT_CHECKOUT_RE = re.compile(r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])")
-from lib.shell_parse import GIT_RESTORE_SOURCE_OPTS  # noqa: E402
 _WT_SOURCE_RE = re.compile(r"(?=(%s))" % "|".join(o + r"\b" for o in GIT_RESTORE_SOURCE_OPTS))
 _WT_WIDE_RE = re.compile(r"(?=(--\s+(\.|\*|[^ /]+/)\s*($|[;&|])))")
 
@@ -6587,7 +6579,6 @@ def _sd_scan(args, spec, permute=True, operands=None):
 def _sd_git(args):
     """(allowed arg indexes, message comes from stdin) for a git call that names the file only as a search pattern
     or in a commit message; None when any part of it is not read."""
-    from lib.shell_parse import OPTION_ENDS
     k = 0
     while k < len(args) and args[k].startswith("-"):
         if args[k] == "-C" and k + 1 < len(args):
@@ -6852,7 +6843,7 @@ def _sd_glob_hit(word, env=None):
 
 def _sd_env(sites):
     """name -> the literal values the command assigns it anywhere (plain assignments and export/declare/local)."""
-    from lib.shell_parse import DECLARATION_BUILTINS, Assignment, resolve
+    from lib.shell_parse import Assignment, resolve
     env = {}
     for site in sites:
         found = list(site.cmd.assignments)
@@ -6971,7 +6962,6 @@ def _sd_glob_operand(res, out_safe):
 def _sd_interpreter_code(res, cmd):
     """The code an interpreter call runs from its own words or its stdin: a -c/-e/-r style option's value (awk's
     program operand), and a heredoc or here-string. A script path and the script's arguments are not code."""
-    from lib.shell_parse import OPTION_ENDS
     name = res.name.lower()
     vals = [w.value() if w.value() is not None else w.text for w in res.args]
     code = []
@@ -7092,7 +7082,6 @@ def _sd_streams(node, out, err):
     """(stdout safe, stderr safe) after a command's own redirections, given whether its stdout and stderr reach only
     the terminal or /dev/null (through display filters at most) before them. A file, another fd or a computed
     target is unsafe: a later command or a later call can read it back."""
-    from lib.shell_parse import BOTH_STREAMS_OPS
     for r in node.redirects:
         if r.op in ("<", "<<", "<<-", "<<<", "<&"):
             continue
@@ -7143,7 +7132,6 @@ def _sd_display(stage):
 
 def _sd_display_args(spec, vals, numeric):
     """True when every option is on the filter's own list and the operands are within its limit."""
-    from lib.shell_parse import OPTION_SIGNS
     flags, short_vals, long_flags, long_vals, most = spec
     operands, k, dashdash = 0, 0, False
     while k < len(vals):
@@ -7190,7 +7178,7 @@ def _sd_output_safety(script, traced=False):
     shell may trace (traced), the trace of a command goes to the stderr it inherits, so its stdout counts as safe only
     with that stderr safe too. A command inside a substitution, a function body, a coproc or code the walk reaches
     another way is absent. An `exec` that moves the shell's own stdout or stderr leaves nothing safe."""
-    from lib.shell_parse import DEFINER_KINDS, Compound, SimpleCommand, resolve
+    from lib.shell_parse import Compound, SimpleCommand, resolve
     found, moved = {}, []
 
     def visit(scr, out_ok, err_ok, ctx):
@@ -7229,7 +7217,7 @@ def _sd_output_safety(script, traced=False):
 
 def _sd_redefines(site):
     """True when this command can change which program a later search or commit call runs, or what it reads."""
-    from lib.shell_parse import DECLARATION_BUILTINS, resolve
+    from lib.shell_parse import resolve
     cmd = site.cmd
     try:
         res = resolve(cmd)
@@ -7374,7 +7362,7 @@ def _sd_plain_command(cmd):
     command (echo, printf, true, false, :, pwd, cd, ls, git status/diff/log/show/push/fetch), with plain wrappers at
     most, literal words and quiet redirections; or a shell -c or a find -exec whose code is itself plain."""
     from types import SimpleNamespace
-    from lib.shell_parse import COMMON_SHELLS, Script, resolve
+    from lib.shell_parse import Script, resolve
     if cmd.assignments or not cmd.words:
         return False
     try:
@@ -7415,7 +7403,7 @@ def _sd_plain_command(cmd):
 def _sd_plain_script(script):
     """True when every command of a parsed list fits the plain shape (see _sd_plain_command): no background job,
     no loop, function, case or coproc, and every later pipeline stage a display filter with quiet redirections."""
-    from lib.shell_parse import PIPE_OPS, Compound, SimpleCommand
+    from lib.shell_parse import Compound, SimpleCommand
     if script.error is not None:
         return False
     for pl, sep in script.items:
