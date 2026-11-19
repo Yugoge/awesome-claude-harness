@@ -253,4 +253,11 @@ def main(rules: list[Rule], one_reason=None) -> int:
         except Exception:
             for o in outcomes:
                 o.superseded_by = ""
-    return report(outcomes)
+    code = report(outcomes)
+    if code == REFUSAL_EXIT:  # a report to the refusal record (lib/refusal_record.py); it never changes the exit
+        try:
+            from . import refusal_record
+            refusal_record.report(raw, [(o.rule.path or o.rule.call, o.stderr) for o in outcomes if o.refused], sys.argv[0])
+        except Exception:
+            pass
+    return code

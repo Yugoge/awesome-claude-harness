@@ -102,7 +102,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.subagent import is_subagent_context  # noqa: E402
+from lib.subagent import DISPATCH_TOOLS, is_subagent_context  # noqa: E402
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.allowlist import (  # noqa: E402
     has_do_consent, match_sentinel_grant_for_tool, read_tool_ran, tool_streak_path, write_tool_streak)
@@ -391,8 +391,6 @@ SCRATCH_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "
                        "NotebookEdit": "notebook_path"}
 # The harness session scratch root when TMPDIR is unset: hooks/session-scratch-init.sh's.
 HARNESS_SCRATCH_DEFAULT_ROOT = "/var/tmp/claude-scratch"
-# A session id usable as one path component (hooks/doc_sync/notice.py's guard).
-_SCRATCH_SID = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 
 
 def _inside(path: str, root: str) -> bool:
@@ -480,7 +478,8 @@ def scratch_write(tool_name: str, data: dict) -> bool:
     closed: any error counts."""
     try:
         sid = data.get("session_id")
-        if not isinstance(sid, str) or sid in (".", "..") or not _SCRATCH_SID.fullmatch(sid):
+        from lib.scratch_owner import is_safe_session_dir_name
+        if not is_safe_session_dir_name(sid):
             return False
         tool_input = data.get("tool_input")
         target = tool_input.get(SCRATCH_WRITE_TOOLS[tool_name]) if isinstance(tool_input, dict) else None
@@ -708,7 +707,7 @@ def main():
     # The retrieval tools' counts are kept even there: the calls of one
     # message all pass PreToolUse together, so a dispatch in the same message
     # would refill their budget before any of them ran.
-    if tool_name == "Agent":
+    if tool_name in DISPATCH_TOOLS:
         try:
             state = read_streak_state(tool_streak_path(sid))
             state["bash_consecutive"] = {"last_tool": "Agent", "count": 0}

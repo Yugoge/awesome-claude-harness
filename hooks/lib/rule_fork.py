@@ -59,6 +59,15 @@ from dataclasses import dataclass
 from lib import rule_runner
 from lib.rule_runner import RuleOverrun, RuleRun
 
+# Standard-library modules imported once before the forks (by hooks/lib/hook_launch.py and
+# hooks/pretool-write-gate.py), so each fork does not import them again:
+# pkgutil is the runner's own (runpy.run_path imports it for every file); pathlib (most hooks, through
+# their libraries), datetime and shlex are what the hooks import most. Their import runs only their own
+# definitions (no file, environment, working directory, signal or other module of the process changes),
+# and the one-after-another run already gave every hook after the first that imports one the module
+# loaded, so a fork that finds one loaded decides and prints as the hook did alone. Never a harness
+# module (hooks/, scripts/): a hook's library must load in the hook's own fork.
+WARM = ("pkgutil", "pathlib", "datetime", "shlex")
 GRACE = 2.0  # seconds a child may run past its overrun signal before it is ended
 ENDING = 0.5  # seconds the children of a run that ends early (below) have between SIGTERM and SIGKILL
 # The signals that end this process while its children run (their default action ends it): the

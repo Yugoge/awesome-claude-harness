@@ -71,8 +71,8 @@ if str(HOOKS) not in sys.path:
     sys.path.insert(0, str(HOOKS))
 
 from lib import command_span  # noqa: E402  (the one transcript reader)
+from lib.harness_vocabulary import GATE_MODES as MODES  # noqa: E402
 
-MODES = ("block", "advisory", "off")
 _SCRIPTS: dict = {}
 
 

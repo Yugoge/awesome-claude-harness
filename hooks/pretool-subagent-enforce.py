@@ -44,6 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib import contract_runtime  # noqa: E402
 from lib import overnight  # noqa: E402
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 from lib import command_span  # noqa: E402
 from lib.subagent import is_subagent_context  # noqa: E402
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
@@ -279,7 +280,7 @@ def _enforce(stdin_data: dict, allowed: dict, step: str, loaded=None) -> None:
 
 def _main() -> None:
     stdin_data = _parse_stdin()
-    if not stdin_data or stdin_data.get('tool_name') != 'Agent':
+    if not stdin_data or stdin_data.get('tool_name') not in DISPATCH_TOOLS:
         sys.exit(0)
     session_id, overnight_state = _resolve_session(stdin_data)
 

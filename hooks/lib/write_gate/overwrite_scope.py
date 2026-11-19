@@ -169,10 +169,21 @@ def _owner_sid(d: str):
     return rec.get("sid") if isinstance(rec, dict) else None
 
 
+def _scratch_owner():
+    """hooks/lib/scratch_owner.py by its path (this module is loaded as a package member or flat)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_overwrite_scope_scratch_owner", os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                       "scratch_owner.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _own_scratch(real: str, session_id: str, hts) -> bool:
     """`real` is below <root>/<session_id>/ for a session scratch root, with an .owner
     record naming this session (lib/scratch_owner.py)."""
-    if not session_id or os.sep in session_id or session_id in (".", ".."):
+    if not _scratch_owner().is_safe_session_dir_name(session_id):
         return False
     for root in _scratch_roots(hts):
         d = os.path.join(root, session_id)

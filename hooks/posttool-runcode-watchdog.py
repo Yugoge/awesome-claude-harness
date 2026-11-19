@@ -31,10 +31,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.harness_vocabulary import RUN_CODE_TOOLS  # noqa: E402
 
-RUN_CODE_TOOLS = frozenset(
-    {"mcp__playwright__browser_run_code", "mcp__paseo__browser_run_code"}
-)
 
 
 def _cancel_watchdog(pid_file: str):

@@ -68,8 +68,10 @@ AGENT_ID_TEXT_RE = re.compile(r"agentId:\s*([A-Za-z0-9._-]+)")
 # measurement and the three evidence tiers.
 try:  # package import (hooks.lib.subagent_restart)
     from . import interruption_signals as signals
+    from .subagent import DISPATCH_TOOLS
 except ImportError:  # direct sys.path import (lib/ on path)
     import interruption_signals as signals  # type: ignore[no-redef]
+    from subagent import DISPATCH_TOOLS  # type: ignore[no-redef]
 
 
 def _is_quota_text(value: Any) -> bool:
@@ -124,12 +126,14 @@ RECOVERY_STATUS_RE = re.compile(r"RECOVERY_STATUS:\s*(completed|quota_interrupte
 # running. Enforcing the pairing here too would duplicate that authority in
 # a second place that could drift from it.
 _HARNESS_HOME = str(Path(os.path.abspath(__file__)).parents[2])  # install location
+# The subcommands of scripts/restart-subagents.py (its parser reads this tuple).
+HELPER_SUBCOMMANDS = ("prepare", "status", "finalize")
 _RESTART_HELPER_COMMAND_RE = re.compile(  # the venv form, or commands/restart.md's quoted CLAUDE_HOME channel
     r'^(?:(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
     r'/venv/bin/python3?\s+'
     r'(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
     r'/scripts/restart-subagents\.py|python3\s+"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/restart-subagents\.py")\s+'
-    r'(?:prepare|status|finalize)'
+    r'(?:' + '|'.join(HELPER_SUBCOMMANDS) + r')'
     r'(?:\s+--cross-account)?'
     r'(?:\s+--wait-seconds\s+\d+)?'
     r'\s*$'
@@ -588,7 +592,7 @@ def _read_parent_calls(
                         "quota_interrupted": signals.is_quota_text(tail),
                     }
             for block in command_span._blocks(record, sidechain=True):
-                if block.get("type") == "tool_use" and block.get("name") in {"Agent", "Task"}:
+                if block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS:
                     tool_id = block.get("id")
                     if isinstance(tool_id, str) and tool_id:
                         tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}

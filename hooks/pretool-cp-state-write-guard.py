@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import locations  # noqa: E402
+from lib.subagent import is_subagent  # noqa: E402
 
 # Remediation paths are derived from THIS hook's own on-disk location
 # (<harness-home>/hooks/<name>.py), so the message names the spec-check.py that
@@ -113,19 +114,11 @@ def _is_in_scope(tool_name: str) -> bool:
     return tool_name in WRITE_TOOLS
 
 
-def _is_subagent(data: dict) -> bool:
-    if data.get("agent_id"):
-        return True
-    if isinstance(data.get("subagent_type"), str) and data.get("subagent_type"):
-        return True
-    return False
-
-
 def main() -> None:
     data = _read_payload()
     if not data:
         sys.exit(0)
-    if not _is_subagent(data):
+    if not is_subagent(data):
         sys.exit(0)
     tool_name = data.get("tool_name")
     if not isinstance(tool_name, str) or not _is_in_scope(tool_name):

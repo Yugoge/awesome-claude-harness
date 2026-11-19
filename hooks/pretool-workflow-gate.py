@@ -49,11 +49,12 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+from lib.subagent import COMPAT_RUNTIME_ENV as CODEX_RUNTIME_ENV, is_subagent  # noqa: E402
+from lib.todo_canonical import STEP_TEXT_FIELDS, TODO_STATUSES  # noqa: E402
 
 CODEX_PLAN_TOOLS = {'update_plan', 'UpdatePlan', 'functions.update_plan'}
 # Tools that only read, which the checklist-not-started lock lets through (OB-L39).
 CHECKLIST_LOCK_READ_ONLY_TOOLS = frozenset({'Read', 'Grep', 'Glob'})
-CODEX_RUNTIME_ENV = 'CLAUDE_COMPAT_RUNTIME'
 
 def is_restart_helper_bash_command(data: dict) -> bool:
     """The exact, unchained /restart helper invocation (lib/subagent_restart.py's
@@ -233,46 +234,6 @@ def valid_codex_session_id(value) -> bool:
     )
 
 
-def codex_payload_is_subagent_context(data: dict) -> bool:
-    """Identify child-local Codex tool events without borrowing parent state."""
-    for key in (
-        'agent_id',
-        'subagent_id',
-        'agent_path',
-        'parent_agent_id',
-        'parent_thread_id',
-        'parent_session_id',
-    ):
-        if data.get(key):
-            return True
-    for key in ('CLAUDE_AGENT_ID', 'CODEX_AGENT_ID', 'CODEX_AGENT_PATH', 'OPENAI_AGENT_ID'):
-        if os.environ.get(key):
-            return True
-    transcript_path = str(data.get('transcript_path') or '').strip()
-    if not transcript_path:
-        return False
-    try:
-        with Path(transcript_path).open(encoding='utf-8', errors='ignore') as handle:
-            for _ in range(20):
-                line = handle.readline()
-                if not line:
-                    break
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(event, dict):
-                    continue
-                if event.get('type') != 'session_meta':
-                    continue
-                payload = event.get('payload')
-                source = payload.get('source') if isinstance(payload, dict) else None
-                return isinstance(source, dict) and isinstance(source.get('subagent'), dict)
-    except OSError:
-        return False
-    return False
-
-
 def normalize_step_text(value: str) -> str:
     value = re.sub(r'\s+', ' ', value or '').strip().lower()
     value = re.sub(r'^(?:[-*]\s*)?(?:\[[ x-]\]\s*)?', '', value)
@@ -287,7 +248,7 @@ def codex_plan_matches_canonical(plan: list, canonical: list) -> bool:
         if not isinstance(item, dict):
             return False
         status = item.get('status', 'pending')
-        if status not in {'pending', 'in_progress', 'completed'}:
+        if status not in TODO_STATUSES:
             return False
         step_text = item.get('step') or item.get('content') or item.get('title') or ''
         actual = normalize_step_text(str(step_text))
@@ -313,7 +274,7 @@ def codex_plan_to_todos(plan: list, canonical: list, last: list | None = None) -
     if not isinstance(plan, list):
         return [], ['Codex plan payload is not a list']
     if isinstance(last, list) and len(last) == len(plan):
-        texts = {normalize_step_text(str(c.get(k, ''))): c for c in canonical for k in ('content', 'activeForm')}
+        texts = {normalize_step_text(str(c.get(k, ''))): c for c in canonical for k in STEP_TEXT_FIELDS}
         canonical = [texts.get(normalize_step_text(str(item.get('step') or item.get('content') or item.get('title')
                                                        or '')) if isinstance(item, dict) else '', {}) for item in plan]
     elif len(plan) != len(canonical):
@@ -323,7 +284,7 @@ def codex_plan_to_todos(plan: list, canonical: list, last: list | None = None) -
             violations.append(f'Step {idx}: plan item is not an object')
             continue
         status = item.get('status', 'pending')
-        if status not in {'pending', 'in_progress', 'completed'}:
+        if status not in TODO_STATUSES:
             violations.append(f'Step {idx}: invalid status "{status}"')
         step_text = item.get('step') or item.get('content') or item.get('title') or ''
         actual = normalize_step_text(str(step_text))
@@ -1177,7 +1138,7 @@ def main():
     if (
         tool_name in CODEX_PLAN_TOOLS
         and is_codex_runtime(data)
-        and codex_payload_is_subagent_context(data)
+        and is_subagent(data)
     ):
         sys.exit(0)
 

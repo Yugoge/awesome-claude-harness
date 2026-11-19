@@ -68,7 +68,7 @@ _SENSITIVE_DATA_FRAGMENTS = (
     "secrets/",
 )
 
-# Filesystem-noise patterns — authority: scripts/blast-radius-tool.py:35-38.
+# Filesystem-noise patterns, also scripts/blast-radius-tool.py's scope filter (spec §5.3).
 _FILESYSTEM_NOISE_FRAGMENTS = (
     "/venv/",
     "/worktrees/",
@@ -81,6 +81,13 @@ _FILESYSTEM_NOISE_FRAGMENTS = (
 
 # Combined tuple exposed as the public API.
 EXCLUDE_FRAGMENTS = _SENSITIVE_DATA_FRAGMENTS + _FILESYSTEM_NOISE_FRAGMENTS
+
+# Graph relations that are coupling (real blast radius): graphify-enrich's reverse dependents
+# and forward context, graphify-query's excerpt priority. `contains` (file->symbol) and bare
+# `references` are not.
+COUPLING_RELATIONS = frozenset(
+    {"imports", "imports_from", "calls", "inherits", "uses", "re_exports"}
+)
 
 # ---------------------------------------------------------------------------
 # Status constants

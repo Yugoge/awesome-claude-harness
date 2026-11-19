@@ -30,6 +30,8 @@ _HOOKS_DIR = Path(__file__).resolve().parent
 if str(_HOOKS_DIR) not in sys.path:
     sys.path.insert(0, str(_HOOKS_DIR))
 
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
+
 try:
     from lib.specialist_yield import classify_report, record_yield  # noqa: E402
 except Exception:  # pragma: no cover - fail-soft if lib missing
@@ -507,7 +509,7 @@ def _resolve_contract(sid: str, cid: int) -> dict | None:
 
 def _process(stdin_ctx: dict) -> None:
     tool_name = stdin_ctx.get("tool_name") or ""
-    if tool_name and tool_name != "Agent":
+    if tool_name and tool_name not in DISPATCH_TOOLS:
         return
     sid, cid, state = _resolve_session_cycle(stdin_ctx)
     if state is None or sid is None or cid is None:

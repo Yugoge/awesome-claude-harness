@@ -479,144 +479,6 @@ def _site_writes(sp, raw: str, res) -> list:
     return [(text, word) for text, word in out if text]
 
 
-class _CdScopes:
-    """Where each part of the command runs: the possible (cwd, OLDPWD) pairs at each simple command,
-    a `cd` applied only to what follows it in its own shell (not past a closing subshell, a pipeline
-    stage or a background job, replaced by a later cd, `&&` and `||` followed), relative to the
-    starting directory ''. A cd that cannot be followed exactly (`cd -` with no known OLDPWD, a
-    computed target, CDPATH, popd, a function body) leaves the unknown directory '?'."""
-
-    UNKNOWN = ('?', '?')
-
-    def __init__(self, sp, raw: str):
-        self.sp, self.raw = sp, raw
-        self.spans = []
-        self.visited = set()
-        self.cdpath = 'CDPATH' in raw
-        self.functions = False  # a function or coprocess defined anywhere it walked
-
-    def _target(self, cwd: str, word) -> str:
-        arg = _home_spelled_out(word.text) if word is not None else '~'
-        if any(c in arg for c in '$`*?[') or (self.cdpath and not arg.startswith(('/', '~', './', '../'))):
-            return '?'
-        if arg.startswith(('/', '~')):
-            return os.path.normpath(arg)
-        if cwd == '?':
-            return '?'
-        return os.path.normpath(os.path.join(cwd, arg)) if cwd else os.path.normpath(arg)
-
-    def _cd(self, name: str, args, states) -> set:
-        if name == 'popd':
-            return {self.UNKNOWN}
-        ops, k = [], 0
-        while k < len(args):
-            v = args[k].value()
-            if v == '--':
-                ops += args[k + 1:]
-                break
-            if v is None or v == '-' or not v.startswith('-') or v[1:2].isdigit() or v[1:2] == '+':
-                ops.append(args[k])
-            k += 1
-        new = set()
-        for cwd, old in states:
-            if ops and ops[0].value() == '-' or (name == 'pushd' and not ops):
-                new.add((old, cwd) if old != '?' else ('?', cwd))
-            elif ops and (ops[0].value() or '').startswith(self.sp.OPTION_SIGNS):
-                new.add(self.UNKNOWN)  # a pushd/cd stack index
-            else:
-                new.add((self._target(cwd, ops[0] if ops else None), cwd))
-        return new
-
-    def _record(self, span, states):
-        self.spans.append((span[0], span[1], frozenset(states)))
-
-    def run_cmd(self, cmd, states):
-        sp = self.sp
-        if isinstance(cmd, sp.SimpleCommand):
-            self.visited.add(cmd.span)
-            res = sp.resolve(cmd)
-            here = set(states)
-            for wname, opts in res.wrappers:
-                for opt, val in opts:
-                    if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
-                        here = {(self._target(cwd, val), cwd) for cwd, _old in here}
-            self._record(cmd.span, here)
-            if res.name in self.sp.CWD_BUILTINS and res.payload is None:
-                return self._cd(res.name, res.args, states), set(states)
-            if res.payload is not None:
-                if res.payload_kind == 'eval':
-                    return self.run_script(res.payload, states)
-                self.run_script(res.payload, here)
-            return set(states), set(states)
-        if isinstance(cmd, sp.Compound):
-            self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
-            self._record(cmd.span, states)
-            scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, sp.Script)]
-            self.functions = self.functions or cmd.kind in sp.DEFINER_KINDS
-            if cmd.kind in ('subshell', 'coproc'):
-                for s in scripts:
-                    self.run_script(s, states)
-                return set(states), set(states)
-            if cmd.kind == 'group':
-                succ, fail = set(states), set(states)
-                for s in scripts:
-                    succ, fail = self.run_script(s, succ)
-                return succ, fail
-            if cmd.kind == 'function':
-                for s in scripts:
-                    self._record(s.span, {self.UNKNOWN})
-                    self.run_script(s, {self.UNKNOWN})
-                return set(states), set(states)
-            acc = set(states)
-            for s in scripts:
-                succ, fail = self.run_script(s, acc)
-                acc |= succ | fail
-            return acc, acc
-        return set(states), set(states)
-
-    def run_pipeline(self, pl, states):
-        if len(pl.stages) == 1:
-            succ, fail = self.run_cmd(pl.stages[0], states)
-        else:
-            for stage in pl.stages:
-                self.run_cmd(stage, states)  # each stage runs in a subshell
-            succ, fail = set(states), set(states)
-        return (fail, succ) if pl.negated else (succ, fail)
-
-    def run_script(self, script, states):
-        succ, fail, prev = set(states), set(states), None
-        for pl, sep in script.items:
-            if prev == '&&':
-                enter = succ
-            elif prev == '||':
-                enter = fail
-            elif prev is None:
-                enter = set(states)
-            else:
-                enter = succ | fail
-            if sep == '&':
-                self.run_pipeline(pl, enter)  # a background job: its cd stays in it
-                s, f = set(enter), set(enter)
-            else:
-                s, f = self.run_pipeline(pl, enter)
-            if prev == '&&':
-                succ, fail = s, f | fail
-            elif prev == '||':
-                succ, fail = s | succ, f
-            else:
-                succ, fail = s, f
-            prev = sep
-        return succ, fail
-
-    def at(self, offset: int):
-        """The possible directories at raw ``offset``: the innermost recorded command around it."""
-        best = None
-        for a, b, states in self.spans:
-            if a <= offset < b and (best is None or b - a < best[1] - best[0]):
-                best = (a, b, states)
-        return {cwd for cwd, _old in best[2]} if best else {'?'}
-
-
 def _cd_dirs(sp, sites) -> list:
     """Every directory a `cd`/`pushd` in the command may leave the shell in, as written (each `cd`
     taken from every directory an earlier one may have left; a CDPATH entry the command sets
@@ -656,14 +518,10 @@ def _parsed_kind(command: str, start: str = None) -> tuple:
     sites = [(site, sp.resolve(site.cmd)) for site in sp.walk(script)]
     names_any = bool(_protected_kind(command))
     settled = settled and all(_site_settled(sp, command, site, res, names_any) for site, res in sites)
-    scopes = _CdScopes(sp, command)
-    scopes.run_script(script, {('', '?')})
-    every_dir = _cd_dirs(sp, sites)
     # a cd the scopes did not follow (inside a substitution, a re-parsed payload): every relative
     # write after it is read from every directory (fail closed)
-    unfollowed = [site.cmd.span[0] if command[slice(*site.cmd.span)].startswith(site.cmd.words[0].text) else 0
-                  for site, res in sites if res.name in sp.CWD_BUILTINS and site.cmd.words
-                  and site.cmd.span not in scopes.visited]
+    scopes = sp.CdScopes(command, lambda w: _home_spelled_out(w.text)).run(script)
+    every_dir = _cd_dirs(sp, sites)
     writes = []
     for t in sp.write_targets(script):
         if t.mechanism == 'computed-command':
@@ -677,11 +535,7 @@ def _parsed_kind(command: str, start: str = None) -> tuple:
         writes += [([text], word, res.name != 'git') for text, word in _site_writes(sp, command, res)]
     kinds = set()
     for texts, word, joinable in writes:
-        faithful = word is not None and command[slice(*word.span)] == word.text
-        offset = word.span[0] if faithful else len(command)
-        dirs = scopes.at(offset) if faithful else {'?'}
-        if any(offset > u for u in unfollowed):
-            dirs = dirs | {'?'}
+        dirs = scopes.of(word)
         for text in texts:
             spelled = _home_spelled_out(text) if text else ''
             if not spelled:
@@ -998,7 +852,7 @@ def _proven_harmless(command: str, start: str) -> bool:
     if script.errors():
         return False
     start = os.path.abspath(start)
-    scopes = _CdScopes(sp, command)
+    scopes = sp.CdScopes(command, lambda w: _home_spelled_out(w.text))
     scopes.cdpath = scopes.cdpath or bool(os.environ.get('CDPATH'))
     scopes.run_script(script, {(start, '?')})
     if scopes.functions:
@@ -1281,6 +1135,7 @@ def _dev_command_product_file(file_path: str, data: dict) -> bool:
             return False
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from lib import command_span, declared_paths, obligation
+        from lib.subagent import DISPATCH_TOOLS
         transcript = Path(data['transcript_path'])
         if transcript.parent.name == 'subagents':  # <sid>/subagents/agent-x.jsonl -> <sid>.jsonl
             transcript = transcript.parent.parent.with_suffix('.jsonl')
@@ -1294,7 +1149,7 @@ def _dev_command_product_file(file_path: str, data: dict) -> bool:
         parsed = obligation.parse_obligation(prompt)
         return (isinstance(parsed, obligation.ParsedObligation) and parsed.obligation.get('role') == 'dev'
                 and any(c.id == call_id and c.input.get('prompt') == prompt
-                        and c.input.get('subagent_type') == 'dev' for c in span.iter_calls('Agent', 'Task')))
+                        and c.input.get('subagent_type') == 'dev' for c in span.iter_calls(*DISPATCH_TOOLS)))
     except Exception:
         return False
 

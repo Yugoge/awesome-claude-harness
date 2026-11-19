@@ -380,7 +380,7 @@ def run(report_path: Path, section_path: Path, repo_root: Path) -> tuple[bool, s
         detail = "section file has no non-empty content"
         return False, f"CLOSE_REPORT_APPEND_ERROR: append: {detail}"
 
-    if cv.classify_line(expected_last_line) not in ("yes", "no"):
+    if cv.classify_line(expected_last_line) not in cv.DECISIVE_CLASSES:
         detail = f"section's own last non-empty line is not a legal CLOSE: form: {expected_last_line!r}"
         return False, f"CLOSE_REPORT_APPEND_ERROR: append: {detail}"
 

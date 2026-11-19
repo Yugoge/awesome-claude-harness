@@ -18,7 +18,7 @@ from lib import subagent_restart as restart  # noqa: E402
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Recover quota-interrupted Claude Code subagents")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "status", "finalize"):
+    for name in restart.HELPER_SUBCOMMANDS:
         command = sub.add_parser(name)
         command.add_argument("--session-id")
         if name == "status":

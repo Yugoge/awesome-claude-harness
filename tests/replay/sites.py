@@ -377,11 +377,19 @@ class PyModule:
                         isinstance(t, ast.Name) and t.id == node.id
                         for t in (st.targets if isinstance(st, ast.Assign) else [st.target])):
                     return self._tools(st.value)
+            mod, attr = self.imports.get(node.id, (None, None))
+            if mod and attr:  # a constant one library holds (lib/subagent.DISPATCH_TOOLS)
+                return PyModule(self.tree, mod)._tools(ast.Name(id=attr))
             return None
         if isinstance(node, ast.Call) and _call_name(node.func)[1] in ("frozenset", "set") and node.args:
             return self._tools(node.args[0])
         if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
-            return frozenset(e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+            out = frozenset(e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+            for e in node.elts:
+                if isinstance(e, ast.Starred):
+                    more = self._tools(e.value)
+                    out = out | more if more is not None else out
+            return out
         return None
 
     def imported_files(self) -> list[str]:
