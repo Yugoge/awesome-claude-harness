@@ -65,7 +65,8 @@ def registered_commands() -> dict:
 
 
 class Scratch:
-    """A copy of hooks/ (the other folders linked) with a home, state, temp and project directory of its own."""
+    """A copy of hooks/ (the other folders linked) with a home, state, temp and project directory of its own. The
+    harness copy and the project are each a git repository: a hook that runs git there stays inside it."""
 
     def __init__(self, root: Path):
         self.root, self.home, self.n = root, root / "harness", 0
@@ -81,6 +82,8 @@ class Scratch:
                     "CLAUDE_PROJECT_DIR": str(root / "project"), "CLAUDE_PYTHON_BIN": sys.executable, "LANG": "C.UTF-8",
                     "PYTHONDONTWRITEBYTECODE": "1", "GIT_CEILING_DIRECTORIES": str(root), "GIT_CONFIG_GLOBAL": os.devnull,
                     "GIT_CONFIG_NOSYSTEM": "1"}
+        for repo in (self.home, root / "project"):
+            subprocess.run(["git", "init", "-q", str(repo)], check=True, env=self.env)
 
     def payload(self, event: str, matcher: str) -> dict:
         self.n += 1
@@ -143,13 +146,10 @@ def cases():
     return out, enumerated.children
 
 
-# The registered commands of the events at which an exit 2 refuses (every registered command while the writer is gone).
-REFUSING = sorted({command for (event, _hook), command in registered_commands().items()
-                   if refusal_record is None or event in refusal_record.EVENTS})
-
-
-@pytest.mark.parametrize("command", REFUSING)
+@pytest.mark.parametrize("command", sorted(set(registered_commands().values())))
 def test_every_blocking_site_refuses_into_the_record(scratch, cases, command):
+    """One registered command of settings.json: every file with a blocking site under it, at the events an exit 2
+    refuses. A command the enumeration finds no such site under has nothing to report and passes."""
     by_command, children = cases
     problems, refused, rows = [], set(), []
     for (event, stand_in), (matcher, is_rule) in sorted(by_command.get(command, {}).items()):
@@ -166,7 +166,7 @@ def test_every_blocking_site_refuses_into_the_record(scratch, cases, command):
             if is_rule and code == 2 and not (status == 2 and lines and MARK in lines[0]["message"]
                                               and any(r["hook"] == stand_in for r in lines[0]["rules"])):
                 problems.append(f"{where}: a rule's refusal is not in the record under its file\n{stderr[-600:]}")
-    print("\n" + "\n".join(rows or [f"{command}: the enumeration finds no blocking site under it"]))
+    print("\n" + "\n".join(rows or [f"{command}: no blocking site at an event where an exit 2 refuses"]))
     silent = sorted({event for event, _ in by_command.get(command, {})} - refused)
     assert not silent, f"no stand-in made {command} refuse at {silent}, so nothing shows it reports there"
     assert not problems, f"{len(problems)} of {len(rows)} runs:\n" + "\n\n".join(problems)
