@@ -1639,7 +1639,7 @@ class Analyzer:
         head = words[k].literal() if k < len(words) else None
         if stdin or head is None or basename(head) not in INERT_ARGV_CONSUMERS:
             for r in (t[1] for t in toks if t[0] == "R"):
-                if r.op in ("<<", "<<-") and r.heredoc is not None:
+                if r.op in HERE_DOCUMENT_OPS and r.heredoc is not None:
                     parts.append(r.heredoc[2].text)
                 elif r.op == "<<<" and r.target is not None:
                     parts.append(self._word_text(r.target))
@@ -3267,7 +3267,7 @@ class Analyzer:
                 self.structural("interpreter_stdin_code_rewritten", base, self._scope_text())
                 return
             fed = [r for r in (t[1] for t in self._last or () if t[0] == "R")
-                   if r.op in ("<<", "<<-") and r.heredoc is not None and r.heredoc[1]] if piped else []
+                   if r.op in HERE_DOCUMENT_OPS and r.heredoc is not None and r.heredoc[1]] if piped else []
             if fed:  # `cat <<'EOF' | python3`: the program is that here-document, read as code
                 for r in fed:
                     self._classify_inline_code(base, r.heredoc[2].text)
