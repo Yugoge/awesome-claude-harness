@@ -11,10 +11,6 @@ ZERO project identifiers.
 PKG_MANAGERS = frozenset({"yarn", "npm", "pnpm", "bun"})
 # The package-manager words that link or unlink a package into the global bin (P7).
 PKG_LINK_WORDS = ("link", "unlink")
-# The host names that are the local machine as a destination (0.0.0.0 connects to it on Linux; ::1 is
-# bare in a socket client's arguments and bracketed in a URL). Read by the endpoint guard (P5) and the
-# HTTP-stop rule of hooks/lib/bash_safety_rules.py.
-LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0")
 # The programs that edit a file in place by a script under -i (_is_inplace_editor_args).
 INPLACE_EDITORS = ("sed", "perl")
 # Generic command wrappers that prefix the real command. After consuming a

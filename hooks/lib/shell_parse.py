@@ -3189,6 +3189,9 @@ NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the w
 INSTALL_DIR_OPTS = ("-d", "--directory")  # install makes every operand a directory (no source)
 TAR_NAMES = ("tar", "bsdtar", "gtar")  # the program names that are tar
 AWK_NAMES = ("awk", "gawk", "mawk", "nawk")  # the program names that are awk
+# The host names that are the local machine as a network client's destination (0.0.0.0 connects to it on
+# Linux; ::1 is bare in a socket client's arguments and bracketed in a URL).
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0")
 # awk's options that take a value (POSIX awk and gawk), by what the value is:
 AWK_DATA_OPTS = ("-F", "--field-separator", "-v", "--assign")  # a separator or an assignment
 AWK_SOURCE_OPTS = ("-e", "--source")  # program text

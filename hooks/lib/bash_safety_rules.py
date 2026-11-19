@@ -511,7 +511,7 @@ def daemon_restart(command, payload, prefix):
 
 from lib import bash_read_only as _bash_read_only  # noqa: E402 -- the programs that only read
 
-from lib.runtime_guard.constants import LOOPBACK_HOSTS  # noqa: E402 -- the host names that are this machine
+from lib.shell_parse import LOOPBACK_HOSTS  # noqa: E402 -- the host names that are this machine
 
 LOOPBACK = "|".join(map(re.escape, LOOPBACK_HOSTS))
 HTTP_STOP_URL = r"(?:%s):[0-9]+/stop(?![A-Za-z0-9])" % LOOPBACK
