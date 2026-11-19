@@ -42,3 +42,16 @@ def test_the_daemon_rule_and_the_runtime_guard_read_one_set_of_service_managers(
     from lib import bash_safety_rules
     assert bash_safety_rules.daemon_restart(command, {"tool_input": {}}, "myd") is True
     assert bash_safety_rules.daemon_restart("initctl status myd", {"tool_input": {}}, "myd") is False
+
+
+@pytest.mark.parametrize("rest,script", [
+    (["--title", "srv", "app.js"], "app.js"),          # node --help: --title=...
+    (["--input-type", "module", "app.js"], "app.js"),  # node --help: --input-type=...
+    (["-r", "dotenv/config", "app.js"], "app.js"),
+    (["--inspect-brk", "app.js"], "app.js"),           # --inspect-brk[=[host:]port]: attached only
+    (["--max-old-space-size=100", "app.js"], "app.js"),
+])
+def test_the_runtime_guard_reads_nodes_value_options_as_the_git_classifier_does(rest, script):
+    """One NODE_VALUE_OPTIONS (shell_parse) for the git classifier and the runtime guard
+    (family node-value-options): the guard finds the script past every value option."""
+    assert _core._runtime_target(rest) == script

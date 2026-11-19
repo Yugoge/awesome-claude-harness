@@ -58,13 +58,6 @@ RUNTIMES = frozenset({"node", "nodejs", "tsx", "bun", "deno", "ts-node", "ts-nod
 # skipped so `deno run <path>`, `tsx watch <path>`, `bun run <path>` reach the
 # protected path. These tokens are not the script; the script follows them.
 _RUNTIME_SUBCOMMANDS = frozenset({"run", "watch"})
-# Runtime flags that consume one following value (so the script positional is
-# not mistaken for the value, and a value is not mistaken for the script).
-_RUNTIME_OPTS_WITH_ARG = frozenset({
-    "-r", "--require", "--loader", "--experimental-loader", "--import",
-    "--env-file", "--conditions", "-C", "--cpu-prof-dir", "--heap-prof-dir",
-    "--tsconfig", "--inspect-brk", "--max-old-space-size",
-})
 # Tokens that, after a workspace selector, must route a launch decision to P1.
 EXEC_RUNNER_TOKENS = frozenset({"node", "nodejs", "tsx", "ts-node", "bun", "deno", "exec", "dlx", "npx", "bunx", "x", "run-script"})
 DEP_BUILTINS = frozenset({

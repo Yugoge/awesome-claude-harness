@@ -1077,27 +1077,7 @@ _OPAQUE_INTERPRETERS = frozenset({
 # standard input. stop: an option naming the program ends the options.
 _Interpreter = collections.namedtuple(
     '_Interpreter', 'program value attached long_program long_value data stdin stop')
-_NODE_VALUE_OPTIONS = frozenset({  # `node --help`, v22: the options shown with `=...`
-    '--allow-fs-read', '--allow-fs-write', '--build-snapshot-config', '--conditions',
-    '--cpu-prof-dir', '--cpu-prof-interval', '--cpu-prof-name', '--diagnostic-dir',
-    '--disable-proto', '--disable-warning', '--dns-result-order', '--env-file',
-    '--env-file-if-exists', '--experimental-config-file', '--experimental-default-type',
-    '--experimental-loader', '--experimental-sea-config', '--experimental-test-isolation',
-    '--heap-prof-dir', '--heap-prof-interval', '--heap-prof-name',
-    '--heapsnapshot-near-heap-limit', '--heapsnapshot-signal', '--icu-data-dir', '--import',
-    '--input-type', '--inspect-publish-uid', '--loader', '--localstorage-file',
-    '--max-http-header-size', '--max-old-space-size-percentage',
-    '--network-family-autoselection-attempt-timeout', '--openssl-config',
-    '--redirect-warnings', '--report-filename', '--report-signal', '--require',
-    '--secure-heap', '--secure-heap-min', '--snapshot-blob', '--test-concurrency',
-    '--test-coverage-branches', '--test-coverage-exclude', '--test-coverage-functions',
-    '--test-coverage-include', '--test-coverage-lines', '--test-name-pattern',
-    '--test-reporter', '--test-reporter-destination', '--test-shard', '--test-skip-pattern',
-    '--test-timeout', '--title', '--tls-cipher-list', '--tls-keylog',
-    '--trace-event-categories', '--trace-event-file-pattern', '--trace-require-module',
-    '--unhandled-rejections', '--use-largepages', '--v8-pool-size', '--watch-kill-signal',
-    '--watch-path',
-})
+_NODE_VALUE_OPTIONS = shell_parse.NODE_VALUE_OPTIONS
 _INTERPRETERS = (
     (re.compile(r'(?:python|pypy)[0-9.]*\Z'),
      _Interpreter('cm', 'QWX', '', (), ('--check-hash-based-pycs',), (), True, True)),

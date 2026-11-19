@@ -455,6 +455,30 @@ SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
 NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
+# node's long options that take a value (`node --help`, v22: the options shown with `=...`;
+# node reads the value attached or as the next word). Read by the git classifier and the
+# runtime guard.
+NODE_VALUE_OPTIONS = frozenset({
+    '--allow-fs-read', '--allow-fs-write', '--build-snapshot-config', '--conditions',
+    '--cpu-prof-dir', '--cpu-prof-interval', '--cpu-prof-name', '--diagnostic-dir',
+    '--disable-proto', '--disable-warning', '--dns-result-order', '--env-file',
+    '--env-file-if-exists', '--experimental-config-file', '--experimental-default-type',
+    '--experimental-loader', '--experimental-sea-config', '--experimental-test-isolation',
+    '--heap-prof-dir', '--heap-prof-interval', '--heap-prof-name',
+    '--heapsnapshot-near-heap-limit', '--heapsnapshot-signal', '--icu-data-dir', '--import',
+    '--input-type', '--inspect-publish-uid', '--loader', '--localstorage-file',
+    '--max-http-header-size', '--max-old-space-size-percentage',
+    '--network-family-autoselection-attempt-timeout', '--openssl-config',
+    '--redirect-warnings', '--report-filename', '--report-signal', '--require',
+    '--secure-heap', '--secure-heap-min', '--snapshot-blob', '--test-concurrency',
+    '--test-coverage-branches', '--test-coverage-exclude', '--test-coverage-functions',
+    '--test-coverage-include', '--test-coverage-lines', '--test-name-pattern',
+    '--test-reporter', '--test-reporter-destination', '--test-shard', '--test-skip-pattern',
+    '--test-timeout', '--title', '--tls-cipher-list', '--tls-keylog',
+    '--trace-event-categories', '--trace-event-file-pattern', '--trace-require-module',
+    '--unhandled-rejections', '--use-largepages', '--v8-pool-size', '--watch-kill-signal',
+    '--watch-path',
+})
 # Environment variables whose VALUE is executed by the command that follows
 # them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
 # a fixture-pinned safe row -- but these named vectors are documented command

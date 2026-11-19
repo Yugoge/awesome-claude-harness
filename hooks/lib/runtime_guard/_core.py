@@ -72,7 +72,6 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         SERVICE_VERBS,
         _EXEC_OPTS_WITH_ARG,
         _GIT_READONLY_SUBCMDS,
-        _RUNTIME_OPTS_WITH_ARG,
         _RUNTIME_SUBCOMMANDS,
         _WRAPPER_LEADING_POSITIONAL,
         _WRAPPER_OPTS_WITH_ARG,
@@ -94,7 +93,6 @@ except ImportError:  # executed as a top-level script (no package context)
         SERVICE_VERBS,
         _EXEC_OPTS_WITH_ARG,
         _GIT_READONLY_SUBCMDS,
-        _RUNTIME_OPTS_WITH_ARG,
         _RUNTIME_SUBCOMMANDS,
         _WRAPPER_LEADING_POSITIONAL,
         _WRAPPER_OPTS_WITH_ARG,
@@ -2622,6 +2620,10 @@ def _pm_global_setting(name: str, value: Optional[str]) -> bool:
     return False
 
 
+# Runtime flags that consume one following value (so the script positional is
+# not mistaken for the value, and a value is not mistaken for the script): node's
+# (shell_parse.NODE_VALUE_OPTIONS and the short -r, -C) and tsx's --tsconfig.
+_RUNTIME_OPTS_WITH_ARG = _sp.NODE_VALUE_OPTIONS | {"-r", "-C", "--tsconfig"}
 _PM_EXEC_SUBCMDS = frozenset({"exec", "x", "dlx"})
 """Package-manager subcommands that run another command: their argv after `--`
 (and npm's `-c` / `--call` string) is a nested invocation, not a script's args."""
