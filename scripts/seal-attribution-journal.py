@@ -30,6 +30,7 @@ Usage: seal-attribution-journal.py [--dest DIR] [--allow-volatile] [--json]
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import shutil
@@ -105,9 +106,8 @@ def seal(dest: Path, allow_volatile=False) -> dict:
         copied += 1
     new_blobs, missing = 0, []
     src = aj.git_dir()
-    for sha in sorted(shas):
-        if _git(odb, "cat-file", "-e", sha).returncode == 0:
-            continue
+    have = _git(odb, "cat-file", "--batch-check", inp="".join(x + "\n" for x in sorted(shas)).encode()).stdout.decode()
+    for sha in sorted(shas - {ln.split()[0] for ln in have.splitlines() if not ln.endswith(" missing")}):
         r = _git(src, "cat-file", "blob", sha)
         if r.returncode != 0:
             missing.append(sha)
@@ -178,6 +178,12 @@ def autoseal_if_due(dest: Optional[Path] = None, interval: Optional[float] = Non
     refusal, is itself recorded as an error evidence entry."""
     dest = dest if dest is not None else default_dest()
     interval = DEFAULT_AUTOSEAL_INTERVAL_SECONDS if interval is None else interval
+    dest.mkdir(parents=True, exist_ok=True)
+    lock = open(dest / "seal.lock", "a")  # one seal at a time: the others skip; the lock ends with its
+    try:                                   # holder (this function's return, or the process, killed or not)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return None
     now = time.time()
     last = read_last_evidence(dest)
     if last is not None and (now - last.get("ts", 0)) < interval:
