@@ -308,8 +308,12 @@ def _decode(raw: bytes) -> dict | None:
     return record if isinstance(record, dict) else None
 
 
-def _blocks(record: dict | None):
-    if not record or record.get("isSidechain"):  # a subagent's own record
+def _blocks(record: dict | None, sidechain: bool = False):
+    """The content blocks of a user or assistant record, the one reading of a transcript's calls and
+    results. Any other record holds none, whatever it carries (CLI 2.1.322's api-request-blob repeats
+    each message of a model request, its tool_use and tool_result blocks too: a call read twice). A
+    subagent's own record (isSidechain) only with ``sidechain``."""
+    if not record or record.get("type") not in ("user", "assistant") or (record.get("isSidechain") and not sidechain):
         return ()
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
