@@ -113,11 +113,6 @@
    "sides": [
     [
      {
-      "name": "state_path_for:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/doc_sync/notice.py:262"
-     },
-     {
       "name": "_http_lift_url_ok:in",
       "fingerprint": "fef34d39956c07c5",
       "at": "hooks/lib/bash_safety_rules.py:770"
@@ -153,11 +148,6 @@
       "at": "hooks/lib/session_resources.py:92"
      },
      {
-      "name": "_own_scratch:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/lib/write_gate/overwrite_scope.py:175"
-     },
-     {
       "name": "_into_dir_texts:in",
       "fingerprint": "fef34d39956c07c5",
       "at": "hooks/pretool-bash-views-guard.py:215"
@@ -166,11 +156,6 @@
       "name": "_session_scratch_of:in",
       "fingerprint": "fef34d39956c07c5",
       "at": "hooks/pretool-orchestrator-gate.py:450"
-     },
-     {
-      "name": "scratch_write:in",
-      "fingerprint": "fef34d39956c07c5",
-      "at": "hooks/pretool-orchestrator-gate.py:483"
      },
      {
       "name": "_Scan._cd:in",
@@ -1078,19 +1063,9 @@
    "sides": [
     [
      {
-      "name": "_p6_prockill:in",
+      "name": "<module>._NAME_KILL_HEADS",
       "fingerprint": "315f36bca1db7e64",
-      "at": "hooks/lib/runtime_guard/_core.py:2576"
-     },
-     {
-      "name": "_p6_prockill:in",
-      "fingerprint": "315f36bca1db7e64",
-      "at": "hooks/lib/runtime_guard/_core.py:2577"
-     },
-     {
-      "name": "_p0_anchor:in",
-      "fingerprint": "315f36bca1db7e64",
-      "at": "hooks/lib/runtime_guard/_core.py:4464"
+      "at": "hooks/lib/runtime_guard/_core.py:3502"
      }
     ],
     [
@@ -1588,21 +1563,6 @@
    "sides": [
     [
      {
-      "name": "_exec_subcommand_after_selector:in",
-      "fingerprint": "91b7c01c06df6d5c",
-      "at": "hooks/lib/runtime_guard/_core.py:1912"
-     },
-     {
-      "name": "_package_runner_invocation:in",
-      "fingerprint": "91b7c01c06df6d5c",
-      "at": "hooks/lib/runtime_guard/_core.py:2162"
-     },
-     {
-      "name": "_strip_selector_tokens.sel_flags",
-      "fingerprint": "91b7c01c06df6d5c",
-      "at": "hooks/lib/runtime_guard/_core.py:3104"
-     },
-     {
       "name": "<module>._PM_FLAGS_WITH_VALUE",
       "fingerprint": "91b7c01c06df6d5c",
       "at": "hooks/lib/runtime_guard/_core.py:3502"
@@ -1610,14 +1570,9 @@
     ],
     [
      {
-      "name": "_post_selector_tokens:in",
+      "name": "<module>._WS_SELECTOR_FLAGS",
       "fingerprint": "30fcac140e0219eb",
-      "at": "hooks/lib/runtime_guard/_core.py:3543"
-     },
-     {
-      "name": "_anchor_nonprotected_workspace_selector.sel_flags",
-      "fingerprint": "30fcac140e0219eb",
-      "at": "hooks/lib/runtime_guard/anchor.py:191"
+      "at": "hooks/lib/runtime_guard/anchor.py:176"
      }
     ],
     [
@@ -1854,7 +1809,7 @@
     ],
     [
      {
-      "name": "<module>:re",
+      "name": "<module>._KEY_NAME:re",
       "fingerprint": "d7439167d45ec3bf",
       "at": "hooks/lib/sensitive_names.py:47"
      }
@@ -2323,27 +2278,6 @@
       "name": "<module>._WRAPPER_POSITIONAL_OPTIONAL",
       "fingerprint": "ad009975c8dcd313",
       "at": "hooks/lib/runtime_guard/constants.py:55"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "ruled-out-01-watched-exts",
-   "source": "audit f199dfb1e families.json, ruled_out_lookalikes",
-   "reason": "share .js .jsx .py .ts .tsx; one is the extensions whose change makes doc-sync regenerate folder documents, the other the extensions the quality gate can lint",
-   "sides": [
-    [
-     {
-      "name": "<module>.WATCHED_EXTS",
-      "fingerprint": "7d5b0c8eb44ddb89",
-      "at": "hooks/doc_sync/main.py:25"
-     }
-    ],
-    [
-     {
-      "name": "<module>.CHECKABLE_EXTS",
-      "fingerprint": "e66c660e8c555004",
-      "at": "hooks/pretool-quality-gate.py:47"
      }
     ]
    ]
@@ -2961,13 +2895,6 @@
       "fingerprint": "f94d8ec4d2a7cbda",
       "at": "hooks/doc_sync/tree.py:22"
      }
-    ],
-    [
-     {
-      "name": "<module>.SKIP_NAMES",
-      "fingerprint": "f94d8ec4d2a7cbda",
-      "at": "hooks/doc_sync/regen_readme.py:45"
-     }
     ]
    ]
   },
@@ -3394,6 +3321,27 @@
       "name": "_parsed_kind:in",
       "fingerprint": "407cad7a32e5eb89",
       "at": "hooks/pretool-claude-config-guard.py:544"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "mode-operators-vs-attr-operand-signs",
+   "source": "defs-tools lane, check group on integration edc54b6e7",
+   "reason": "runtime_guard's _mutation_targets_for_verb asks whether a chmod argument is a symbolic mode (+, - or = followed only by mode letters, so it is not a path the chmod changes); shell_parse's _attr_operands asks where the option words of chmod, chown, chattr and setfacl end and their path operands begin (a word led by -, + or = is an option or a chattr attribute change, not a path). One classifies a mode string, the other splits options from operands for four verbs; they share only the three sign characters.",
+   "sides": [
+    [
+     {
+      "name": "_mutation_targets_for_verb:in",
+      "fingerprint": "206ca566a91f492e",
+      "at": "hooks/lib/runtime_guard/_core.py:1088"
+     }
+    ],
+    [
+     {
+      "name": "_attr_operands:in",
+      "fingerprint": "206ca566a91f492e",
+      "at": "hooks/lib/shell_parse.py:3505"
      }
     ]
    ]
