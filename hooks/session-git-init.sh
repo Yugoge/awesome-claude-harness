@@ -105,7 +105,8 @@ if harness_auto_push .; then
 fi
 MANUAL_CMD="gh repo create \"$REPO_NAME\" ${CREATE_ARGS[*]}"
 
-_truthy "$AUTO_CREATE" || case "$AUTO_CREATE" in
+_truthy "$AUTO_CREATE" || {
+case "$AUTO_CREATE" in
   ask)
     echo -e "${BLUE}❓ Create GitHub repository '$REPO_NAME'? (set CLAUDE_AUTO_CREATE_REPO env var to automate)${NC}" >&3
     echo -e "${YELLOW}   Skipping for now. Run manually: $MANUAL_CMD${NC}" >&3
@@ -118,6 +119,7 @@ _truthy "$AUTO_CREATE" || case "$AUTO_CREATE" in
     echo -e "${YELLOW}⚠️  CLAUDE_AUTO_CREATE_REPO value not recognised (true/1/yes create, false skips). Skipping GitHub repository creation.${NC}" >&3
     exit 0 ;;
 esac
+}
 
 # Auto-create GitHub repository
 echo -e "${BLUE}🌐 Creating GitHub repository: $REPO_NAME${NC}" >&3

@@ -466,14 +466,9 @@
     ],
     [
      {
-      "name": "_message:in",
+      "name": "<module>.GH_MESSAGE_SUBCOMMANDS",
       "fingerprint": "5c197c0105382b8e",
-      "at": "hooks/pretool-harness-switch-guard.py:252"
-     },
-     {
-      "name": "<module>._GH_MESSAGE_SUBS",
-      "fingerprint": "5c197c0105382b8e",
-      "at": "hooks/pretool-wrapper-userintent.py:208"
+      "at": "hooks/lib/git_facts.py:53"
      }
     ]
    ]
@@ -1304,14 +1299,9 @@
    "sides": [
     [
      {
-      "name": "_Scan._make:in",
+      "name": "<module>._DEFAULT_MAKEFILES",
       "fingerprint": "d5f7f87b8848d545",
-      "at": "hooks/pretool-wrapper-userintent.py:2953"
-     },
-     {
-      "name": "_Scan._make:in",
-      "fingerprint": "d5f7f87b8848d545",
-      "at": "hooks/pretool-wrapper-userintent.py:2957"
+      "at": "hooks/pretool-wrapper-userintent.py:208"
      }
     ],
     [
@@ -1366,37 +1356,6 @@
       "name": "<module>._SORT_FORBIDDEN",
       "fingerprint": "a1e47531a093c8f0",
       "at": "hooks/lib/bash_read_only.py:133"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "overnight-actor-classes",
-   "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "Two identical pairs in one file: the actors, and the actors plus a worktree context.",
-   "sides": [
-    [
-     {
-      "name": "main:in",
-      "fingerprint": "5a9b45a1a15db1ed",
-      "at": "hooks/pretool-overnight-hook-guard.py:1978"
-     },
-     {
-      "name": "main:in",
-      "fingerprint": "5a9b45a1a15db1ed",
-      "at": "hooks/pretool-overnight-hook-guard.py:2009"
-     }
-    ],
-    [
-     {
-      "name": "main:in",
-      "fingerprint": "40d0dac7b2263807",
-      "at": "hooks/pretool-overnight-hook-guard.py:1985"
-     },
-     {
-      "name": "main:in",
-      "fingerprint": "40d0dac7b2263807",
-      "at": "hooks/pretool-overnight-hook-guard.py:2003"
      }
     ]
    ]
@@ -1548,14 +1507,9 @@
     ],
     [
      {
-      "name": "handle_phase_a:in",
+      "name": "<module>._DEV_COMMANDS",
       "fingerprint": "1600c9eb2ee79e0b",
-      "at": "hooks/prompt-workflow.py:1770"
-     },
-     {
-      "name": "cli:in",
-      "fingerprint": "1600c9eb2ee79e0b",
-      "at": "hooks/prompt-workflow.py:2039"
+      "at": "hooks/prompt-workflow.py:368"
      }
     ]
    ]
@@ -2929,9 +2883,9 @@
    "sides": [
     [
      {
-      "name": "<script>:case",
+      "name": "_truthy:case",
       "fingerprint": "54d6200645ebbe9c",
-      "at": "hooks/session-git-init.sh:117"
+      "at": "hooks/session-git-init.sh:115"
      }
     ],
     [
