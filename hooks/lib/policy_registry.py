@@ -60,6 +60,7 @@ from typing import Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+import locations  # noqa: E402
 
 # Relative path of the tool policy under the resolved harness home. The absolute
 # path is resolved at load time via claude_home so a fresh non-root clone (whose
@@ -292,7 +293,7 @@ def _carveout_entries(role_pol: dict) -> list:
         if not (entry.startswith("/") and entry.endswith("/")):
             continue
         parts = entry.strip("/").split("/")
-        if any(part in ("", ".", "..") for part in parts):
+        if any(part in locations.NAMELESS_PARTS for part in parts):
             continue
         out.append(entry)
     return out
