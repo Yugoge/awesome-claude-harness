@@ -71,8 +71,8 @@ def test_clean_names_every_refusal_and_withdraws_what_the_tool_policy_refused() 
     policy = json.loads((ROOT / "policies/tool-policy.v1.json").read_text(encoding="utf-8"))
     assert "*" in policy["roles"]["dev"]["allowed_write_path_prefixes"]
     assert "the owner's own `/allow` grant for it (for example `/allow git commit`), typed as the owner's own prompt" in rule
-    assert "recorded, with its exact operation and the hook's output, as that action's outcome in Steps 17 and 18" \
-        in rule
+    assert ("recorded, with its exact operation, the hook's output and, where the refusing hook reads `/allow` "
+            "grants, the exact `/allow` line the owner could type, as that action's outcome in Steps 17 and 18") in rule
     assert OWNER_RUN.findall(rule) == []
 
 
