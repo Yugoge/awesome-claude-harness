@@ -3379,6 +3379,13 @@ RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
 GREP_PATTERN_OPTS = ("-e", "--regexp")
 GREP_PATTERN_FILE_OPTS = ("-f", "--file")
 GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
+# grep's options that take a value (GNU grep 3.11 --help; --color[=WHEN] takes one only after `=`): those
+# every grep-like search shares, then GNU grep's own.
+GREP_CORE_VALUE_OPTS = GREP_PATTERN_OPTS + GREP_PATTERN_FILE_OPTS + (
+    "-m", "--max-count", "-A", "--after-context", "-B", "--before-context", "-C", "--context")
+GREP_VALUE_OPTS = GREP_CORE_VALUE_OPTS + ("-d", "--directories", "-D", "--devices", "--binary-files", "--include",
+                                          "--exclude", "--exclude-dir", "--exclude-from", "--label",
+                                          "--group-separator")
 RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip", "--pre-glob")
 # ripgrep's options that take a value: the short letters and the long names.
 RG_VALUE_SHORT = frozenset("efgtTmABCMjrEd")
