@@ -55,6 +55,7 @@ if ! write_checkpoint "" "manual: /checkpoint" "$SUMMARY"; then
   echo -e "${RED}❌ Failed to create checkpoint. See ~/.claude/logs/checkpoint.log${NC}"
   exit 1
 fi
+[ -z "$checkpoint_notice" ] || echo "⚠️  $checkpoint_notice"
 
 # Display the new tip of the checkpoint ref
 if [ -n "$BRANCH" ]; then
