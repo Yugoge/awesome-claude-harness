@@ -4294,7 +4294,6 @@ _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", 
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
 _SED_PRINT = re.compile(r"^(([0-9]+|\$)(,([0-9]+|\$))?)?p$")
-_PLAIN_HEREDOC_OPS = HEREDOC_OPS
 
 
 def _plain_word(w, params=False):
@@ -4328,7 +4327,7 @@ def _plain_redirects(cmd, sv, reads_ok=True):
     for x in cmd.redirects:
         if x.fd_var is not None:
             return False
-        if x.op in _PLAIN_HEREDOC_OPS:
+        if x.op in HEREDOC_OPS:
             if not reads_ok or x.fd != 0:
                 return False
             if x.hd is not None and not (x.hd.quoted or not x.hd.expansions):
@@ -4607,7 +4606,6 @@ def _dd_fd_of(path):
     return int(m.group(2)) if m else None
 
 
-_HEREDOC_OPS = HEREDOC_OPS
 
 
 def _dd_redirect_targets(site, fds=(), extra=()):
@@ -4628,7 +4626,7 @@ def _dd_redirect_targets(site, fds=(), extra=()):
     def named(x):
         return bool(fds) and (x.fd in fds or (x.fd is None and x.fd_var is not None))
     return [x.target.value() for x in redirects
-            if x.target is not None and x.dup is None and not x.close and x.op not in _HEREDOC_OPS
+            if x.target is not None and x.dup is None and not x.close and x.op not in HEREDOC_OPS
             and (x.writes() or named(x))]
 
 
@@ -6145,7 +6143,6 @@ _SD_LISTERS = frozenset({"ls", "dir", "vdir", "du", "echo", "printf", "stat", "f
 # What a later word can use to reach an earlier command's last argument (`grep -l session_dirs.txt; cat $_`).
 _SD_LAST_ARG = re.compile(r"\$(_(?![A-Za-z0-9_])|\{_(?![A-Za-z0-9_])|\{?BASH_(ARGV|ARGC|COMMAND|EXECUTION_STRING)|\{!)"
                           r"|!\$")
-_SD_FIND_NAMES = set(FIND_NAME_TESTS)
 _SD_FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
 # Interpreters: (short options whose value is code, short options that take the next word, long options whose
 # value is code).
@@ -6292,7 +6289,7 @@ def _sd_glob_operand(res, out_safe):
         if res.payload is None and not any(v in _SD_FIND_ACTIONS for v in vals) and out_safe:
             return None
         for k, a in enumerate(vals[:-1]):
-            if a in _SD_FIND_NAMES and _sd_pattern_hits(vals[k + 1]):
+            if a in FIND_NAME_TESTS and _sd_pattern_hits(vals[k + 1]):
                 return vals[k + 1]
             if a in ("-regex", "-iregex") and _sd_pattern_hits(vals[k + 1], regex=True):
                 return vals[k + 1]

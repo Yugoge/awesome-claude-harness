@@ -1123,7 +1123,6 @@ _HOOK_ENTRY = re.compile(r"(?:pretool|subagentstop|subagentstart)-[\w.-]*\.(?:py
 _PROVENANCE_TEXT = re.compile(r"report_provenance|report-provenance|observe_call")
 _RUNNERS = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh|"
                       r"source|\.)\Z")
-_SHELL_VALUE_OPTS = frozenset(_sp_names.SHELL_VALUE_OPTS)
 _INLINE_FLAGS = re.compile(r"-[A-Za-z]*[ceEr]\Z")
 _PY_VALUE_OPTS = frozenset({"-W", "-X", "-Q"})
 _HOOKS_DIR = re.compile(r"(?:\A|[/'\"=:\s])hooks/?(?:\Z|['\"\s:;)])|hooks/lib\b|/hooks(?=['\"/\s:;)]|\Z)")
@@ -1145,7 +1144,6 @@ _WRITES = re.compile(
 # Top-level module names an import statement in python code names.
 _PY_IMPORTED = re.compile(r"(?:^|[;\n])\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))")
 _FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
-_FIND_NAME_OPTS = frozenset(_sp_names.FIND_NAME_TESTS)
 _EXEC_WRAPPERS = frozenset({"env", "nice", "timeout", "nohup", "command", "exec", "stdbuf", "setsid", "time",
                             "sudo", "ionice", "chrt", "taskset", "xargs"})
 _BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
@@ -1257,7 +1255,7 @@ def _find_runs_hook(args: list, texts: list, dirs: list) -> str | None:
             break
         roots.append(w)
     for i, w in enumerate(words[:-1]):
-        if w not in _FIND_NAME_OPTS:
+        if w not in _sp_names.FIND_NAME_TESTS:
             continue
         pat = words[i + 1].replace('"', "").replace("'", "")
         if _HOOK_ENTRY.search(pat) or _PROVENANCE_TEXT.search(pat):
@@ -1318,7 +1316,7 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             if name in sp.SCRIPT_RUNNERS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
                 operand = None
                 break  # `sh -c CODE`: walked as commands of its own
-            if name in sp.SCRIPT_RUNNERS and a in _SHELL_VALUE_OPTS:
+            if name in sp.SCRIPT_RUNNERS and a in _sp_names.SHELL_VALUE_OPTS:
                 if a in ("-o", "+o") and i + 1 < len(args) and (args[i + 1] or "") == "noexec":
                     noexec = a == "-o"
                 i += 2

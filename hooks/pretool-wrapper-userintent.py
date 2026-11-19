@@ -2767,8 +2767,6 @@ class _Scan:
             return ''
         return out
 
-    _PLAIN_PAGERS = _bro.PLAIN_PAGERS
-
     def _plain_pager(self, prog) -> bool:
         """A pager that only reads the files git hands it: less, more or cat (with options),
         unless the command sets LESSOPEN / LESSCLOSE for less."""
@@ -2779,7 +2777,7 @@ class _Scan:
         if '/' in head and os.path.dirname(head) not in locations.SYSTEM_BIN_DIRS:
             return False
         name = os.path.basename(head)
-        if name not in self._PLAIN_PAGERS or (name in ('less', 'more') and (
+        if name not in _bro.PLAIN_PAGERS or (name in ('less', 'more') and (
                 self.lessopen or re.search(r'\b(?:LESS|MORE)\w*\+?=', self.command))):
             return False  # LESS / LESSKEY* / MORE set by the command may hold commands
         return all(w.startswith('-') and 'k' not in w.lstrip('-')[:1] and 'lesskey' not in w

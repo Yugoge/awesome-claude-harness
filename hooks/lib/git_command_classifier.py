@@ -1944,7 +1944,6 @@ _HIDDEN_CODE_OPTIONS = (
     (re.compile(r'Rscript\Z'), 'e', ()),
 )
 _HIDDEN_SHELLS = shell_parse.SCRIPT_RUNNERS
-_HIDDEN_SHELL_VALUE_OPTS = frozenset(shell_parse.SHELL_VALUE_OPTS)
 _HIDDEN_SCRIPT_MAX = 256 * 1024
 _HIDDEN_GIT_RE = re.compile(r'(?<![\w.-])git(?![\w.-])')
 _HIDDEN_WORD_RE = re.compile(r'[\w.:/+@^~=%-]+')
@@ -2000,7 +1999,7 @@ def _hidden_script_path(name, head, argv):
                 return None
             if skip:
                 skip = False
-            elif arg in _HIDDEN_SHELL_VALUE_OPTS:
+            elif arg in shell_parse.SHELL_VALUE_OPTS:
                 skip = True
             elif name in shell_parse.SOURCE_BUILTINS or not arg.startswith(shell_parse.OPTION_SIGNS):
                 return (arg, True) if arg not in _STDIN_PATHS else None

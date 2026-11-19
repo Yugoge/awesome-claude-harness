@@ -121,7 +121,6 @@ _MAX_EMBED_DEPTH = 3
 _QUOTING_RE = re.compile(r"['\"`\\]")
 _SYNTAX_RE = re.compile(r"['\"`\\$()<>]")
 # Word parts with no static text: an expansion the shell computes at run time.
-_DYNAMIC_PARTS = DYNAMIC_PART_KINDS
 # Parts that run a command (substitutions), whose bodies are commands too.
 _BODY_PARTS = BODY_PART_KINDS
 
@@ -176,7 +175,7 @@ def _static_word(word):
     for kind, src, _off in word.segs:
         if kind == "ansi":
             out.append(ansi_decode(src.text))
-        elif kind in _DYNAMIC_PARTS:
+        elif kind in DYNAMIC_PART_KINDS:
             dynamic = True
             if kind in _BODY_PARTS:
                 bodies.append(src.text)
