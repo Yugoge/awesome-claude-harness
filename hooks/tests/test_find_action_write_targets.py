@@ -43,8 +43,9 @@ READS = [  # an ordinary find, and words that only look like an action
 def test_a_file_writing_action_is_a_write_target(command, path, mechanism):
     found = [(t.path, t.mode, t.mechanism) for t in sp.write_targets(sp.parse(command))]
     assert found == [(path, sp.TRUNCATE, mechanism)]
-    assert extract_bash_write_paths(command) == [path]
-    assert extract_bash_touched_paths(command) == [(path, False)]
+    landed = ("x/" if command.startswith("cd x ") else "") + path  # judged where its command runs, as any write
+    assert extract_bash_write_paths(command) == [landed]
+    assert extract_bash_touched_paths(command) == [(landed, False)]
 
 
 @pytest.mark.parametrize("command", READS)
