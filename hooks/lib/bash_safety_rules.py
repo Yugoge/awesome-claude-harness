@@ -3225,8 +3225,8 @@ def _base_bulk_sentinel_decision(cmd):
     if tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         return 'DENY'
     keywords = {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', 'select'}
-    redirects = {'>', '>>', '<', '<>', '>|', '&>', '&>>', '>&', '<&', '<<', '<<-', '<<<'}
-    if any(t in keywords or t in redirects for t in tokens) or 'xargs' in tokens or 'tee' in tokens:
+    from lib.shell_parse import REDIRECT_OPS
+    if any(t in keywords or t in REDIRECT_OPS for t in tokens) or 'xargs' in tokens or 'tee' in tokens:
         return 'DENY'
     actions = {'-exec', '-execdir', '-delete', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'}
     for t in tokens:

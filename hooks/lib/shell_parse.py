@@ -420,6 +420,7 @@ _OP_CHARS = ";&|()"
 _WORD_BREAK = " \t\n" + _OP_CHARS + "<>"
 _OPS = (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")")
 _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
+REDIRECT_OPS = ("&>>", "&>") + _REDIR_OPS  # every redirection operator, longest first (&> takes no fd)
 PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
 OPTION_SIGNS = ("-", "+")  # what starts an option word: -x switches on, +x off
 OPTION_ENDS = ("--", "-")  # the words that end the options: `--`, and `-` (standard input)

@@ -179,8 +179,7 @@ _SHELL_PREFIX_KEYWORDS = {
 
 # Leading redirections, attached (`2>/dev/null`, `{fd}>f`) or bare (`2> f`).
 _REDIRECT_RE = re.compile(
-    r'^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|\d+)?'
-    r'(?:<<<|<<-|<<|>>|&>>|&>|>&|<&|>\||<>|>|<)'
+    r'^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|\d+)?(?:%s)' % '|'.join(map(re.escape, shell_parse.REDIRECT_OPS))
 )
 
 _ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?\+?=')
