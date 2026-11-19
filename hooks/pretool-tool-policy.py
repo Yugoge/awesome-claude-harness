@@ -1831,6 +1831,8 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     check_tool = "Write" if tool_name == "Bash" else tool_name
     restaged = _restaged_targets(tool_name, data.get("tool_input"))
     for target in targets:
+        if check_tool in WRITE_TOOLS and locations.is_sink(target):
+            continue  # the null device, the caller's own streams, terminal or descriptor: no file is written
         carveouts = restaged is not None and target not in restaged
         if check_tool in WRITE_TOOLS and target in approved and target not in own:
             allowed, reason = _approved_write_allowed(role, check_tool, target)

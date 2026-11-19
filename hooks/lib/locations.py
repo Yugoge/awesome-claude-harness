@@ -151,6 +151,12 @@ def is_device(path, cwd: Optional[str] = None) -> bool:
     return bool(full) and below(full, DEVICE_DIR) is not None and not below(full, SHM_DIR)
 
 
+def is_sink(path) -> bool:
+    """Whether a write to ``path``, as written, changes no file: the null device, the writer's own
+    standard streams or terminal, or a descriptor it already holds (/dev/fd/N)."""
+    return isinstance(path, str) and (path in TERMINAL_SINKS or bool(FD_PATH.match(path)))
+
+
 def is_system_path(path: str) -> bool:
     """Whether absolute normal ``path`` is in a directory the system keeps (UNSAFE_DIRS); a file of
     the tmpfs mounted in the device directory is not."""
