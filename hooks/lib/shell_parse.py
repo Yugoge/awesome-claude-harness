@@ -28,6 +28,11 @@ import os
 import re
 import sys
 
+try:
+    from lib import locations
+except ImportError:  # hooks/lib itself is on sys.path
+    import locations
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -2809,7 +2814,7 @@ def _resolve_shell(r, head, words, cmd, depth):
     return r
 
 
-_STDIN_FILES = ("/dev/stdin", "/dev/fd/0", "/proc/self/fd/0", "-")
+_STDIN_FILES = locations.STDIN_DEVICES + ("-",)
 
 
 def _script_operand(r, w, cmd, depth):
@@ -2831,7 +2836,7 @@ def _script_operand(r, w, cmd, depth):
             r.unresolved = "generated_code"
         r.payload_kind = "pipe_shell"
         return
-    if v is None or (v or "").startswith("/dev/fd/"):
+    if v is None or (v or "").startswith(locations.FD_DIR):
         r.unresolved = "script_file_computed"
 
 

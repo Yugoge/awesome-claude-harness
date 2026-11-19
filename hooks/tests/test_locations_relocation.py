@@ -43,8 +43,6 @@ POLICY_BLOCK = "BLOCKED by tool-policy.v1: "
 
 @pytest.fixture(params=list(PROJECTS))
 def project(request) -> str:
-    if request.param == "dev-shm" and not os.path.isdir("/dev/shm"):
-        pytest.skip("this machine mounts no filesystem at /dev/shm, so no project can lie there")
     path = PROJECTS[request.param]
     assert not os.path.exists(path)
     return path
@@ -482,15 +480,17 @@ def test_f17_the_users_home_is_a_broad_root_whoever_the_user_is(tmp_path, home):
 
 # --- the one place itself -------------------------------------------------------------------------
 
-def test_is_device_is_what_the_file_is_not_where_its_name_starts(tmp_path):
+def test_a_file_on_the_shared_memory_tmpfs_is_no_device(tmp_path):
     from lib import locations
-    for device in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/2", "/dev", "/dev/tcp/host/80"):
+    for device in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/2", "/dev", "/dev/tcp/host/80",
+                   "/dev/sda1", "/dev/mapper/not-made-yet", "/dev/shm/../sda"):
         assert locations.is_device(device), device
-    if os.path.isdir("/dev/shm"):
-        for ordinary in ("/dev/shm", f"/dev/shm/{NEVER}/proj/docs/x.json"):
-            assert not locations.is_device(ordinary), ordinary
-    for ordinary in ("/dev/../etc/hostname", str(tmp_path / "x"), "docs/x.json", "", "/devices/x"):
+    for ordinary in ("/dev/shm", f"/dev/shm/{NEVER}/proj/docs/x.json", "/dev/../etc/hostname", "/dev/shmem/x/../../shm/x",
+                     str(tmp_path / "x"), "docs/x.json", "", "/devices/x"):
         assert not locations.is_device(ordinary), ordinary
+    assert locations.is_device("x", cwd="/dev") and not locations.is_device("x", cwd="/dev/shm")
+    assert locations.is_system_path("/dev/sda1") and locations.is_system_path("/etc/hostname")
+    assert not locations.is_system_path("/dev/shm/proj/x") and not locations.is_system_path("/root/proj/x")
 
 
 def test_is_inside_resolves_both_sides(tmp_path):

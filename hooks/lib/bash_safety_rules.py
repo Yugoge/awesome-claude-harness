@@ -46,9 +46,8 @@ def grep(pattern, text):
 
 
 def state_dir():
-    """The hook state root as lib/harness_state_dir.sh resolves it."""
-    v = os.environ.get("CLAUDE_STATE_DIR", "")
-    return (v.rstrip("/") or "/") if v.startswith("/") else "/tmp"
+    """The hook state root: its one resolution (lib/locations.state_root)."""
+    return locations.state_root()
 
 
 def one_slash(d):
@@ -601,7 +600,7 @@ def _http_reader_ok(site, r):
     if name not in HTTP_STOP_READERS | HTTP_STOP_FILTERS:
         return False
     for rd in site.cmd.redirects:
-        if rd.writes() and not (rd.target is not None and rd.target.value() == "/dev/null"):
+        if rd.writes() and not (rd.target is not None and rd.target.value() == locations.NULL_DEVICE):
             return False
     args = [w.value() if w.value() is not None else w.text for w in site.cmd.words[1:]]
     if name in ("sed", "rg", "git") and any(w.value() is None for w in site.cmd.words[1:]):
@@ -754,7 +753,7 @@ def _http_lift_value_ok(kind, v):
 def _http_out_path_ok(v):
     """A place shape (b)'s client (or its option) may write to: /dev/null, or a plain literal file path with no
     `..` segment that is not under /dev or /proc (no /dev/tcp, /dev/udp, /dev/fd or /proc/*/fd socket)."""
-    if v == "/dev/null":
+    if v == locations.NULL_DEVICE:
         return True
     if not re.fullmatch(r"[A-Za-z0-9_./][A-Za-z0-9_./-]*", v):
         return False
@@ -1362,9 +1361,9 @@ def _shape_strict_ok(command, carries, sites):
             body = r.hd.body if r.hd is not None else (r.target.text if r.op == "<<<" and r.target is not None else None)
             if body is not None and (carries(body) or carries(re.sub(r"""[\\'"]""", "", body)) or "$'" in body):
                 return False
-            if r.target is not None and r.writes() and r.target.value() != "/dev/null":
+            if r.target is not None and r.writes() and r.target.value() != locations.NULL_DEVICE:
                 return False
-        if any(t != "/dev/null" for t in _arg_write_targets(res)):
+        if any(t != locations.NULL_DEVICE for t in _arg_write_targets(res)):
             return False
         if writer:
             names = {res.name} | {n for n, _o in res.wrappers}
@@ -1376,7 +1375,7 @@ def _shape_strict_ok(command, carries, sites):
     if writer:
         try:
             from lib.shell_parse import parse, write_targets
-            if any(t.path != "/dev/null" for t in write_targets(parse(command))):
+            if any(t.path != locations.NULL_DEVICE for t in write_targets(parse(command))):
                 return False
         except Exception:  # noqa: BLE001
             return False
@@ -1524,6 +1523,7 @@ def commit_artifact_rules(command, state):
 # The flag's name has one definition, next to its reader (lib/allowlist.has_do_consent); hooks/prompt-workflow.py
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
+from lib import locations  # noqa: E402
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
 # Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
@@ -1551,7 +1551,7 @@ _CONSENT_UNPACKERS = {
     "7z": "7z", "7za": "7z", "7zr": "7z", "gzip": "gzip", "gunzip": "gzip", "zcat": "gzip", "pigz": "gzip",
     "unpigz": "gzip", "ar": "ar", "dpkg-deb": "deb", "dpkg": "deb", "pax": "pax", "unrar": "rar", "rar": "rar",
     "unar": "unar", "lha": "lha", "lhasa": "lha"}
-_CONSENT_DEVICES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty")
+_CONSENT_DEVICES = locations.TERMINAL_SINKS
 _CONSENT_UNKNOWN = ("_", "BASH_REMATCH", "BASH_ARGV", "COMP_WORDS", "REPLY", "MAPFILE")
 
 
@@ -1640,7 +1640,7 @@ class _ConsentView:
 
     def __init__(self, sp, script, sites, command, cwd, state):
         self.sp, self.state = sp, state
-        self.state_is_tmp = _consent_same_dir(state, "/tmp")
+        self.state_is_tmp = _consent_same_dir(state, locations.DEFAULT_TEMP_DIR)
         self.home = os.environ.get("HOME", "")
         self.command = command
         self.defs = {}  # variable -> list of ("static", text) | ("word", Word) | ("text", source text) | ("state",)
@@ -1710,7 +1710,7 @@ class _ConsentView:
         text = text or ""
         if self.state in text or os.path.realpath(self.state) in text or "CLAUDE_STATE_DIR" in text:
             return True
-        if self.state_is_tmp and re.search(r"/tmp\b|\bTE?MP(DIR)?\b|\bmktemp\b", text):
+        if self.state_is_tmp and re.search(locations.DEFAULT_TEMP_DIR + r"\b|\bTE?MP(DIR)?\b|\bmktemp\b", text):
             return True
         if self.cwd_state(".") and re.search(r"\bpwd\b|\bO?L?D?PWD\b|\$\{?PWD|\bdirs\b", text):
             return True
@@ -2773,7 +2773,7 @@ def consent_flag_verdict(command, cwd, state):
     for t in sp.write_targets(script):
         if t.mode == "delete" and deletes_state(t):
             return "it deletes or moves the state directory that holds the consent flag"
-        if t.path is not None and (t.path in _CONSENT_DEVICES or t.path.startswith("/dev/fd/")):
+        if t.path is not None and (t.path in _CONSENT_DEVICES or t.path.startswith(locations.FD_DIR)):
             continue
         real_writes = True
         config_writes = config_writes or _consent_git_config_file(view, t)
@@ -3372,7 +3372,7 @@ def executable_view_or_raw(command):
 _HB_NOEXEC_SHELLS = frozenset({"bash", "sh", "dash"})
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile(r"(/bin/|/usr/bin/|/usr/local/bin/)?(bash|sh|dash)")
+_HB_SHELL_WORD = re.compile("(%s)?(bash|sh|dash)" % "|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
 # Options an inert noexec shell may carry: none of them runs, echoes or sources anything.
@@ -3498,7 +3498,7 @@ def _hb_inert_redirect(r):
         return False
     if r.op in (">&", "<&"):
         return r.dup is not None or r.close
-    return r.op in ("<", ">", ">>") and _hb_plain(r.target) and r.target.literal() == "/dev/null"
+    return r.op in ("<", ">", ">>") and _hb_plain(r.target) and r.target.literal() == locations.NULL_DEVICE
 
 
 def _hb_inert_shell(words):
@@ -4187,7 +4187,6 @@ _PLAIN_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", 
 _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "wc"})
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
-_PLAIN_UNSAFE_DIRS = ("/dev/", "/proc/", "/sys/", "/etc/", "/boot/", "/run/", "/var/run/")
 _SED_PRINT = re.compile(r"^(([0-9]+|\$)(,([0-9]+|\$))?)?p$")
 _PLAIN_HEREDOC_OPS = ("<<", "<<-", "<<<")
 
@@ -4213,7 +4212,7 @@ def _plain_file(w, sv):
     p = _abs_norm(v, sv.cwd)
     if not v.startswith("/") and sv.named("cd", "pushd", "popd"):
         return False
-    return all(q == "/dev/null" or q.startswith("/dev/shm/") or not (q + "/").startswith(_PLAIN_UNSAFE_DIRS)
+    return all(q == locations.NULL_DEVICE or not locations.is_system_path(q)
                for q in (p, _abs_norm(os.path.realpath(p))))
 
 
@@ -4254,14 +4253,14 @@ def _plain_dd(vals, sv):
         if not v.startswith("of="):
             continue
         path = v[3:]
-        if path.startswith("/") and _abs_norm(path) in ("/dev/null", "/dev/stdout", "/dev/stderr"):
+        if path.startswith("/") and _abs_norm(path) in locations.STD_SINKS:
             continue
         if not path or path.startswith("~") or (not path.startswith("/") and sv.named("cd", "pushd", "popd")):
             return False
         p = _abs_norm(path, sv.cwd)
-        if re.match(r"^/dev/fd/[0-9]+$", p):
+        if locations.FD_PATH.fullmatch(p):
             continue  # its command's redirections are plain (fd 1 and 2 only), so N is inherited or stdout/stderr
-        if (p + "/").startswith(_PLAIN_UNSAFE_DIRS) and not p.startswith("/dev/shm/"):
+        if locations.is_system_path(p):
             return False
         if _dd_target_refused(path, sv):
             return False
@@ -4454,7 +4453,7 @@ def _dd_target_refused(path, sv):
         return True
     if _dd_fd_of(_abs_norm(path) if path.startswith("/") else path) is not None:
         return False  # a descriptor: the command's own redirections are checked as dd's targets
-    if re.match(r"^/proc/[^/]+/fd(/|$)", _abs_norm(path, "/x")):
+    if locations.PROC_FD.match(_abs_norm(path, "/x")):
         return True  # /proc/<pid>/fd/N of a process other than this shell: its file cannot be read here
     if path.startswith("~"):
         path = os.path.expanduser(path)  # bash expands a tilde after of= too
@@ -4468,10 +4467,9 @@ def _dd_target_refused(path, sv):
     with contextlib.suppress(Exception):
         paths.append(_abs_norm(os.path.realpath(paths[0])))
     for p in paths:
-        if p == "/dev" or p.startswith("/dev/"):
-            rel = p[5:]
-            if not (rel in DD_DEV_OK or rel.startswith(("fd/", "shm/"))):  # /dev/shm/x: a tmpfs file
-                return True
+        rel = locations.device_name(p)  # a file of the tmpfs mounted there (/dev/shm/x) is no device
+        if rel is not None and not (rel in DD_DEV_OK or rel.startswith("fd/") or not locations.is_device(p)):
+            return True
     return False
 
 
@@ -5716,7 +5714,7 @@ def _interpreter_shell_texts(code):
 _PIPE_FILTERS = frozenset({"head", "tail", "wc", "sort", "uniq", "cut", "less", "more", "grep", "rg"})
 _SHAPE_SEARCHERS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
 _SHAPE_COMMANDS = frozenset({"echo", "printf", "cat", "ls", "true", "git"}) | _SHAPE_SEARCHERS
-_SAFE_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/2"})
+_SAFE_DEVICES = locations.TERMINAL_SINKS | {locations.FD_DIR + "1", locations.FD_DIR + "2"}
 _SHAPE_GIT_SUBS = frozenset({"status", "show", "diff", "log", "restore", "add", "commit", "rev-parse", "ls-files",
                              "stash", "checkout", "clean", "blame", "shortlog", "describe", "branch", "switch",
                              "cat-file", "ls-tree", "merge-base", "reflog", "tag"})
@@ -6395,7 +6393,7 @@ _SD_DECODE = (
     (re.compile(r"\\0?([0-7]{1,3})"), 8),
 )
 _SD_DROP = re.compile(r"""['"\\$+`\s]""")
-_SD_HEAD_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
+_SD_HEAD_DIRS = locations.BIN_DIRS
 # What can change which program a search or commit call runs, or what it reads: a shell function of that name
 # (read with quotes, blanks and escapes gone), a command that defines one or an alias or rehashes a path, and a
 # variable that moves the program, its options or its config.
@@ -6629,7 +6627,7 @@ def _sd_git(args):
                     value = val if eq else (rest[j + 1] if j + 1 < len(rest) else None)
                     if name == "--message":
                         allowed.add(base + value_at)
-                    if name == "--file" and value in ("-", "/dev/stdin"):
+                    if name == "--file" and value in ("-", locations.STDIN_DEVICE):
                         stdin = True
                     j += 1 if eq else 2
                     continue
@@ -6645,7 +6643,7 @@ def _sd_git(args):
                     value = a[c_at + 1:] if attached else (rest[j + 1] if j + 1 < len(rest) else None)
                     if c == "m":
                         allowed.add(base + (j if attached else j + 1))
-                    if c == "F" and value in ("-", "/dev/stdin"):
+                    if c == "F" and value in ("-", locations.STDIN_DEVICE):
                         stdin = True
                     if not attached:
                         j += 1
@@ -7336,7 +7334,7 @@ def _sd_quiet_redirects(redirects, stdin_doc=False):
             if r.fd not in (1, 2) or r.dup not in (1, 2):
                 return False
             continue
-        if not r.writes() or r.target is None or r.target.value() != "/dev/null" or \
+        if not r.writes() or r.target is None or r.target.value() != locations.NULL_DEVICE or \
                 any(p.kind != "lit" for p in r.target.parts):
             return False
     return True
@@ -7517,7 +7515,7 @@ def session_dirs_rule(command):
 # ── Entry ────────────────────────────────────────────────────────────────────
 
 def environment():
-    tmp = os.environ.get("CLAUDE_TMPDIR") or os.environ.get("TMPDIR") or "/tmp"
+    tmp = os.environ.get("CLAUDE_TMPDIR") or os.environ.get("TMPDIR") or locations.DEFAULT_TEMP_DIR
     helper = os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_HELPER", "")
     return {
         "prefix": os.environ.get("CLAUDE_PROTECTED_DAEMON_PREFIX", ""),
