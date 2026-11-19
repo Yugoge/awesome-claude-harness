@@ -87,14 +87,6 @@ MARK_ENV = "CLAUDE_HOOK_LAUNCH_MARKS"  # a traced replay's marker directory (tes
 from lib.hook_launch_fallback import TOOL_EVENTS  # noqa: E402 -- the stdlib-only fallback holds the one list
 PLAIN_CONTEXT_EVENTS = frozenset({"UserPromptSubmit", "SessionStart"})
 TIMEOUT = "timeout"             # a hook's status when it ran past its timeout
-# Standard-library modules imported once before the forks, so each fork does not import them again:
-# pkgutil is the runner's own (runpy.run_path imports it for every file); pathlib (most hooks, through
-# their libraries), datetime and shlex are what the hooks import most. Their import runs only their own
-# definitions (no file, environment, working directory, signal or other module of the process changes),
-# and the one-after-another run already gave every hook after the first that imports one the module
-# loaded, so a fork that finds one loaded decides and prints as the hook did alone. Never a harness
-# module (hooks/, scripts/): a hook's library must load in the hook's own fork.
-WARM = ("pkgutil", "pathlib", "datetime", "shlex")
 
 
 @dataclass(frozen=True)
@@ -309,7 +301,7 @@ class Dispatch:
             from lib import rule_fork
             if not rule_fork.can_fork():
                 return False
-            for name in WARM:
+            for name in rule_fork.WARM:
                 __import__(name)
             index = {r.name: i for i, r in enumerate(self.rules)}
             jobs = [rule_fork.Job(r.file, self.raw, r.timeout,

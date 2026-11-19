@@ -43,10 +43,6 @@ import subprocess
 import sys
 
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
-# The standard-library modules lib/hook_launch.py imports before its forks (its WARM, which says why
-# that changes nothing a hook decides): pkgutil is the runner's own (runpy.run_path imports it for
-# every file), so without it each fork would import it again. Never a harness module.
-WARM = ("pkgutil", "pathlib", "datetime", "shlex")
 # The tools whose rules run one after another even where the gate may fork. Bash: its call waits
 # for pretool-bash-safety.sh (about 470 ms, a shell registration of its own) whatever the gate
 # does, so forking its six rules saved no wait and cost about 30 ms CPU a call (measured with
@@ -93,7 +89,7 @@ def _runs(rules, raw: bytes, tool=None) -> list:
         try:
             from lib import rule_fork
             at_once = rule_fork.can_fork()
-            for name in WARM if at_once else ():
+            for name in rule_fork.WARM if at_once else ():  # lib/rule_fork.WARM says why
                 __import__(name)
         except Exception:
             at_once = False
