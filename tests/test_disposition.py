@@ -830,10 +830,15 @@ def test_an_odd_do_status_prints_one_parseable_line(tmp_path):
     assert gaps[0]["problem"] == "do.status:stopped: waiting\n lane=x"
 
 
-def test_without_the_flag_the_project_root_is_the_working_directory_s_git_top_level(tmp_path):
+def test_without_the_flag_the_project_root_is_the_working_directory(tmp_path):
+    """R1: a Bash call has no CLAUDE_PROJECT_DIR and its cwd is the session's directory, the hooks' project
+    root, even below the git top level: from the project the chain passes, from a subdirectory it is not
+    found there."""
     tree = singular(tmp_path)
     repository(tree, tmp_path)
-    proc = run_cli(tree.root, "dev", cwd=tree.root / "scripts", project_dir=False)
+    proc = run_cli(tree.root, "dev", cwd=tree.root, project_dir=False)
     assert proc.returncode == 0
     assert proc.stdout.splitlines()[0] == f"DISPOSITION=chain_pass STAGE=dev TASK={TASK}"
     assert set(chain_line(proc.stdout)) == set(RESOLVER.CHAIN_FIELDS)
+    below = run_cli(tree.root, "dev", cwd=tree.root / "scripts", project_dir=False)
+    assert below.stdout.splitlines()[0] == f"DISPOSITION=incomplete STAGE=dev TASK={TASK}"
