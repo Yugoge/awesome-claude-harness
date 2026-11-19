@@ -4757,11 +4757,64 @@ def let_through_unproven(entry, payload):
     """
 
 
+def _scratch_owner(payload):
+    """The write policy's answers about the calling actor's own scratch directory: (owner test for a path, the note
+    naming that directory or ""). Both are hooks/pretool-tool-policy.py's own (_scratch_status, _note_own_scratch),
+    loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an actor may write
+    scratch files, with no second one here. An actor the write policy gives no directory (the main agent, a
+    subagent whose role does not resolve) owns nothing, and so does any failure to ask."""
+    import importlib.util
+    import io
+    try:
+        spec = importlib.util.spec_from_file_location("_tool_policy_scratch", os.path.join(HOOKS, "pretool-tool-policy.py"))
+        policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(policy)
+        policy._bootstrap_security()
+        role = policy.resolve_agent_type(payload)
+        note = io.StringIO()
+        with contextlib.redirect_stderr(note):  # the note for a refused write to system temp names the directory
+            policy._note_own_scratch(role, payload, os.path.join(locations.DEFAULT_TEMP_DIR, "removal"))
+    except BaseException:  # noqa: BLE001 - also a bootstrap that exits: nothing is owned
+        return (lambda path: False), ""
+
+    def owns(path):
+        try:
+            return bool(role) and policy._scratch_status(role, path, payload) == "owner"
+        except Exception:  # noqa: BLE001
+            return False
+    return owns, note.getvalue().strip()
+
+
+def _removal_in_own_scratch(proof, payload, owns):
+    """Whether every file a removal names (lib/bash_execution_boundary.py `removal_targets`) lies inside the caller's
+    own scratch directory, from every directory the command may run it in (the call's cwd and each literal `cd`,
+    as written and normalised). A file passes when the place it resolves to and the directory holding its entry
+    both pass the write policy's owner test, so a link outside that directory pointing into it does not."""
+    targets, dirs, cwd = proof.get("targets"), proof.get("cwds"), payload.get("cwd")
+    if not isinstance(targets, list) or not targets:
+        return False
+    for target in targets:
+        if not isinstance(target, str) or not target:
+            return False
+        if os.path.isabs(target):
+            paths = [target]
+        elif not isinstance(dirs, list) or not isinstance(cwd, str) or not os.path.isabs(cwd):
+            return False  # a relative name after a `cd` this reading cannot follow
+        else:
+            paths = [os.path.join(d, target) for d in [cwd] + dirs + [os.path.normpath(d) for d in dirs]]
+        for path in paths:
+            if not (owns(path) and owns(os.path.dirname(path.rstrip(os.sep)) or os.sep)):
+                return False
+    return True
+
+
 def removal_policy(payload_text, command):
     """lib/bash_execution_boundary.py's verdict, then the owner's rule (2026-11-19) for what it cannot prove.
 
     The analyzer runs in its own process under a time and memory limit. A command it proves (PROVEN_INERT,
-    PROVEN_SAFE_REMOVAL) passes; a filesystem removal it finds (FORBIDDEN_REMOVAL) is refused. A command it cannot
+    PROVEN_SAFE_REMOVAL) passes; a filesystem removal it finds (FORBIDDEN_REMOVAL) is refused, unless the analyzer
+    knows every file the command removes and each lies inside the calling actor's own scratch directory as the
+    write policy defines it (the owner, 2026-11-19: one's own temp folder may be deleted). A command it cannot
     prove safe, because it answers UNRESOLVED (the primary path) or gives no usable verdict (timeout, memory
     ceiling, crash, bad JSON: the degraded path), is refused when its text holds a removal word, by the single
     definition in lib/pol_degraded_removal_reference.ere, and otherwise runs. Both paths ask that one question of the
@@ -4772,7 +4825,7 @@ def removal_policy(payload_text, command):
     let_through_unproven().
     """
     analyzer = os.path.join(LIB, "bash_execution_boundary.py")
-    decision = ""
+    decision, proof = "", None
     limit = duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "15s")
     if os.access(analyzer, os.R_OK) and limit is not None:
         try:
@@ -4798,8 +4851,9 @@ def removal_policy(payload_text, command):
                 elif verdict in ("PROVEN_INERT", "PROVEN_SAFE_REMOVAL", "FORBIDDEN_REMOVAL", "UNRESOLVED") \
                         and v.get("allowed") is False:
                     decision = "DENY " + verdict + " " + str(v.get("reason", ""))[:200]
+                    proof = v.get("removal_targets") if verdict == "FORBIDDEN_REMOVAL" else None
         except Exception:  # noqa: BLE001 - timeout, memory ceiling, crash, bad JSON: degraded mode
-            decision = ""
+            decision, proof = "", None
     if decision == "ALLOW":
         return None
     unproven = not decision or decision.startswith("DENY UNRESOLVED ")
@@ -4815,18 +4869,29 @@ def removal_policy(payload_text, command):
             refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
                        f"missing or empty. Denied conservatively.", f"Command: {command}")
         named = grep(rmref, command)
+    own = ()
+    if named:
+        try:
+            payload = json.loads(payload_text)
+        except ValueError:
+            payload = None
+        owns, note = _scratch_owner(payload if isinstance(payload, dict) else {})
+        if isinstance(proof, dict) and isinstance(payload, dict) and _removal_in_own_scratch(proof, payload, owns):
+            return None  # every file it removes is written out and lies in the caller's own scratch directory
+        own = (note, "A removal runs when every file it names is written out in the command (no variable, pattern "
+               "or `~`) and lies inside that directory.") if note else ()
     if decision and named:
         refuse(f"BLOCKED: removal-policy — {decision[5:]}", f"Command: {command}",
                    "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. "
                    "git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no "
                    "submodule); this command has a boundary that is none of these."
                    + (" It could not be proven, and its text holds a removal word (an unproven command that holds none "
-                      "runs)." if unproven else ""), released_line())
+                      "runs)." if unproven else ""), released_line(), *own)
     if named:
         refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
                    "usable verdict, and this command's text holds a removal word. Denied conservatively.",
                    f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; an unproven command "
-                   f"runs only when its text holds no removal word (lib/pol_degraded_removal_reference.ere).")
+                   f"runs only when its text holds no removal word (lib/pol_degraded_removal_reference.ere).", *own)
     return {"rule": "removal-policy", "kind": "let_through_unproven", "path": "primary" if decision else "degraded",
             "reason": decision[5:] or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
 

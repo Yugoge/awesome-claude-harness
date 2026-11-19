@@ -1476,6 +1476,9 @@ class Analyzer:
         # A non-forced git rm's run-time obligations (git options, pathspecs), the
         # directories a `cd` may leave a later one in, and why they cannot be known.
         self.git_rm, self.git_rm_cwds, self.git_rm_unresolved = [], [], ""
+        # Per filesystem removal, the files it names when every one is written out (else None), and
+        # whether some `cd` leaves the directory of what follows unknown (see _removal_targets).
+        self.removals, self.cwd_unknown = [], False
         self._head, self.direct = None, False
         # Whether the code being walked is read by a shell that has `[[ ]]`
         # (see walk). Set per analyze_code call; a call that does not say so
@@ -2192,6 +2195,7 @@ class Analyzer:
             if len(ops) == 1 and ops[0] and ops[0].startswith("/"):
                 self.git_rm_cwds.append(ops[0])
                 return
+            self.cwd_unknown = True
         elif base == "set":  # allexport, keyword and posix let an assignment reach git
             if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in OPTION_SIGNS and x != "--" and ("a" in x or "k" in x) for x in lits):
                 return
@@ -2242,6 +2246,7 @@ class Analyzer:
         if base in REMOVAL_EXES:
             self.cover(head)  # accounted for: it IS the removal we denied
             self.add(FORBIDDEN_REMOVAL, "filesystem_removal", name)
+            self.removals.append(self._removal_targets(base, args) if self.direct else None)
             return
 
         if base == ".":
@@ -2279,6 +2284,22 @@ class Analyzer:
         # arguments alone leaves that entire shape authorized.
         self._terminal_inert("named_program_no_removal_reference", name, words,
                              data_opts=SELECTOR_DATA_OPTIONS.get(basename(name), ()))
+
+    @staticmethod
+    def _removal_targets(base, args):
+        """The files a `rm` or `unlink` run as the command's own head names, when every one is
+        written out in the command; None when any word is computed, a pattern or `~`-led, when it
+        names none, or for a program whose operands are not read here (shred, srm). Neither
+        program has an option that takes a separate value, so a word is an operand unless it is an
+        option before `--`."""
+        if base != "rm" and base != "unlink":
+            return None
+        lits = [a.literal() for a in args]
+        if None in lits:
+            return None
+        end = lits.index("--") if "--" in lits else len(lits)
+        targets = [x for x in lits[:end] if x == "-" or not x.startswith("-")] + lits[end + 1:]
+        return targets if targets and not any(not x or x.startswith("~") for x in targets) else None
 
     # -- declared-inert argv consumers: POSITION, not membership -------------
 
@@ -3792,6 +3813,13 @@ def analyze(raw):
     result["removal_positional_shape"] = result["removal_positional_shapes"][0]
     if result["allowed"] and az.git_rm:
         result["git_rm_proof"] = {"cwds": az.git_rm_cwds, "removals": az.git_rm}
+    # A command whose only unsafe boundaries are removals that name every file they remove: the
+    # verdict stays FORBIDDEN_REMOVAL, and the files go to the policy, which alone knows whose they are.
+    if verdict == FORBIDDEN_REMOVAL and not az.overflow and not az.git_rm and None not in az.removals \
+            and all(b["verdict"] in _TERMINAL_SAFE or b["reason"] == "filesystem_removal" for b in az.boundaries) \
+            and sum(b["reason"] == "filesystem_removal" for b in az.boundaries) == len(az.removals):
+        result["removal_targets"] = {"targets": [t for ts in az.removals for t in ts],
+                                     "cwds": None if az.cwd_unknown else az.git_rm_cwds}
     return result
 
 
