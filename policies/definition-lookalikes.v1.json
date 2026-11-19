@@ -3321,6 +3321,62 @@
      }
     ]
    ]
+  },
+  {
+   "id": "programs-find-words-by-rule",
+   "source": "lane defs-programs reading",
+   "reason": "The disk guard's _DG_FIND_WORDS is the whole find grammar it admits; the userintent rule's two sets are the words it skips before reading -exec and those of them that take a value; the runtime guard's _FIND_PREPATH_ARG_OPTS the depth options (find's and fd's) that may come before the start paths. Each is a different reading of find.",
+   "sides": [
+    [
+     {
+      "name": "<module>._DG_FIND_WORDS",
+      "fingerprint": "60af0ddeb92cbce2",
+      "at": "hooks/lib/bash_safety_rules.py:5427"
+     }
+    ],
+    [
+     {
+      "name": "_Scan._find:in",
+      "fingerprint": "8db66104d5368c0c",
+      "at": "hooks/pretool-wrapper-userintent.py:1422"
+     }
+    ],
+    [
+     {
+      "name": "_Scan._find:in",
+      "fingerprint": "08041fc82686a949",
+      "at": "hooks/pretool-wrapper-userintent.py:1424"
+     }
+    ],
+    [
+     {
+      "name": "<module>._FIND_PREPATH_ARG_OPTS",
+      "fingerprint": "50a5363381132d05",
+      "at": "hooks/lib/runtime_guard/find_cmds.py:48"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "programs-python-reader-vs-safe-modules",
+   "source": "lane defs-programs reading",
+   "reason": "_PY_READER_MODULES are modules that, run with python -m, only read the files named; _PY_SAFE_MODULES are modules whose import in -c code loads no other code and runs nothing. A module can be either without the other (json.tool vs math).",
+   "sides": [
+    [
+     {
+      "name": "<module>._PY_READER_MODULES",
+      "fingerprint": "a84e766485b3b9b2",
+      "at": "hooks/pretool-wrapper-userintent.py:137"
+     }
+    ],
+    [
+     {
+      "name": "<module>._PY_SAFE_MODULES",
+      "fingerprint": "e94c5dc8f1a0e1b7",
+      "at": "hooks/pretool-wrapper-userintent.py:139"
+     }
+    ]
+   ]
   }
  ]
 }
