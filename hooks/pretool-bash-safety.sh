@@ -75,6 +75,7 @@ _preclean_snapshot_guard() {
   mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null || true
   write_checkpoint "" "pre-clean WIP snapshot before granted: $COMMAND"
   local _ckpt_rc=$?
+  [ -z "$checkpoint_left_out" ] || _ckpt_rc=3  # a file left out of the snapshot would be lost to the clean
   trap - EXIT INT TERM HUP  # write_checkpoint's early returns leave its temp-index trap installed
   if [ "$_ckpt_rc" -ne 0 ]; then
     echo "BLOCKED: granted 'git clean' denied — the protective pre-clean WIP snapshot FAILED (fail-closed)" >&2
