@@ -3063,6 +3063,69 @@
      }
     ]
    ]
+  },
+  {
+   "id": "git-grant-skippable-vs-location-options",
+   "source": "lane defs-git (git-global-value-options)",
+   "reason": "allowlist._GRANT_SKIPPABLE_GIT_VALUE_OPTS is what a short grant authorizes reading past (a policy, narrower on purpose and pinned as a subset of the parser tables by test_allowlist_git_global_opts; the core install profile ships allowlist.py without shell_parse, so it cannot import them); shell_parse.GIT_LOCATION_OPTS is which git options move the repository or work tree.",
+   "sides": [
+    [
+     {
+      "name": "<module>._GRANT_SKIPPABLE_GIT_VALUE_OPTS",
+      "fingerprint": "ab2d2270785dd616",
+      "at": "hooks/lib/allowlist.py:363"
+     }
+    ],
+    [
+     {
+      "name": "<module>.GIT_LOCATION_OPTS",
+      "fingerprint": "c17a550b6c6921c4",
+      "at": "hooks/lib/shell_parse.py:3652"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "git-printing-vs-ext-diff-subcommands",
+   "source": "lane defs-git (git-read-subcommands)",
+   "reason": "bash_safety_rules._http_reader_ok takes log, show, diff and grep as git calls that only print text; userintent._git_reader names the subcommands whose --ext-diff runs a diff driver, and git grep has no --ext-diff (git refuses it as an unknown option).",
+   "sides": [
+    [
+     {
+      "name": "_http_reader_ok:in",
+      "fingerprint": "b8172cbd74a376b3",
+      "at": "hooks/lib/bash_safety_rules.py:615"
+     }
+    ],
+    [
+     {
+      "name": "_Scan._git_reader:in",
+      "fingerprint": "8d7e1b15ee29d49e",
+      "at": "hooks/pretool-wrapper-userintent.py:1077"
+     }
+    ]
+   ]
+  },
+  {
+   "id": "git-data-operand-vs-all-subcommands",
+   "source": "lane defs-git (git-all-subcommands, undecided in the audit)",
+   "reason": "bash_execution_boundary.GIT_SUBCOMMANDS lists the subcommands whose operands the removal policy may call data (it marks them inert); git_command_classifier._GIT_SUBCOMMANDS is every word git takes as a verb, to see a verb after a computed word. The classifier-only names include filter-branch, difftool, mergetool, send-email and instaweb, which run commands they are handed: merged into the removal policy table they would become inert.",
+   "sides": [
+    [
+     {
+      "name": "<module>.GIT_SUBCOMMANDS",
+      "fingerprint": "b17652e52fa8e42b",
+      "at": "hooks/lib/bash_execution_boundary.py:798"
+     }
+    ],
+    [
+     {
+      "name": "<module>._GIT_SUBCOMMANDS",
+      "fingerprint": "022827c06019fae2",
+      "at": "hooks/lib/git_command_classifier.py:243"
+     }
+    ]
+   ]
   }
  ]
 }

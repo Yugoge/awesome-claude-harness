@@ -46,6 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib import locations  # noqa: E402
 try:
     from lib.shell_parse import without_heredoc_bodies
 except Exception:  # pragma: no cover - fail-soft when lib missing
@@ -111,7 +112,7 @@ _SENTINEL_DIR = os.environ.get('CLAUDE_USERINTENT_SENTINEL_DIR', harness_state_d
 
 _PYTHON_RE = re.compile(r'^(?:python[\d.]*|pypy[\d.]*)$')
 _PY_VALUE_OPTS = 'cmWXQ'
-_STDIN_FILES = ('/dev/stdin', '/dev/fd/0', '/proc/self/fd/0')
+_STDIN_FILES = locations.STDIN_DEVICES
 _SUBST_KINDS = frozenset(('cmdsub', 'backtick', 'procsub_in', 'procsub_out'))
 _UNSAFE_CONTEXTS = frozenset(('cmdsub', 'backtick', 'procsub', 'pipe_shell'))
 # Builtins and keywords that run no file.
@@ -189,13 +190,8 @@ _CMD_VAR_RE = re.compile(
     r'PERL5OPT|PERL5DB|RUBYOPT|NODE_OPTIONS|LD_PRELOAD|LD_AUDIT|BROWSER|TERMINAL|FCEDIT|'
     r'GIT_SSH|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|SSH_ASKPASS|SUDO_ASKPASS|'
     r'\w*(?:EDITOR|PAGER|_COMMAND|_CMD|ASKPASS|_PROGRAM|_HOOK|_HOOKS))$')
-# git configuration keys whose value runs a command.
-_GIT_RUN_KEY = re.compile(
-    r'^(?:alias\..*|core\.(?:pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy)|'
-    r'pager\..*|sequence\.editor|include\..*|includeif\..*|filter\..*|diff\..*|merge\..*|'
-    r'gpg\..*|credential.*|uploadpack\..*|receive\..*|man\..*|web\..*|browser\..*|'
-    r'sendemail\..*|interactive\..*|.*\.(?:pager|editor|command|cmd|textconv|program|helper|'
-    r'external|path|tool|hook|sshcommand|difffilter|clean|smudge|process))$', re.IGNORECASE)
+# git configuration keys whose value runs a command (lib/git_facts.py).
+from lib.git_facts import GIT_RUN_CONFIG_KEY_RE as _GIT_RUN_KEY  # noqa: E402
 _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 'ls-files',
                             'ls-tree', 'status', 'cat-file', 'rev-parse', 'shortlog', 'describe',
                             'show-ref', 'whatchanged', 'rev-list', 'add', 'commit', 'diff-tree',
@@ -203,8 +199,10 @@ _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 
                             'check-attr', 'count-objects', 'reflog', 'stash', 'restore',
                             'branch', 'tag', 'remote', 'fetch', 'push', 'pull', 'switch',
                             'checkout', 'mv', 'rm', 'init', 'clone', 'version', 'help'))
-_GIT_GLOBAL_VALUE = frozenset(('-C', '-c', '--git-dir', '--work-tree', '--namespace',
-                               '--config-env', '--super-prefix', '--exec-path'))
+_GIT_GLOBAL_VALUE = _sp.GIT_GLOBAL_VALUE_OPTS if _sp is not None else frozenset()  # read by _Scan, which needs _sp
+from lib.git_facts import GIT_CONFIG_READ_OPTIONS as _GIT_CONFIG_READS  # noqa: E402
+from lib.git_facts import GIT_CONFIG_READ_SUBCOMMANDS as _GIT_CONFIG_READ_SUBS  # noqa: E402
+from lib.git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS as _GIT_SHELL_PAYLOAD_SUBS  # noqa: E402
 _GH_MESSAGE_SUBS = frozenset(('pr', 'issue', 'release'))
 _RC_FILES = frozenset(('.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_logout',
                        '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.kshrc', '.mkshrc',
@@ -403,7 +401,7 @@ def _writes_file(red) -> bool:
     except Exception:
         return True
     tgt = red.target.value() if red.target is not None else None
-    return tgt not in ('/dev/null', '/dev/stderr', '/dev/stdout', '/dev/tty')
+    return tgt not in locations.TERMINAL_SINKS
 
 
 class _Scan:
@@ -1243,7 +1241,7 @@ class _Scan:
 
     def _operand(self, site, res, word, shell):
         v, _g = self._expand(word)
-        if v in _STDIN_FILES or (v and v.startswith('/dev/fd/')):
+        if v in _STDIN_FILES or (v and v.startswith(locations.FD_DIR)):
             self._stdin(site, res, shell)
             return
         if any(p.kind.startswith('procsub') for p in word.parts):
@@ -1621,12 +1619,12 @@ class _Scan:
             break
         sub = vals[k] if k < len(vals) else None
         rest = [x for x in vals[k + 1:] if x is not None]
-        if sub == 'config' and not any(r in ('--get', '--get-all', '--list', '-l', '--get-regexp',
-                                             '--show-origin', '--unset') for r in rest):
+        if sub == 'config' and not (any(r in _GIT_CONFIG_READS for r in rest) or rest[:1] and rest[0] in
+                                    _GIT_CONFIG_READ_SUBS):
             self.git_config_written = True  # it may set the pager git grep -O opens
             if any(_mentions(r) for r in rest):
                 self.persist = True
-        if sub in ('rebase', 'bisect', 'submodule', 'filter-branch', 'difftool', 'mergetool'):
+        if sub in _GIT_SHELL_PAYLOAD_SUBS:
             if any(_mentions(r) for r in rest):
                 self.unsure = True
 
@@ -2779,7 +2777,7 @@ class _Scan:
         if not words or re.search(r'[;&|`$()<>\\\'"\n*?{}\[\]]', prog):
             return False
         head = words[0]
-        if '/' in head and os.path.dirname(head) not in ('/bin', '/usr/bin', '/usr/local/bin'):
+        if '/' in head and os.path.dirname(head) not in locations.SYSTEM_BIN_DIRS:
             return False
         name = os.path.basename(head)
         if name not in self._PLAIN_PAGERS or (name in ('less', 'more') and (
@@ -2964,7 +2962,7 @@ class _Scan:
                     self.unsure = True
                     self.computed_run = True
                 continue
-            if v in ('-',) + _STDIN_FILES or v.startswith('/dev/fd/'):
+            if v in ('-',) + _STDIN_FILES or v.startswith(locations.FD_DIR):
                 got = False
                 for red in cmd.redirects:
                     if red.fd != 0:

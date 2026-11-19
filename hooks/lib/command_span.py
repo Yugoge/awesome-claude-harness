@@ -310,8 +310,13 @@ def _decode(raw: bytes) -> dict | None:
     return record if isinstance(record, dict) else None
 
 
-def _blocks(record: dict | None):
-    if not record or record.get("isSidechain"):  # a subagent's own record
+def _blocks(record: dict | None, sidechain: bool = False):
+    """The content blocks of a user or assistant record, the one reading of a transcript's calls and
+    results. Any other record holds none, whatever it carries (CLI 2.1.322's api-request-blob repeats
+    each message of a model request, its tool_use and tool_result blocks too: a call read twice). A
+    subagent's own record (isSidechain) only with ``sidechain``."""
+    if not isinstance(record, dict) or record.get("type") not in ("user", "assistant") \
+            or (record.get("isSidechain") and not sidechain):
         return ()
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
@@ -966,15 +971,11 @@ def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: 
         return None
     uses, ok = [], set()
     for number, record in records:
-        if number <= start_line or (main_only and record.get("isSidechain")):
+        if number <= start_line:
             continue
         if stop_line is not None and number >= stop_line:
             break
-        message = record.get("message")
-        content = message.get("content") if isinstance(message, dict) else None
-        for block in content if isinstance(content, list) else ():
-            if not isinstance(block, dict):
-                continue
+        for block in _blocks(record, sidechain=not main_only):
             if block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
                 uses.append((block.get("id"), block.get("name"), block["input"], record.get("cwd") or root))
             elif block.get("type") == "tool_result" and not block.get("is_error"):

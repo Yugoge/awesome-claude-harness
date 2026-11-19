@@ -24,6 +24,13 @@ HOOKS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(o
 LIB = os.path.join(HOOKS, "lib")
 sys.path[:0] = [p for p in (HOOKS, LIB) if p not in sys.path]
 
+from lib import git_facts  # noqa: E402
+from lib.git_facts import GIT_DIR_CONFIG_FILES  # noqa: E402
+from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, GIT_INERT_FLAGS, git_global_options, git_plain_subcommand_index  # noqa: E402
+# A git option word that runs a program or writes a file: grep's -O, or one starting with a long option of
+# git_facts.GIT_RUN_OR_WRITE_OPTIONS (`--output=x`, `--exec=...`).
+_GIT_RUN_OR_WRITE_PREFIXES = ("-O",) + tuple(sorted(git_facts.GIT_RUN_OR_WRITE_OPTIONS))
+
 
 def refuse(*lines):
     """Refuse the call: the lines go to stderr, and the process exits 2, which the shell entry relays."""
@@ -46,9 +53,8 @@ def grep(pattern, text):
 
 
 def state_dir():
-    """The hook state root as lib/harness_state_dir.sh resolves it."""
-    v = os.environ.get("CLAUDE_STATE_DIR", "")
-    return (v.rstrip("/") or "/") if v.startswith("/") else "/tmp"
+    """The hook state root: its one resolution (lib/locations.state_root)."""
+    return locations.state_root()
 
 
 def one_slash(d):
@@ -160,6 +166,23 @@ def commit_guard_applies(command):
     return ("commit" in s or "config" in s) and re.search(r"(^|[^\w])git", s) is not None
 
 
+def _no_commit_or_config(command):
+    """lib/shell_parse.py's reading of a command whose quoting the commit guard's own splitter cannot follow: True
+    when it parses, no command word or payload is computed, no computed word spells git with commit or config, and
+    every git invocation it runs or carries in a static string is read whole, sets no configuration and is neither
+    commit nor config."""
+    try:
+        from lib.shell_parse import git_invocations, parse, walk
+        script = parse(command)
+        return not script.errors() and not any(
+            s.dynamic or s.templated or any(w.value() is None and commit_guard_applies(w.text) for w in s.cmd.words)
+            for s in walk(script)) and all(
+            i.unresolved is None and i.subcommand not in (None, "commit", "config") and not (i.config_pairs or i.env)
+            for i in git_invocations(script, strings=True))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def commit_guard(payload):
     """BS-04, BS-05, BS-06: 'HOOKS <why>', 'CONFIG <key>', 'FILTER <top>[\\t<why>]' or 'OK'.
 
@@ -185,12 +208,10 @@ def commit_guard(payload):
     cur = [d.get('cwd') or os.getcwd()]
     dirs = cur[:]
     commits, why, cfg, loc, ex = [], [], [], [], {}
-    LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer')
+    LONGV = tuple(o[2:] for o in sorted(git_facts.GIT_COMMIT_VALUE_OPTIONS))
     GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
-    CFGW = {'set', 'unset', 'unset-all', 'replace-all', 'add', 'rename-section', 'remove-section'}
-    CFGR = {'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list'}
-    WRF = {'--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section'}
-    RDF = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l'}
+    CFGW, CFGR = git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS, git_facts.GIT_CONFIG_READ_SUBCOMMANDS
+    WRF, RDF = git_facts.GIT_CONFIG_WRITE_OPTIONS, git_facts.GIT_CONFIG_READ_OPTIONS
 
     def prot(k):
         k = k.strip().strip('\'"').lower()
@@ -227,7 +248,8 @@ def commit_guard(payload):
             m = (DQ if st[-1:] == '"' else UQ).match(t, i)
             k, s, i = m.lastgroup, m.group(), m.end()
             o += s.translate({36: '_', 96: ')'}) if k in ('e', 's') else s
-            if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]):
+            if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]) \
+                    and not _no_commit_or_config(d.get('tool_input', {}).get('command', '')):
                 unread('a double-quoted bash -c/eval string inside a double-quoted $(...)')
             st = st + '!' if k == 'x' and (s != '${' or st) or k == 'c' and st[-1:] != ')' else st[:-1] if k == 'c' or k == 'd' and st[-1:] == '"' else st + {'o': ')', 'd': '"'}.get(k, '')
         return t if st else o
@@ -601,7 +623,7 @@ def _http_reader_ok(site, r):
     if name not in HTTP_STOP_READERS | HTTP_STOP_FILTERS:
         return False
     for rd in site.cmd.redirects:
-        if rd.writes() and not (rd.target is not None and rd.target.value() == "/dev/null"):
+        if rd.writes() and not (rd.target is not None and rd.target.value() == locations.NULL_DEVICE):
             return False
     args = [w.value() if w.value() is not None else w.text for w in site.cmd.words[1:]]
     if name in ("sed", "rg", "git") and any(w.value() is None for w in site.cmd.words[1:]):
@@ -610,7 +632,7 @@ def _http_reader_ok(site, r):
         return False
     if name == "git":
         return bool(args) and args[0] in ("log", "show", "diff", "grep") and not any(
-            a.startswith(("--ext-diff", "--output", "--textconv", "-O", "--open-files-in-pager")) for a in args) \
+            a.startswith(_GIT_RUN_OR_WRITE_PREFIXES) for a in args) \
             and not (args[0] == "grep" and any(_git_grep_pager(a) for a in args[1:]))
     if name == "uniq":
         return _uniq_operands(args) < 2
@@ -754,7 +776,7 @@ def _http_lift_value_ok(kind, v):
 def _http_out_path_ok(v):
     """A place shape (b)'s client (or its option) may write to: /dev/null, or a plain literal file path with no
     `..` segment that is not under /dev or /proc (no /dev/tcp, /dev/udp, /dev/fd or /proc/*/fd socket)."""
-    if v == "/dev/null":
+    if v == locations.NULL_DEVICE:
         return True
     if not re.fullmatch(r"[A-Za-z0-9_./][A-Za-z0-9_./-]*", v):
         return False
@@ -1232,8 +1254,9 @@ other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
 _SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
 """A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
 _SHAPE_DIR_CHANGE = frozenset({"cd", "pushd", "popd"})
-_GIT_DIR_OPTS = ("-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--attr-source", "--exec-path",
-                 "--config-env")
+# The global options that point git at another directory, file, ref namespace or program set (every value option
+# but -c, and --exec-path).
+_GIT_DIR_OPTS = (GIT_GLOBAL_VALUE_OPTS | {"--exec-path"}) - {"-c"}
 _SHAPE_RUNS_FILE = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|busybox|i?python[0-9.]*|pypy[0-9.]*|node(js)?[0-9.]*|deno|bun"
                               r"|perl[0-9.]*|ruby[0-9.]*|php[0-9.]*|lua[0-9.]*|tclsh|wish|expect|make|[gmn]?awk|sed"
                               r"|gsed|exec|source|\.|eval|xargs|parallel|watch|script|su|builtin|strace|ltrace)")
@@ -1362,9 +1385,9 @@ def _shape_strict_ok(command, carries, sites):
             body = r.hd.body if r.hd is not None else (r.target.text if r.op == "<<<" and r.target is not None else None)
             if body is not None and (carries(body) or carries(re.sub(r"""[\\'"]""", "", body)) or "$'" in body):
                 return False
-            if r.target is not None and r.writes() and r.target.value() != "/dev/null":
+            if r.target is not None and r.writes() and r.target.value() != locations.NULL_DEVICE:
                 return False
-        if any(t != "/dev/null" for t in _arg_write_targets(res)):
+        if any(t != locations.NULL_DEVICE for t in _arg_write_targets(res)):
             return False
         if writer:
             names = {res.name} | {n for n, _o in res.wrappers}
@@ -1376,7 +1399,7 @@ def _shape_strict_ok(command, carries, sites):
     if writer:
         try:
             from lib.shell_parse import parse, write_targets
-            if any(t.path != "/dev/null" for t in write_targets(parse(command))):
+            if any(t.path != locations.NULL_DEVICE for t in write_targets(parse(command))):
                 return False
         except Exception:  # noqa: BLE001
             return False
@@ -1524,6 +1547,7 @@ def commit_artifact_rules(command, state):
 # The flag's name has one definition, next to its reader (lib/allowlist.has_do_consent); hooks/prompt-workflow.py
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
+from lib import locations  # noqa: E402
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
 # Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
@@ -1551,7 +1575,7 @@ _CONSENT_UNPACKERS = {
     "7z": "7z", "7za": "7z", "7zr": "7z", "gzip": "gzip", "gunzip": "gzip", "zcat": "gzip", "pigz": "gzip",
     "unpigz": "gzip", "ar": "ar", "dpkg-deb": "deb", "dpkg": "deb", "pax": "pax", "unrar": "rar", "rar": "rar",
     "unar": "unar", "lha": "lha", "lhasa": "lha"}
-_CONSENT_DEVICES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty")
+_CONSENT_DEVICES = locations.TERMINAL_SINKS
 _CONSENT_UNKNOWN = ("_", "BASH_REMATCH", "BASH_ARGV", "COMP_WORDS", "REPLY", "MAPFILE")
 
 
@@ -1640,7 +1664,7 @@ class _ConsentView:
 
     def __init__(self, sp, script, sites, command, cwd, state):
         self.sp, self.state = sp, state
-        self.state_is_tmp = _consent_same_dir(state, "/tmp")
+        self.state_is_tmp = _consent_same_dir(state, locations.DEFAULT_TEMP_DIR)
         self.home = os.environ.get("HOME", "")
         self.command = command
         self.defs = {}  # variable -> list of ("static", text) | ("word", Word) | ("text", source text) | ("state",)
@@ -1705,12 +1729,20 @@ class _ConsentView:
         else:
             self.defs.setdefault(name, []).append(("text", a.word.text))
 
+    def made(self, p):
+        """The path `$(mktemp [-d] TEMPLATE)` prints, written as its template: mktemp makes that name new, below the
+        template's directory, so it is never the state directory itself. None for any other substitution."""
+        cmds = [s.cmd for s in self.sp.walk(p.body)] if p.body is not None and p.body.error is None else []
+        vals = [w.value() for w in cmds[0].words] if len(cmds) == 1 and not (cmds[0].redirects or cmds[0].assignments) else []
+        ops = [v for v in vals[1:] if v not in ("-d", "-q", "--directory", "--quiet")]
+        return ops[0] if vals[:1] == ["mktemp"] and None not in vals and len(ops) == 1 and ops[0][:1] not in ("-", "") else None
+
     def marks_state(self, text):
         """Does computed source text (a substitution's body, a read's input) point at the state directory?"""
         text = text or ""
         if self.state in text or os.path.realpath(self.state) in text or "CLAUDE_STATE_DIR" in text:
             return True
-        if self.state_is_tmp and re.search(r"/tmp\b|\bTE?MP(DIR)?\b|\bmktemp\b", text):
+        if self.state_is_tmp and re.search(locations.DEFAULT_TEMP_DIR + r"\b|\bTE?MP(DIR)?\b|\bmktemp\b", text):
             return True
         if self.cwd_state(".") and re.search(r"\bpwd\b|\bO?L?D?PWD\b|\$\{?PWD|\bdirs\b", text):
             return True
@@ -1834,6 +1866,8 @@ class _ConsentView:
                         out.append((("*",), "state"))
                 else:
                     out.append((("*",), "unk"))
+            elif p.kind in ("cmdsub", "backtick") and self.made(p):
+                out.extend((("c", ch), "lit") for ch in self.made(p))
             elif p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") and self.marks_state(p.text):
                 out.extend((("c", ch), "state") for ch in self.state)
             else:
@@ -2587,7 +2621,7 @@ def _consent_git_config_file(view, t):
     base, parent = parts[-1], (parts[-2] if len(parts) > 1 else None)
     if base == ".gitconfig":
         return True
-    if base in ("config", "config.worktree"):
+    if base in GIT_DIR_CONFIG_FILES:
         if parent is None:
             return any(c is None or re.search(r"\.git(/|$)", c) for c, _ in view.cwds)
         if parent.endswith(".git") or parent == "git" or "*" in parent or "/.git/" in "/" + text:
@@ -2693,15 +2727,11 @@ def _consent_read_only(cmd, name, view, named_writes):
                 named_writes.append(w)
         return None
     if name == "git":
-        i = 0
-        while i < len(vals) and vals[i].startswith("-"):
-            if vals[i] == "-C":
-                i += 2
-                continue
-            if vals[i] in ("--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs", "--no-replace-objects"):
-                i += 1
-                continue
-            return f"`git {vals[i]}` is not a read-only git option"
+        gopts, i = git_global_options(vals)
+        i = len(vals) if i is None else i
+        for o, _v in gopts:
+            if vals[o] != "-C" and vals[o] not in GIT_INERT_FLAGS:
+                return f"`git {vals[o]}` is not a read-only git option"
         sub = vals[i] if i < len(vals) else None
         opts = vals[i + 1:]
         if sub in _CONSENT_GIT_READS:
@@ -2773,7 +2803,7 @@ def consent_flag_verdict(command, cwd, state):
     for t in sp.write_targets(script):
         if t.mode == "delete" and deletes_state(t):
             return "it deletes or moves the state directory that holds the consent flag"
-        if t.path is not None and (t.path in _CONSENT_DEVICES or t.path.startswith("/dev/fd/")):
+        if t.path is not None and (t.path in _CONSENT_DEVICES or t.path.startswith(locations.FD_DIR)):
             continue
         real_writes = True
         config_writes = config_writes or _consent_git_config_file(view, t)
@@ -2916,15 +2946,13 @@ _BULK_INTERPRETER = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|i?python[0-9.]*|node(
                                r"|php[0-9.]*|lua[0-9.]*)")
 _BULK_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-delete", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
                                 "-fls"})
-_GIT_VALUE_OPTS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
-                             "--super-prefix", "--attr-source"})
 _GIT_PLAIN = frozenset({"diff", "log", "show", "grep", "status", "add", "commit", "rm", "mv", "restore", "checkout",
                         "switch", "reset", "blame", "annotate", "ls-files", "ls-tree", "cat-file", "rev-parse",
                         "rev-list", "shortlog", "whatchanged", "describe", "check-ignore", "check-attr", "diff-tree",
                         "diff-files", "diff-index", "range-diff", "reflog", "branch", "tag", "merge-base", "name-rev",
                         "show-ref", "for-each-ref", "stash", "merge", "cherry-pick", "revert", "version"})
 """git subcommands that take a protected name as a path or message to read, never as code or an output file."""
-_GIT_RUN_OR_WRITE_OPTS = ("--output", "--ext-diff", "--open-files-in-pager")
+_GIT_RUN_OR_WRITE_OPTS = git_facts.GIT_RUN_OR_WRITE_OPTIONS
 _BULK_BENIGN = frozenset({"echo", "printf", "cd", "pwd", "true", "false", ":"})
 """Commands that neither run nor write what they are handed (beside a redirection, read on its own)."""
 _BULK_DECLARE = frozenset({"export", "declare", "local", "readonly", "typeset", "alias", "let"})
@@ -3068,13 +3096,12 @@ _GIT_INERT_CONFIG_RE = re.compile(
 """The exact `git -c` keys that only change how git prints: two segments, a value with no dot or path. Any other
 setting (diff.external, diff.<driver>.textconv or .command, core.pager=<program>, core.editor, core.hooksPath,
 core.sshCommand, include.path, alias.*, a filter or a credential helper, safe.directory ...) can make git run a
-program or read another repository's config, so beside a protected name it is refused."""
-_GIT_RUN_KEY_RE = re.compile(r"[^=]*\.(command|textconv|external|driver|program|cmd|helper|path)(=.*)?", re.IGNORECASE)
+program or read another repository's config, so beside a protected name it is refused. The one key on the list that runs a
+program, core.pager, is on it only with a value that reads (git_facts.GIT_RUN_CONFIG_KEY_RE holds the keys that run)."""
 
 
 def _git_config_inert(setting):
-    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting)) and \
-        not _GIT_RUN_KEY_RE.fullmatch(setting)
+    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting))
 
 
 
@@ -3095,7 +3122,7 @@ def _git_runs_bulk_name(res):
             return True
         if v.startswith("--exec-path=") or v.startswith("--config-env"):
             return True
-        if v in _GIT_VALUE_OPTS and k + 1 < len(args):
+        if v in GIT_GLOBAL_VALUE_OPTS and k + 1 < len(args):
             k += 1
             if _bulk_word_mentions(args[k]):
                 return True
@@ -3372,7 +3399,7 @@ def executable_view_or_raw(command):
 _HB_NOEXEC_SHELLS = frozenset({"bash", "sh", "dash"})
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile(r"(/bin/|/usr/bin/|/usr/local/bin/)?(bash|sh|dash)")
+_HB_SHELL_WORD = re.compile("(%s)?(bash|sh|dash)" % "|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
 # Options an inert noexec shell may carry: none of them runs, echoes or sources anything.
@@ -3498,7 +3525,7 @@ def _hb_inert_redirect(r):
         return False
     if r.op in (">&", "<&"):
         return r.dup is not None or r.close
-    return r.op in ("<", ">", ">>") and _hb_plain(r.target) and r.target.literal() == "/dev/null"
+    return r.op in ("<", ">", ">>") and _hb_plain(r.target) and r.target.literal() == locations.NULL_DEVICE
 
 
 def _hb_inert_shell(words):
@@ -3660,9 +3687,25 @@ def hard_ban_mask(t):
     return t if o is None or _HB_RUNS_TEXT.search("".join(u)) else "".join(o)
 
 
+def _hb_only_reads(command):
+    """True when lib/bash_read_only.py proves the whole command read-only, a command word in a system program directory
+    (lib/locations.SYSTEM_BIN_DIRS) read as its bare name: it runs nothing it chooses, so a name in it is only read."""
+    try:
+        from lib.bash_read_only import is_read_only
+        from lib.shell_parse import parse, walk
+        out = list(command)
+        for w in filter(None, (site.cmd.head() for site in walk(parse(command), into=()))):
+            if (name := w.text.rpartition("/"))[0] in locations.SYSTEM_BIN_DIRS and name[2]:
+                out[w.span[0]:w.span[1]] = name[2].rjust(len(w.text))
+        return is_read_only("".join(out))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def hard_ban_rule(command):
     """Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs,
-    each matched anywhere; unset, session-recovery and restart-all-sessions match only as the command word: in the
+    each matched anywhere in a command that is not read-only as a whole (_hb_only_reads: a search, listing or print
+    of the script's file runs nothing); unset, session-recovery and restart-all-sessions match only as the command word: in the
     text with its quoted data masked (unless a word outside quotes names a program that runs text), or in the
     parser's executable view, which keeps what a shell `-c`, a git alias or a substitution runs and blanks the data
     an option such as git's `-c` merely configures. The default names pass a whole command of hard_ban_inert_shape
@@ -3686,6 +3729,8 @@ def hard_ban_rule(command):
             text = command + hard_ban_run_lines(command)
         except Exception:  # noqa: BLE001
             text = command
+    elif _hb_only_reads(command):
+        return
     for ban in bans:
         if configured:
             rx = ban
@@ -4032,6 +4077,7 @@ def sensitive_redirect(command):
     from lib.sensitive_names import (RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_code_or_doc_operand,
                                      is_sensitive_name)
     try:
+        from lib.bash_read_only import is_read_only
         from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
         script = parse(command)
         if script.error is not None:
@@ -4056,6 +4102,9 @@ def sensitive_redirect(command):
             network = name in _NETWORK_CLIENTS
             writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
                                               if network else (False, False, {}))
+            if any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs) and tuple(site.context) == ("top",) \
+                    and is_read_only(command[slice(*site.cmd.span)]):
+                outputs = []  # lib/bash_read_only.py's reader, its output thrown into /dev/null: what it reads lands nowhere
             if not outputs and network and writes:
                 # A client writing its own output file reads a `file:` URL into it (curl file:///.env -o /tmp/y).
                 if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
@@ -4138,20 +4187,23 @@ class ServiceView:
 
     def __init__(self, command, cwd=None):
         self.raw, self.sites, self.code, self.runners, self.redirect_sites = False, [], [], [], []
-        self.exec_redirects, self.plain = [], False
+        self.exec_redirects, self.plain, self.command, self.sets = [], False, command, {}
         self.cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
         try:
-            from lib.shell_parse import parse, resolve, walk
+            from lib.shell_parse import _AssignScope, parse, resolve, walk
             script = parse(command)
             if script.error is not None:
                 raise ValueError(script.error.code)
-            nested = False
+            nested, scope = False, _AssignScope(script)
             for site in walk(script):
                 r = resolve(site.cmd)
                 if site.dynamic or site.templated or (r.unresolved and not str(r.unresolved).startswith("xargs_")):
                     self.raw = True
                 nested = nested or tuple(site.context) != ("top",)
                 self.redirect_sites.append(site)
+                if not site.cmd.words and tuple(site.context) == ("top",) and scope.certain(site, site.cmd):
+                    self.sets.update((a.name, (a.word.span[0], a.static_value())) for a in site.cmd.assignments
+                                     if a.static_value() and not a.append)
                 if [w.value() for w in site.cmd.words] == ["exec"]:
                     self.exec_redirects.extend(site.cmd.redirects)  # they hold for every later command
                 name = r.name
@@ -4177,6 +4229,30 @@ class ServiceView:
     def named(self, *names):
         return [(n, a, s, r) for n, a, s, r in self.sites if n in names]
 
+    def set_once(self, word, at, rx):
+        """True for a word that ends in one bare `$name` (or `${name}`) whose name the command sets once, to a static
+        value `rx` matches whole, unconditionally and before offset `at`, and names nowhere else but as `$name`, and
+        which sources and evals nothing: nothing else can have set it."""
+        p = word.parts[-1]
+        n = re.escape(p.text)
+        where, value = self.sets.get(p.text, (at, "")) if p.kind == "param" else (at, "")
+        return where < at and re.fullmatch(rx, value) is not None and not self.named("source", ".", "eval") \
+            and len(re.findall(rf"(?<![A-Za-z0-9_]){n}(?![A-Za-z0-9_])", self.command)) \
+            == 1 + len(re.findall(rf"\$(?:{n}(?![A-Za-z0-9_])|\{{{n}\}})", self.command))
+
+    def without(self, view, name, whole):
+        """`view` without the `name` commands the command-position reading reads whole (`whole(cmd, self)`): the
+        command word of an unwrapped simple command at the top level (inside if, for, while and until too), where
+        the program runs, so the raw reading of the rest of the command has nothing to add about it."""
+        out = list(view)
+        for _n, _a, site, r in self.named(name) if not self.raw and len(view) == len(self.command) else ():
+            words = site.cmd.words
+            if tuple(site.context) == ("top",) and not (site.cmd.assignments or r.wrappers or r.payload is not None
+                                                        or r.unresolved) and whole(site.cmd, self) \
+                    and _plain_redirects(site.cmd, self, reads_ok=False):
+                out[words[0].span[0]:words[-1].span[1]] = " " * (words[-1].span[1] - words[0].span[0])
+        return "".join(out)
+
 
 # The plain shape. Only a command made wholly of these simple commands, each with static arguments and plain
 # redirections, is read at command position alone; every other command also keeps the pre-OB-L11 whole-command
@@ -4187,7 +4263,6 @@ _PLAIN_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", 
 _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "wc"})
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
-_PLAIN_UNSAFE_DIRS = ("/dev/", "/proc/", "/sys/", "/etc/", "/boot/", "/run/", "/var/run/")
 _SED_PRINT = re.compile(r"^(([0-9]+|\$)(,([0-9]+|\$))?)?p$")
 _PLAIN_HEREDOC_OPS = ("<<", "<<-", "<<<")
 
@@ -4213,7 +4288,7 @@ def _plain_file(w, sv):
     p = _abs_norm(v, sv.cwd)
     if not v.startswith("/") and sv.named("cd", "pushd", "popd"):
         return False
-    return all(q == "/dev/null" or q.startswith("/dev/shm/") or not (q + "/").startswith(_PLAIN_UNSAFE_DIRS)
+    return all(q == locations.NULL_DEVICE or not locations.is_system_path(q)
                for q in (p, _abs_norm(os.path.realpath(p))))
 
 
@@ -4254,14 +4329,14 @@ def _plain_dd(vals, sv):
         if not v.startswith("of="):
             continue
         path = v[3:]
-        if path.startswith("/") and _abs_norm(path) in ("/dev/null", "/dev/stdout", "/dev/stderr"):
+        if path.startswith("/") and _abs_norm(path) in locations.STD_SINKS:
             continue
         if not path or path.startswith("~") or (not path.startswith("/") and sv.named("cd", "pushd", "popd")):
             return False
         p = _abs_norm(path, sv.cwd)
-        if re.match(r"^/dev/fd/[0-9]+$", p):
+        if locations.FD_PATH.match(p):
             continue  # its command's redirections are plain (fd 1 and 2 only), so N is inherited or stdout/stderr
-        if (p + "/").startswith(_PLAIN_UNSAFE_DIRS) and not p.startswith("/dev/shm/"):
+        if locations.is_system_path(p):
             return False
         if _dd_target_refused(path, sv):
             return False
@@ -4269,17 +4344,14 @@ def _plain_dd(vals, sv):
 
 
 def _plain_git(words):
-    """A git read subcommand, past only -C DIR, --no-pager and -P; no -c, --config-env, alias, pager or output."""
+    """A git read subcommand, past only -C DIR and inert flags; no -c, --config-env, alias, pager or output."""
     vals = [w.value() if _plain_word(w) else None for w in words]
     if None in vals:
         return False
-    k = 0
-    while k < len(vals) and vals[k] in ("-C", "--no-pager", "-P"):
-        k += 2 if vals[k] == "-C" else 1
-    if k >= len(vals) or vals[k] not in _PLAIN_GIT_READS:
+    k = git_plain_subcommand_index(vals, GIT_INERT_FLAGS)
+    if k is None or vals[k] not in _PLAIN_GIT_READS:
         return False
-    return not any(v.startswith(("--output", "--open-files-in-pager", "--ext-diff", "--textconv", "--exec"))
-                   or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
+    return not any(v.startswith(_GIT_RUN_OR_WRITE_PREFIXES) or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
 
 
 def _plain_simple(cmd, sv, piped):
@@ -4330,6 +4402,27 @@ def _plain_kill_args(words):
     return len(words) == 1 and len(words[0].parts) == 1 and words[0].parts[0].kind == "param" \
         and words[0].parts[0].quote == "double" and re.match(r"^([A-Za-z_][A-Za-z0-9_]*|[0-9])$", words[0].parts[0].text) \
         and not words[0].substitutions()
+
+
+def _dd_whole(cmd, sv):
+    """dd that only reads: every word is one of its own operands and none is of=, so its output goes to standard
+    output alone (a pipe, or the plain redirection `without` asks for). A word is static, or an operand name and one
+    `$name` the command sets once to a plain path (ServiceView.set_once), which no splitting turns into an of=."""
+    return all(w.static_prefix().startswith(_DD_OPERANDS) and not w.static_prefix().startswith("of=") and (
+        w.value() is not None or len(w.parts) == 2 and sv.set_once(w, cmd.span[0], "[A-Za-z0-9_.,:+@%/-]+"))
+        for w in cmd.words[1:])
+
+
+def _kill_probe(cmd, sv):
+    """The liveness probe, which sends no signal: `kill -0` and then only PIDs, as literal words that are no option,
+    one double-quoted bare parameter, or one `$name` alone that the command sets once to digits
+    (ServiceView.set_once: digits split into digits, never into `-s SIG`)."""
+    rest = cmd.words[2:]
+    if not rest or [w.value() if _plain_word(w) else None for w in cmd.words[:2]] != ["kill", "-0"] \
+            or any((w.value() or w.text).startswith("-") for w in rest):
+        return False
+    return _plain_kill_args(rest) or (len(rest) == 1 and len(rest[0].parts) == 1
+                                      and sv.set_once(rest[0], cmd.span[0], "[0-9]+"))
 
 
 def _plain_script(script, sv):
@@ -4454,7 +4547,7 @@ def _dd_target_refused(path, sv):
         return True
     if _dd_fd_of(_abs_norm(path) if path.startswith("/") else path) is not None:
         return False  # a descriptor: the command's own redirections are checked as dd's targets
-    if re.match(r"^/proc/[^/]+/fd(/|$)", _abs_norm(path, "/x")):
+    if locations.PROC_FD.match(_abs_norm(path, "/x")):
         return True  # /proc/<pid>/fd/N of a process other than this shell: its file cannot be read here
     if path.startswith("~"):
         path = os.path.expanduser(path)  # bash expands a tilde after of= too
@@ -4468,10 +4561,9 @@ def _dd_target_refused(path, sv):
     with contextlib.suppress(Exception):
         paths.append(_abs_norm(os.path.realpath(paths[0])))
     for p in paths:
-        if p == "/dev" or p.startswith("/dev/"):
-            rel = p[5:]
-            if not (rel in DD_DEV_OK or rel.startswith(("fd/", "shm/"))):  # /dev/shm/x: a tmpfs file
-                return True
+        rel = locations.device_name(p)  # a file of the tmpfs mounted there (/dev/shm/x) is no device
+        if rel is not None and not (rel in DD_DEV_OK or rel.startswith("fd/") or not locations.is_device(p)):
+            return True
     return False
 
 
@@ -4569,7 +4661,7 @@ def _production_systemctl(sv, env):
 
 def _workflow_state_removal(command, sv):
     """rm, mv, git rm or git mv naming a workflow state path; with computed operands, one the command names."""
-    from lib.shell_parse import _git_from_resolved
+    from lib.shell_parse import GIT_MV_RM, _git_from_resolved
     for name, args, site, r in sv.sites:
         if name == "git":
             # The subcommand as git reads it: past global options and their values (-C dir, -c k=v, --work-tree d).
@@ -4577,9 +4669,9 @@ def _workflow_state_removal(command, sv):
             if not invs:
                 continue
             sub, unresolved = invs[0].subcommand, invs[0].unresolved
-            if sub not in ("rm", "mv") and not (sub is None and unresolved):
+            if sub not in GIT_MV_RM and not (sub is None and unresolved):
                 continue
-        elif name not in ("rm", "mv"):
+        elif name not in GIT_MV_RM:
             continue
         if any(re.search(WORKFLOW_STATE_RE, w.text) for w in args):
             return True
@@ -4612,7 +4704,7 @@ def service_rules(command, view, env, sv=None):
         return structural() or any(raw_rule(t) for t in sv.code + sv.runners) \
             or (not sv.plain and raw_rule(command))
 
-    def reads_view(view_rule, structural):  # an executable-view rule: runner lines keep it
+    def reads_view(view_rule, structural, view=view):  # an executable-view rule: runner lines keep it
         if sv.raw:
             return view_rule(view)
         return structural() or any(view_rule(t) for t in sv.runners) or (not sv.plain and view_rule(view))
@@ -4623,12 +4715,12 @@ def service_rules(command, view, env, sv=None):
         refuse("BLOCKED: docker-compose down/stop/restart is refused", f"Command: {command}", released_line())
     if reads(_raw_prune, lambda: _docker_prune_all(sv)):
         refuse("BLOCKED: docker system prune -a is refused", f"Command: {command}", released_line())
-    if reads_view(_raw_disk, lambda: _destructive_disk(sv)):
+    if reads_view(_raw_disk, lambda: _destructive_disk(sv), sv.without(view, "dd", _dd_whole)):
         refuse("BLOCKED: Destructive disk operation detected", f"Command: {command}", released_line())
     if reads_view(lambda t: _raw_killall(t, family), lambda: _kill_protected_family(sv, family)):
         refuse(f"BLOCKED: Killing {family + '/' if family else ''}claude/docker processes is refused",
                    f"Command: {command}", released_line())
-    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv)):
+    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv), sv.without(view, "kill", _kill_probe)):
         refuse("BLOCKED: kill with signals is refused — use graceful shutdown methods", f"Command: {command}",
                    released_line())
     prefix = env["prefix"]
@@ -5062,10 +5154,10 @@ def _dg_subcommands(*allowed):
 # --config-env, -C, --exec-path, --git-dir: config and paths that can name a program from argv). Writes stay inside
 # the repository the command is run in (add, commit, fetch, pull, switch, merge, stash); a pager, diff driver, hook or
 # filter the repository's own config names runs for every git command, trailing option or not, and is not argv.
-_DG_GIT_GLOBAL_OK = frozenset(("--no-pager", "-P", "--version", "--help"))
+_DG_GIT_GLOBAL_OK = GIT_INERT_FLAGS | {"--version", "--help"}
 # Options no subcommand may carry: a file written (--output), a program named (upload/receive pack, archive --exec,
 # grep's pager). Per subcommand: (refused options, refused words); interactive patch modes and history rewriting.
-_DG_GIT_ALL = ("--output", "--upload-pack", "--receive-pack", "--exec", "--open-files-in-pager")
+_DG_GIT_ALL = tuple(sorted(git_facts.GIT_ARGV_RUN_OR_WRITE_OPTIONS))
 _DG_GIT_SUB = {
     **dict.fromkeys(("status", "log", "diff", "show", "rev-parse", "describe", "shortlog", "ls-files", "ls-tree",
                      "cherry", "count-objects", "blame", "commit", "version", "range-diff", "merge-base",
@@ -5094,8 +5186,7 @@ def _dg_git_runs(words):
     """git words that name a program or a written file (shared with the denylist layer)."""
     i = 1
     while i < len(words) and words[i].startswith("-"):
-        i += 1 + (words[i] in ("-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace",
-                               "--exec-path", "--super-prefix", "--attr-source"))
+        i += 1 + (words[i] in GIT_GLOBAL_VALUE_OPTS)
     sub = words[i] if i < len(words) else ""
     refused = _DG_GIT_ALL + _DG_GIT_SUB.get(sub, ((), ()))[0]
     return any(_DG_GIT_RUNS.search(w) for w in words[1:]) or _dg_opts_hit(words[i + 1:], refused)
@@ -5112,17 +5203,16 @@ def _dg_git(t, words):
         return False
     if sub == "remote":  # listing only: `git remote [-v]`, `git remote [-v] show|get-url [options] name`
         words_ = [w for w in rest if not w.startswith("-")]
-        return all(w in ("-v", "--verbose", "-n", "--push", "--all") for w in rest if w.startswith("-")) and (
+        return all(w in git_facts.GIT_REMOTE_READ_FLAGS for w in rest if w.startswith("-")) and (
             not words_ or words_[0] in ("show", "get-url"))
     if sub == "config":  # reading only, in the old and the subcommand syntax; never set, unset or edit
-        reads = ("-l", "--list", "--get", "--get-all", "--get-regexp", "--show-origin", "--show-scope", "--global",
-                 "--local", "--system", "--name-only", "-z", "--null")
+        reads = git_facts.GIT_CONFIG_READ_OPTIONS | git_facts.GIT_CONFIG_READ_MODIFIERS
         if not all(w in reads for w in rest if w.startswith("-")):
             return False
         ops = [w for w in rest if not w.startswith("-")]
-        if ops and ops[0] in ("get", "list"):  # `git config get KEY`, `git config list`
+        if ops and ops[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS:  # `git config get KEY`, `git config list`
             return len(ops) <= (2 if ops[0] == "get" else 1)
-        if ops and ops[0] in ("set", "unset", "edit", "rename-section", "remove-section"):
+        if ops and ops[0] in git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS:
             return False
         if any(w in ("-l", "--list") for w in rest):
             return not ops
@@ -5716,11 +5806,11 @@ def _interpreter_shell_texts(code):
 _PIPE_FILTERS = frozenset({"head", "tail", "wc", "sort", "uniq", "cut", "less", "more", "grep", "rg"})
 _SHAPE_SEARCHERS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
 _SHAPE_COMMANDS = frozenset({"echo", "printf", "cat", "ls", "true", "git"}) | _SHAPE_SEARCHERS
-_SAFE_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/2"})
+_SAFE_DEVICES = locations.TERMINAL_SINKS | {locations.FD_DIR + "1", locations.FD_DIR + "2"}
 _SHAPE_GIT_SUBS = frozenset({"status", "show", "diff", "log", "restore", "add", "commit", "rev-parse", "ls-files",
                              "stash", "checkout", "clean", "blame", "shortlog", "describe", "branch", "switch",
                              "cat-file", "ls-tree", "merge-base", "reflog", "tag"})
-_SHAPE_GIT_GLOBALS = frozenset({"-C", "--no-pager", "-P", "--no-optional-locks"})
+_SHAPE_GIT_GLOBALS = GIT_INERT_FLAGS | {"-C"}
 _EXEC_DOC_EXT_RE = re.compile(r"\.(sh|bash|zsh|ksh|fish|csh|tcsh|command|mk|mak|make|py|pl|pm|rb|js|mjs|cjs|ts|php|"
                               r"tcl|lua|awk|sed|ps1|bat|cmd|service|timer|desktop|cron|rc|env|envrc)$", re.I)
 _EXEC_DOC_NAMES = frozenset({"makefile", "gnumakefile", "crontab", ".bashrc", ".bash_profile", ".bash_login",
@@ -5979,10 +6069,14 @@ def _wide_path_after_dashdash(args):
     return path in (".", "*") or (path or "").endswith("/")
 
 
+# The first words after `git stash` that save the working tree (and with -u/-a its untracked files) and reset it.
+_STASH_SAVE_WORDS = ("push", "save", "create", "store", "-u", "--include-untracked", "-a", "--all")
+_STASH_SAVE_ALT = "|".join(map(re.escape, _STASH_SAVE_WORDS))
+
+
 def _stash_pushes(args):
-    bad = {"push", "save", "create", "store", "-u", "--include-untracked", "-a", "--all"}
     first = args[0] if args else None
-    return first is not None and (first in bad or (
+    return first is not None and (first in _STASH_SAVE_WORDS or (
         first.startswith("-") and not first.startswith("--") and any(c in first[1:] for c in "ua")))
 
 
@@ -6087,7 +6181,7 @@ def _worktree_raw_fallback(command, globals_=False):
         return _worktree_global_scan(command)
     g = r"git\s+"
     return {
-        "push": grep(g + r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command)
+        "push": grep(g + r"stash\s+(" + _STASH_SAVE_ALT + r")\b", command)
         or grep(g + r"stash\s+-[ua]+\b", command),
         "bare": grep(g + r"stash\s*($|[;&|])", command),
         "checkout": grep(g + r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])", command),
@@ -6193,7 +6287,7 @@ _WT_VALOPTS = frozenset(["-C", "-c"] + ["--" + n for n in GC_VALOPT_NAMES.split(
 _WT_VALUE_SHAPED_RE = re.compile(rf"[{GC_VMARK}]")
 _WT_SEPS = frozenset(";&|()`")
 _WT_SUB_RE = re.compile(r"(stash|checkout|restore)\b")
-_WT_PUSH_RE = re.compile(r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b")
+_WT_PUSH_RE = re.compile(r"stash\s+(" + _STASH_SAVE_ALT + r")\b")
 _WT_PUSH_FLAGS_RE = re.compile(r"stash\s+-[ua]+\b")
 _WT_BARE_RE = re.compile(r"stash\s*($|[;&|])")
 _WT_CHECKOUT_RE = re.compile(r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])")
@@ -6395,7 +6489,7 @@ _SD_DECODE = (
     (re.compile(r"\\0?([0-7]{1,3})"), 8),
 )
 _SD_DROP = re.compile(r"""['"\\$+`\s]""")
-_SD_HEAD_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
+_SD_HEAD_DIRS = locations.BIN_DIRS
 # What can change which program a search or commit call runs, or what it reads: a shell function of that name
 # (read with quotes, blanks and escapes gone), a command that defines one or an alias or rehashes a path, and a
 # variable that moves the program, its options or its config.
@@ -6449,8 +6543,7 @@ _SD_GIT_GREP = ("efABCm", "aiIwvhHEGFPnlLcopWzqr",
                  "--function-context", "--break", "--heading", "--all-match", "--quiet", "--and", "--or", "--not",
                  "--no-color"},
                 {"--color"}, {"--textconv", "-O", "--open-files-in-pager"})
-_SD_GIT_GLOBAL_FLAGS = {"--no-pager", "-p", "--paginate", "-P", "--no-optional-locks", "--no-replace-objects",
-                        "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"}
+_SD_GIT_GLOBAL_FLAGS = GIT_INERT_FLAGS | {"-p", "--paginate"}
 # git log options. A value option takes the next word (or its `=value`); a flag takes nothing; an attached option
 # takes a value only after `=` (git reads an optional or `=`-only value, as `--unified[=<n>]` or `--orderfile=<f>`, never
 # from the next word, so such an option is a flag or attached-only, never a value option). An option on none of these lists (a new one included) leaves no allowed mention, since
@@ -6496,8 +6589,7 @@ _SD_LOG_SHORT_ATTACHED = "nUMCBlIO"  # a short option whose value may follow it 
 _SD_COMMIT_SHORT_VALUES = "mFCct"
 _SD_COMMIT_SHORT_OPTIONAL = "Su"
 _SD_COMMIT_SHORT_FLAGS = "aqvsneiopz"
-_SD_COMMIT_LONG_VALUES = {"--message", "--file", "--reuse-message", "--reedit-message", "--template", "--author",
-                          "--date", "--cleanup", "--fixup", "--squash", "--trailer", "--pathspec-from-file"}
+_SD_COMMIT_LONG_VALUES = git_facts.GIT_COMMIT_VALUE_OPTIONS
 _SD_COMMIT_LONG_FLAGS = {"--all", "--patch", "--quiet", "--verbose", "--signoff", "--no-signoff", "--no-verify",
                          "--verify", "--amend", "--no-edit", "--edit", "--allow-empty", "--allow-empty-message",
                          "--dry-run", "--short", "--branch", "--porcelain", "--long", "--null", "--include", "--only",
@@ -6576,15 +6668,8 @@ def _sd_scan(args, spec, permute=True, operands=None):
 def _sd_git(args):
     """(allowed arg indexes, message comes from stdin) for a git call that names the file only as a search pattern
     or in a commit message; None when any part of it is not read."""
-    k = 0
-    while k < len(args) and args[k].startswith("-"):
-        if args[k] == "-C" and k + 1 < len(args):
-            k += 2
-            continue
-        if args[k] not in _SD_GIT_GLOBAL_FLAGS:
-            return None
-        k += 1
-    if k >= len(args):
+    k = git_plain_subcommand_index(args, _SD_GIT_GLOBAL_FLAGS)
+    if k is None:
         return None
     sub, rest, base = args[k], args[k + 1:], k + 1
     if sub == "grep":
@@ -6629,7 +6714,7 @@ def _sd_git(args):
                     value = val if eq else (rest[j + 1] if j + 1 < len(rest) else None)
                     if name == "--message":
                         allowed.add(base + value_at)
-                    if name == "--file" and value in ("-", "/dev/stdin"):
+                    if name == "--file" and value in ("-", locations.STDIN_DEVICE):
                         stdin = True
                     j += 1 if eq else 2
                     continue
@@ -6645,7 +6730,7 @@ def _sd_git(args):
                     value = a[c_at + 1:] if attached else (rest[j + 1] if j + 1 < len(rest) else None)
                     if c == "m":
                         allowed.add(base + (j if attached else j + 1))
-                    if c == "F" and value in ("-", "/dev/stdin"):
+                    if c == "F" and value in ("-", locations.STDIN_DEVICE):
                         stdin = True
                     if not attached:
                         j += 1
@@ -7246,15 +7331,8 @@ _SD_SHELL = re.compile(r"(ba|da|z|k|mk|y|r|po)?sh|busybox")
 
 def _sd_git_sub(vals):
     """The subcommand of a git call after its global options; None when a global option is not plain."""
-    k = 0
-    while k < len(vals) and vals[k].startswith("-"):
-        if vals[k] == "-C" and k + 1 < len(vals):
-            k += 2
-            continue
-        if vals[k] not in _SD_GIT_GLOBAL_FLAGS:
-            return None
-        k += 1
-    return vals[k] if k < len(vals) else None
+    k = git_plain_subcommand_index(vals, _SD_GIT_GLOBAL_FLAGS)
+    return None if k is None else vals[k]
 
 
 def _sd_traces(sites):
@@ -7313,7 +7391,7 @@ _SD_PLAIN_WRAPPERS = frozenset({"timeout", "nice", "command"})
 _SD_PLAIN_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
 _SD_PLAIN_GIT = frozenset({"status", "diff", "log", "show", "push", "fetch"})
 # git options of those subcommands that run a program or write a file (taken in any abbreviation).
-_SD_PLAIN_GIT_REFUSED = ("--ext-diff", "--textconv", "--receive-pack", "--upload-pack", "--exec")
+_SD_PLAIN_GIT_REFUSED = git_facts.GIT_RUN_OR_WRITE_OPTIONS
 _SD_PLAIN_COMPOUNDS = frozenset({"group", "subshell", "if"})
 
 
@@ -7336,7 +7414,7 @@ def _sd_quiet_redirects(redirects, stdin_doc=False):
             if r.fd not in (1, 2) or r.dup not in (1, 2):
                 return False
             continue
-        if not r.writes() or r.target is None or r.target.value() != "/dev/null" or \
+        if not r.writes() or r.target is None or r.target.value() != locations.NULL_DEVICE or \
                 any(p.kind != "lit" for p in r.target.parts):
             return False
     return True
@@ -7517,7 +7595,7 @@ def session_dirs_rule(command):
 # ── Entry ────────────────────────────────────────────────────────────────────
 
 def environment():
-    tmp = os.environ.get("CLAUDE_TMPDIR") or os.environ.get("TMPDIR") or "/tmp"
+    tmp = os.environ.get("CLAUDE_TMPDIR") or os.environ.get("TMPDIR") or locations.DEFAULT_TEMP_DIR
     helper = os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_HELPER", "")
     return {
         "prefix": os.environ.get("CLAUDE_PROTECTED_DAEMON_PREFIX", ""),

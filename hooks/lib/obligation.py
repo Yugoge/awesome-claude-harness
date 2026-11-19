@@ -1523,7 +1523,7 @@ def declaring_dispatch(
     task_id: str,
     path: str | Path,
     project_dir: str | Path,
-    roots: Iterable[str | Path] | None = None,
+    roots: Iterable[str | Path] | None = None, writer: bool = True,
 ) -> dict | None:
     """Who owes ``path`` for the task ``task_id``, read from the task's
     dispatch records in every session the project's transcript store holds
@@ -1543,20 +1543,20 @@ def declaring_dispatch(
       main agent's own step) and the template that declares the path, bound
       to its values (None when the step declares the path itself);
     - ``{"source": "writer", ...}``: a file no declaration names (a product
-      file): the dispatch whose own tool calls wrote it;
+      file): the dispatch whose own tool calls wrote it (not sought with writer=False);
     - None: nothing names an owner.
 
     Read-only; judges nothing on disk. Inside an open transcript_scan each
     answer is read once (each caller gets its own copy)."""
     if _SCAN is None or not isinstance(task_id, str):
-        return _declaring_dispatch(task_id, path, project_dir, roots)
+        return _declaring_dispatch(task_id, path, project_dir, roots, writer)
     roots = None if roots is None else tuple(roots)
-    key = ("owner", task_id, str(path), str(Path(project_dir).resolve()), roots)
-    return copy.deepcopy(_scan_memo(key, lambda: _declaring_dispatch(task_id, path, project_dir, roots)))
+    key = ("owner", task_id, str(path), str(Path(project_dir).resolve()), roots, writer)
+    return copy.deepcopy(_scan_memo(key, lambda: _declaring_dispatch(task_id, path, project_dir, roots, writer)))
 
 
 def _declaring_dispatch(task_id: str, path: str | Path, project_dir: str | Path,
-                        roots: Iterable[str | Path] | None) -> dict | None:
+                        roots: Iterable[str | Path] | None, writer: bool = True) -> dict | None:
     """declaring_dispatch's answer, read from the store."""
     root = Path(project_dir)
     rel = Path(path)
@@ -1583,7 +1583,7 @@ def _declaring_dispatch(task_id: str, path: str | Path, project_dir: str | Path,
     step = _canonical_step(family, wanted, spans, pipelines) if family else None
     if step is not None:
         return step
-    return _writer(records, wanted, project_dir)
+    return _writer(records, wanted, project_dir) if writer else None
 
 
 def first_declared_at(

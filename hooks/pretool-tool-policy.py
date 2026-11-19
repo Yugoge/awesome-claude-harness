@@ -90,6 +90,11 @@ Behavior:
     ba-qa-report-*.json, dev-report-*.json), a Write/Edit/MultiEdit/NotebookEdit
     of a QA or BA-QA report, declared by a dispatch yet or not -> exit 2
     (_check_report_writes, CD-6; residuals in docs/ENFORCEMENT-LEDGER.md R-003).
+  - An Agent/Task call whose obligation declares a file its subagent could not
+    write: each declared file is put to this decision (_decide) as that
+    subagent's Write of it, the dispatch recorded as the CLI records one; a
+    refusal -> exit 2 naming the file, the role and the refusing rule
+    (_check_dispatch_writes). No declared file, nothing is read.
   - Main agent (no agent_id) -> exit 0 after the derived permission and the
     grant binding (the orchestrator gate handles the rest of the main agent).
   - Subagent role unresolvable (a NORMAL state in agent_resolver), or one
@@ -143,6 +148,7 @@ extract_bash_write_paths = None  # type: ignore[assignment]
 extract_bash_touched_paths = None  # type: ignore[assignment]
 is_allowed = None  # type: ignore[assignment]
 harness_state_dir = None  # type: ignore[assignment]
+locations = None  # type: ignore[assignment]
 
 
 def _bootstrap_security() -> None:
@@ -152,12 +158,13 @@ def _bootstrap_security() -> None:
     NOT be wrapped by the blanket fail-open `except` in __main__.
     """
     global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, extract_bash_touched_paths, is_allowed, \
-        harness_state_dir
+        harness_state_dir, locations
     try:
         from lib.agent_resolver import resolve_agent_type as _rat
         from lib.bash_write_targets import extract_bash_touched_paths as _ebtp, extract_bash_write_paths as _ebwp
         from lib.policy_registry import WRITE_TOOLS as _wt, is_allowed as _ia
         from lib.harness_state_dir import harness_state_dir as _hsd
+        from lib import locations as _loc
     except Exception as e:  # ImportError, bootstrap failure, resolver failure
         sys.stderr.write(
             "BLOCKED by tool-policy.v1: deny-logic bootstrap FAILED — the policy "
@@ -171,6 +178,7 @@ def _bootstrap_security() -> None:
     extract_bash_touched_paths = _ebtp
     is_allowed = _ia
     harness_state_dir = _hsd
+    locations = _loc
 
 
 def _read_payload() -> dict:
@@ -198,11 +206,6 @@ def _extract_targets(tool_name: str, tool_input: dict) -> list:
         command = tool_input.get("command") or ""
         return extract_bash_write_paths(command) if isinstance(command, str) else []
     return [None]
-
-
-_RAW_TEMP_GRANTS = {"/tmp/*", "/var/tmp/*", "*/tmp/*", "*/var/tmp/*",
-                    "/tmp/", "/var/tmp/"}
-_SYSTEM_TEMP_ROOTS = ("/tmp", "/var/tmp")
 
 
 def _project_root() -> "os.PathLike | str":
@@ -235,12 +238,12 @@ def _role_temp_exceptions(role: str) -> list:
     state = harness_state_dir()
     out = []
     for entry in allowed:
-        if not isinstance(entry, str) or entry in _RAW_TEMP_GRANTS:
+        if not isinstance(entry, str) or entry in locations.RAW_TEMP_GRANTS:
             continue
         parts = entry.strip("*").split("/")
         if "tmp" in parts:
             out.append(entry)
-        elif state not in _SYSTEM_TEMP_ROOTS and entry.startswith("*/"):
+        elif not locations.is_system_temp_root(state) and entry.startswith("*/"):
             out.append(state + entry[1:] + ("" if entry.endswith("*") else "*"))
     return out
 
@@ -302,11 +305,7 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
     try:
         rel = resolved.relative_to(scratch_root).parts
     except ValueError:
-        for root in _SYSTEM_TEMP_ROOTS:
-            root_path = Path(root)
-            if resolved == root_path or root_path in resolved.parents:
-                return "system_temp"
-        return "outside"
+        return "system_temp" if locations.in_arbitrary_temp(str(resolved), str(_project_root())) else "outside"
     dispatch_id = data.get("agent_id")
     if len(rel) >= 3 and rel[1] == role and dispatch_id and rel[2] == dispatch_id:
         return "owner"
@@ -337,12 +336,36 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
     if status == "system_temp":
         if _matches_role_exception(role, target):
             return (True, "ok")
-        return (
-            False,
-            "arbitrary /tmp and /var/tmp are denied for every role; use the "
-            "managed scratch namespace .claude/scratch/<session>/<role>/<dispatch>/",
-        )
+        return (False, "arbitrary /tmp and /var/tmp are denied for every role")
     return (True, "ok")
+
+
+def _note_own_scratch(role: str, data: dict, target) -> None:
+    """After a refused write of ``target`` to system temp or scratch, name the
+    caller's own scratch directory as a literal path. It is the directory
+    _scratch_status judges "owner": the resource session's when one resolves,
+    else <project>/.claude/scratch/<session_id>/<role>/<agent_id>/."""
+    from pathlib import Path
+
+    try:
+        if _scratch_status(role, target, data) not in ("sibling", "system_temp"):
+            return
+        binding = _owner_binding(role, data)
+        if binding is not None:
+            from lib import session_resources
+
+            own = session_resources.scratch_path(_project_root(), binding)
+        else:
+            parts = [str(data.get("session_id") or "session"), role, str(data.get("agent_id") or "")]
+            if not all(parts):  # an id that is no single name fails the owner check below
+                return
+            own = Path(_project_root()).resolve(strict=False).joinpath(".claude", "scratch", *parts)
+        if _scratch_status(role, str(own / "f"), data) != "owner":
+            return
+        sys.stderr.write(f"tool-policy.v1 note: your own scratch directory is {own}/ (mkdir -p {own} first; "
+                         f"a program that writes under $TMPDIR: TMPDIR={own} <command>)\n")
+    except Exception:
+        pass
 
 
 def _emit_block(role: str, tool: str, target, reason: str) -> None:
@@ -428,10 +451,11 @@ def _write_targets(tool_name: str, targets: list) -> list:
     if tool_name != "Bash" and tool_name not in WRITE_TOOLS:
         return []
     found = targets
-    # An unexpanded word cannot name a declared path, and the device tree (a
-    # redirect's /dev/null) holds no artifact; the role rows judge both.
+    # An unexpanded word cannot name a declared path, and a device (a redirect's
+    # /dev/null; never a file of a project kept on a tmpfs: lib/locations) holds
+    # no artifact; the role rows judge both.
     return [t for t in found if isinstance(t, str) and t and not any(c in t for c in "$`\x00")
-            and not t.startswith("/dev/")]
+            and not locations.is_device(t)]
 
 
 def _session_transcript(data: dict):
@@ -1521,8 +1545,8 @@ def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, tran
 
 
 def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True):
-    """The role's denials on the declaring dispatch's own write: its tool
-    lists, deny prefixes and an unreadable policy, never its allow prefixes."""
+    """The role's denials on the declaring dispatch's own write: its tool lists (and
+    declared_artifact_tools), deny prefixes and an unreadable policy, never its allow prefixes."""
     from lib import policy_registry
 
     if policy_registry.load_policy() is None:
@@ -1530,7 +1554,7 @@ def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True
     role_pol = policy_registry.get_role_policy(role)
     if role_pol.get("_unknown_role"):
         return is_allowed(role, tool, target, carveouts)
-    tool_check = policy_registry._check_tool_lists(role_pol, tool)
+    tool_check = policy_registry._check_tool_lists(role_pol, tool, own=True)
     if tool_check is not None:
         return tool_check
     denial = policy_registry._write_denial(role_pol, target, carveouts)
@@ -1837,6 +1861,8 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             allowed, reason = is_allowed(role, check_tool, target, carveouts)
         if not allowed:
             _emit_block(role, check_tool, target, reason)
+            if check_tool in WRITE_TOOLS:
+                _note_own_scratch(role, data, target)
             if tool_name == "Bash":
                 _note_bash_write_target(data, target)
             _note_inflight_token_route(role, tool_name, target)
@@ -1845,6 +1871,7 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             allowed, reason = _check_scratch_actor_exactness(role, target, data)
             if not allowed:
                 _emit_block(role, check_tool, target, reason)
+                _note_own_scratch(role, data, target)
                 if tool_name == "Bash":
                     _note_bash_write_target(data, target)
                 sys.exit(2)
@@ -1882,8 +1909,9 @@ def _home_git_files(home) -> list:
         git_dir, common = out.stdout.splitlines()[:2] if out.returncode == 0 else ("", "")
     except (OSError, subprocess.SubprocessError, ValueError):
         git_dir = common = ""
-    for root, names, label in ((common, ("config", "hooks"), "git common dir's"),
-                               (git_dir, ("config", "config.worktree"), "git dir's")):
+    from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES
+    for root, names, label in ((common, GIT_COMMON_DIR_PROTECTED, "git common dir's"),
+                               (git_dir, GIT_DIR_CONFIG_FILES, "git dir's")):
         held += [(os.path.join(root, n), f"the harness home's {label} {n}") for n in names if root]
     return held
 
@@ -2073,22 +2101,81 @@ def _check_scheduled_prompt(role, tool_name: str, tool_input: dict, data: dict) 
         sys.exit(2)
 
 
+def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None:
+    """A dispatch whose obligation declares a file its subagent cannot write -> exit 2, so no
+    subagent is started into a stop gate (G2) it cannot pass. Each declared file is put to this
+    hook's own decision (_decide) as that subagent's Write of it, its dispatch recorded as the CLI
+    records one (the call, the child's first record and meta) in a store of its own."""
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+    if not isinstance(prompt, str) or "<obligation" not in prompt or '"path"' not in prompt:
+        return  # no block, or one declaring no file: a file artifact's fields hold its path
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+    from lib import obligation
+    from lib.send_policy import AGENT_TOOLS
+
+    if tool_name not in AGENT_TOOLS:
+        return
+
+    parsed = obligation.parse_obligation(prompt)
+    arts = parsed.obligation.get("artifacts") or [] if isinstance(parsed, obligation.ParsedObligation) else []
+    paths = [a["path"] for a in arts if obligation.FRESHNESS_SLACK_SECONDS_BY_KIND.get(a.get("kind")) is not None]
+    role, call = tool_input.get("subagent_type") or "general-purpose", data.get("tool_use_id") or "toolu_dispatch"
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd()
+    if not paths:
+        return
+    root = tempfile.mkdtemp(prefix="dispatch-writes-")
+    try:
+        for name, record in (("s/subagents/agent-dispatch.jsonl", {"type": "user", "message": {"role": "user",
+                             "content": prompt}}), ("s/subagents/agent-dispatch.meta.json", {"agentType": role,
+                             "toolUseId": call}), ("s.jsonl", {"type": "assistant", "message": {"role": "assistant",
+                             "content": [{"type": "tool_use", "id": call, "name": tool_name, "input": tool_input}]}})):
+            os.makedirs(os.path.dirname(os.path.join(root, name)), exist_ok=True)
+            with open(os.path.join(root, name), "w") as fh:
+                fh.write(json.dumps(record) + "\n")
+        for path in paths:
+            target, saved, sys.stderr, code = os.path.join(project, path), sys.stderr, io.StringIO(), 0
+            try:
+                _decide({**data, "transcript_path": os.path.join(root, "s.jsonl"), "tool_name": "Write",
+                         "agent_id": "dispatch", "agent_type": role, "tool_input": {"file_path": target}})
+            except SystemExit as stop:
+                code = stop.code
+            finally:
+                refusal, sys.stderr = sys.stderr.getvalue(), saved
+            if code != 2:
+                continue
+            with contextlib.suppress(ValueError, KeyError, TypeError):
+                refusal = json.loads(refusal.partition("\n")[0].partition(": ")[2])["deny_reason"]
+            _emit_block("main", tool_name, path, f"this dispatch declares {path} for its {role} subagent, and "
+                        f"tool-policy.v1 (hooks/pretool-tool-policy.py) would refuse that subagent's Write of "
+                        f"{target}: {refusal.strip()}; its stop gate would demand a file it may not write, so no "
+                        "subagent is started")
+            sys.exit(2)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main() -> None:
     # Bootstrap the deny-logic FIRST, fail-closed (exit 2) on import error.
     _bootstrap_security()
     data = _read_payload()
-    if not data:
+    if not data or not isinstance(data.get("tool_name"), str):
         sys.exit(0)
-    tool_name = data.get("tool_name")
-    if not isinstance(tool_name, str):
-        sys.exit(0)
-    tool_input = data.get("tool_input") or {}
     _observe_reports(data)
+    _decide(data)
+
+
+def _decide(data: dict) -> None:
+    """The decision on one call (exit 2 refuses it, exit 0 lets it through)."""
+    tool_name, tool_input = data["tool_name"], data.get("tool_input") or {}
     role = resolve_agent_type(data)
     _check_hook_replay(role, tool_name, tool_input, data)
     targets = _extract_targets(tool_name, tool_input)
     _check_protected(role, tool_name, tool_input, targets, data)
     _check_scheduled_prompt(role, tool_name, tool_input, data)
+    _check_dispatch_writes(tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
     approved = _check_clean_writes(role, tool_name, targets, data)
     _check_grant_writes(role, tool_name, targets, data)

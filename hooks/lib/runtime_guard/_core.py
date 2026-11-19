@@ -1553,7 +1553,7 @@ def _container_glob_too_broad(parent: str) -> bool:
     # dir and is kept; a deep absolute dir (depth ≥ 3) is specific enough to keep.
     if parent.startswith("/") and "*" not in parent:
         norm = os.path.normpath(parent)
-        if norm in _ANCESTOR_STOP_ROOTS:
+        if _config.locations.is_broad_root(norm):
             return True
         depth = len([s for s in norm.split("/") if s])
         if depth < 3:
@@ -2295,7 +2295,7 @@ def _endpoint_path_in(text: str, paths: list) -> bool:
 def _http_reads_stdin_body(sc: str) -> bool:
     """True if an HTTP client is told to read its request body from stdin, so a
     control path piped in upstream would actually be sent."""
-    return bool(re.search(r"(--data-binary|--data|-d)\s+@-|--data-binary\s+@/dev/stdin", sc))
+    return bool(re.search(r"(--data-binary|--data|-d)\s+@-|--data-binary\s+@" + _config.locations.STDIN_DEVICE, sc))
 
 
 def _p5_endpoint(ctx: "Context") -> Optional[Verdict]:
@@ -3716,7 +3716,11 @@ def _resolve_bare_script(script_tok: Optional[str], cwd: Optional[str], cwd_det:
         return _block("P9", "script-run with indeterminate cwd (fail-closed)")
     man_dir, is_protected, scripts, det = _effective_manifest_for_cwd(cwd, cfg)
     if not det:
-        return _block("P9", "script-run with unresolvable effective manifest (fail-closed)")
+        if not os.path.isabs(cwd) or _path_under_any(cwd, cfg.get("protected_script_paths", [])):
+            return _block("P9", "script-run with unresolvable effective manifest (fail-closed)")
+        # An absolute cwd with no package.json and no protected root from it up to /: no manifest whose script could
+        # reach a protected workspace. Read on as a manifest of no scripts outside the protected monorepo.
+        is_protected, scripts = False, set()
     if is_protected:
         if script_tok is not None and script_tok in safe_allow:
             return ALLOW
@@ -4062,22 +4066,9 @@ def _git_inspection_head(head: str, rest: list) -> bool:
     git GLOBAL options that take an argument (`git -C <dir> status`)."""
     if head != "git":
         return False
-    skip_next = False
-    for t in rest:
-        st = _strip_quotes(t)
-        if skip_next:
-            skip_next = False
-            continue
-        if not st:
-            continue
-        if st in _GIT_GLOBAL_OPTS_WITH_ARG:
-            skip_next = True          # its operand is NOT the subcommand
-            continue
-        if st.startswith("-"):
-            continue                  # bare/fused global flag (no separate arg)
-        return st in _GIT_READONLY_SUBCMDS
+    sub, _i = _git_subcommand_index(["git"] + list(rest), 0)
     # bare `git` (or only global options) with no subcommand: treat as inspection
-    return True
+    return sub is None or sub in _GIT_READONLY_SUBCMDS
 
 
 # Options that turn an otherwise-inspection head into a COMMAND-EXECUTOR:

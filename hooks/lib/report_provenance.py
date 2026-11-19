@@ -77,6 +77,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from lib import command_span
+
 REPORT_GLOB = os.path.join("docs", "dev", "qa-report-*.json")
 MAIN = "main"
 VERSION = 2
@@ -342,12 +344,8 @@ def _session_reading(session_transcript, call=None) -> dict:
                 record = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(record, dict) or record.get("isSidechain"):
-                continue
-            message = record.get("message")
-            content = message.get("content") if isinstance(message, dict) else None
-            for block in content if isinstance(content, list) else ():
-                if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+            for block in command_span._blocks(record):
+                if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
                     tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
                     out["calls"][block["id"]] = (block.get("name"), tool_input, _iso(record.get("timestamp")))
                     out["order"].append(block["id"])
@@ -716,12 +714,8 @@ def own_write(transcript_path, project_dir, rel: str) -> bool:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                message = record.get("message") if isinstance(record, dict) else None
-                content = message.get("content") if isinstance(message, dict) else None
                 cwd = record.get("cwd") or root
-                for block in content if isinstance(content, list) else ():
-                    if not isinstance(block, dict):
-                        continue
+                for block in command_span._blocks(record, sidechain=True):
                     if block.get("type") == "tool_use" and block.get("name") == "Write" \
                             and isinstance(block.get("input"), dict):
                         target = block["input"].get("file_path")
