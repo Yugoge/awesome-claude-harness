@@ -3580,6 +3580,44 @@ def _flag_values(args, short, long_opt, env):
     return out
 
 
+def _git_discarded_paths(sub, args, env, context):
+    """The files `git clean`, `checkout-index` or `stash` overwrites or removes by name: clean's
+    operands when it is forced (-f) and not a dry run, checkout-index's operands, and the pathspecs
+    of `stash push` (or `stash -- <paths>`). A form that names no path (reset, `clean -f` alone,
+    `checkout-index -a`, a bare `stash`) acts on the whole tree and yields no target here."""
+    vals = [a.value() for a in args]
+    if None in vals:
+        return []
+    dd = vals.index("--") if "--" in vals else len(vals)
+    head, tail = vals[:dd], list(args[dd + 1:])
+    shorts = "".join(v[1:] for v in head if v.startswith("-") and not v.startswith("--"))
+    kind = TRUNCATE
+    if sub == "clean":
+        if not ("--force" in head or "f" in shorts) or "--dry-run" in head or "n" in shorts:
+            return []
+        kind, skip = DELETE, ("-e", "--exclude")
+    elif sub == "checkout-index":
+        skip = ()
+    elif head[:1] == ["push"] or (not head and tail):
+        skip, head = ("-m", "--message", "--pathspec-from-file"), head[1:]
+        args = args[1:] if vals[:1] == ["push"] else args
+    else:
+        return []
+    ops, k = [], 0
+    while k < len(head):
+        v = head[k]
+        if v in skip:
+            k += 1
+        elif not v.startswith("-"):
+            ops.append(args[k])
+        k += 1
+    out = []
+    for w in ops + tail:
+        path, dec = _project(w, env)
+        out.append(WriteTarget(path, kind, "git-" + sub, None, dec, w, None, context))
+    return out
+
+
 def _git_write_targets(res, env, context):
     out = []
     for inv in _git_from_resolved(res, context):
@@ -3602,7 +3640,9 @@ def _git_write_targets(res, env, context):
                 for w in ops[:-1]:
                     sp, sdec = _project(w, env)
                     out.append(WriteTarget(sp, DELETE, "git-mv-source", None, sdec, w, None, context))
-        elif sub in ("checkout", "restore"):
+        elif sub in GIT_WORKTREE_DISCARDERS - GIT_RESTORE_PATHS:
+            out += _git_discarded_paths(sub, args, env, context)
+        elif sub in GIT_RESTORE_PATHS:
             vals = [a.value() for a in args]
             if sub == "checkout":
                 if "--" not in vals:
@@ -3773,6 +3813,13 @@ GIT_LONG_OPTIONS = {
 
 # The git subcommands that move or remove working-tree files as mv and rm do.
 GIT_MV_RM = frozenset({"rm", "mv"})
+# The git subcommands that overwrite or remove working-tree files, the changes in them lost or set
+# aside: checkout and restore (from the index or a tree), reset (--hard, --merge, --keep), clean
+# (untracked files, with -f), checkout-index (from the index; over existing files with -f) and stash
+# (push and save revert the files after saving their changes; apply and pop write them back).
+GIT_WORKTREE_DISCARDERS = frozenset({"checkout", "checkout-index", "clean", "reset", "restore", "stash"})
+# The two that write the paths they name with their copy in the index or a tree.
+GIT_RESTORE_PATHS = frozenset({"checkout", "restore"})
 
 
 class GitInvocation:

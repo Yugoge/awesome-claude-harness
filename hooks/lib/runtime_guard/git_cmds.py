@@ -35,11 +35,11 @@ except ImportError:  # executed under the top-level-script shim (no package)
 
 try:
     from ..git_command_classifier import GIT_GLOBAL_VALUE_OPTS
-    from ..shell_parse import git_subcommand_index
+    from ..shell_parse import GIT_RESTORE_PATHS, GIT_WORKTREE_DISCARDERS, git_subcommand_index
 except ImportError:  # executed under the top-level-script shim: hooks/lib is the parent
     sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # type: ignore[no-redef]
-    from shell_parse import git_subcommand_index  # type: ignore[no-redef]
+    from shell_parse import GIT_RESTORE_PATHS, GIT_WORKTREE_DISCARDERS, git_subcommand_index  # type: ignore[no-redef]
 
 # git GLOBAL options (before the subcommand) that consume the FOLLOWING token as
 # their argument (`git -C <dir> status`, `git -c k=v log`): the classifier's git
@@ -55,7 +55,9 @@ _GIT_GLOBAL_OPTS_WITH_ARG = GIT_GLOBAL_VALUE_OPTS
 # under a pathspec (wiping or clobbering a protected bundle / build dir / statefile).
 # `clean` removes untracked files; `restore`/`checkout`/`reset --hard` overwrite
 # tracked files from the index/HEAD. Generic git verbs, NO project names.
-_GIT_DESTRUCTIVE_SUBCMDS = frozenset({"clean", "restore", "checkout", "reset"})
+# (shell_parse's table; stash is in it but sets the changes aside, so _git_is_destructive_invocation
+# never calls it destructive.)
+_GIT_DESTRUCTIVE_SUBCMDS = GIT_WORKTREE_DISCARDERS
 # git global options (before the subcommand) consuming the next token as an operand
 # (shared shape with `_GIT_GLOBAL_OPTS_WITH_ARG`, reused here).
 
@@ -210,13 +212,15 @@ def _git_destructive_pathspecs(tokens: list, sub_idx: int, subcmd: str) -> list:
             # separator OR a token that looks path-like to treat it as a pathspec —
             # a plain branch name (`git checkout main`) is NOT a path op. An EXCLUDE
             # pathspec is always a pathspec (it has the `:!`/`:(exclude)` magic).
-            if (subcmd in ("checkout", "restore") and not repo_rel and not is_exclude
+            if (subcmd in GIT_RESTORE_PATHS and not repo_rel and not is_exclude
                     and not ("/" in clean or clean in (".", "..") or clean.startswith("./") or clean.startswith("../"))):
                 continue
         out.append((clean, repo_rel, ic, is_exclude))
     # a path-less destructive form (no POSITIVE pathspec — excludes don't count)
     # targets the worktree root (the effective cwd).
-    if not any(not ex for (_p, _r, _i, ex) in out) and subcmd in ("clean", "checkout", "restore", "reset"):
+    whole_tree = subcmd in GIT_WORKTREE_DISCARDERS - {"checkout-index", "stash"} or (
+        subcmd == "checkout-index" and any(_strip_quotes(t) in ("-a", "--all") for t in rest))
+    if not any(not ex for (_p, _r, _i, ex) in out) and whole_tree:
         out.append((".", False, False, False))
     return out
 
@@ -227,9 +231,11 @@ def _git_is_destructive_invocation(tokens: list, sub_idx: int, subcmd: str) -> b
       • restore — always overwrites the worktree file from the index/source.
       • checkout— a pathspec checkout (`--` or a path operand) reverts the worktree
         file; a plain branch switch (`git checkout <branch>`) is NOT a path wipe.
-      • reset   — requires `--hard` (only --hard touches the worktree)."""
+      • reset   — requires `--hard` (only --hard touches the worktree).
+      • checkout-index — requires `-f` (without it git writes no file that exists).
+      • stash   — never: it saves the changes it reverts."""
     rest = [_strip_quotes(t) for t in tokens[sub_idx + 1:]]
-    if subcmd == "clean":
+    if subcmd in ("clean", "checkout-index"):  # checkout-index overwrites an existing file only with -f
         return any(t in ("-f", "--force") or (t.startswith("-") and not t.startswith("--") and "f" in t[1:]) for t in rest)
     if subcmd == "restore":
         return True

@@ -1400,7 +1400,7 @@ def _enforce_git_invocation(inv, cwd, cwd_known: bool, main_real: str, payload_c
             'overnight actors. Branch ops INSIDE the isolated worktree (non-protected target) '
             'are allowed.\n'
         )
-    if sub in ('reset', 'restore', 'clean') and (targets_main or switches_protected or not in_worktree):
+    if sub in sp.GIT_WORKTREE_DISCARDERS - {'checkout', 'stash'} and (targets_main or switches_protected or not in_worktree):
         _block(
             f'\nOVERNIGHT MAIN-WRITE BLOCK: git {sub} that could write '
             'the main working directory is forbidden for overnight '

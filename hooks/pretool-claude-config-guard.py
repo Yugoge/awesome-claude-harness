@@ -540,7 +540,7 @@ def _site_writes(sp, raw: str, res) -> list:
                    'pull', 'cherry-pick', 'revert', 'rm', 'mv'):
             if cdir is not None:
                 out.append((cdir.value() or cdir.text, cdir))
-            if sub in ('checkout', 'restore'):
+            if sub in sp.GIT_RESTORE_PATHS:
                 out += [(w.value() or w.text, w) for w in args[k + 1:]
                         if not (w.value() or '-').startswith('-')]
             if sub == 'apply':

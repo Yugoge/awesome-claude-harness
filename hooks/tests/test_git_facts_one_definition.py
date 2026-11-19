@@ -184,3 +184,37 @@ class TestGitConfigReadWrite:
         assert not git_facts.GIT_CONFIG_WRITE_OPTIONS & git_facts.GIT_CONFIG_READ_OPTIONS
         ui = _load("pretool-wrapper-userintent.py")
         assert ui._GIT_CONFIG_READS == git_facts.GIT_CONFIG_READ_OPTIONS
+
+
+class TestGitWorktreeDiscarders:
+    """git-worktree-discarders: which git subcommands overwrite or remove the working-tree files they name.
+
+    audit f04/f05: the config guard refused `git restore T` and passed `git clean -f T`, `git
+    checkout-index -f T` and `git stash push -- T`, as did tool-policy and the views guard; the shared
+    parser gave a write target only to checkout and restore."""
+
+    @pytest.mark.parametrize("cmd,mode", [
+        ("git clean -f t/x", "delete"), ("git clean -fd t/x", "delete"),
+        ("git checkout-index -f t/x", "truncate"), ("git stash push -- t/x", "truncate"),
+        ("git stash push -m wip t/x", "truncate"), ("git stash -- t/x", "truncate"),
+        ("git restore t/x", "truncate"), ("git checkout HEAD~1 -- t/x", "truncate")])
+    def test_shared_parser_names_the_file(self, cmd, mode):
+        got = [(t.path, t.mode) for t in sp.write_targets(sp.parse(cmd))]
+        assert got == [("t/x", mode)]
+
+    @pytest.mark.parametrize("cmd", ["git clean -n -f t/x", "git clean t/x", "git stash", "git stash list",
+                                     "git stash push -m wip", "git checkout-index -a -f"])
+    def test_forms_that_name_no_file(self, cmd):
+        assert sp.write_targets(sp.parse(cmd)) == []
+
+    @pytest.mark.parametrize("cmd", ["git clean -f .claude/hooks/x.py", "git checkout-index -f .claude/hooks/x.py",
+                                     "git stash push -- .claude/hooks/x.py", "git restore .claude/hooks/x.py"])
+    def test_config_guard_refuses_each(self, scratch, cmd):
+        assert run_hook(scratch, "pretool-claude-config-guard.py", cmd) == 2
+
+    def test_runtime_guard_and_overnight_read_the_table(self):
+        assert git_cmds._GIT_DESTRUCTIVE_SUBCMDS == sp.GIT_WORKTREE_DISCARDERS
+        toks = ["git", "checkout-index", "-f", "a/b"]
+        assert git_cmds._git_is_destructive_invocation(toks, 1, "checkout-index")
+        assert not git_cmds._git_is_destructive_invocation(["git", "checkout-index", "a/b"], 1, "checkout-index")
+        assert not git_cmds._git_is_destructive_invocation(["git", "stash", "push"], 1, "stash")
