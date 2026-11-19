@@ -4,7 +4,8 @@
     refusals [--since T] [--until T] [--dir DIR] [--json]
         The period's totals (default: the last 7 days), then the counts by event, rule, hook, role,
         project, day and provider, and the loops: one actor refused the identical call, stop or prompt
-        more than once. A call the removal policy let through unproven is no refusal: counted apart.
+        more than once. A call the removal policy let through unproven is no refusal: counted apart, and
+        listed with the snapshot taken before it ran (the last 20; --json: all).
     refusals reconcile [--since T] [--until T] [--dir DIR] [--transcripts DIR ...] [--refusals FILE]
         The record against the hook refusals the session transcripts hold for the period, by tool-call
         id; a blocked stop has none and pairs by session, agent and time. Every difference is printed;
@@ -107,6 +108,10 @@ def summary(found: list) -> dict:
         "by_day": sorted(collections.Counter(r["ts"][:10] for r in refused).items()),
         "by_provider": count(refused, lambda r: [r.get("provider") or "unknown"]),
         "unproven_by_rule": count(unproven, _rules),
+        "unproven_calls": [{"ts": r["ts"], "refused": str(r.get("refused") or "")[:120],
+                            "snapshot": next((ln for ln in str(r.get("message") or "").splitlines()
+                                              if ln.startswith("snapshot: ")), "snapshot: not recorded")}
+                           for r in unproven],
         "loops": sorted(loops, key=lambda x: (-x["times"], x["first"])),
     }
 
@@ -121,6 +126,9 @@ def render(s: dict, since: str, until: str, folder: str, damaged: int) -> str:
                        ("by provider", "by_provider"), ("let through unproven, by rule", "unproven_by_rule")):
         if s[key]:
             lines += ["", title] + [f"{n:7d}  {name}" for name, n in s[key]]
+    if s["unproven_calls"]:
+        lines += ["", f"let through unproven, the last {min(20, len(s['unproven_calls']))} (--json: all), each with its snapshot"]
+        lines += [f"  {x['ts']}  {x['refused']!r}\n      {x['snapshot']}" for x in s["unproven_calls"][-20:]]
     repeats = sum(x["times"] for x in s["loops"])
     lines += ["", f"loops (one actor, the identical refusal more than once): {len(s['loops'])}, holding {repeats} refusals"]
     for x in s["loops"]:

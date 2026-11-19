@@ -74,11 +74,11 @@ mkdir -p "$CHECKPOINT_LOG_DIR"
 # AC2 (static): the add-all invocation in write_checkpoint() must remain
 # unflagged -- no ignore-bypassing option co-occurring on that logical call.
 # ============================================================================
-add_a_line=$(grep -n '\$git_cmd add -A' "$CORE_LIB" | head -1)
+add_a_line=$(grep -nF '"${git_cmd[@]}" add -A' "$CORE_LIB" | head -1)
 if [ -n "$add_a_line" ] && ! printf '%s' "$add_a_line" | grep -q -- '-f'; then
   _ok "AC2: git add -A in write_checkpoint carries no -f (ignore-bypass) flag"
 else
-  _fail "AC2: expected an unflagged '\$git_cmd add -A' invocation in $CORE_LIB (got: '${add_a_line}')"
+  _fail "AC2: expected an unflagged '\"\${git_cmd[@]}\" add -A' invocation in $CORE_LIB (got: '${add_a_line}')"
 fi
 
 # ============================================================================
