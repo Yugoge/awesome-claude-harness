@@ -66,6 +66,9 @@ from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
     OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
     _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
+from shell_parse import GIT_LONG_OPTIONS  # noqa: E402
+from git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS  # noqa: E402
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -347,11 +350,11 @@ GIT_DATA_OPTIONS = frozenset((
 ))
 
 # Subcommands that HAND A COMMAND LINE ONWARD (`git bisect run <cmd>`,
-# `git submodule foreach <cmd>`). For these, NO option may declare its value
+# `git submodule foreach <cmd>`, `git rebase -x <cmd>`, `git difftool -x <cmd>`). For these, NO option may declare its value
 # data: otherwise `git bisect run -m '/bin/rm -rf T'` and `git submodule
 # foreach --message '/bin/rm -rf T'` would read as PROVEN_INERT. Scoping the
 # table by subcommand can only ever remove allows.
-GIT_PAYLOAD_FORWARDING_SUBCOMMANDS = frozenset(("bisect", "submodule"))
+GIT_PAYLOAD_FORWARDING_SUBCOMMANDS = GIT_SHELL_PAYLOAD_SUBCOMMANDS
 
 INERT_ARGV_CONSUMERS = {
     # ---- name / documentation lookup -------------------------------------
@@ -762,26 +765,19 @@ OUTPUT_SINKS = {
     "STDOUT.puts", "STDERR.puts", "process.stdout.write",
 }
 
-GIT_GLOBAL = _spec(
-    ("--paginate", "-p", "--no-pager", "-P", "--bare", "--literal-pathspecs",
-     "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
-     "--no-optional-locks", "--no-replace-objects", "--html-path", "--man-path",
-     "--info-path", "--version", "--help", "-v", "-h", "--no-lazy-fetch"),
-    ("-C", "-c", "--exec-path", "--git-dir", "--work-tree", "--namespace",
-     "--super-prefix", "--config-env", "--attr-source"))
+GIT_GLOBAL = _spec(GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS)
 
+# git rm's options: its long ones as shell_parse lists them, and the short ones.
 GIT_RM = _spec(
-    ("-n", "--dry-run", "-r", "--cached", "-f", "--force", "-q", "--quiet",
-     "--ignore-unmatch", "--sparse", "--pathspec-file-nul"),
+    ("-n", "-r", "-f", "-q") + tuple(o for o in GIT_LONG_OPTIONS["rm"] if o != "--pathspec-from-file"),
     ("--pathspec-from-file",))
 # A non-forced `git rm` is recoverable: git refuses a file that differs from HEAD or the index, and a
 # removed clean file comes back with `git checkout <sha>^ -- <path>`. It is allowed only when the walk
 # can hand prove_git_rm the repository it runs in: written at the top level as its command's own head
 # (no wrapper, nested shell or assignment), only these git options before `rm`, literal pathspecs, and
 # no shell state a later command inherits other than `cd`/`pushd` to a literal absolute directory.
-_GIT_RM_LOCATION_OPTS = ("-C", "--git-dir", "--work-tree")
-_GIT_RM_PATHSPEC_OPTS = ("--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
-                         "--icase-pathspecs")
+_GIT_RM_LOCATION_OPTS = GIT_LOCATION_OPTS
+_GIT_RM_PATHSPEC_OPTS = GIT_PATHSPEC_FLAGS
 _SHELL_STATE_BUILTINS = {"export", "declare", "typeset", "local", "readonly", "unset", "source",
                          ".", "enable", "read", "readarray", "mapfile", "getopts", "trap", "for",
                          "select"}
@@ -3385,8 +3381,8 @@ class Analyzer:
             unproven = unproven or "f" in lit
             i += 1
         loc = [w.literal() for w in git_opts]  # kept only if they just locate the repository
-        if None in loc or not all(x in _GIT_RM_LOCATION_OPTS + _GIT_RM_PATHSPEC_OPTS or "=" in x and x.split(
-                "=", 1)[0] in _GIT_RM_LOCATION_OPTS[1:] or loc[j - 1:j] and loc[j - 1] in _GIT_RM_LOCATION_OPTS
+        if None in loc or not all(x in _GIT_RM_LOCATION_OPTS | _GIT_RM_PATHSPEC_OPTS or "=" in x and x.split(
+                "=", 1)[0] in _GIT_RM_LOCATION_OPTS - {"-C"} or loc[j - 1:j] and loc[j - 1] in _GIT_RM_LOCATION_OPTS
                 for j, x in enumerate(loc)):
             loc = None
         if cached:

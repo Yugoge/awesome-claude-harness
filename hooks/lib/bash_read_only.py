@@ -49,6 +49,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402
 from shell_parse import (  # noqa: E402
     OPTION_ENDS, OUTPUT_REDIRECT_OPS, SimpleCommand, active_parts, parse, resolve, walk, write_targets)
+from shell_parse import GIT_INERT_FLAGS, git_plain_subcommand_index  # noqa: E402
+from git_facts import GIT_LISTING_SUBCOMMANDS, GIT_READ_SUBCOMMANDS  # noqa: E402
+from git_facts import GIT_CONFIG_READ_MODIFIERS, GIT_CONFIG_READ_OPTIONS, GIT_CONFIG_READ_SUBCOMMANDS  # noqa: E402
+from git_facts import GIT_REMOTE_READ_FLAGS, GIT_RUN_OR_WRITE_OPTIONS  # noqa: E402
 sys.path.pop(0)
 
 MAX_COMMAND_LEN = 8192
@@ -255,35 +259,20 @@ def _awk(args) -> bool:
 
 # --- git -------------------------------------------------------------------
 
-_GIT_GLOBAL_FLAGS = frozenset({
-    "-P", "--no-pager", "--no-optional-locks", "--literal-pathspecs", "--no-literal-pathspecs",
-    "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-replace-objects", "--no-advice",
-})
-
 # Long options that write a file, run a program, or start a pager, refused (or
 # any abbreviation of them) on every git subcommand.
-_GIT_FORBIDDEN = ("--output", "--output-directory", "--ext-diff", "--textconv", "--open-files-in-pager",
-                  "--filters", "--exec", "--upload-pack", "--receive-pack", "--edit", "--paginate")
+_GIT_FORBIDDEN = GIT_RUN_OR_WRITE_OPTIONS
 
-# Builtin subcommands that only read (git never lets an alias shadow a builtin).
-_GIT_READ = frozenset({
-    "status", "log", "show", "diff", "rev-parse", "ls-files", "ls-tree", "blame", "describe", "shortlog",
-    "rev-list", "grep", "merge-base", "diff-tree", "diff-index", "diff-files", "show-ref", "for-each-ref",
-    "cat-file", "count-objects", "check-ignore", "name-rev", "whatchanged",
-    "branch", "tag", "remote", "config", "stash", "worktree", "reflog",
-})
+# Builtin subcommands that only read, and those that read in a listing form _git_sub checks.
+_GIT_READ = GIT_READ_SUBCOMMANDS | GIT_LISTING_SUBCOMMANDS
 
 _BRANCH_FLAGS = frozenset({"-a", "-r", "-v", "-vv", "--all", "--remotes", "--verbose", "--show-current",
                            "--no-color", "--color", "--no-column"})
-_BRANCH_VALUED = ("--format=", "--sort=", "--contains=", "--no-contains=", "--merged=", "--no-merged=",
-                  "--points-at=")
+# The attached-value options branch and tag share in their listing form.
+_LISTING_VALUED = ("--format=", "--sort=", "--contains=", "--no-contains=", "--merged=", "--no-merged=",
+                   "--points-at=")
 _TAG_FLAGS = frozenset({"--no-color", "--color", "--no-column"})
-_TAG_VALUED = ("--format=", "--sort=", "--contains=", "--no-contains=", "--merged=", "--no-merged=",
-               "--points-at=")
-_CONFIG_FLAGS = frozenset({"--list", "-l", "--get", "--get-all", "--get-regexp", "--show-origin",
-                           "--show-scope", "--global", "--local", "--system", "--worktree", "--null", "-z",
-                           "--name-only", "--includes", "--no-includes", "--bool", "--int", "--path"})
-_CONFIG_READ = frozenset({"--list", "-l", "--get", "--get-all", "--get-regexp"})
+_CONFIG_FLAGS = GIT_CONFIG_READ_OPTIONS | GIT_CONFIG_READ_MODIFIERS
 
 
 def _listing(args, flags, valued, list_flags, count_flag=False) -> bool:
@@ -313,20 +302,20 @@ def _git_sub(sub: str, args) -> bool:
     positional = [a for a in args if not a.startswith("-")]
     if sub == "branch":
         # Only --list: before git 2.23 `git branch -l NAME` created NAME.
-        return _listing(args, _BRANCH_FLAGS, _BRANCH_VALUED, ("--list",))
+        return _listing(args, _BRANCH_FLAGS, _LISTING_VALUED, ("--list",))
     if sub == "tag":
-        return _listing(args, _TAG_FLAGS, _TAG_VALUED, ("--list", "-l"), count_flag=True)
+        return _listing(args, _TAG_FLAGS, _LISTING_VALUED, ("--list", "-l"), count_flag=True)
     if sub == "remote":
         if positional and positional[0] == "get-url":
-            return all(a in ("--all", "--push") for a in args if a.startswith("-")) and len(positional) == 2
-        return not positional and all(a in ("-v", "--verbose") for a in args)
+            return all(a in GIT_REMOTE_READ_FLAGS for a in args if a.startswith("-")) and len(positional) == 2
+        return not positional and all(a in GIT_REMOTE_READ_FLAGS for a in args)
     if sub == "config":
         flags = [a for a in args if a.startswith("-")]
         if not all(a in _CONFIG_FLAGS or a.startswith("--type=") for a in flags):
             return False  # --file, --blob, --add, --unset, --edit, ...
-        if positional and positional[0] in ("get", "list"):
+        if positional and positional[0] in GIT_CONFIG_READ_SUBCOMMANDS:
             return len(positional) <= 3
-        return any(a in _CONFIG_READ for a in flags) and len(positional) <= 2
+        return any(a in GIT_CONFIG_READ_OPTIONS for a in flags) and len(positional) <= 2
     if sub == "stash":
         return bool(positional) and args[0] in ("list", "show")
     if sub == "worktree":
@@ -337,21 +326,8 @@ def _git_sub(sub: str, args) -> bool:
 
 
 def _git(args) -> bool:
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a == "-C":
-            if i + 1 >= len(args):
-                return False
-            i += 2
-            continue
-        if a in _GIT_GLOBAL_FLAGS:
-            i += 1
-            continue
-        if a.startswith("-"):
-            return False  # -c, --exec-path, --git-dir, --work-tree, -p, --help, ...
-        break
-    if i >= len(args) or args[i] not in _GIT_READ:
+    i = git_plain_subcommand_index(args, GIT_INERT_FLAGS)  # not past -c, --exec-path, --git-dir, -p, --help ...
+    if i is None or args[i] not in _GIT_READ:
         return False
     return _git_sub(args[i], args[i + 1:])
 

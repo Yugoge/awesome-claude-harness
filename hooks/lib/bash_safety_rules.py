@@ -24,6 +24,13 @@ HOOKS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(o
 LIB = os.path.join(HOOKS, "lib")
 sys.path[:0] = [p for p in (HOOKS, LIB) if p not in sys.path]
 
+from lib import git_facts  # noqa: E402
+from lib.git_facts import GIT_DIR_CONFIG_FILES  # noqa: E402
+from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, GIT_INERT_FLAGS, git_global_options, git_plain_subcommand_index  # noqa: E402
+# A git option word that runs a program or writes a file: grep's -O, or one starting with a long option of
+# git_facts.GIT_RUN_OR_WRITE_OPTIONS (`--output=x`, `--exec=...`).
+_GIT_RUN_OR_WRITE_PREFIXES = ("-O",) + tuple(sorted(git_facts.GIT_RUN_OR_WRITE_OPTIONS))
+
 
 def refuse(*lines):
     """Refuse the call: the lines go to stderr, and the process exits 2, which the shell entry relays."""
@@ -201,12 +208,10 @@ def commit_guard(payload):
     cur = [d.get('cwd') or os.getcwd()]
     dirs = cur[:]
     commits, why, cfg, loc, ex = [], [], [], [], {}
-    LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer')
+    LONGV = tuple(o[2:] for o in sorted(git_facts.GIT_COMMIT_VALUE_OPTIONS))
     GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
-    CFGW = {'set', 'unset', 'unset-all', 'replace-all', 'add', 'rename-section', 'remove-section'}
-    CFGR = {'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list'}
-    WRF = {'--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section'}
-    RDF = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l'}
+    CFGW, CFGR = git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS, git_facts.GIT_CONFIG_READ_SUBCOMMANDS
+    WRF, RDF = git_facts.GIT_CONFIG_WRITE_OPTIONS, git_facts.GIT_CONFIG_READ_OPTIONS
 
     def prot(k):
         k = k.strip().strip('\'"').lower()
@@ -627,7 +632,7 @@ def _http_reader_ok(site, r):
         return False
     if name == "git":
         return bool(args) and args[0] in ("log", "show", "diff", "grep") and not any(
-            a.startswith(("--ext-diff", "--output", "--textconv", "-O", "--open-files-in-pager")) for a in args) \
+            a.startswith(_GIT_RUN_OR_WRITE_PREFIXES) for a in args) \
             and not (args[0] == "grep" and any(_git_grep_pager(a) for a in args[1:]))
     if name == "uniq":
         return _uniq_operands(args) < 2
@@ -1248,8 +1253,9 @@ _SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve
 other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
 _SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
 """A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
-_GIT_DIR_OPTS = ("-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--attr-source", "--exec-path",
-                 "--config-env")
+# The global options that point git at another directory, file, ref namespace or program set (every value option
+# but -c, and --exec-path).
+_GIT_DIR_OPTS = (GIT_GLOBAL_VALUE_OPTS | {"--exec-path"}) - {"-c"}
 _SHAPE_RUNS_FILE = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|busybox|i?python[0-9.]*|pypy[0-9.]*|node(js)?[0-9.]*|deno|bun"
                               r"|perl[0-9.]*|ruby[0-9.]*|php[0-9.]*|lua[0-9.]*|tclsh|wish|expect|make|[gmn]?awk|sed"
                               r"|gsed|exec|source|\.|eval|xargs|parallel|watch|script|su|builtin|strace|ltrace)")
@@ -2618,7 +2624,7 @@ def _consent_git_config_file(view, t):
     base, parent = parts[-1], (parts[-2] if len(parts) > 1 else None)
     if base == ".gitconfig":
         return True
-    if base in ("config", "config.worktree"):
+    if base in GIT_DIR_CONFIG_FILES:
         if parent is None:
             return any(c is None or re.search(r"\.git(/|$)", c) for c, _ in view.cwds)
         if parent.endswith(".git") or parent == "git" or "*" in parent or "/.git/" in "/" + text:
@@ -2724,15 +2730,11 @@ def _consent_read_only(cmd, name, view, named_writes):
                 named_writes.append(w)
         return None
     if name == "git":
-        i = 0
-        while i < len(vals) and vals[i].startswith("-"):
-            if vals[i] == "-C":
-                i += 2
-                continue
-            if vals[i] in ("--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs", "--no-replace-objects"):
-                i += 1
-                continue
-            return f"`git {vals[i]}` is not a read-only git option"
+        gopts, i = git_global_options(vals)
+        i = len(vals) if i is None else i
+        for o, _v in gopts:
+            if vals[o] != "-C" and vals[o] not in GIT_INERT_FLAGS:
+                return f"`git {vals[o]}` is not a read-only git option"
         sub = vals[i] if i < len(vals) else None
         opts = vals[i + 1:]
         if sub in _CONSENT_GIT_READS:
@@ -2947,15 +2949,13 @@ _BULK_INTERPRETER = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|i?python[0-9.]*|node(
                                r"|php[0-9.]*|lua[0-9.]*)")
 _BULK_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-delete", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
                                 "-fls"})
-_GIT_VALUE_OPTS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
-                             "--super-prefix", "--attr-source"})
 _GIT_PLAIN = frozenset({"diff", "log", "show", "grep", "status", "add", "commit", "rm", "mv", "restore", "checkout",
                         "switch", "reset", "blame", "annotate", "ls-files", "ls-tree", "cat-file", "rev-parse",
                         "rev-list", "shortlog", "whatchanged", "describe", "check-ignore", "check-attr", "diff-tree",
                         "diff-files", "diff-index", "range-diff", "reflog", "branch", "tag", "merge-base", "name-rev",
                         "show-ref", "for-each-ref", "stash", "merge", "cherry-pick", "revert", "version"})
 """git subcommands that take a protected name as a path or message to read, never as code or an output file."""
-_GIT_RUN_OR_WRITE_OPTS = ("--output", "--ext-diff", "--open-files-in-pager")
+_GIT_RUN_OR_WRITE_OPTS = git_facts.GIT_RUN_OR_WRITE_OPTIONS
 _BULK_BENIGN = frozenset({"echo", "printf", "cd", "pwd", "true", "false", ":"})
 """Commands that neither run nor write what they are handed (beside a redirection, read on its own)."""
 _BULK_DECLARE = frozenset({"export", "declare", "local", "readonly", "typeset", "alias", "let"})
@@ -3099,13 +3099,12 @@ _GIT_INERT_CONFIG_RE = re.compile(
 """The exact `git -c` keys that only change how git prints: two segments, a value with no dot or path. Any other
 setting (diff.external, diff.<driver>.textconv or .command, core.pager=<program>, core.editor, core.hooksPath,
 core.sshCommand, include.path, alias.*, a filter or a credential helper, safe.directory ...) can make git run a
-program or read another repository's config, so beside a protected name it is refused."""
-_GIT_RUN_KEY_RE = re.compile(r"[^=]*\.(command|textconv|external|driver|program|cmd|helper|path)(=.*)?", re.IGNORECASE)
+program or read another repository's config, so beside a protected name it is refused. The one key on the list that runs a
+program, core.pager, is on it only with a value that reads (git_facts.GIT_RUN_CONFIG_KEY_RE holds the keys that run)."""
 
 
 def _git_config_inert(setting):
-    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting)) and \
-        not _GIT_RUN_KEY_RE.fullmatch(setting)
+    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting))
 
 
 
@@ -3126,7 +3125,7 @@ def _git_runs_bulk_name(res):
             return True
         if v.startswith("--exec-path=") or v.startswith("--config-env"):
             return True
-        if v in _GIT_VALUE_OPTS and k + 1 < len(args):
+        if v in GIT_GLOBAL_VALUE_OPTS and k + 1 < len(args):
             k += 1
             if _bulk_word_mentions(args[k]):
                 return True
@@ -4106,7 +4105,7 @@ def sensitive_redirect(command):
             network = name in _NETWORK_CLIENTS
             writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
                                               if network else (False, False, {}))
-            if any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs) and tuple(site.context) == ("top",) \
+            if any(r.fd == 1 or r.op in BOTH_STREAMS_OPS for r in outputs) and tuple(site.context) == ("top",) \
                     and is_read_only(command[slice(*site.cmd.span)]):
                 outputs = []  # lib/bash_read_only.py's reader, its output thrown into /dev/null: what it reads lands nowhere
             if not outputs and network and writes:
@@ -4349,17 +4348,14 @@ def _plain_dd(vals, sv):
 
 
 def _plain_git(words):
-    """A git read subcommand, past only -C DIR, --no-pager and -P; no -c, --config-env, alias, pager or output."""
+    """A git read subcommand, past only -C DIR and inert flags; no -c, --config-env, alias, pager or output."""
     vals = [w.value() if _plain_word(w) else None for w in words]
     if None in vals:
         return False
-    k = 0
-    while k < len(vals) and vals[k] in ("-C", "--no-pager", "-P"):
-        k += 2 if vals[k] == "-C" else 1
-    if k >= len(vals) or vals[k] not in _PLAIN_GIT_READS:
+    k = git_plain_subcommand_index(vals, GIT_INERT_FLAGS)
+    if k is None or vals[k] not in _PLAIN_GIT_READS:
         return False
-    return not any(v.startswith(("--output", "--open-files-in-pager", "--ext-diff", "--textconv", "--exec"))
-                   or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
+    return not any(v.startswith(_GIT_RUN_OR_WRITE_PREFIXES) or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
 
 
 def _plain_simple(cmd, sv, piped):
@@ -4669,7 +4665,7 @@ def _production_systemctl(sv, env):
 
 def _workflow_state_removal(command, sv):
     """rm, mv, git rm or git mv naming a workflow state path; with computed operands, one the command names."""
-    from lib.shell_parse import _git_from_resolved
+    from lib.shell_parse import GIT_MV_RM, _git_from_resolved
     for name, args, site, r in sv.sites:
         if name == "git":
             # The subcommand as git reads it: past global options and their values (-C dir, -c k=v, --work-tree d).
@@ -4677,9 +4673,9 @@ def _workflow_state_removal(command, sv):
             if not invs:
                 continue
             sub, unresolved = invs[0].subcommand, invs[0].unresolved
-            if sub not in ("rm", "mv") and not (sub is None and unresolved):
+            if sub not in GIT_MV_RM and not (sub is None and unresolved):
                 continue
-        elif name not in ("rm", "mv"):
+        elif name not in GIT_MV_RM:
             continue
         if any(re.search(WORKFLOW_STATE_RE, w.text) for w in args):
             return True
@@ -5161,10 +5157,10 @@ def _dg_subcommands(*allowed):
 # --config-env, -C, --exec-path, --git-dir: config and paths that can name a program from argv). Writes stay inside
 # the repository the command is run in (add, commit, fetch, pull, switch, merge, stash); a pager, diff driver, hook or
 # filter the repository's own config names runs for every git command, trailing option or not, and is not argv.
-_DG_GIT_GLOBAL_OK = frozenset(("--no-pager", "-P", "--version", "--help"))
+_DG_GIT_GLOBAL_OK = GIT_INERT_FLAGS | {"--version", "--help"}
 # Options no subcommand may carry: a file written (--output), a program named (upload/receive pack, archive --exec,
 # grep's pager). Per subcommand: (refused options, refused words); interactive patch modes and history rewriting.
-_DG_GIT_ALL = ("--output", "--upload-pack", "--receive-pack", "--exec", "--open-files-in-pager")
+_DG_GIT_ALL = tuple(sorted(git_facts.GIT_ARGV_RUN_OR_WRITE_OPTIONS))
 _DG_GIT_SUB = {
     **dict.fromkeys(("status", "log", "diff", "show", "rev-parse", "describe", "shortlog", "ls-files", "ls-tree",
                      "cherry", "count-objects", "blame", "commit", "version", "range-diff", "merge-base",
@@ -5193,8 +5189,7 @@ def _dg_git_runs(words):
     """git words that name a program or a written file (shared with the denylist layer)."""
     i = 1
     while i < len(words) and words[i].startswith("-"):
-        i += 1 + (words[i] in ("-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace",
-                               "--exec-path", "--super-prefix", "--attr-source"))
+        i += 1 + (words[i] in GIT_GLOBAL_VALUE_OPTS)
     sub = words[i] if i < len(words) else ""
     refused = _DG_GIT_ALL + _DG_GIT_SUB.get(sub, ((), ()))[0]
     return any(_DG_GIT_RUNS.search(w) for w in words[1:]) or _dg_opts_hit(words[i + 1:], refused)
@@ -5211,17 +5206,16 @@ def _dg_git(t, words):
         return False
     if sub == "remote":  # listing only: `git remote [-v]`, `git remote [-v] show|get-url [options] name`
         words_ = [w for w in rest if not w.startswith("-")]
-        return all(w in ("-v", "--verbose", "-n", "--push", "--all") for w in rest if w.startswith("-")) and (
+        return all(w in git_facts.GIT_REMOTE_READ_FLAGS for w in rest if w.startswith("-")) and (
             not words_ or words_[0] in ("show", "get-url"))
     if sub == "config":  # reading only, in the old and the subcommand syntax; never set, unset or edit
-        reads = ("-l", "--list", "--get", "--get-all", "--get-regexp", "--show-origin", "--show-scope", "--global",
-                 "--local", "--system", "--name-only", "-z", "--null")
+        reads = git_facts.GIT_CONFIG_READ_OPTIONS | git_facts.GIT_CONFIG_READ_MODIFIERS
         if not all(w in reads for w in rest if w.startswith("-")):
             return False
         ops = [w for w in rest if not w.startswith("-")]
-        if ops and ops[0] in ("get", "list"):  # `git config get KEY`, `git config list`
+        if ops and ops[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS:  # `git config get KEY`, `git config list`
             return len(ops) <= (2 if ops[0] == "get" else 1)
-        if ops and ops[0] in ("set", "unset", "edit", "rename-section", "remove-section"):
+        if ops and ops[0] in git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS:
             return False
         if any(w in ("-l", "--list") for w in rest):
             return not ops
@@ -5819,7 +5813,7 @@ _SAFE_DEVICES = locations.TERMINAL_SINKS | {locations.FD_DIR + "1", locations.FD
 _SHAPE_GIT_SUBS = frozenset({"status", "show", "diff", "log", "restore", "add", "commit", "rev-parse", "ls-files",
                              "stash", "checkout", "clean", "blame", "shortlog", "describe", "branch", "switch",
                              "cat-file", "ls-tree", "merge-base", "reflog", "tag"})
-_SHAPE_GIT_GLOBALS = frozenset({"-C", "--no-pager", "-P", "--no-optional-locks"})
+_SHAPE_GIT_GLOBALS = GIT_INERT_FLAGS | {"-C"}
 _EXEC_DOC_EXT_RE = re.compile(r"\.(sh|bash|zsh|ksh|fish|csh|tcsh|command|mk|mak|make|py|pl|pm|rb|js|mjs|cjs|ts|php|"
                               r"tcl|lua|awk|sed|ps1|bat|cmd|service|timer|desktop|cron|rc|env|envrc)$", re.I)
 _EXEC_DOC_NAMES = frozenset({"makefile", "gnumakefile", "crontab", ".bashrc", ".bash_profile", ".bash_login",
@@ -6078,10 +6072,14 @@ def _wide_path_after_dashdash(args):
     return path in (".", "*") or (path or "").endswith("/")
 
 
+# The first words after `git stash` that save the working tree (and with -u/-a its untracked files) and reset it.
+_STASH_SAVE_WORDS = ("push", "save", "create", "store", "-u", "--include-untracked", "-a", "--all")
+_STASH_SAVE_ALT = "|".join(map(re.escape, _STASH_SAVE_WORDS))
+
+
 def _stash_pushes(args):
-    bad = {"push", "save", "create", "store", "-u", "--include-untracked", "-a", "--all"}
     first = args[0] if args else None
-    return first is not None and (first in bad or (
+    return first is not None and (first in _STASH_SAVE_WORDS or (
         first.startswith("-") and not first.startswith("--") and any(c in first[1:] for c in "ua")))
 
 
@@ -6186,7 +6184,7 @@ def _worktree_raw_fallback(command, globals_=False):
         return _worktree_global_scan(command)
     g = r"git\s+"
     return {
-        "push": grep(g + r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command)
+        "push": grep(g + r"stash\s+(" + _STASH_SAVE_ALT + r")\b", command)
         or grep(g + r"stash\s+-[ua]+\b", command),
         "bare": grep(g + r"stash\s*($|[;&|])", command),
         "checkout": grep(g + r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])", command),
@@ -6293,7 +6291,7 @@ _WT_VALOPTS = frozenset(["-C", "-c"] + ["--" + n for n in GC_VALOPT_NAMES.split(
 _WT_VALUE_SHAPED_RE = re.compile(rf"[{GC_VMARK}]")
 _WT_SEPS = frozenset(";&|()`")
 _WT_SUB_RE = re.compile(r"(stash|checkout|restore)\b")
-_WT_PUSH_RE = re.compile(r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b")
+_WT_PUSH_RE = re.compile(r"stash\s+(" + _STASH_SAVE_ALT + r")\b")
 _WT_PUSH_FLAGS_RE = re.compile(r"stash\s+-[ua]+\b")
 _WT_BARE_RE = re.compile(r"stash\s*($|[;&|])")
 _WT_CHECKOUT_RE = re.compile(r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])")
@@ -6549,8 +6547,7 @@ _SD_GIT_GREP = ("efABCm", "aiIwvhHEGFPnlLcopWzqr",
                  "--function-context", "--break", "--heading", "--all-match", "--quiet", "--and", "--or", "--not",
                  "--no-color"},
                 {"--color"}, {"--textconv", "-O", "--open-files-in-pager"})
-_SD_GIT_GLOBAL_FLAGS = {"--no-pager", "-p", "--paginate", "-P", "--no-optional-locks", "--no-replace-objects",
-                        "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"}
+_SD_GIT_GLOBAL_FLAGS = GIT_INERT_FLAGS | {"-p", "--paginate"}
 # git log options. A value option takes the next word (or its `=value`); a flag takes nothing; an attached option
 # takes a value only after `=` (git reads an optional or `=`-only value, as `--unified[=<n>]` or `--orderfile=<f>`, never
 # from the next word, so such an option is a flag or attached-only, never a value option). An option on none of these lists (a new one included) leaves no allowed mention, since
@@ -6596,8 +6593,7 @@ _SD_LOG_SHORT_ATTACHED = "nUMCBlIO"  # a short option whose value may follow it 
 _SD_COMMIT_SHORT_VALUES = "mFCct"
 _SD_COMMIT_SHORT_OPTIONAL = "Su"
 _SD_COMMIT_SHORT_FLAGS = "aqvsneiopz"
-_SD_COMMIT_LONG_VALUES = {"--message", "--file", "--reuse-message", "--reedit-message", "--template", "--author",
-                          "--date", "--cleanup", "--fixup", "--squash", "--trailer", "--pathspec-from-file"}
+_SD_COMMIT_LONG_VALUES = git_facts.GIT_COMMIT_VALUE_OPTIONS
 _SD_COMMIT_LONG_FLAGS = {"--all", "--patch", "--quiet", "--verbose", "--signoff", "--no-signoff", "--no-verify",
                          "--verify", "--amend", "--no-edit", "--edit", "--allow-empty", "--allow-empty-message",
                          "--dry-run", "--short", "--branch", "--porcelain", "--long", "--null", "--include", "--only",
@@ -6676,15 +6672,8 @@ def _sd_scan(args, spec, permute=True, operands=None):
 def _sd_git(args):
     """(allowed arg indexes, message comes from stdin) for a git call that names the file only as a search pattern
     or in a commit message; None when any part of it is not read."""
-    k = 0
-    while k < len(args) and args[k].startswith("-"):
-        if args[k] == "-C" and k + 1 < len(args):
-            k += 2
-            continue
-        if args[k] not in _SD_GIT_GLOBAL_FLAGS:
-            return None
-        k += 1
-    if k >= len(args):
+    k = git_plain_subcommand_index(args, _SD_GIT_GLOBAL_FLAGS)
+    if k is None:
         return None
     sub, rest, base = args[k], args[k + 1:], k + 1
     if sub == "grep":
@@ -7346,15 +7335,8 @@ _SD_SHELL = re.compile(r"(ba|da|z|k|mk|y|r|po)?sh|busybox")
 
 def _sd_git_sub(vals):
     """The subcommand of a git call after its global options; None when a global option is not plain."""
-    k = 0
-    while k < len(vals) and vals[k].startswith("-"):
-        if vals[k] == "-C" and k + 1 < len(vals):
-            k += 2
-            continue
-        if vals[k] not in _SD_GIT_GLOBAL_FLAGS:
-            return None
-        k += 1
-    return vals[k] if k < len(vals) else None
+    k = git_plain_subcommand_index(vals, _SD_GIT_GLOBAL_FLAGS)
+    return None if k is None else vals[k]
 
 
 def _sd_traces(sites):
@@ -7412,7 +7394,7 @@ def _sd_reads_back(site, res):
 _SD_PLAIN_WRAPPERS = frozenset({"timeout", "nice", "command"})
 _SD_PLAIN_GIT = frozenset({"status", "diff", "log", "show", "push", "fetch"})
 # git options of those subcommands that run a program or write a file (taken in any abbreviation).
-_SD_PLAIN_GIT_REFUSED = ("--ext-diff", "--textconv", "--receive-pack", "--upload-pack", "--exec")
+_SD_PLAIN_GIT_REFUSED = git_facts.GIT_RUN_OR_WRITE_OPTIONS
 _SD_PLAIN_COMPOUNDS = frozenset({"group", "subshell", "if"})
 
 

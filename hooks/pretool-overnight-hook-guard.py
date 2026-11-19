@@ -40,6 +40,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib import command_span, locations, overnight, shell_parse as sp, stop_contract  # noqa: E402
 from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
+from lib import git_facts  # noqa: E402
+from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES  # noqa: E402
 
 try:  # optional contract runtime + agent resolver for the self_repair grant
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -1023,8 +1025,7 @@ def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
 
 
 # `git config` reads and the forms that open, remove or rename (a section of) the config.
-_CONFIG_READ_FLAGS = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color',
-                      '--get-colorbool', '-l', '--list'}
+_CONFIG_READ_FLAGS = git_facts.GIT_CONFIG_READ_OPTIONS
 _CONFIG_SECTION_OPS = {'--remove-section', '--rename-section', 'remove-section', 'rename-section'}
 _CONFIG_EDIT_OPS = {'-e', '--edit', 'edit'}
 _CONFIG_VALUE_OPTS = {'-f', '--file', '--blob', '--type', '--default', '--comment', '--url'}
@@ -1058,8 +1059,7 @@ def _config_key_operand(args: list[str]) -> str:
             skip = True
         elif not a.startswith('-'):
             words.append(a)
-    if words and words[0] in ('set', 'unset', 'get', 'add', 'replace-all', 'unset-all', 'edit', 'list',
-                              'remove-section', 'rename-section'):
+    if words and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS | git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS:
         words = words[1:]
     return words[0] if words else ''
 
@@ -1072,7 +1072,7 @@ def _config_args(inv) -> list[str]:
 def _config_reads(args: list[str]) -> bool:
     opts = args[:args.index('--')] if '--' in args else args
     words = [a for a in opts if not a.startswith('-')]
-    return any(a in _CONFIG_READ_FLAGS for a in opts) or (words[:1] in (['get'], ['list']))
+    return any(a in _CONFIG_READ_FLAGS for a in opts) or (words[:1] and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS)
 
 
 def _config_writes_keystone(inv) -> bool:
@@ -1397,7 +1397,7 @@ def _enforce_git_invocation(inv, cwd, cwd_known: bool, main_real: str, payload_c
             'overnight actors. Branch ops INSIDE the isolated worktree (non-protected target) '
             'are allowed.\n'
         )
-    if sub in ('reset', 'restore', 'clean') and (targets_main or switches_protected or not in_worktree):
+    if sub in sp.GIT_WORKTREE_DISCARDERS - {'checkout', 'stash'} and (targets_main or switches_protected or not in_worktree):
         _block(
             f'\nOVERNIGHT MAIN-WRITE BLOCK: git {sub} that could write '
             'the main working directory is forbidden for overnight '
@@ -1622,7 +1622,7 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
         return []
     common_real = os.path.realpath(gcd)
     args: list[str] = []
-    for leaf in ('config', 'hooks', _KEYSTONE_HOOKS_LEAF):
+    for leaf in GIT_COMMON_DIR_PROTECTED + (_KEYSTONE_HOOKS_LEAF,):
         p = os.path.join(common_real, leaf)
         if os.path.exists(p):
             args += ['--ro-bind', p, p]
@@ -1763,7 +1763,7 @@ class _GitConfigPaths:
         self.hook_dirs: set[str] = set()
         for dirs in checkouts:
             for d in dirs:
-                self.files.update(os.path.join(os.path.realpath(d), leaf) for leaf in ('config', 'config.worktree'))
+                self.files.update(os.path.join(os.path.realpath(d), leaf) for leaf in GIT_DIR_CONFIG_FILES)
             if dirs:
                 self.hook_dirs.add(os.path.realpath(os.path.join(os.path.realpath(dirs[-1]), _KEYSTONE_HOOKS_LEAF)))
 

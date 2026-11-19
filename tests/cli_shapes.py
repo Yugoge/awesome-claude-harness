@@ -279,6 +279,60 @@ def notification(task_id: str, tool_use_id: str, status: str = "completed", resu
     return _NOTIFICATION_RESULT.sub(lambda _m: f"<result>{result}</result>", text)
 
 
+# Before each model request the CLI (2.1.322, tests/fixtures/cli-request-copies) writes an api-request-blob
+# record for each message of the request it has not written before: the message as sent, its tool_use and
+# tool_result blocks with their ids. A call's copy follows its result; a turn's last message's, the next prompt.
+REQUEST_COPIES = FIXTURES.parent / "cli-request-copies" / "transcript-2.1.322.jsonl"
+
+
+def request_copies(messages: list) -> list:
+    """The api-request-blob records of a request for ``messages`` (user and assistant records, in order):
+    one per message, the assistant records in a row as one message (the recorded copy, its values filled)."""
+    import hashlib
+
+    blob = next(r for r in map(json.loads, REQUEST_COPIES.read_text().splitlines()) if r["type"] == "api-request-blob")
+    merged = []
+    for rec in messages:
+        content = _content(rec) if isinstance(_content(rec), list) else [{"type": "text", "text": _content(rec)}]
+        if merged and merged[-1][0] == rec["type"] == "assistant":
+            merged[-1][1].extend(content)
+        else:
+            merged.append((rec["type"], list(content), rec))
+    out = []
+    for role, blocks, first in merged:
+        message = dict(blob["message"], role=role, content=blocks)
+        copy = dict(blob, sessionId=first.get("sessionId"), message=message,
+                    hash=hashlib.sha256(json.dumps(message, sort_keys=True).encode()).hexdigest())
+        out.append(dict(copy, agentId=first["agentId"]) if "agentId" in first else copy)
+    return out
+
+
+def with_request_copies(records: list) -> list:
+    """``records`` (one transcript's, in order) with the api-request-blob records the CLI writes among them:
+    after each user record that a model request follows (the next message is the model's), the copies of
+    the messages before it not yet copied (request_copies). The user record itself is copied at the next
+    request, as the recording's tool result is; the messages of a turn no request followed (an agent's
+    last), after the next prompt."""
+    said = [k for k, rec in enumerate(records) if rec.get("type") in ("user", "assistant") and _content(rec) is not None]
+    out, pending = [], []
+    for k, rec in enumerate(records):
+        out.append(rec)
+        if k not in said:
+            continue
+        pending.append(rec)
+        if rec["type"] == "user" and [records[j]["type"] for j in said if j > k][:1] == ["assistant"]:
+            out += request_copies(pending[:-1])
+            pending = pending[-1:]
+    return out
+
+
+def add_request_copies(path) -> None:
+    """Write the CLI's api-request-blob records into the transcript at ``path`` (with_request_copies)."""
+    path = pathlib.Path(path)
+    records = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    path.write_text("".join(json.dumps(r) + "\n" for r in with_request_copies(records)))
+
+
 @functools.lru_cache(maxsize=None)
 def _recorded_shapes(fixture_dir: str) -> dict:
     return fixture_shapes(fixture_dir)
