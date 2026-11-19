@@ -603,8 +603,8 @@ def step5_refused(span, call: str, ref: str | None = None) -> bool:
     return refused
 
 
-def _bulk_block(span):
-    """The status block the analyst of the span's last commit-bulk dispatch
+def _bulk_block(span, profile: str = "commit-bulk"):
+    """The status block the analyst of the span's last ``profile`` dispatch
     reported when it stopped (its obligation's response_block,
     changelog-status.v1, checked at the analyst's own stop), or None: no such
     dispatch ran, or its analyst has not stopped. Its stop and reply are read
@@ -613,7 +613,7 @@ def _bulk_block(span):
     own recorded stop. A dispatch refused before it ran started no analyst."""
     returns, found = importlib.import_module("lib.agent_returns").Returns(span), None
     for call, doc in span.dispatches():
-        if doc.get("profile") != "commit-bulk" or not (call.ok or returns.agent(call)):
+        if doc.get("profile") != profile or not (call.ok or returns.agent(call)):
             continue
         block = next((a for a in doc.get("artifacts") or () if a.get("kind") == "response_block"), {})
         begin, end, text = block.get("begin") or "", block.get("end") or "", returns.reply(call)
@@ -622,6 +622,18 @@ def _bulk_block(span):
         except ValueError:
             found = None
     return found if isinstance(found, dict) else None
+
+
+REFUSED_LINE = re.compile(r"^REFUSED: \S", re.M)
+
+
+def hook_refused_landing(span) -> bool:
+    """commit.md Step 7: the analyst of the span's last commit-landing dispatch reported `hook_blocked` (a hook
+    refused its commit) and the span's last main-agent text holds the REFUSED: line that reports it. The commit is
+    not retried and nobody is asked, so the run ends there; a later landing dispatch's block replaces it."""
+    block = _bulk_block(span, "commit-landing")
+    return bool(block) and block.get("failure_code") == "hook_blocked" and bool(
+        REFUSED_LINE.search(span.last_text() or ""))
 
 
 def p_commit(span, root, payload) -> list[str]:
@@ -645,6 +657,8 @@ def p_commit(span, root, payload) -> list[str]:
         return unresolved
     if targets is None:
         return ["commit: no target task resolved"]
+    if "--auto" not in args and hook_refused_landing(span):
+        return []  # Step 7: a hook refused the commit; reported as refused, nobody asked
     names = _cycle_names(span)
     return [g for task in targets for name in _names(names, task) for g in disposition(root, name, "commit")]
 
@@ -919,6 +933,8 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=F
 
     values = {head, _value_at(local, since)} | {sha for sha, t, _m in local if t >= since}
     for commit in [head] + ([opened] if opened and not _ancestor(root, opened, head) else []):
+        if unknown and again:
+            continue  # Step 5: push.sh refused the typed name, which git lists as no remote; reported, nobody asked
         if (up and tip(*up) and _ancestor(root, commit, tip(*up))) or any(
                 took(value, remote) for remote in considered for value in (values if commit == head else {commit})
                 if value):

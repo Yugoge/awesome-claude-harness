@@ -1,20 +1,17 @@
-"""P5 review M: the owner mistypes the /close or /push argument and corrects it in the same turn.
+"""P5 review M: the owner mistypes the /close or /push argument; nobody is asked, and the owner types it again.
 
 Each replay types the command with an argument that names nothing: /close of a ticket path of another
 id, which does not exist (drivers/do.py `then=close mistype=1`), and /push of a remote the toy does not
-have (drivers/push.py `after=none token=owner2 remote=upstrem`: two sessions' push-gate tokens name
-HEAD, so one is left after push.sh consumes the other). The main agent asks in the turn (close.md's
-Task-id resolution, awaiting-input cause (iii); push.md's Refusals rule over push.sh's "remote
-'upstrem' not found"), the owner picks the corrected value (the /do task's id; origin), and the work is
-done on it. With the tree's settings ("shipped") and armed:
+have (drivers/push.py `after=none token=owner2 remote=upstrem`). Nobody is asked (2026-11-19):
 
-* the /push Stop passes, a token still naming HEAD, and /push reaches its terminal (origin's branch is
-  HEAD), with no block;
-* the /close Stop passes, or, while this tree lacks P3's disposition or P4's close rating, is held by
-  their instrument failures alone (waiting on P3/P4); the gate run on the replay's own transcript, with
-  stand-ins of their signatures, decides on the /do task and never on the typed id, and passes once
-  that task's disposition passes;
-* each replay asks once and meets no other block and no hook error.
+* /close's Task-id resolution ends on its NO_TARGET: line naming the task, its Stop passes (the Stop gate's
+  no_target_end), and the owner types `/close <the /do task>`; that run's Stop passes, or, while this tree lacks
+  P3's disposition or P4's close rating, is held by their instrument failures alone; the gate run on the replay's
+  own transcript, with stand-ins of their signatures, decides on the /do task and passes once that task's
+  disposition passes;
+* /push's Step 5 refusal of the unknown remote is reported with the action it names (push to origin), nothing
+  is pushed, and its Stop passes (the typed name is no remote of the repository and Step 5 refused it);
+* no AskUserQuestion is made but the close rating, and no other block or hook error is met.
 """
 from __future__ import annotations
 
@@ -98,24 +95,26 @@ def test_a_mistyped_argument_corrected_in_the_turn_is_checked_on_the_corrected_v
     asked = [ev["label"] for ev in events if ev["event"] == "PreToolUse" and ev.get("tool") == "AskUserQuestion"]
     stops = {ev["label"]: ev for ev in events if ev["event"] == "Stop"}
     if scn is PUSH:
-        assert typed == ["/push typed"] and asked == ["/push Step 5 AskUserQuestion"], (typed, asked)
+        assert typed == ["/push typed"] and asked == [], (typed, asked)
         assert [f["value"] for f in r.facts if f.get("key") == "push refusal"] == [
-            {"step": "Step 5", "action": "push to origin", "answer": "push to origin"}], r.explain()
+            {"step": "Step 5", "action": "push to origin", "answer": None}], r.explain()
         pushes = [f["value"] for f in r.facts if f.get("key") == "push"]
-        assert [p["rc"] for p in pushes] == [1, 0] and "remote 'upstrem' not found" in pushes[0]["output"], pushes
-        assert pushes[-1]["pushed"] and pushes[-1]["origin_equals_head"], pushes[-1]
-        assert any("/agentic-commit/push/" in p for left in pushes[-1]["left"].values() for p in left), pushes[-1]
+        assert [p["rc"] for p in pushes] == [1] and "remote 'upstrem' not found" in pushes[0]["output"], pushes
+        assert not pushes[-1]["pushed"], pushes[-1]
         assert list(stops) == ["/push Stop"] and not r.blocks, r.explain()
-        assert r.reached(), r.explain()
         return
     tid = (r.terminal("do") or {}).get("task")
     made = r.fact("close typed") or {}
-    assert tid and made.get("answer") == tid and made.get("typed", "").startswith("docs/dev/ticket-"), (tid, made)
+    assert tid and made.get("retyped") == tid and made.get("typed", "").startswith("docs/dev/ticket-"), (tid, made)
+    assert made["line"].startswith("NO_TARGET: ") and made["still_blocked"] is False, made
     typo = re.search(r"ticket-(.+)\.md$", made["typed"]).group(1)
-    # the one question of the correction; with P4's close rating in the tree, close.md's Step 4 asks the rating too
+    # with P4's close rating in the tree, close.md's Step 4 asks the rating; nothing else is asked
     rating = ["/close Step 4 AskUserQuestion"] if WAITS["P4"][0]() else []
-    assert typo != tid and asked == ["/close Task-id resolution AskUserQuestion"] + rating, (typo, asked)
-    assert set(stops) == {"/do Stop", "/close Stop"} and not _blocked(stops["/do Stop"]), r.explain()
+    assert typo != tid and asked == rating, (typo, asked)
+    assert [t for t in typed if t.startswith("/close ")] == ["/close typed", "/close typed again"], typed
+    assert set(stops) == {"/do Stop", "/close Stop (no task)", "/close Stop"} and not _blocked(stops["/do Stop"]), \
+        r.explain()
+    assert not _blocked(stops["/close Stop (no task)"]), r.explain()
     refused = {(b["step"], b["hook"]) for b in r.blocks} - {("/close Stop", "hooks/stop-launch.py")}
     assert not refused, r.explain()
     waiting = sorted(phase for phase, (present, _rx) in WAITS.items() if not present())
@@ -127,7 +126,7 @@ def test_a_mistyped_argument_corrected_in_the_turn_is_checked_on_the_corrected_v
     else:
         assert not held and r.reached(), r.explain()
     held = _on_the_transcript(r, str(tmp_path), "gap")
-    assert held["command"] == "close" and held["args"] == made["typed"], held
+    assert held["command"] == "close" and held["args"] == tid, held
     assert held["decision"] == [2, f"COMMAND_GATE /close: not complete\n- close {tid}: the stand-in disposition\n"
                                    "Finish the gaps above. What a rule refuses is reported as refused, with the "
                                    "hook's output; nobody is asked about it.\n"], held

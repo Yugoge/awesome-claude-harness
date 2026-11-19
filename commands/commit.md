@@ -574,9 +574,10 @@ own lifecycle (absent, past `expires_at`, or spent by an earlier attempt;
 `agents/changelog-analyst.md` § failure_code values keeps them apart from `hook_blocked`), not a
 hook refusing an operation. The Retryable rule above takes a fresh grant for them and asks
 nothing, and after a landing the Non-retryable rule routes them. For a hook rejection, print one
-line `REFUSED: <hook> refused <the operation> for task <TASK_ID>` and the hook's output verbatim;
-`/commit` goes on without that operation where every acceptance criterion still holds without it
-(Hook Discipline #4), and otherwise ends there with that report. The operation runs again only on
+line `REFUSED: <hook> refused <the operation> for task <TASK_ID>` and the hook's output verbatim,
+with the remedy the hook names or the `/allow` line that would let it through, and end: the commit
+is not retried, and the Stop gate (`hooks/stop-command-gate.py`, `hook_refused_landing`) lets the
+run end on that line. The operation runs again only on
 the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses; no agent asks for one.
 
 ### Step 8: Spec-update dispatch (post-commit, advisory)
