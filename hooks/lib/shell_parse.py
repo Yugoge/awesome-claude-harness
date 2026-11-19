@@ -433,6 +433,7 @@ COMMAND_OPTS = ("-c", "--command")  # su, runuser, flock, script: the option who
 ENV_SPLIT_OPTS = ("-S", "--split-string")  # env: the option whose value env splits into the command line
 GIT_RESTORE_SOURCE_OPTS = ("-s", "--source")  # git restore: the tree the files are restored from
 COMMAND_LOOKUP_OPTS = ("-v", "-V")  # `command -v NAME` / `-V NAME` describe NAME, run nothing
+ITEM_RUNNERS = ("xargs", "parallel")  # run their command once per input item, operands built at run time
 # Environment variables whose VALUE is executed by the command that follows
 # them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
 # a fixture-pinned safe row -- but these named vectors are documented command

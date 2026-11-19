@@ -2825,7 +2825,7 @@ def consent_flag_verdict(command, cwd, state):
                                 "state directory")
         # 3a. xargs, parallel and find -exec build their operands at run time: none may aim at the state directory.
         head = s.cmd.head().value() if s.cmd.words and s.cmd.head().value() else ""
-        if "xargs" in [n for n, _ in r.wrappers] or sp.basename(head) in ("xargs", "parallel") or \
+        if "xargs" in [n for n, _ in r.wrappers] or sp.basename(head) in sp.ITEM_RUNNERS or \
                 "exec_argv" in s.context:
             if view.cwd_state(".") == "explicit":
                 return "it runs a command with operands built at run time in the state directory"

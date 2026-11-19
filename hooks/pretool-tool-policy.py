@@ -940,7 +940,7 @@ def _bash_report_writes(command: str, cwd: str) -> list:
     # command that names a report, may write it.
     for site in sites:
         words = [sp.basename(w.value() or "") for w in site.cmd.words]
-        if tokens and words and words[0] in ("xargs", "parallel") and (
+        if tokens and words and words[0] in sp.ITEM_RUNNERS and (
                 _WRITER_NAMES & set(words[1:]) or any(">" in (w.text or "") for w in site.cmd.words[1:])):
             found.append(tokens[0])
     for t in writes:
