@@ -238,7 +238,7 @@ def _state_root():
     override = os.environ.get(STATE_ROOT_ENV, '')
     if override and os.path.isabs(override):
         return override
-    return tempfile.gettempdir()
+    return os.environ.get('TMPDIR') or '/var/tmp/claude-scratch'  # hooks/session-scratch-init.sh's root
 
 
 def _owns_scratch_dir(session_dir, session_id):
