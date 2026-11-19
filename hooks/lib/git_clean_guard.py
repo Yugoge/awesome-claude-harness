@@ -67,9 +67,9 @@ import re
 import sys
 
 try:
-    from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
+    from lib.shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
-    from shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
+    from shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 try:
     from . import locations
 except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
@@ -77,7 +77,7 @@ except ImportError:  # loaded outside its package (by path, or from hooks/lib): 
     import locations
 
 # git globals that point the invocation at a DIFFERENT repository / work tree.
-_REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
+_REDIRECT_FLAGS = GIT_LOCATION_OPTS
 # Environment assignments that redirect the target.
 _REDIRECT_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"})
 # `-c key=value` config keys that redirect the work tree. `-c` is config, not
@@ -85,8 +85,7 @@ _REDIRECT_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"})
 _REDIRECT_CONFIG_KEYS = frozenset({"core.worktree", "core.gitdir"})
 
 # Shell builtins that move the effective working directory.
-_CWD_MUTATORS = frozenset({"cd", "pushd", "popd"})
-_SUBST_MARKERS = ("$(", "<(", ">(", "`")
+_SUBST_MARKERS = SUBST_OPENERS + ("`",)
 
 # Reserved words / decorators that never move the target and take no operand.
 _RESERVED_DECORATORS = frozenset({
@@ -514,7 +513,7 @@ def _cwd_indeterminate(words, info, raw: str) -> bool:
     if any(marker in raw for marker in _SUBST_MARKERS):
         return True
     for word in words:
-        if os.path.basename(word.text) in _CWD_MUTATORS:
+        if os.path.basename(word.text) in CWD_BUILTINS:
             return True
     return False
 
@@ -570,7 +569,6 @@ _SHADOWING_WORDS = frozenset({
     "source", "eval",
 })
 _SHADOWING_NAMES = ("PATH", "BASH_ENV", "ENV")
-_PIPE_OPS = ("|", "|&")
 
 
 def _data_head(words):
@@ -651,7 +649,7 @@ def _inert_data_commands(commands, info, raw: str):
     if _is_shadowing(info, commands, inert):
         return frozenset()
     for k, command in enumerate(commands):
-        if command["next_op"] in _PIPE_OPS and k + 1 not in inert:
+        if command["next_op"] in PIPE_OPS and k + 1 not in inert:
             return frozenset()
     if any(_writes_a_file(c) for c in commands):
         for k, command in enumerate(commands):

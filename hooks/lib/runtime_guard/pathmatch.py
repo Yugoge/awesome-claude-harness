@@ -21,10 +21,15 @@ import os
 import re
 from typing import Optional
 
+try:
+    from ..shell_parse import QUOTE_CHARS
+except ImportError:  # loaded beside _core run as a script: hooks/lib is on sys.path
+    from shell_parse import QUOTE_CHARS
+
 
 def _strip_quotes(tok: str) -> str:
     """`tok` without one pair of enclosing single or double quotes."""
-    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ("'", '"'):
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in QUOTE_CHARS:
         return tok[1:-1]
     return tok
 

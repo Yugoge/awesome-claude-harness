@@ -13,13 +13,33 @@ boundary in a command ends in exactly one of:
     UNRESOLVED           the analyzer could not PROVE which of the above holds
 
 Precedence: FORBIDDEN_REMOVAL > UNRESOLVED > PROVEN_SAFE_REMOVAL > PROVEN_INERT.
-The command is authorized by the removal policy only when every boundary is
+This module reports a command ``allowed`` only when every boundary is
 terminal-safe.  There is deliberately NO code path from "no adapter matched",
-"parser gave up", "unsupported syntax", or "analyzer crashed" to *allow* — that
-inversion is the whole point.  The analyzer enumerates what is PROVABLY SAFE
-and denies on silence; it never enumerates what is FORBIDDEN and allows on
-silence.  Consequently every lookup table below may only ever move a
-boundary toward SAFE: absence from a table falls to UNRESOLVED, never to allow.
+"parser gave up", "unsupported syntax", or "analyzer crashed" to *allowed* —
+that inversion is the whole point.  The analyzer enumerates what is PROVABLY
+SAFE and answers UNRESOLVED on silence; it never enumerates what is FORBIDDEN
+and allows on silence.  Consequently every lookup table below may only ever
+move a boundary toward SAFE: absence from a table falls to UNRESOLVED, never to
+allowed.
+
+WHAT THE POLICY DOES WITH UNRESOLVED (owner's rule, 2026-11-19).  The reader of
+this verdict, lib/bash_safety_rules.py::removal_policy, no longer refuses on
+that silence alone.  A command this module leaves UNRESOLVED, like one for
+which it gives no verdict at all, is refused when its raw text holds a removal
+word (lib/pol_degraded_removal_reference.ere) and otherwise runs, handed to the
+record as let through unproven.  FORBIDDEN_REMOVAL is refused whatever the text
+holds.  So a proof here now decides whether a command that NAMES a removal may
+run, and a FORBIDDEN_REMOVAL finding still refuses a removal the text does not
+name (``r''m x``).
+
+THE FILES A REMOVAL NAMES.  When the only unsafe boundaries of a command are
+``rm`` or ``unlink`` run as a command's own head with every operand written out
+(no variable, substitution, pattern or ``~``), the result carries
+``removal_targets``: those operands, and the absolute directories a written-out
+``cd`` may leave the removal in (None when some ``cd`` cannot be followed).  The
+verdict stays FORBIDDEN_REMOVAL.  The policy alone decides whose the files are:
+it lets the command run when each lies in the calling actor's own scratch
+directory.
 
 Two failure classes are distinguished so the deny surface stays proportionate:
 
@@ -62,8 +82,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
-    WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    AWK_NAMES, AWK_SOURCE_OPTS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
+    CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
+    OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
+    _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
+from shell_parse import GIT_LONG_OPTIONS  # noqa: E402
+from git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS  # noqa: E402
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -80,14 +105,16 @@ MAX_BOUNDARIES = 400
 
 # Filesystem-removal front ends. This set defines the POLICY SCOPE (what is
 # forbidden), not the authorization mechanism. Widening it widens the deny
-# surface. It is the SINGLE shared definition of "removal binary": the degraded
-# fallback in hooks/pretool-bash-safety.sh names the same four, so the primary
-# path can never be laxer than the fallback.
-REMOVAL_EXES = {"rm", "unlink", "shred", "srm"}
+# surface. The one definition of "removal binary" is the census's
+# REMOVAL_BINARIES (the census, an independent backstop, imports nothing from
+# here; this analyzer reads its set): the degraded fallback in
+# hooks/pretool-bash-safety.sh names the same four, so the primary path can
+# never be laxer than the fallback.
+REMOVAL_EXES = frozenset(census_mod.REMOVAL_BINARIES)
 
 # Removal evidence gates the REMOVAL-SCOPED failure class only.
 _REMOVAL_EVIDENCE_RE = re.compile(
-    r"(?:^|[^A-Za-z0-9_])(rm|unlink|shred|srm)(?![A-Za-z0-9_])")
+    r"(?:^|[^A-Za-z0-9_])(%s)(?![A-Za-z0-9_])" % "|".join(map(re.escape, sorted(REMOVAL_EXES))))
 
 # Library-level removal in interpreter payloads. These carry NO rm/unlink/
 # shred/srm token, so _REMOVAL_EVIDENCE_RE is structurally blind to them; this
@@ -160,20 +187,6 @@ _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # is reached from static call sites; the analyzer is a single-shot CLI.
 _PAYLOAD_NESTING = [0]
 
-# Environment variables whose VALUE is executed by the command that follows
-# them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
-# a fixture-pinned safe row -- but these named vectors are documented command
-# hooks, so `GIT_EXTERNAL_DIFF=/bin/rm git diff` runs the removal.
-EXEC_ASSIGNMENT_VARS = {
-    "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_SSH", "GIT_SSH_COMMAND",
-    "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_ASKPASS", "GIT_MERGE_TOOL",
-    "GIT_DIFF_TOOL", "GIT_TEXTCONV", "GIT_PROXY_COMMAND", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "PAGER", "MANPAGER", "LESSOPEN", "LESSCLOSE", "LESSEDIT", "EDITOR",
-    "VISUAL", "FCEDIT", "BROWSER", "SSH_ASKPASS", "SUDO_EDITOR", "SUDO_ASKPASS",
-    "DIFFPROG", "MERGE", "PERL5OPT", "PYTHONSTARTUP", "BASH_ENV", "ENV",
-    "SHELL", "RSYNC_RSH", "CVS_RSH", "SVN_SSH", "HGEDITOR", "P4EDITOR",
-    "SYSTEMD_PAGER", "SYSTEMD_EDITOR", "DEBUGINFOD_URLS", "LD_PRELOAD",
-}
 
 
 def _static_prefix(w):
@@ -318,13 +331,8 @@ _RELOCATE_WHY = "file relocation/copy: argv words are source and destination pat
 _DATA_VAL_WHY = ("declared data value: read as a regex, a pattern file, a "
                  "count, a glob or a label; never as a program name")
 
-_GREP_CORE_DATA = ("-e", "--regexp", "-f", "--file", "-m", "--max-count",
-                   "-A", "--after-context", "-B", "--before-context",
-                   "-C", "--context")
-_GREP_DATA = _GREP_CORE_DATA + ("-d", "--directories", "--binary-files",
-                                "--include", "--exclude", "--exclude-dir",
-                                "--exclude-from", "--label",
-                                "--group-separator")
+_GREP_CORE_DATA = GREP_CORE_VALUE_OPTS  # shell_parse's grep value options
+_GREP_DATA = GREP_VALUE_OPTS
 
 # Long options of a non-removal git subcommand whose value git reads as DATA:
 # a regex, an author name, a message, a date. None of them names a program.
@@ -359,11 +367,11 @@ GIT_DATA_OPTIONS = frozenset((
 ))
 
 # Subcommands that HAND A COMMAND LINE ONWARD (`git bisect run <cmd>`,
-# `git submodule foreach <cmd>`). For these, NO option may declare its value
+# `git submodule foreach <cmd>`, `git rebase -x <cmd>`, `git difftool -x <cmd>`). For these, NO option may declare its value
 # data: otherwise `git bisect run -m '/bin/rm -rf T'` and `git submodule
 # foreach --message '/bin/rm -rf T'` would read as PROVEN_INERT. Scoping the
 # table by subcommand can only ever remove allows.
-GIT_PAYLOAD_FORWARDING_SUBCOMMANDS = frozenset(("bisect", "submodule"))
+GIT_PAYLOAD_FORWARDING_SUBCOMMANDS = GIT_SHELL_PAYLOAD_SUBCOMMANDS
 
 INERT_ARGV_CONSUMERS = {
     # ---- name / documentation lookup -------------------------------------
@@ -375,7 +383,7 @@ INERT_ARGV_CONSUMERS = {
                       "--ascii", "--global-apropos", "--no-hyphenation",
                       "--no-justification", "--names-only", "--regex", "--wildcard",
                       "--ignore-case", "--match-case", "--no-subpages"),
-               exec_=("-P", "--pager", "-H", "--html", "-B", "--browser")),
+               exec_=MAN_PROGRAM_OPTS),
     "whatis": _ic(_LOOKUP_WHY, bool_=("-d", "-v", "-a", "-l", "-w", "-r", "-e"),
                   exec_=("-P", "--pager")),
     "apropos": _ic(_LOOKUP_WHY, bool_=("-d", "-v", "-a", "-l", "-w", "-r", "-e"),
@@ -743,8 +751,7 @@ COND_SHELLS = {"bash", "zsh", "ksh", "ksh93", "mksh", "rbash", "bash5"}
 # word of a command (`if [[`, `! [[`, `while ! [[`, `{ [[` ...). Any other word,
 # an assignment or a redirection before it makes `[[` an argument or a command
 # name, and then nothing inside it is a conditional expression.
-COND_OPENER_PREFIX = frozenset(("!", "if", "then", "else", "elif", "while",
-                                "until", "do", "{"))
+COND_OPENER_PREFIX = COMMAND_PREFIX_WORDS
 # Builtins that can stop `[[` from being read as the reserved word on a later
 # line: an alias named `[[` (or `if`, `while` ...) turns it into a simple
 # command, and zsh's `disable -r` switches the reserved word off.
@@ -764,7 +771,7 @@ INTERPRETERS = {
     "nodejs": ("-e", "--eval", "-p"), "php": ("-r",), "lua": ("-e",),
     "lua5.1": ("-e",), "lua5.3": ("-e",), "deno": ("eval",),
 }
-AWKS = {"awk", "gawk", "mawk", "nawk", "busybox-awk"}
+AWKS = set(AWK_NAMES) | {"busybox-awk"}  # and busybox's applet, as this reader names it
 
 # Calls that only render text. A removal token reaching one of these and
 # nothing else is PROVEN inert; anything else is not proven and denies.
@@ -775,26 +782,19 @@ OUTPUT_SINKS = {
     "STDOUT.puts", "STDERR.puts", "process.stdout.write",
 }
 
-GIT_GLOBAL = _spec(
-    ("--paginate", "-p", "--no-pager", "-P", "--bare", "--literal-pathspecs",
-     "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
-     "--no-optional-locks", "--no-replace-objects", "--html-path", "--man-path",
-     "--info-path", "--version", "--help", "-v", "-h", "--no-lazy-fetch"),
-    ("-C", "-c", "--exec-path", "--git-dir", "--work-tree", "--namespace",
-     "--super-prefix", "--config-env", "--attr-source"))
+GIT_GLOBAL = _spec(GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS)
 
+# git rm's options: its long ones as shell_parse lists them, and the short ones.
 GIT_RM = _spec(
-    ("-n", "--dry-run", "-r", "--cached", "-f", "--force", "-q", "--quiet",
-     "--ignore-unmatch", "--sparse", "--pathspec-file-nul"),
+    ("-n", "-r", "-f", "-q") + tuple(o for o in GIT_LONG_OPTIONS["rm"] if o != "--pathspec-from-file"),
     ("--pathspec-from-file",))
 # A non-forced `git rm` is recoverable: git refuses a file that differs from HEAD or the index, and a
 # removed clean file comes back with `git checkout <sha>^ -- <path>`. It is allowed only when the walk
 # can hand prove_git_rm the repository it runs in: written at the top level as its command's own head
 # (no wrapper, nested shell or assignment), only these git options before `rm`, literal pathspecs, and
 # no shell state a later command inherits other than `cd`/`pushd` to a literal absolute directory.
-_GIT_RM_LOCATION_OPTS = ("-C", "--git-dir", "--work-tree")
-_GIT_RM_PATHSPEC_OPTS = ("--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
-                         "--icase-pathspecs")
+_GIT_RM_LOCATION_OPTS = GIT_LOCATION_OPTS
+_GIT_RM_PATHSPEC_OPTS = GIT_PATHSPEC_FLAGS
 _SHELL_STATE_BUILTINS = {"export", "declare", "typeset", "local", "readonly", "unset", "source",
                          ".", "enable", "read", "readarray", "mapfile", "getopts", "trap", "for",
                          "select"}
@@ -836,12 +836,6 @@ DOCKER_RESOURCE_NOUNS = {"container", "image", "volume", "network", "system",
                          "builder", "buildx", "config", "secret", "service",
                          "stack", "node", "plugin", "context", "compose"}
 
-XARGS = _spec(("-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose",
-               "-p", "--interactive", "-x", "--exit", "--open-tty", "--show-limits",
-               "--process-slot-var"),
-              ("-n", "--max-args", "-L", "-l", "--max-lines", "-P", "--max-procs",
-               "-s", "--max-chars", "-I", "--replace", "-i", "-d", "--delimiter",
-               "-E", "-e", "--eof", "-a", "--arg-file"))
 
 PARALLEL = _spec(
     ("--gnu", "--bar", "--eta", "--progress", "-k", "--keep-order", "--will-cite",
@@ -857,15 +851,9 @@ PARALLEL = _spec(
      "--trc", "-a", "--arg-file", "-N", "-L", "-l", "-I", "--recstart", "--recend",
      "--transfer", "--cleanup", "--sshloginfile", "--interactive", "--limit"))
 
-WATCH = _spec(("-d", "--differences", "-t", "--no-title", "-b", "--beep",
-               "-e", "--errexit", "-g", "--chgexit", "-c", "--color", "-x", "--exec",
-               "-h", "--help", "-v", "--version", "-p", "--precise", "-w", "--no-wrap"),
-              ("-n", "--interval"))
+WATCH = PEEL["watch"][0]
 
-SSH_SPEC = _spec(("-4", "-6", "-A", "-a", "-C", "-f", "-G", "-g", "-K", "-k", "-M",
-                  "-N", "-n", "-q", "-s", "-T", "-t", "-V", "-v", "-X", "-x", "-Y", "-y"),
-                 ("-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L",
-                  "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w"))
+SSH_SPEC = _SSH_SPEC
 
 FIND_EXEC_OPS = {"-exec", "-execdir", "-ok", "-okdir"}
 FIND_DELETE_OPS = {"-delete"}
@@ -1494,6 +1482,9 @@ class Analyzer:
         # A non-forced git rm's run-time obligations (git options, pathspecs), the
         # directories a `cd` may leave a later one in, and why they cannot be known.
         self.git_rm, self.git_rm_cwds, self.git_rm_unresolved = [], [], ""
+        # Per filesystem removal, the files it names when every one is written out (else None), and
+        # whether some `cd` leaves the directory of what follows unknown (see _removal_targets).
+        self.removals, self.cwd_unknown = [], False
         self._head, self.direct = None, False
         # Whether the code being walked is read by a shell that has `[[ ]]`
         # (see walk). Set per analyze_code call; a call that does not say so
@@ -1754,7 +1745,7 @@ class Analyzer:
         stripped by the split search, so the value is what gets recognised.
         """
         raw = _strip_outer_quotes(w.raw.text)
-        if not raw[:1] in ("-", "+"):
+        if not raw[:1] in OPTION_SIGNS:
             return False
         return Analyzer.attached_value_names_removal(raw[1:])
 
@@ -1931,7 +1922,7 @@ class Analyzer:
             elif kind == "param":
                 body = s.text
                 if body.startswith("!") or (
-                        "@" in body and body.rsplit("@", 1)[1][:1] in ("P", "E", "A")):
+                        "@" in body and body.rsplit("@", 1)[1][:1] in REEXPAND_OPS):
                     self.note("param_reexpand", off)
                     self.structural("param_reexpansion", body)
                 self.scan_expansions(s, env)
@@ -1988,7 +1979,7 @@ class Analyzer:
                         body = s.text
                         if body.startswith("!") or (
                                 "@" in body
-                                and body.rsplit("@", 1)[1][:1] in ("P", "E", "A")):
+                                and body.rsplit("@", 1)[1][:1] in REEXPAND_OPS):
                             self.note("param_reexpand", off)
                             self.structural("param_reexpansion", body)
                         self.scan_expansions(s, env)
@@ -2068,7 +2059,7 @@ class Analyzer:
                     cond_depth = None
                 self.flush(cur, env, piped)
                 cur = []
-                piped = next_piped = (op in ("|", "|&"))
+                piped = next_piped = (op in PIPE_OPS)
                 continue
             if tok[0] == "W":
                 if cond_depth is None:
@@ -2205,14 +2196,14 @@ class Analyzer:
     def _shell_state(self, base, args):
         """Record what a later command inherits from shell builtin `base` (see _GIT_RM_LOCATION_OPTS)."""
         lits = [a.literal() for a in args]
-        if base in ("cd", "pushd"):  # popd only returns to a directory already listed
+        if base in CD_TARGET_BUILTINS:  # popd only returns to a directory already listed
             ops = [x for x in lits if x is None or x == "-" or not x.startswith("-")]
             if len(ops) == 1 and ops[0] and ops[0].startswith("/"):
                 self.git_rm_cwds.append(ops[0])
                 return
+            self.cwd_unknown = True
         elif base == "set":  # allexport, keyword and posix let an assignment reach git
-            if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in (
-                    "-", "+") and x != "--" and ("a" in x or "k" in x) for x in lits):
+            if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in OPTION_SIGNS and x != "--" and ("a" in x or "k" in x) for x in lits):
                 return
         elif base == "printf":
             if None not in lits and not any(x.startswith("-v") for x in lits):
@@ -2261,6 +2252,7 @@ class Analyzer:
         if base in REMOVAL_EXES:
             self.cover(head)  # accounted for: it IS the removal we denied
             self.add(FORBIDDEN_REMOVAL, "filesystem_removal", name)
+            self.removals.append(self._removal_targets(base, args) if self.direct else None)
             return
 
         if base == ".":
@@ -2298,6 +2290,22 @@ class Analyzer:
         # arguments alone leaves that entire shape authorized.
         self._terminal_inert("named_program_no_removal_reference", name, words,
                              data_opts=SELECTOR_DATA_OPTIONS.get(basename(name), ()))
+
+    @staticmethod
+    def _removal_targets(base, args):
+        """The files a `rm` or `unlink` run as the command's own head names, when every one is
+        written out in the command; None when any word is computed, a pattern or `~`-led, when it
+        names none, or for a program whose operands are not read here (shred, srm). Neither
+        program has an option that takes a separate value, so a word is an operand unless it is an
+        option before `--`."""
+        if base != "rm" and base != "unlink":
+            return None
+        lits = [a.literal() for a in args]
+        if None in lits:
+            return None
+        end = lits.index("--") if "--" in lits else len(lits)
+        targets = [x for x in lits[:end] if x == "-" or not x.startswith("-")] + lits[end + 1:]
+        return targets if targets and not any(not x or x.startswith("~") for x in targets) else None
 
     # -- declared-inert argv consumers: POSITION, not membership -------------
 
@@ -2591,7 +2599,7 @@ class Analyzer:
             lit = a.literal()
             if lit is None:
                 break
-            if lit in ("-S", "--split-string"):
+            if lit in ENV_SPLIT_OPTS:
                 if idx + 1 >= len(args):
                     self.structural("missing_option_value", "env -S")
                     return
@@ -2695,11 +2703,7 @@ class Analyzer:
     _h_builtin = _h_busybox
 
     def _h_flock(self, name, args, redirs, env, piped):
-        spec = _spec(("-s", "--shared", "-x", "--exclusive", "-u", "--unlock",
-                      "-n", "--nonblock", "-o", "--close", "-v", "--verbose",
-                      "-F", "--no-fork"),
-                     ("-w", "--wait", "--timeout", "-E", "--conflict-exit-code"))
-        i, err = split_opts(args, spec)
+        i, err = split_opts(args, PEEL["flock"][0])
         if err == "missing_option_value":
             self.structural("missing_option_value", "flock")
             return
@@ -2709,7 +2713,7 @@ class Analyzer:
         i += 1  # the lock file / directory / fd operand
         if self._swallowed_removal("flock", args[:i]):
             return
-        if i < len(args) and args[i].literal() in ("-c", "--command"):
+        if i < len(args) and args[i].literal() in COMMAND_OPTS:
             self._shell_code_operand(args, i + 1, env, "flock")
             return
         payload = args[i:]
@@ -2719,30 +2723,18 @@ class Analyzer:
         self.eval_argv(payload, [], env)
 
     def _h_su(self, name, args, redirs, env, piped):
-        spec = _spec(("-l", "--login", "-", "-p", "--preserve-environment", "-m",
-                      "-P", "--pty", "-f", "--fast"),
-                     ("-c", "--command", "-s", "--shell", "-g", "--group",
-                      "-G", "--supp-group", "-w", "--whitelist-environment"))
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "su")
-                return
-        i, err = split_opts(args, spec)
+        if self._command_option(args, env, "su", SU_COMMAND_OPTS):
+            return
+        i, err = split_opts(args, _SU_SPEC)
         if err:
             self.scoped(err, "su")
             return
         self._terminal_inert("su_without_command", "su", args)
 
     def _h_runuser(self, name, args, redirs, env, piped):
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "runuser")
-                return
-        spec = _spec(("-l", "--login", "-p", "--preserve-environment", "-m",
-                      "-P", "--pty", "-f", "--fast"),
-                     ("-u", "--user", "-g", "--group", "-G", "--supp-group",
-                      "-s", "--shell", "-w", "--whitelist-environment"))
-        i, err = split_opts(args, spec)
+        if self._command_option(args, env, "runuser", SU_COMMAND_OPTS):
+            return
+        i, err = split_opts(args, PEEL["runuser"][0])
         if err == "missing_option_value":
             self.structural("missing_option_value", "runuser")
             return
@@ -2763,10 +2755,8 @@ class Analyzer:
         self._terminal_inert("sg_without_command", "sg", args)
 
     def _h_script(self, name, args, redirs, env, piped):
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "script")
-                return
+        if self._command_option(args, env, "script"):
+            return
         # `-c` is matched EXACTLY above, so `script -qc '<code>'` (a clustered
         # short option, the canonical documented form) misses it. Falling to a
         # residual-proof terminal is what makes the miss deny instead of allow.
@@ -2884,7 +2874,7 @@ class Analyzer:
         self.eval_argv(payload, [], env)
 
     def _h_xargs(self, name, args, redirs, env, piped):
-        i, err = split_opts(args, XARGS)
+        i, err = split_opts(args, XARGS_SPEC)
         if err == "missing_option_value":
             self.structural("missing_option_value", "xargs")
             return
@@ -2901,7 +2891,7 @@ class Analyzer:
     def _h_parallel(self, name, args, redirs, env, piped):
         cut = len(args)
         for idx, a in enumerate(args):
-            if (a.literal() or "") in (":::", "::::", ":::+", "::::+"):
+            if (a.literal() or "") in PARALLEL_SEPARATORS:
                 cut = idx
                 break
         head_args = args[:cut]
@@ -2926,7 +2916,7 @@ class Analyzer:
         # belong to the same argv. Passing them through is both more faithful
         # and what lets `parallel echo ::: /bin/rm` explain its removal name.
         items = [a for a in args[cut:]
-                 if (a.literal() or "") not in (":::", "::::", ":::+", "::::+")]
+                 if (a.literal() or "") not in PARALLEL_SEPARATORS]
         self.eval_argv(payload + items, [], env)
 
     def _h_find(self, name, args, redirs, env, piped):
@@ -2947,7 +2937,7 @@ class Analyzer:
                 payload = []
                 while j < len(args):
                     jl = args[j].literal()
-                    if jl in (";", "+"):
+                    if jl in FIND_EXEC_ENDS:
                         break
                     payload.append(args[j])
                     j += 1
@@ -2995,6 +2985,21 @@ class Analyzer:
 
     # -- shells --------------------------------------------------------------
 
+    def _command_option(self, args, env, who, names=COMMAND_OPTS):
+        """Analyze the code of a `-c CODE`, `--command CODE` or `--command=CODE` among args."""
+        for idx, a in enumerate(args):
+            lit = a.literal()
+            if lit in names:
+                self._shell_code_operand(args, idx + 1, env, who)
+                return True
+            long = next((n for n in names if n.startswith("--") and (lit or "").startswith(n + "=")), None)
+            if long is not None:
+                content = a.content()
+                start = len(content.text) - (len(lit) - len(long) - 1)
+                self.analyze_code(content.slice(start, len(content.text)), Env(env.hashed, env.aliases))
+                return True
+        return False
+
     def _shell_code_operand(self, args, idx, env, who):
         if idx >= len(args):
             self.structural("missing_option_value", who)
@@ -3029,7 +3034,7 @@ class Analyzer:
         n = len(args)
         while i < n:
             lit = args[i].literal()
-            if lit is None or not lit or lit[0] not in "-+" or lit in ("-", "+"):
+            if lit is None or not lit or lit[0] not in "-+" or lit in OPTION_SIGNS:
                 break
             if lit == "--":
                 i += 1
@@ -3145,7 +3150,11 @@ class Analyzer:
                 lit = args[i].literal()
                 if lit is None or not lit.startswith("-") or lit == "-":
                     break
-                if lit in ("-f", "--file", "-v", "--assign"):
+                if lit in AWK_SOURCE_OPTS or lit.startswith(tuple(o + "=" for o in AWK_SOURCE_OPTS if o[1] == "-")):
+                    # the program text: the next word, or the value attached with `=`
+                    i += 0 if "=" in lit else 1
+                    break
+                if lit in AWK_VALUE_OPTS:
                     i += 2
                     continue
                 if lit == "--":
@@ -3414,8 +3423,8 @@ class Analyzer:
             unproven = unproven or "f" in lit
             i += 1
         loc = [w.literal() for w in git_opts]  # kept only if they just locate the repository
-        if None in loc or not all(x in _GIT_RM_LOCATION_OPTS + _GIT_RM_PATHSPEC_OPTS or "=" in x and x.split(
-                "=", 1)[0] in _GIT_RM_LOCATION_OPTS[1:] or loc[j - 1:j] and loc[j - 1] in _GIT_RM_LOCATION_OPTS
+        if None in loc or not all(x in _GIT_RM_LOCATION_OPTS | _GIT_RM_PATHSPEC_OPTS or "=" in x and x.split(
+                "=", 1)[0] in _GIT_RM_LOCATION_OPTS - {"-C"} or loc[j - 1:j] and loc[j - 1] in _GIT_RM_LOCATION_OPTS
                 for j, x in enumerate(loc)):
             loc = None
         if cached:
@@ -3814,6 +3823,13 @@ def analyze(raw):
     result["removal_positional_shape"] = result["removal_positional_shapes"][0]
     if result["allowed"] and az.git_rm:
         result["git_rm_proof"] = {"cwds": az.git_rm_cwds, "removals": az.git_rm}
+    # A command whose only unsafe boundaries are removals that name every file they remove: the
+    # verdict stays FORBIDDEN_REMOVAL, and the files go to the policy, which alone knows whose they are.
+    if verdict == FORBIDDEN_REMOVAL and not az.overflow and not az.git_rm and None not in az.removals \
+            and all(b["verdict"] in _TERMINAL_SAFE or b["reason"] == "filesystem_removal" for b in az.boundaries) \
+            and sum(b["reason"] == "filesystem_removal" for b in az.boundaries) == len(az.removals):
+        result["removal_targets"] = {"targets": [t for ts in az.removals for t in ts],
+                                     "cwds": None if az.cwd_unknown else az.git_rm_cwds}
     return result
 
 

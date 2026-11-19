@@ -1190,7 +1190,14 @@ def test_ac_r02_10_only_co_winning_boundaries_contribute_shapes():
 @pytest.mark.parametrize("mode", ["timeout", "module_unreadable", "crash"])
 def test_ac_r02_10_degradation_modes_deny_the_adversarial_domain(mode, tmp_path):
     """Three distinct analyzer-failure modes, each denying a removal-suspect
-    sample end to end through the hook."""
+    sample end to end through the hook.
+
+    Owner's rule of 2026-11-19: an unproven command is refused when its text
+    holds a removal word by the shared predicate file, and runs otherwise. The
+    domain of AC-R02-10 IS the set the predicate names, so every member of the
+    sample inside it is still denied under every mode; the two members that
+    spell the removal program as a glob (`/bin/r?`) name no removal word, lie
+    outside the domain, and run."""
     env = dict(os.environ)
     if mode == "timeout":
         env["CLAUDE_HOOK_BOUNDARY_TIMEOUT"] = "0.001s"
@@ -1200,10 +1207,15 @@ def test_ac_r02_10_degradation_modes_deny_the_adversarial_domain(mode, tmp_path)
         env["CLAUDE_HOOK_BOUNDARY_TIMEOUT"] = "0s"
     sample = list(ITERATION2_COUNTER_EXAMPLES)[:8] + [
         "man -P '/bin/rm -rf T' ls", "taskset 0x1 /bin/r? -rf T"]
+    inside = [c for c in sample if G.degraded_denies_removal_reference(c)]
+    assert len(inside) == 8 and len(sample) == 10
     for command in sample:
         code, _out, err = H.run_hook_command(command, env=env)
-        assert code == 2, "%s allowed under %s" % (command, mode)
-        assert err.strip()
+        if command in inside:
+            assert code == 2, "%s allowed under %s" % (command, mode)
+            assert err.strip()
+        else:
+            assert code == 0, "%s refused under %s: %s" % (command, mode, err)
 
 
 # ---------------------------------------------------------------------------
@@ -1288,10 +1300,26 @@ def test_iteration3_counter_examples_deny(command):
 @pytest.mark.parametrize("command", ITERATION3_COUNTER_EXAMPLES)
 def test_iteration3_counter_examples_deny_through_the_hook(command):
     """Through the shipped hook, not only in process: QA confirmed the leak at
-    exit-code level (exit 2 vs exit 0), so the fix is confirmed there too."""
+    exit-code level (exit 2 vs exit 0), so the fix is confirmed there too.
+
+    The analyzer still authorizes none of them (the test above). Since the
+    owner's rule of 2026-11-19 the hook refuses an unproven command only when
+    its text holds a removal word: six of the eight do and are refused; `cat
+    -abXrm qa-target` (the letters `rm` inside an option cluster are no word)
+    and `cat -X/bin/r? qa-target` name none and run."""
     code, _out, err = H.run_hook_command(command)
-    assert code == 2, command
-    assert err.strip()
+    if G.degraded_denies_removal_reference(command):
+        assert code == 2, command
+        assert err.strip()
+    else:
+        assert command in ("cat -abXrm qa-target", "cat -X/bin/r? qa-target")
+        assert code == 0, (command, err)
+
+
+def test_iteration3_counter_examples_split_six_and_two():
+    named = [c for c in ITERATION3_COUNTER_EXAMPLES
+             if G.degraded_denies_removal_reference(c)]
+    assert len(named) == 6 and len(ITERATION3_COUNTER_EXAMPLES) == 8, named
 
 
 @pytest.mark.parametrize("probe_id,command", sorted(REP_PROBES.items()))
@@ -1344,9 +1372,13 @@ def test_ac_r02_16_seeded_sample_agrees_with_the_real_hook(sweeps):
         sample = G.seeded_sample(pool, FIDELITY_PER_SWEEP, name)
         for command in sample:
             sampled += 1
-            # The hook also runs a non-forced git rm's run-time proof, in the directory it runs in.
-            in_process = G.analyze_allowed(command) and B.prove_git_rm(
-                B.analyze(command), H.REPO_ROOT, H.REPO_ROOT)["allowed"]
+            # The hook also runs a non-forced git rm's run-time proof, in the directory it runs in,
+            # and (owner's rule of 2026-11-19) lets an UNRESOLVED command run when its text holds no
+            # removal word by the shared predicate file.
+            proved = B.prove_git_rm(B.analyze(command), H.REPO_ROOT, H.REPO_ROOT)
+            in_process = proved["allowed"] or (
+                proved["verdict"] == B.UNRESOLVED
+                and not G.degraded_denies_removal_reference(command))
             code, _out, err = H.run_hook_command(command)
             if bool(code == 0) == in_process:
                 continue

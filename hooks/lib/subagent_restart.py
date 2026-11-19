@@ -202,7 +202,11 @@ def state_dir() -> Path:
     override = os.environ.get("CLAUDE_RESTART_STATE_DIR")
     if override:
         return Path(override)
-    return config_dir() / "restart-state"
+    try:  # one record per harness home, whichever configuration directory runs the session
+        from .locations import config_home
+    except ImportError:
+        from locations import config_home  # type: ignore[no-redef]
+    return config_home() / "restart-state"
 
 
 def grant_path(session_id: str) -> Path:
@@ -550,16 +554,26 @@ def _read_parent_calls(
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, list[Any]] = {}
     latest_notifications: dict[str, dict[str, Any]] = {}
+    try:  # the one reading of calls; at the call, since a harness tree without command sets imports this module
+        from . import command_span
+    except ImportError:
+        import command_span  # type: ignore[no-redef]
     try:
         lines = transcript.open("r", encoding="utf-8", errors="replace")
     except OSError as exc:
         raise RestartError(f"cannot read parent transcript: {exc}") from exc
     with lines:
         for line_no, line in enumerate(lines, 1):
+            try:
+                record = json.loads(line)
+            except ValueError:
+                record = None
             # Notifications can appear as top-level queue-operation content,
             # message.content, or attachment.prompt. Scan the complete JSONL line
-            # before walking message blocks so all three persisted forms count.
-            for block in _iter_notification_blocks(line):
+            # so all three persisted forms count; a record of another kind (the
+            # CLI's api-request-blob copy of a message) delivered nothing.
+            copy = isinstance(record, dict) and record.get("type") not in ("user", "attachment", "queue-operation")
+            for block in () if copy else _iter_notification_blocks(line):
                 match = TASK_NOTIFICATION_RE.search(block)
                 if not match:
                     continue
@@ -573,19 +587,7 @@ def _read_parent_calls(
                         "status": match.group(2).lower(),
                         "quota_interrupted": signals.is_quota_text(tail),
                     }
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            message = record.get("message") if isinstance(record, dict) else None
-            content = message.get("content") if isinstance(message, dict) else None
-            if isinstance(content, str):
-                continue
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
+            for block in command_span._blocks(record, sidechain=True):
                 if block.get("type") == "tool_use" and block.get("name") in {"Agent", "Task"}:
                     tool_id = block.get("id")
                     if isinstance(tool_id, str) and tool_id:
@@ -943,6 +945,16 @@ def account_project_roots() -> list[Path]:
     if home_projects.is_dir():
         roots.append(home_projects)
     return roots
+
+
+def config_projects() -> list[Path]:
+    """projects/ of this session's configuration directory, then of each directory CLAUDE_CONFIG_DIRS
+    names (os.pathsep-separated; an optional machine-local setting, absent by default: then only the
+    session's own). A lookup by session id reads these, the only directories it knows of."""
+    named = (os.environ.get("CLAUDE_CONFIG_DIRS")
+             or _settings_env("CLAUDE_CONFIG_DIRS").get("CLAUDE_CONFIG_DIRS") or "")
+    dirs = dict.fromkeys([config_dir()] + [Path(p) for p in named.split(os.pathsep) if os.path.isabs(p)])
+    return [d / "projects" for d in dirs if (d / "projects").is_dir()]
 
 
 DEFAULT_SIBLING_WINDOW_SECONDS = 86400

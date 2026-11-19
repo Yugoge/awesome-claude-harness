@@ -51,11 +51,9 @@ def emit(**facts: object) -> None:
 def project_dir(given: str | None) -> Path:
     if given:
         return Path(given).resolve()
-    env = os.environ.get("CLAUDE_PROJECT_DIR")
-    if env:
-        return Path(env).resolve()
-    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    return Path(top.stdout.strip() if top.returncode == 0 and top.stdout.strip() else os.getcwd()).resolve()
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks" / "lib"))
+    import locations  # noqa: E402 -- the one project-root resolution
+    return locations.project_root(bash=True).resolve()
 
 
 def spec_dir_id(spec: str, project: Path) -> str:

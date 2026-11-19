@@ -65,7 +65,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
-from lib import obligation as obligation_lib  # noqa: E402
+from lib import command_span, obligation as obligation_lib  # noqa: E402
 from lib import contract_runtime  # noqa: E402
 from lib.dev_report_shard_patterns import classify_filename as _shared_classify_filename  # noqa: E402
 
@@ -483,11 +483,7 @@ def _scan_transcript_for_prior_obligations(transcript_path, family, current_tool
                     record = json.loads(raw_line)
                 except Exception:
                     continue
-                message = record.get("message") if isinstance(record, dict) else None
-                content = message.get("content") if isinstance(message, dict) else None
-                for block in content if isinstance(content, list) else ():
-                    if not isinstance(block, dict):
-                        continue
+                for block in command_span._blocks(record, sidechain=True):
                     if block.get("type") == "tool_result":
                         results[block.get("tool_use_id")] = bool(block.get("is_error"))
                     elif block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task"):

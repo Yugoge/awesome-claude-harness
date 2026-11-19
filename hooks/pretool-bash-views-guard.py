@@ -142,7 +142,7 @@ def _cd_dirs(script, call_dir):
     dirs = [call_dir]
     for site in _sp.walk(script):
         res = _sp.resolve(site.cmd)
-        if res.name not in ("cd", "pushd"):
+        if res.name not in _sp.CD_TARGET_BUILTINS:
             continue
         args = [w.value() for w in res.args]
         args = [a for a in args if a is None or not (a.startswith("-") and a != "-")]
@@ -161,8 +161,7 @@ def _cd_dirs(script, call_dir):
 
 # Copy, move, install and link: into a directory destination the written path is
 # `<dest>/<basename(source)>`.
-_INTO_DIR = ("cp", "mv", "install", "ln", "rsync")
-_NO_TARGET_DIR = ("-T", "--no-target-directory")
+_INTO_DIR = _sp.INTO_DIR_VERBS if _sp is not None else ()
 
 
 def _word_text(w):
@@ -184,11 +183,11 @@ def _into_dir_texts(script, dirs):
         opts, operands, _err = _sp.split_options(list(res.args), _sp.VERBS[res.name][0], 0,
                                                   permute=True, lenient=True)
         names = {o for o, _v in opts}
-        if names.intersection(_NO_TARGET_DIR):
+        if names.intersection(_sp.NO_TARGET_DIR_OPTS):
             continue
-        if res.name == "install" and names.intersection(("-d", "--directory")):
+        if res.name == "install" and names.intersection(_sp.INSTALL_DIR_OPTS):
             continue
-        target_dir = [v for o, v in opts if o in ("-t", "--target-directory")]
+        target_dir = [v for o, v in opts if o in _sp.TARGET_DIR_OPTS]
         if target_dir:
             dest, sources, into = _word_text(target_dir[-1]), operands, True
         elif res.name == "ln" and len(operands) == 1:
@@ -206,23 +205,6 @@ def _into_dir_texts(script, dirs):
             base = os.path.basename(src.rstrip("/")) if src else ""
             if base and base not in (".", ".."):
                 out.append(os.path.join(dest, base))
-    return out
-
-
-# touch creates or stamps each operand.
-_TOUCH_SPEC = None if _sp is None else _sp._spec(
-    ("-a", "-c", "--no-create", "-f", "-h", "--no-dereference", "-m"),
-    ("-d", "--date", "-r", "--reference", "-t", "--time"))
-
-
-def _touch_texts(script):
-    out = []
-    for site in _sp.walk(script):
-        res = _sp.resolve(site.cmd)
-        if res.name != "touch":
-            continue
-        _opts, operands, _err = _sp.split_options(list(res.args), _TOUCH_SPEC, 0, permute=True, lenient=True)
-        out.extend(t for t in (_word_text(w) for w in operands) if t)
     return out
 
 
@@ -250,11 +232,10 @@ def _matches_block(command, call_dir):
             dirs = _cd_dirs(script, call_dir)
         except Exception:
             pass
-        for extra in (lambda: _touch_texts(script), lambda: _into_dir_texts(script, dirs)):
-            try:
-                texts += extra()
-            except Exception:
-                pass
+        try:
+            texts += _into_dir_texts(script, dirs)
+        except Exception:
+            pass
     for text in dict.fromkeys(texts):
         if not text:
             continue

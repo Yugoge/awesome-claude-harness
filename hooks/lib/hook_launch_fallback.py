@@ -113,6 +113,13 @@ def run(event, rules, raw, record_fd=None) -> int:
         _write(record_fd, lines)
     _write(1, out)
     _write(2, err)
+    if code == 2:  # a report to the refusal record (lib/refusal_record.py); it never changes the answer
+        try:
+            from lib import refusal_record
+            refusal_record.report(raw, [(r.rule.file, minimal([r])[2]) for r in results if minimal([r])[0] == 2],
+                                  os.path.join(HOOKS, os.path.basename(sys.argv[0])))
+        except Exception:
+            pass
     return code
 
 

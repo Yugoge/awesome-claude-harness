@@ -60,8 +60,9 @@ import shlex
 import sys
 
 try:
-    from lib import shell_parse
+    from lib import bash_read_only, shell_parse
 except ImportError:  # run as a script: hooks/lib is on sys.path
+    import bash_read_only
     import shell_parse
 try:
     from . import locations
@@ -118,7 +119,7 @@ def _segments_with_kind(c):
         two = c[i:i + 2]
         if two in ('&&', '||'):
             _flush('separator'); i += 2; continue
-        if two in ('$(', '<(', '>('):
+        if two in shell_parse.SUBST_OPENERS:
             subshell_stack.append(_buf_is_cmd_position())
             _flush('separator'); i += 2; continue
         ch = c[i]
@@ -155,7 +156,7 @@ def _basename(tok):
 def _unquote_token(tok):
     """Strip balanced surrounding quotes: `"/usr/bin/git"` -> `/usr/bin/git`."""
     t = tok.strip()
-    while len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'"):
+    while len(t) >= 2 and t[0] == t[-1] and t[0] in shell_parse.QUOTE_CHARS:
         t = t[1:-1]
     return t
 
@@ -171,20 +172,16 @@ def _unquote_token(tok):
 _WRAPPER_SPECS = {name: entry for table in (shell_parse.WRAPPERS, shell_parse.PEEL)
                   for name, entry in table.items() if entry is not None}
 _WRAPPERS = set(_WRAPPER_SPECS) | {'eval'}
-_WRAPPER_VALUE_FLAGS = {name: spec['val'] for name, (spec, _fixed) in _WRAPPER_SPECS.items()}
+_WRAPPER_VALUE_FLAGS = {name: {o for o in spec['val'] if spec['nargs'].get(o, 1)}
+                        for name, (spec, _fixed) in _WRAPPER_SPECS.items()}
 _WRAPPER_POSITIONALS = {name: fixed for name, (_spec, fixed) in _WRAPPER_SPECS.items() if fixed}
+# The reserved words after which the grammar puts a command word (shell_parse).
+_SHELL_PREFIX_KEYWORDS = shell_parse.COMMAND_PREFIX_WORDS
 
-# Reserved words (and `!`) after which the grammar puts a command word. `for`,
-# `select`, `case`, `in` and `function` are followed by a name, and `fi`,
-# `done`, `esac`, `}`, `]]`, `[[` end a construct, so they are not here.
-_SHELL_PREFIX_KEYWORDS = {
-    'if', 'elif', 'then', 'else', 'while', 'until', 'do', '!', '{', 'coproc',
-}
 
 # Leading redirections, attached (`2>/dev/null`, `{fd}>f`) or bare (`2> f`).
 _REDIRECT_RE = re.compile(
-    r'^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|\d+)?'
-    r'(?:<<<|<<-|<<|>>|&>>|&>|>&|<&|>\||<>|>|<)'
+    r'^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|\d+)?(?:%s)' % '|'.join(map(re.escape, shell_parse.REDIRECT_OPS))
 )
 
 _ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?\+?=')
@@ -233,19 +230,7 @@ def _command_token_index(toks):
     return None
 
 
-def _git_subcommand_index(args):
-    """Index of the subcommand among git's args (global options skipped), or None."""
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a in GIT_GLOBAL_VALUE_OPTS:
-            i += 2
-            continue
-        if a.startswith('-'):
-            i += 1
-            continue
-        return i
-    return None
+_git_subcommand_index = shell_parse.git_subcommand_index
 
 
 def _git_subcommand(args):
@@ -424,8 +409,6 @@ _COMPOUND_WORDS = frozenset({
     'for', 'select', 'while', 'until', 'if', 'then', 'elif', 'else', 'fi',
     'do', 'done', 'case', 'esac', 'function', 'coproc', '{', '}',
 })
-# Redirections that write a file.
-_WRITE_REDIRS = frozenset({'>', '>>', '>|', '&>', '&>>'})
 
 
 def _opens_compound(cmd):
@@ -476,7 +459,7 @@ def _writes_file(redir):
     `>`, `>>`, `>|`, `&>`, `&>>`, `<>` (read-write), and `>&` with a word
     that is no descriptor number or `-` (`>& file` writes the file).
     """
-    if redir.op in _WRITE_REDIRS or redir.op == '<>':
+    if redir.op in shell_parse.WRITE_REDIRECT_OPS:
         return True
     if redir.op == '>&':
         target = _value(redir.target)[0]
@@ -534,7 +517,7 @@ def _is_inert(cmd, written):
             return False
     for r in cmd.redirs:
         target = None if r.target is None else _value(r.target)[0]
-        if r.op in _WRITE_REDIRS or r.op == '<>':
+        if r.op in shell_parse.WRITE_REDIRECT_OPS:
             if target != locations.NULL_DEVICE:
                 return False
         elif r.op == '>&' and not (target is not None and (target.isdigit() or target == '-')):
@@ -580,7 +563,7 @@ def _here_docs_are_data(toks, cmds, k, nested=False):
         if not _reads_input_as_data(cmds[j]):
             return False
         j += 1
-        if j >= len(cmds) or cmds[j].opener not in ('|', '|&'):
+        if j >= len(cmds) or cmds[j].opener not in shell_parse.PIPE_OPS:
             break
     paths, unknown = _written_paths(cmds, k, j)
     if not (paths or unknown):
@@ -718,9 +701,9 @@ _TEXT_ONLY_GIT_SUBCOMMANDS = frozenset({'commit'})
 # and `git log` reading a `--grep` pattern.
 _TEXT_SEARCH_GIT_SUBCOMMANDS = frozenset({'grep', 'log'})
 _GIT_CONFIG_OPTS = ('-c', '--config-env')
-# rg reads its pattern as text, unless a preprocessor runs (`--pre`,
-# `--pre-glob`) or a config file it is pointed at may add one.
-_RG_PROGRAM_OPTS = ('--pre', '--pre-glob')
+# rg reads its pattern as text, unless it runs a program (shell_parse.RG_RUN_OPTS:
+# `--pre`, `--hostname-bin`, `--search-zip`) or a config file it is pointed at may add one.
+_RG_PROGRAM_OPTS = shell_parse.RG_RUN_OPTS
 # Commands that read what a pipe feeds them as text and never run it. They are
 # not text-only: their own arguments may name a program (`sort
 # --compress-program`), and one given such an option (_PROGRAM_OPTIONS) is no
@@ -728,9 +711,7 @@ _RG_PROGRAM_OPTS = ('--pre', '--pre-glob')
 # absent: LESSOPEN and LESSCLOSE name an input preprocessor (`|-sh %s` runs
 # what it reads), and they may come from the inherited environment, which the
 # command line cannot show.
-_STDIN_CONSUMERS = frozenset({
-    'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'column', 'nl',
-})
+_STDIN_CONSUMERS = bash_read_only.FILTERS  # the one list of text filters
 
 
 def _long_opt_named(value, names):
@@ -875,7 +856,7 @@ def _segment_invocations(command_text, tagged=False, nested=False):
     """
     cmds, exact = _code_commands(command_text, nested=nested)
     droppable = (exact and not _NOT_DROPPABLE_RE.search(command_text)
-                 and not any(cmd.opener in ('|', '|&') and not _is_text_only(cmd.words)
+                 and not any(cmd.opener in shell_parse.PIPE_OPS and not _is_text_only(cmd.words)
                              and not _is_stdin_consumer(cmd.words) for cmd in cmds))
     for cmd in cmds:
         for inv in _invocations(cmd.words):
@@ -1067,12 +1048,7 @@ _CURL_CODE_SHORT_OPTS = frozenset({'K'})
 # load code: locale names select a compiled locale, TZ/TERM name a data file,
 # the rest are numbers, flags or plain strings. HOME is absent: the Python user
 # site, `~/.node_modules` and `~/.ssh/config` live under it.
-_SAFE_ENV_VARS = frozenset({
-    'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES',
-    'LC_NUMERIC', 'LC_TIME', 'TZ', 'TERM', 'COLUMNS', 'LINES', 'PWD',
-    'OLDPWD', 'USER', 'LOGNAME', 'HOSTNAME', 'TMPDIR', 'DISPLAY', 'NO_COLOR',
-    'FORCE_COLOR', 'CLICOLOR', 'CLICOLOR_FORCE',
-})
+_SAFE_ENV_VARS = shell_parse.INERT_ENV_VARS
 # A shell named among another command's words (`find -exec sh -c`), by name:
 # the shape _SHELL_NAME_RE reads also matches `push`.
 _EMBEDDED_SHELL_RE = re.compile(r'(?:ba|rba|da|a|z|k|mk|c|tc|fi|y|pw)?sh[0-9.]*\Z')
@@ -1090,27 +1066,7 @@ _OPAQUE_INTERPRETERS = frozenset({
 # standard input. stop: an option naming the program ends the options.
 _Interpreter = collections.namedtuple(
     '_Interpreter', 'program value attached long_program long_value data stdin stop')
-_NODE_VALUE_OPTIONS = frozenset({  # `node --help`, v22: the options shown with `=...`
-    '--allow-fs-read', '--allow-fs-write', '--build-snapshot-config', '--conditions',
-    '--cpu-prof-dir', '--cpu-prof-interval', '--cpu-prof-name', '--diagnostic-dir',
-    '--disable-proto', '--disable-warning', '--dns-result-order', '--env-file',
-    '--env-file-if-exists', '--experimental-config-file', '--experimental-default-type',
-    '--experimental-loader', '--experimental-sea-config', '--experimental-test-isolation',
-    '--heap-prof-dir', '--heap-prof-interval', '--heap-prof-name',
-    '--heapsnapshot-near-heap-limit', '--heapsnapshot-signal', '--icu-data-dir', '--import',
-    '--input-type', '--inspect-publish-uid', '--loader', '--localstorage-file',
-    '--max-http-header-size', '--max-old-space-size-percentage',
-    '--network-family-autoselection-attempt-timeout', '--openssl-config',
-    '--redirect-warnings', '--report-filename', '--report-signal', '--require',
-    '--secure-heap', '--secure-heap-min', '--snapshot-blob', '--test-concurrency',
-    '--test-coverage-branches', '--test-coverage-exclude', '--test-coverage-functions',
-    '--test-coverage-include', '--test-coverage-lines', '--test-name-pattern',
-    '--test-reporter', '--test-reporter-destination', '--test-shard', '--test-skip-pattern',
-    '--test-timeout', '--title', '--tls-cipher-list', '--tls-keylog',
-    '--trace-event-categories', '--trace-event-file-pattern', '--trace-require-module',
-    '--unhandled-rejections', '--use-largepages', '--v8-pool-size', '--watch-kill-signal',
-    '--watch-path',
-})
+_NODE_VALUE_OPTIONS = shell_parse.NODE_VALUE_OPTIONS
 _INTERPRETERS = (
     (re.compile(r'(?:python|pypy)[0-9.]*\Z'),
      _Interpreter('cm', 'QWX', '', (), ('--check-hash-based-pycs',), (), True, True)),
@@ -1166,7 +1122,7 @@ def _shell_words(text, info=None):
         if not (words or redirs):
             return False
         k = len(cmds)
-        fed = opener in ('|', '|&') or any(groups)
+        fed = opener in shell_parse.PIPE_OPS or any(groups)
         for word in words + [r.target for r in redirs if r.target is not None]:
             for kind, src, off in word.segs:
                 if kind in _BODY_PARTS:
@@ -1203,7 +1159,7 @@ def _shell_words(text, info=None):
                 opener = None
             continue
         if op == '(':
-            groups.append(opener in ('|', '|&') and not ended)
+            groups.append(opener in shell_parse.PIPE_OPS and not ended)
         elif op == ')' and groups:
             groups.pop()
         sep = opener = op
@@ -1311,7 +1267,7 @@ def _shell_c_operand(words, i):
             maybe_c = True  # an unknown word may be any option, -c included
             i += 1
             continue
-        if value in ('--', '-'):
+        if value in shell_parse.OPTION_ENDS:
             i += 1
             break
         if value.startswith('--'):
@@ -1397,7 +1353,7 @@ def _shell_c_strings(text, fed=False):
 # its own: rg's preprocessor, ag's and ack's pager (run by a shell), and
 # sort's compressor. A long option may be abbreviated.
 _PROGRAM_OPTIONS = {
-    'rg': ('--pre',),
+    'rg': shell_parse.RG_PROGRAM_OPTS,
     'ag': ('--pager',),
     'ack': ('--pager',),
     'sort': ('--compress-program',),
@@ -1722,7 +1678,7 @@ def _shell_args_run_runtime(args, as_command):
         value, runtime = args[i]
         if runtime:
             return True
-        if value in ('--', '-'):
+        if value in shell_parse.OPTION_ENDS:
             i += 1
             break
         if value.startswith('--'):
@@ -1881,6 +1837,7 @@ def iter_git_invocations(command_text):
     """
     layers = [list(_segment_invocations(text, tagged=True, nested=k > 0))
               for k, text in enumerate(iter_shell_texts(command_text))]
+    seen = collections.Counter()
     for k, layer in enumerate(layers):
         later = collections.Counter(_bare_invocation(inv) for rest in layers[k + 1:] for inv, _q in rest)
         for inv, quoted in layer:
@@ -1888,7 +1845,40 @@ def iter_git_invocations(command_text):
             if quoted and later[key]:
                 later[key] -= 1
                 continue
+            seen[key] += 1
             yield inv
+    # The shared parser's reading of the same text (shell_parse.git_invocations):
+    # the commands a wrapper, a payload option or a shell definition runs
+    # (`env -S`, `su -c`, `find -exec`, `xargs -i`, alias, trap, function) are
+    # split by the one definition of how a command line splits, and an
+    # invocation this scan did not reach is yielded after its own.
+    for inv in _parser_invocations(command_text):
+        key = _bare_invocation(inv)
+        if seen[key]:
+            seen[key] -= 1
+            continue
+        yield inv
+
+
+def _parser_invocations(command_text):
+    """GitInvocation for each git invocation shell_parse.git_invocations reads in command_text
+    that names a subcommand (a git alias whose value is computed reads as git with none)."""
+    try:
+        script = shell_parse.parse(command_text)
+        found = shell_parse.git_invocations(script)
+        # a variable whose value the command it prefixes runs (`GIT_PAGER='...' git -p log`)
+        for site in shell_parse.walk(script):
+            for a in site.cmd.assignments + shell_parse.resolve(site.cmd).assignments:
+                value = a.static_value() if a.name in shell_parse.EXEC_ASSIGNMENT_VARS else None
+                if value:
+                    found.extend(shell_parse.git_invocations(value))
+    except Exception:  # never let the second reading cost the first its verdict
+        return []
+    # as _invocations writes them: an option as git receives it, an operand as written
+    return [GitInvocation(inv.word.raw.text, inv.path_qualified, inv.subcommand,
+                          [a if a is not None and _is_option_word(a) else w.raw.text
+                           for a, w in zip(inv.args, inv.arg_words)])
+            for inv in found if inv.word is not None and inv.subcommand is not None]
 
 
 def _bare_invocation(inv):
@@ -1919,7 +1909,7 @@ def classify_git_command(command_text):
 # command runs (`bash push.sh`) is not shell text it sees. hidden_git_texts
 # yields, for each, shell text the caller judges as it judges a command:
 #   - inline code (python/pypy -c, perl -e/-E, ruby -e, node -e/-p/--eval/
-#     --print): the token `git`, then words separated only by blanks, quotes,
+#     --print, php -r/-B/-R/-E, lua -e, Rscript -e): the token `git`, then words separated only by blanks, quotes,
 #     commas, `[` or backquotes, whose subcommand is in _HIDDEN_GIT_SUBCOMMANDS,
 #     read as `git <words>`. Lexical and conservative: `print("git push")` reads
 #     as a push.
@@ -1946,8 +1936,12 @@ _HIDDEN_CODE_OPTIONS = (
     (re.compile(r'perl[0-9.]*\Z'), 'eE', ()),
     (re.compile(r'ruby[0-9.]*\Z'), 'e', ()),
     (re.compile(r'node(?:js)?[0-9.]*\Z'), 'ep', ('--eval', '--print')),
+    # the code options _INTERPRETERS reads for these too (php -r/-B/-R/-E, lua -e, Rscript -e)
+    (re.compile(r'php[0-9.]*\Z'), 'rBRE', ()),
+    (re.compile(r'lua(?:jit)?[0-9.]*\Z'), 'e', ()),
+    (re.compile(r'Rscript\Z'), 'e', ()),
 )
-_HIDDEN_SHELLS = frozenset({'bash', 'sh', 'dash', 'zsh', 'ksh', 'source', '.'})
+_HIDDEN_SHELLS = shell_parse.SCRIPT_RUNNERS
 _HIDDEN_SHELL_VALUE_OPTS = frozenset({'-o', '+o', '-O', '+O', '--rcfile', '--init-file'})
 _HIDDEN_SCRIPT_MAX = 256 * 1024
 _HIDDEN_GIT_RE = re.compile(r'(?<![\w.-])git(?![\w.-])')
@@ -1981,7 +1975,7 @@ def _hidden_inline_code(name, argv):
     codes = []
     for i, arg in enumerate(argv):
         nxt = argv[i + 1] if i + 1 < len(argv) else None
-        if arg is None or not arg.startswith('-') or arg in ('-', '--'):
+        if arg is None or not arg.startswith('-') or arg in shell_parse.OPTION_ENDS:
             continue
         if arg.startswith('--'):
             opt, eq, val = arg.partition('=')
@@ -2006,7 +2000,7 @@ def _hidden_script_path(name, head, argv):
                 skip = False
             elif arg in _HIDDEN_SHELL_VALUE_OPTS:
                 skip = True
-            elif name in ('source', '.') or not arg.startswith(('-', '+')):
+            elif name in ('source', '.') or not arg.startswith(shell_parse.OPTION_SIGNS):
                 return (arg, True) if arg not in _STDIN_PATHS else None
             elif 'c' in arg[1:] and not arg.startswith('--') or arg == '-s':
                 return None

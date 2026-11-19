@@ -225,6 +225,18 @@ def test_the_hook_allows_the_conditional(command, agent, scratch_home):
 @pytest.mark.parametrize("agent", [False, True], ids=["main", "subagent"])
 @pytest.mark.parametrize("command", HOOK_REFUSED)
 def test_the_hook_refuses_a_dynamic_command_head(command, agent, scratch_home):
+    # The analyzer cannot name the head of any of these (test_a_dynamic_command_head_stays_refused), so the hook
+    # cannot prove them. Since the owner's rule of 2026-11-19 it refuses an unproven command when its text holds a
+    # removal word, and lets it run otherwise: each form is refused once its dynamic head is handed `remove`, on
+    # the analyzer's own reason, and runs as written (the next test).
+    named = command.replace("$CMD", "$CMD remove", 1)
+    code, err = _hook_exit(named, scratch_home, agent)
+    assert code == 2, (named, err[:300])
+    assert "dynamic_command_head" in err, (named, err[:300])
+
+
+@pytest.mark.parametrize("agent", [False, True], ids=["main", "subagent"])
+@pytest.mark.parametrize("command", HOOK_REFUSED)
+def test_the_hook_lets_a_dynamic_command_head_naming_no_removal_run(command, agent, scratch_home):
     code, err = _hook_exit(command, scratch_home, agent)
-    assert code == 2, (command, err[:300])
-    assert "dynamic_command_head" in err, (command, err[:300])
+    assert code == 0 and "removal-policy" not in err, (command, err[:300])

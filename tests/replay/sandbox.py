@@ -158,6 +158,7 @@ def copy_framework(sb: str) -> None:
     tests, cli = os.path.dirname(HERE), os.path.join(sb, "replay", "_cli")
     shutil.copytree(os.path.join(tests, "fixtures", "cli"), os.path.join(cli, "fixtures", "cli"), ignore=COPY_IGNORE)
     shutil.copy2(os.path.join(tests, "cli_shapes.py"), os.path.join(cli, "cli_shapes.py"))
+    shutil.copytree(os.path.join(tests, "fixtures", "cli-request-copies"), os.path.join(cli, "fixtures", "cli-request-copies"))
 
 
 def _rm(sb: str, path: str) -> None:

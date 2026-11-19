@@ -40,6 +40,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib import command_span, locations, overnight, shell_parse as sp, stop_contract  # noqa: E402
 from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
+from lib import git_facts  # noqa: E402
+from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES  # noqa: E402
 
 try:  # optional contract runtime + agent resolver for the self_repair grant
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -539,7 +541,7 @@ class _Read:
         self.script = sp.parse(command)
         self.unreadable = bool(self.script.errors())
         self.resolved = [(site, sp.resolve(site.cmd)) for site in sp.walk(self.script)]
-        self.targets = sp.write_targets(self.script, env=env)
+        self.targets = sp.write_targets(self.script, env=env, raw=command)
 
 
 @functools.lru_cache(maxsize=8)
@@ -593,8 +595,8 @@ def _target_text(t) -> str:
 def _bash_write_paths(command: str, skip=frozenset()) -> list[str]:
     """The path of each file the command writes or creates (a deletion is not one), first seen order.
     ``skip`` holds the ids of target words not to report."""
-    found = (_target_text(t) for t in _read(command).targets
-             if t.mode != sp.DELETE and id(t.word) not in skip)
+    found = (p for t in _read(command).targets if t.mode != sp.DELETE and id(t.word) not in skip
+             for p in t.placed(_target_text(t)))  # at each directory a `cd` before it may have left
     return list(dict.fromkeys(p for p in found if p))
 
 
@@ -667,7 +669,7 @@ def _git_runs(command: str, payload_cwd: str) -> list:
     out = []
     cwd, known = None, True
     for site, res in _read(command).resolved:
-        if res.name in ('cd', 'pushd'):
+        if res.name in sp.CD_TARGET_BUILTINS:
             cwd, known = _cd_target(res, cwd or payload_cwd)
         moved = any(v is not None for _name, opts in res.wrappers for _o, v in opts)
         out.extend((inv, cwd, known and not moved) for inv in _git_of(site, res))
@@ -1023,8 +1025,7 @@ def _git_invocation_injects_keystone_config(subtoks: list[str]) -> bool:
 
 
 # `git config` reads and the forms that open, remove or rename (a section of) the config.
-_CONFIG_READ_FLAGS = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color',
-                      '--get-colorbool', '-l', '--list'}
+_CONFIG_READ_FLAGS = git_facts.GIT_CONFIG_READ_OPTIONS
 _CONFIG_SECTION_OPS = {'--remove-section', '--rename-section', 'remove-section', 'rename-section'}
 _CONFIG_EDIT_OPS = {'-e', '--edit', 'edit'}
 _CONFIG_VALUE_OPTS = {'-f', '--file', '--blob', '--type', '--default', '--comment', '--url'}
@@ -1058,8 +1059,7 @@ def _config_key_operand(args: list[str]) -> str:
             skip = True
         elif not a.startswith('-'):
             words.append(a)
-    if words and words[0] in ('set', 'unset', 'get', 'add', 'replace-all', 'unset-all', 'edit', 'list',
-                              'remove-section', 'rename-section'):
+    if words and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS | git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS:
         words = words[1:]
     return words[0] if words else ''
 
@@ -1072,7 +1072,7 @@ def _config_args(inv) -> list[str]:
 def _config_reads(args: list[str]) -> bool:
     opts = args[:args.index('--')] if '--' in args else args
     words = [a for a in opts if not a.startswith('-')]
-    return any(a in _CONFIG_READ_FLAGS for a in opts) or (words[:1] in (['get'], ['list']))
+    return any(a in _CONFIG_READ_FLAGS for a in opts) or (words[:1] and words[0] in git_facts.GIT_CONFIG_READ_SUBCOMMANDS)
 
 
 def _config_writes_keystone(inv) -> bool:
@@ -1397,7 +1397,7 @@ def _enforce_git_invocation(inv, cwd, cwd_known: bool, main_real: str, payload_c
             'overnight actors. Branch ops INSIDE the isolated worktree (non-protected target) '
             'are allowed.\n'
         )
-    if sub in ('reset', 'restore', 'clean') and (targets_main or switches_protected or not in_worktree):
+    if sub in sp.GIT_WORKTREE_DISCARDERS - {'checkout', 'stash'} and (targets_main or switches_protected or not in_worktree):
         _block(
             f'\nOVERNIGHT MAIN-WRITE BLOCK: git {sub} that could write '
             'the main working directory is forbidden for overnight '
@@ -1622,7 +1622,7 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
         return []
     common_real = os.path.realpath(gcd)
     args: list[str] = []
-    for leaf in ('config', 'hooks', _KEYSTONE_HOOKS_LEAF):
+    for leaf in GIT_COMMON_DIR_PROTECTED + (_KEYSTONE_HOOKS_LEAF,):
         p = os.path.join(common_real, leaf)
         if os.path.exists(p):
             args += ['--ro-bind', p, p]
@@ -1763,7 +1763,7 @@ class _GitConfigPaths:
         self.hook_dirs: set[str] = set()
         for dirs in checkouts:
             for d in dirs:
-                self.files.update(os.path.join(os.path.realpath(d), leaf) for leaf in ('config', 'config.worktree'))
+                self.files.update(os.path.join(os.path.realpath(d), leaf) for leaf in GIT_DIR_CONFIG_FILES)
             if dirs:
                 self.hook_dirs.add(os.path.realpath(os.path.join(os.path.realpath(dirs[-1]), _KEYSTONE_HOOKS_LEAF)))
 
@@ -1803,13 +1803,13 @@ def _block_git_config(tool_name: str, target: str) -> None:
            f'leaves both as they are.\nBlocked: {tool_name} to {target}\n')
 
 
-def _emit_command_rewrite(new_command: str) -> None:
-    """Emit the Claude Code PreToolUse command-rewrite and exit 0. The runtime
-    replaces tool_input.command with `new_command` (the bwrap re-exec)."""
+def _emit_command_rewrite(new_command: str, tool_input: dict) -> None:
+    """Emit the Claude Code PreToolUse command-rewrite and exit 0. updatedInput replaces the whole
+    tool input, so it is `tool_input` with only its command replaced (the bwrap re-exec)."""
     out = {
         'hookSpecificOutput': {
             'hookEventName': 'PreToolUse',
-            'updatedInput': {'command': new_command},
+            'updatedInput': {**tool_input, 'command': new_command},
         }
     }
     sys.stdout.write(json.dumps(out))
@@ -1848,7 +1848,7 @@ def _raw_git_metadata_write_into_main(command: str, main_root: str,
 
 
 def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
-                          journal: tuple = ()) -> None:
+                          journal: tuple = (), tool_input: dict | None = None) -> None:
     """For the overnight actor's Bash command: re-exec it inside the bwrap RO-bind
     boundary (emit updatedInput.command) when the boundary is available; FAIL-CLOSED
     (deny non-worktree-local commands) when bwrap is unavailable. No-op only for an
@@ -1876,7 +1876,7 @@ def _apply_write_boundary(command: str, gov_state: dict, main_git_dir: str,
         if argv:
             # shlex-quote the argv into a single re-exec command string.
             import shlex
-            _emit_command_rewrite(' '.join(shlex.quote(a) for a in argv))
+            _emit_command_rewrite(' '.join(shlex.quote(a) for a in argv), tool_input or {})
         # boundary requested but argv could not be built -> fall through to the
         # fail-closed deny below (do not silently allow).
     # FAIL-CLOSED: bwrap unavailable OR argv unbuildable. The write guarantee
@@ -1990,7 +1990,7 @@ def main():
             # its journal bound writable: a check of the helper against its blobs at the harness's
             # HEAD cannot see what it runs (its hooks/lib modules load from untracked __pycache__
             # bytecode, and the untracked venv runs any .pth in it).
-            _apply_write_boundary(command, gov_state, main_git_dir, _restart_journal(payload))
+            _apply_write_boundary(command, gov_state, main_git_dir, _restart_journal(payload), tool_input)
         elif classification == 'worktree_context':
             # No governing state: the main_root cannot be derived to scope a targeted
             # block, so any git / interpreter command is refused; any other command is

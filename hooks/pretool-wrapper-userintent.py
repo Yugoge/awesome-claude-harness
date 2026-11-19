@@ -106,9 +106,10 @@ try:
     from lib import shell_parse as _sp
 except Exception:  # pragma: no cover - fail-soft when lib missing
     _sp = None
+from lib import bash_read_only as _bro  # noqa: E402 -- the programs that only read
 
-# Directory holding the user-intent sentinels (overridable for sandbox tests).
-_SENTINEL_DIR = os.environ.get('CLAUDE_USERINTENT_SENTINEL_DIR', harness_state_dir())
+# Directory holding the user-intent sentinels: where hooks/prompt-workflow.py writes them.
+_SENTINEL_DIR = harness_state_dir()
 
 _PYTHON_RE = re.compile(r'^(?:python[\d.]*|pypy[\d.]*)$')
 _PY_VALUE_OPTS = 'cmWXQ'
@@ -123,16 +124,13 @@ _NO_EXEC = frozenset((
     'break', 'continue', 'let', 'getopts', 'umask', 'ulimit', 'jobs', 'fg', 'bg', 'kill',
     'history', 'shopt', 'times', 'trap', 'disown', 'help', 'logout', 'mapfile',
     'readarray', 'compgen', 'complete', 'caller', 'eval', 'which', 'whereis'))
+# Readers that stay readers whatever words xargs appends (no option of theirs runs a program
+# or names one: not find, rg, ag, sort, sed, awk, git, less ...): lib/bash_read_only's
+# readers, and those of its checked ones whose other forms write but run nothing.
+_XARGS_SAFE = _bro.ANY_ARGS | {'file', 'printf', 'test', '[', 'uniq', 'xxd', 'tree', 'shellcheck'}
 # Readers: they never run an operand. Their operands, patterns and strings are
 # harmless while their output goes nowhere that runs.
-_PLAIN_READERS = frozenset((
-    'grep', 'egrep', 'fgrep', 'zgrep', 'rg', 'ag', 'cat', 'tac', 'nl', 'head', 'tail', 'less',
-    'more', 'wc', 'ls', 'stat', 'file', 'du', 'tree', 'sha1sum', 'sha224sum', 'sha256sum',
-    'sha384sum', 'sha512sum', 'md5sum', 'b2sum', 'cksum', 'sum', 'diff', 'cmp', 'comm', 'sort',
-    'uniq', 'cut', 'tr', 'od', 'xxd', 'hexdump', 'strings', 'readlink', 'realpath', 'basename',
-    'dirname', 'column', 'paste', 'fold', 'fmt', 'expand', 'unexpand', 'rev', 'jq', 'echo',
-    'printf', 'true', 'false', 'test', '[', 'shellcheck', 'type', 'which', 'whereis', 'find',
-    'hash', 'pwd', ':'))
+_PLAIN_READERS = _XARGS_SAFE | {'zgrep', 'rg', 'ag', 'less', 'more', 'sort', 'find', 'hash'}
 # Commands that never change a file's content (a run target they name is still
 # the file on disk).
 _CONTENT_KEEPING = frozenset(('chmod', 'chown', 'chgrp', 'touch'))
@@ -172,7 +170,7 @@ _RUBY_BAD = re.compile(
     r'syscall|trap|at_exit|ENV|Dir|Object|BasicObject|Class|Module|Signal)\b|`|%x|\$0|::')
 _AWK_BAD = re.compile(r'\bsystem\b|\|&?|\bgetline\b|@\w+|\b(?:print|printf)\b[^;{}\n]*>|'
                       r'\bENVIRON\b|\bPROCINFO\b')
-_AWK_NAMES = frozenset(('awk', 'gawk', 'mawk', 'nawk'))
+_AWK_NAMES = frozenset(_sp.AWK_NAMES) if _sp is not None else frozenset()
 _SED_SAFE = re.compile(
     r'^\s*(?:(?:\d+|\$|/(?:\\.|[^/])*/)(?:\s*,\s*(?:\d+|\$|/(?:\\.|[^/])*/|[+~]\d+))?\s*!?\s*)?'
     r'(?:[pd=lnq]|s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1[gpiImM0-9]*)?\s*$')
@@ -184,19 +182,17 @@ _CODE_RUNNERS = frozenset(('perl', 'ruby', 'node', 'nodejs', 'php', 'lua', 'tcls
 _STDIN_RUNNERS = frozenset(('at', 'batch', 'crontab'))
 _OTHER_SHELLS = frozenset(('fish', 'tcsh', 'csh', 'elvish', 'nu', 'xonsh', 'rc', 'es'))
 _PY_RUNNERS = frozenset(('pytest', 'py.test', 'coverage', 'ipython', 'ipython3', 'pdb', 'pdb3'))
+# less runs these over each file it opens.
+_LESS_HOOK_VARS = ('LESSOPEN', 'LESSCLOSE')
+_HOME_PARAMS = ('HOME', '{HOME}')  # the parameter texts of $HOME and ${HOME}
 # Variables whose value is a command or a file some program runs.
 _CMD_VAR_RE = re.compile(
     r'^(?:BASH_ENV|ENV|PYTHONSTARTUP|PROMPT_COMMAND|PS[0-4]|SHELL|LESSOPEN|LESSCLOSE|'
     r'PERL5OPT|PERL5DB|RUBYOPT|NODE_OPTIONS|LD_PRELOAD|LD_AUDIT|BROWSER|TERMINAL|FCEDIT|'
     r'GIT_SSH|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|SSH_ASKPASS|SUDO_ASKPASS|'
     r'\w*(?:EDITOR|PAGER|_COMMAND|_CMD|ASKPASS|_PROGRAM|_HOOK|_HOOKS))$')
-# git configuration keys whose value runs a command.
-_GIT_RUN_KEY = re.compile(
-    r'^(?:alias\..*|core\.(?:pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy)|'
-    r'pager\..*|sequence\.editor|include\..*|includeif\..*|filter\..*|diff\..*|merge\..*|'
-    r'gpg\..*|credential.*|uploadpack\..*|receive\..*|man\..*|web\..*|browser\..*|'
-    r'sendemail\..*|interactive\..*|.*\.(?:pager|editor|command|cmd|textconv|program|helper|'
-    r'external|path|tool|hook|sshcommand|difffilter|clean|smudge|process))$', re.IGNORECASE)
+# git configuration keys whose value runs a command (lib/git_facts.py).
+from lib.git_facts import GIT_RUN_CONFIG_KEY_RE as _GIT_RUN_KEY  # noqa: E402
 _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 'ls-files',
                             'ls-tree', 'status', 'cat-file', 'rev-parse', 'shortlog', 'describe',
                             'show-ref', 'whatchanged', 'rev-list', 'add', 'commit', 'diff-tree',
@@ -204,8 +200,10 @@ _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 
                             'check-attr', 'count-objects', 'reflog', 'stash', 'restore',
                             'branch', 'tag', 'remote', 'fetch', 'push', 'pull', 'switch',
                             'checkout', 'mv', 'rm', 'init', 'clone', 'version', 'help'))
-_GIT_GLOBAL_VALUE = frozenset(('-C', '-c', '--git-dir', '--work-tree', '--namespace',
-                               '--config-env', '--super-prefix', '--exec-path'))
+_GIT_GLOBAL_VALUE = _sp.GIT_GLOBAL_VALUE_OPTS if _sp is not None else frozenset()  # read by _Scan, which needs _sp
+from lib.git_facts import GIT_CONFIG_READ_OPTIONS as _GIT_CONFIG_READS  # noqa: E402
+from lib.git_facts import GIT_CONFIG_READ_SUBCOMMANDS as _GIT_CONFIG_READ_SUBS  # noqa: E402
+from lib.git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS as _GIT_SHELL_PAYLOAD_SUBS  # noqa: E402
 _GH_MESSAGE_SUBS = frozenset(('pr', 'issue', 'release'))
 _RC_FILES = frozenset(('.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_logout',
                        '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.kshrc', '.mkshrc',
@@ -495,7 +493,7 @@ class _Scan:
                     self.feeders[id(pl.stages[k + 1])] = st
                 if isinstance(st, _sp.Compound):
                     w = writes or any(_writes_file(r) for r in st.redirects)
-                    if st.kind in ('for', 'select') and st.header and st.body:
+                    if st.kind in _sp.LOOP_VAR_KINDS and st.header and st.body:
                         var = st.header[0].value()
                         if var and re.match(r'^[A-Za-z_]\w*$', var):
                             self.loops.append((var, list(st.header[1:]), st.body))
@@ -554,7 +552,7 @@ class _Scan:
                 if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
                     t = self.home + t[1:]
                 alts = [(t, glob.escape(t), False)]
-            elif p.kind == 'param' and p.text in ('HOME', '{HOME}') and self.home:
+            elif p.kind == 'param' and p.text in _HOME_PARAMS and self.home:
                 alts = [(self.home, glob.escape(self.home), False)]
             elif p.kind == 'glob':
                 alts = [(p.text, p.text, True)]
@@ -587,8 +585,7 @@ class _Scan:
                 continue
             if v.startswith('PATH=') or v.startswith('PATH+='):
                 self.path_assigned = True
-            if (v.startswith('CDPATH=') and v != 'CDPATH=') and res.name in (
-                    'export', 'declare', 'typeset', 'local', 'readonly'):
+            if (v.startswith('CDPATH=') and v != 'CDPATH=') and res.name in _sp.DECLARATION_BUILTINS:
                 self.cdpath = True
             if not reader:
                 self.others.append((w, v))
@@ -622,7 +619,7 @@ class _Scan:
         words = [w.value() for w in cmd.words]
         if not words:
             return True
-        if words[0] == 'command' and len(words) > 1 and words[1] in ('-v', '-V'):
+        if words[0] == 'command' and len(words) > 1 and words[1] in _sp.COMMAND_LOOKUP_OPTS:
             return True
         res = _sp.resolve(cmd)
         last_open = res.unresolved == 'computed-shell-option' and (
@@ -640,8 +637,7 @@ class _Scan:
         vals = [w.value() for w in res.args]
         sv = [v for v in vals if v is not None]
         if name in _PLAIN_READERS:
-            if name == 'rg' and any((v.startswith('--pre') and not v.startswith('--pre-glob')) or
-                                    v.startswith('--hostname-bin') for v in sv):
+            if name == 'rg' and any(v.split('=', 1)[0] in _sp.RG_PROGRAM_OPTS for v in sv):
                 return False
             if name == 'rg' and '--no-config' not in sv and self._rg_config_progs():
                 return False
@@ -662,7 +658,7 @@ class _Scan:
                                        list(res.args), self._lead_checker(cmd, res, res.args))
         if _PYTHON_RE.match(name):
             return self._py_reader(cmd, vals)
-        if name in ('node', 'nodejs'):
+        if name in _sp.NODE_NAMES:
             return self._code_opt(vals, ('-e', '--eval', '-p', '--print'), _node_inert, ())
         if name in _AWK_NAMES:
             return self._awk_reader(vals)
@@ -711,7 +707,7 @@ class _Scan:
                     if lead_ok is not None and lead_ok(k):
                         return True
                 return noexec and last_open and k == len(vals) - 1
-            if v in ('--', '-'):
+            if v in _sp.OPTION_ENDS:
                 break
             if v.startswith('--'):
                 if v in ('--rcfile', '--init-file'):
@@ -789,7 +785,7 @@ class _Scan:
                         if got is None:
                             return False
                         firsts.extend(got)
-                if any(f[:1] in ('-', '+') for f in firsts):
+                if any(f[:1] in _sp.OPTION_SIGNS for f in firsts):
                     return False
             if not empty:
                 return True
@@ -990,13 +986,13 @@ class _Scan:
             v = vals[k]
             if v is None:
                 return False
-            if v in ('-f', '--file', '-E', '--exec', '-l', '--load', '-i', '--include') or \
+            if v in _sp.AWK_PROGFILE_OPTS + _sp.AWK_LIB_OPTS or \
                     v.startswith('--file=') or v.startswith('--load='):
                 return False
-            if v in ('-F', '-v', '--assign', '--field-separator'):
+            if v in _sp.AWK_DATA_OPTS:
                 k += 2
                 continue
-            if v in ('-e', '--source'):
+            if v in _sp.AWK_SOURCE_OPTS:
                 if k + 1 >= len(vals) or not _awk_inert(vals[k + 1]):
                     return False
                 prog = vals[k + 1]
@@ -1205,7 +1201,7 @@ class _Scan:
                 if self._built(args[k]):
                     self.computed_run = True  # a script operand built at run time
                 return
-            if v in ('--', '-'):
+            if v in _sp.OPTION_ENDS:
                 k += 1
                 break
             if len(v) > 1 and v[0] in '-+' and not v.startswith('--'):
@@ -1400,7 +1396,7 @@ class _Scan:
         """`find ... -exec {}`: the files find hands to a command that may run them."""
         vals = [self._expand(w)[0] for w in args]
         i = 0
-        while i < len(vals) and vals[i] in ('-L', '-H', '-P'):
+        while i < len(vals) and vals[i] in _sp.FIND_SYMLINK_OPTS:
             i += 1
         starts = []
         while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in ('(', '!', ')'))):
@@ -1413,7 +1409,7 @@ class _Scan:
             if p in ('-exec', '-execdir', '-ok', '-okdir'):
                 k = j + 1
                 argv = []
-                while k < len(vals) and vals[k] not in (';', '+'):
+                while k < len(vals) and vals[k] not in _sp.FIND_EXEC_ENDS:
                     argv.append(vals[k])
                     k += 1
                 blocks.append((p, argv))
@@ -1514,7 +1510,7 @@ class _Scan:
             return
         name = os.path.basename(head)
         args = list(res.args)
-        if name in ('cd', 'pushd'):
+        if name in _sp.CD_TARGET_BUILTINS:
             self._cd(args)
             return
         if name in ('source', '.'):
@@ -1529,7 +1525,7 @@ class _Scan:
             self._python(site, res, args)
             return
         if name in _OTHER_SHELLS:
-            ops = [w for w in args if not (w.value() or '-').startswith(('-', '+'))]
+            ops = [w for w in args if not (w.value() or '-').startswith(_sp.OPTION_SIGNS)]
             if ops and not any((w.value() or '') in ('-c', '-n') for w in args):
                 self._path_target(ops[0])
         if name in _PY_RUNNERS:
@@ -1574,9 +1570,9 @@ class _Scan:
                 for v in vals[cut + 1:]:
                     if v is None:
                         self.unsure = True
-                    elif v not in (':::', '::::'):
+                    elif v not in _sp.PARALLEL_SEPARATORS:
                         self._sub(v)
-            vals = [v for v in vals if v not in (':::', '::::')]
+            vals = [v for v in vals if v not in _sp.PARALLEL_SEPARATORS]
         if not reader and named:
             if name in _CODE_RUNNERS or name in _STDIN_RUNNERS or _sp._SCRIPT_INTERP_RE.match(name):
                 self.unsure = True
@@ -1622,34 +1618,16 @@ class _Scan:
             break
         sub = vals[k] if k < len(vals) else None
         rest = [x for x in vals[k + 1:] if x is not None]
-        if sub == 'config' and not any(r in ('--get', '--get-all', '--list', '-l', '--get-regexp',
-                                             '--show-origin', '--unset') for r in rest):
+        if sub == 'config' and not (any(r in _GIT_CONFIG_READS for r in rest) or rest[:1] and rest[0] in
+                                    _GIT_CONFIG_READ_SUBS):
             self.git_config_written = True  # it may set the pager git grep -O opens
             if any(_mentions(r) for r in rest):
                 self.persist = True
-        if sub in ('rebase', 'bisect', 'submodule', 'filter-branch', 'difftool', 'mergetool'):
+        if sub in _GIT_SHELL_PAYLOAD_SUBS:
             if any(_mentions(r) for r in rest):
                 self.unsure = True
 
     # -- runs built at run time, rg --pre, sed e, LESSOPEN, loops -----------------
-    # Readers that stay readers whatever words xargs appends (no option of theirs runs
-    # a program or names one: not find, rg, ag, sort, sed, awk, git, less ...).
-    _XARGS_SAFE = frozenset((
-        'grep', 'egrep', 'fgrep', 'cat', 'tac', 'nl', 'head', 'tail', 'wc', 'ls', 'stat',
-        'file', 'du', 'sha1sum', 'sha224sum', 'sha256sum', 'sha384sum', 'sha512sum', 'md5sum',
-        'b2sum', 'cksum', 'sum', 'cmp', 'comm', 'uniq', 'cut', 'tr', 'od', 'xxd', 'hexdump',
-        'strings', 'readlink', 'realpath', 'basename', 'dirname', 'column', 'paste', 'fold',
-        'fmt', 'expand', 'unexpand', 'rev', 'echo', 'printf', 'true', 'false', 'test', '[',
-        'shellcheck', 'type', 'which', 'whereis', 'pwd', ':', 'diff', 'jq', 'tree'))
-    _RG_VALUE_SHORT = 'efgtTmABCMjrEd'
-    _RG_VALUE_LONG = frozenset((
-        '--regexp', '--file', '--glob', '--iglob', '--type', '--type-not', '--max-count',
-        '--after-context', '--before-context', '--context', '--max-columns', '--threads',
-        '--pre', '--pre-glob', '--type-add', '--type-clear', '--replace', '--colors',
-        '--encoding', '--sort', '--sortr', '--max-depth', '--maxdepth', '--max-filesize',
-        '--path-separator', '--ignore-file', '--dfa-size-limit', '--regex-size-limit',
-        '--context-separator', '--field-match-separator', '--field-context-separator',
-        '--engine', '--hostname-bin', '--hyperlink-format', '--color', '--generate'))
 
     @staticmethod
     def _built(word) -> bool:
@@ -1666,7 +1644,7 @@ class _Scan:
         if hv is None:
             return False
         name = os.path.basename(hv)
-        if name in self._XARGS_SAFE:
+        if name in _XARGS_SAFE:
             return True
         if _PYTHON_RE.match(name):
             vals = [w.value() for w in res.args]
@@ -1677,19 +1655,19 @@ class _Scan:
         cmd = site.cmd
         res = self.res[id(site)]
         for a in tuple(cmd.assignments) + tuple(res.assignments):
-            if a.name in ('LESSOPEN', 'LESSCLOSE'):
+            if a.name in _LESS_HOOK_VARS:
                 self.lessopen = True
         for w in cmd.words:
             t = w.value()
             t = w.text if t is None else t
-            if re.match(r'''^["']?(?:LESSOPEN|LESSCLOSE)\+?=''', t or ''):
+            if re.match(r'''^["']?(?:%s)\+?=''' % '|'.join(_LESS_HOOK_VARS), t or ''):
                 self.lessopen = True
         # RIPGREP_CONFIG_PATH the command sets (prefix, env, export/declare/typeset/readonly)
         for a in tuple(cmd.assignments) + tuple(res.assignments):
             if a.name == 'RIPGREP_CONFIG_PATH':
                 self.rgconf.append(a.value)
             self._pager_assign(a)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+        if res.name in _sp.DECLARATION_BUILTINS:
             for w in res.args:
                 if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''):
                     a = _sp.Assignment(w)
@@ -1718,7 +1696,7 @@ class _Scan:
         cmd = site.cmd
         res = self.res[id(site)]
         assigns = list(cmd.assignments) + list(res.assignments)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+        if res.name in _sp.DECLARATION_BUILTINS:
             assigns.extend(_sp.Assignment(w) for w in res.args
                            if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''))
         for a in assigns:
@@ -1821,17 +1799,17 @@ class _Scan:
                 break
             if v.startswith('--'):
                 name, eq, val = v.partition('=')
-                takes = name in self._RG_VALUE_LONG
+                takes = name in _sp.RG_VALUE_LONG
                 vw = None if eq else (args[k + 1] if takes and k + 1 < len(args) else None)
-                if name in ('--pre', '--hostname-bin'):
+                if name in _sp.RG_PROGRAM_OPTS:
                     progs.append(vw if not eq else val)
-                if name in ('--regexp', '--file'):
+                if name in _sp.GREP_PATTERN_LONG:
                     given = True
                 k += 1 if (eq or not takes) else 2
                 continue
             if v.startswith('-') and len(v) > 1:
                 for j, ch in enumerate(v[1:], 1):
-                    if ch in self._RG_VALUE_SHORT:
+                    if ch in _sp.RG_VALUE_SHORT:
                         if ch in 'ef':
                             given = True
                         k += 1 if v[j + 1:] else 2
@@ -2109,7 +2087,7 @@ class _Scan:
 
     def _less(self, args):
         """less with a LESSOPEN/LESSCLOSE the command sets runs it over each file it opens."""
-        ops = [w for w in args if not (w.value() or 'x').startswith(('-', '+'))]
+        ops = [w for w in args if not (w.value() or 'x').startswith(_sp.OPTION_SIGNS)]
         self._words_hold_wrapper(ops)
 
     def _loop(self, var, items, body):
@@ -2170,7 +2148,7 @@ class _Scan:
                 if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
                     t = self.home + t[1:]
                 prefix += t
-            elif p.kind == 'param' and p.text in ('HOME', '{HOME}') and self.home:
+            elif p.kind == 'param' and p.text in _HOME_PARAMS and self.home:
                 prefix += self.home
             else:
                 break
@@ -2213,7 +2191,7 @@ class _Scan:
         for site in self.sites:
             cmd, res = site.cmd, self.res[id(site)]
             assigns = list(cmd.assignments) + list(res.assignments)
-            if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+            if res.name in _sp.DECLARATION_BUILTINS:
                 assigns.extend(_sp.Assignment(w) for w in res.args
                                if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''))
             for a in assigns:
@@ -2623,9 +2601,9 @@ class _Scan:
                         continue
                     lines = [ln for ln in lines if ln and not ln.startswith('#')]
                     for i, ln in enumerate(lines):
-                        if ln in ('--pre', '--hostname-bin'):
+                        if ln in _sp.RG_PROGRAM_OPTS:
                             out.append(lines[i + 1] if i + 1 < len(lines) else None)
-                        elif ln.startswith(('--pre=', '--hostname-bin=')):
+                        elif ln.startswith(tuple(o + '=' for o in _sp.RG_PROGRAM_OPTS)):
                             out.append(ln.split('=', 1)[1])
         self._rgconf_memo = out
         return out
@@ -3186,7 +3164,7 @@ class _Scan:
         res = self.res[id(site)]
         inert = self._inert(cmd)
         assigns = list(cmd.assignments) + list(res.assignments)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly', 'env'):
+        if res.name in _sp.DECLARATION_BUILTINS + ('env',):
             for w in res.args:
                 if _sp._ASSIGN_PARTS_RE.match(w.raw.text):
                     assigns.append(_sp.Assignment(w))

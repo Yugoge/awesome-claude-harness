@@ -41,7 +41,7 @@ Only when Section 5 cannot be sketched at all: no topic, feature or issue, no ac
 
 2. The spec path, always in the parent project directory and never inside an overnight worktree:
    ```
-   ${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md
+   ${CLAUDE_PROJECT_DIR:-$PWD}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md
    ```
    Keep it as `spec_path`. A fresh `/spec` in a new session makes a new timestamped file; follow-ups within the session append to this one.
 

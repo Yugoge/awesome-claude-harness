@@ -24,12 +24,33 @@ HOOKS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(o
 LIB = os.path.join(HOOKS, "lib")
 sys.path[:0] = [p for p in (HOOKS, LIB) if p not in sys.path]
 
+from lib import git_facts  # noqa: E402
+from lib.git_facts import GIT_DIR_CONFIG_FILES  # noqa: E402
+from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, GIT_INERT_FLAGS, git_global_options, git_plain_subcommand_index  # noqa: E402
+# A git option word that runs a program or writes a file: grep's -O, or one starting with a long option of
+# git_facts.GIT_RUN_OR_WRITE_OPTIONS (`--output=x`, `--exec=...`).
+_GIT_RUN_OR_WRITE_PREFIXES = ("-O",) + tuple(sorted(git_facts.GIT_RUN_OR_WRITE_OPTIONS))
+
+
+PAYLOAD = ""  # the call's payload text (decide() sets it), for the refusal record
+
 
 def refuse(*lines):
     """Refuse the call: the lines go to stderr, and the process exits 2, which the shell entry relays."""
     sys.stderr.write("".join(line + "\n" for line in lines))
     sys.stderr.flush()
+    record("\n".join(lines))
     sys.exit(2)
+
+
+def record(text, kind="refusal"):
+    """A report of this call to the refusal record (lib/refusal_record.py): a refusal, or kind "unproven" for a
+    command the removal policy lets through unproven. It never changes the verdict."""
+    try:
+        import refusal_record
+        refusal_record.report(PAYLOAD, [(__file__, text)], __file__, kind)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def released_line():
@@ -201,12 +222,10 @@ def commit_guard(payload):
     cur = [d.get('cwd') or os.getcwd()]
     dirs = cur[:]
     commits, why, cfg, loc, ex = [], [], [], [], {}
-    LONGV = ('message', 'file', 'reuse-message', 'reedit-message', 'template', 'author', 'date', 'trailer')
+    LONGV = tuple(o[2:] for o in sorted(git_facts.GIT_COMMIT_VALUE_OPTIONS))
     GV = {'--git-dir': 'GIT_DIR', '--work-tree': 'GIT_WORK_TREE'}
-    CFGW = {'set', 'unset', 'unset-all', 'replace-all', 'add', 'rename-section', 'remove-section'}
-    CFGR = {'get', 'get-all', 'get-regexp', 'get-urlmatch', 'list'}
-    WRF = {'--unset', '--unset-all', '--add', '--replace-all', '--rename-section', '--remove-section'}
-    RDF = {'--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l'}
+    CFGW, CFGR = git_facts.GIT_CONFIG_WRITE_SUBCOMMANDS, git_facts.GIT_CONFIG_READ_SUBCOMMANDS
+    WRF, RDF = git_facts.GIT_CONFIG_WRITE_OPTIONS, git_facts.GIT_CONFIG_READ_OPTIONS
 
     def prot(k):
         k = k.strip().strip('\'"').lower()
@@ -270,9 +289,9 @@ def commit_guard(payload):
         if ' ' in t[i]:
             return scan(' '.join(t[i:]), depth + 1, lg, gc)
         b, c = os.path.basename(t[i]), [j for j in range(i + 1, len(t) - 1) if re.match(r'-[^-]*c', t[j])]
-        if b in ('bash', 'sh', 'zsh', 'dash', 'ksh') and c:
+        if b in COMMON_SHELLS and c:
             scan(t[c[0] + 1], depth + 1, lg, gc)
-        if b in ('cd', 'pushd'):
+        if b in CD_TARGET_BUILTINS:
             cur[0] = at(cur[0], ([a for a in t[i + 1:] if a[:1] != '-'] or ['~'])[0])
             dirs.append(cur[0])
         if b != 'git':
@@ -520,13 +539,18 @@ def daemon_restart(command, payload, prefix):
         cwd = (payload.get("tool_input") or {}).get("cwd") or os.getcwd()
         verbs = DAEMON_VERBS[1:-1].split("|")
         return _core.evaluate(command, cwd, cfg)[0] == "BLOCK" and any(
-            r.name in ("systemctl", "service") and any(a in verbs for a in r.argv())
+            r.name in _core._SERVICE_MANAGER_PROGRAMS and any(a in verbs for a in r.argv())
             for r in (resolve(site.cmd) for site in walk(parse(command))))
     except Exception:  # noqa: BLE001 - the guard or the parser unavailable: the raw reading, which over-blocks
         return grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) and grep(re.escape(prefix), command)
 
 
-HTTP_STOP_URL = r"(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):[0-9]+/stop(?![A-Za-z0-9])"
+from lib import bash_read_only as _bash_read_only  # noqa: E402 -- the programs that only read
+
+from lib.shell_parse import LOOPBACK_HOSTS  # noqa: E402 -- the host names that are this machine
+
+LOOPBACK = "|".join(map(re.escape, LOOPBACK_HOSTS))
+HTTP_STOP_URL = r"(?:%s):[0-9]+/stop(?![A-Za-z0-9])" % LOOPBACK
 """A localhost port's stop endpoint: `/stop`, `/stop?x`, `/stop/now`, `/stop-now`, `/stop_server`; never `/stops`
 or `/stopwords`."""
 HTTP_STOP_BARE_URL = r"(?:^|(?<=[\s'\"=])):[0-9]+/stop(?![A-Za-z0-9])"
@@ -543,7 +567,7 @@ HTTP_LIBRARIES = r"(http\.client|aiohttp|requests|urllib|httpx|fetch\(|axios|LWP
 HTTP_STOP_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "echo", "printf", "cat", "sed", "git"})
 """Commands that only print the text they are given or read (sed, git and uniq under the checks of _http_reader_ok).
 ag and ack are not readers: their `--pager` runs a command."""
-HTTP_STOP_FILTERS = frozenset({"head", "tail", "wc", "cut", "tr", "uniq", "nl", "column", "jq"})
+HTTP_STOP_FILTERS = _bash_read_only.FILTERS  # the one list of text filters (lib/bash_read_only.py)
 HTTP_STOP_CONTEXTS = frozenset({"top", "cmdsub", "backtick"})
 
 
@@ -595,22 +619,6 @@ def _git_grep_pager(arg):
     return False
 
 
-def _uniq_operands(args):
-    """The number of file operands of a `uniq` call (`uniq IN OUT` writes OUT); an option taking a separate value
-    (`-f N`, `-s N`, `-w N`) does not count its value."""
-    n, skip, ended = 0, False, False
-    for a in args:
-        if skip:
-            skip = False
-        elif not ended and a == "--":
-            ended = True
-        elif not ended and a in ("-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"):
-            skip = True
-        elif ended or a == "-" or not a.startswith("-"):
-            n += 1
-    return n
-
-
 def _http_reader_ok(site, r):
     """True if the simple command only prints or filters text: a reader or a pure filter, as written, whose
     redirections write nowhere but /dev/null."""
@@ -627,10 +635,10 @@ def _http_reader_ok(site, r):
         return False
     if name == "git":
         return bool(args) and args[0] in ("log", "show", "diff", "grep") and not any(
-            a.startswith(("--ext-diff", "--output", "--textconv", "-O", "--open-files-in-pager")) for a in args) \
+            a.startswith(_GIT_RUN_OR_WRITE_PREFIXES) for a in args) \
             and not (args[0] == "grep" and any(_git_grep_pager(a) for a in args[1:]))
-    if name == "uniq":
-        return _uniq_operands(args) < 2
+    if name in ("uniq", "sort"):
+        return _bash_read_only.reads_only(name, args)  # uniq IN OUT; sort -o, --compress-program
     if name == "sed":
         quiet, scripts, operands, take = False, [], [], False
         for a in args:
@@ -660,7 +668,7 @@ def _http_reader_ok(site, r):
                 operands.append(a)
         if not scripts and operands:
             scripts.append(operands[0])
-        stripped = re.sub(r"(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)?" + HTTP_STOP_ANY, "", " ".join(scripts))
+        stripped = re.sub(r"(%s)?" % LOOPBACK + HTTP_STOP_ANY, "", " ".join(scripts))
         return quiet and not take and not re.search(r"[ewW]", stripped)
     return True
 
@@ -686,8 +694,6 @@ def _http_runs_client(command, sites):
     return False
 
 
-HTTP_LIFT_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", "xhs"})
-"""The clients whose request URL is their literal argument; a raw socket client (nc, socat, telnet) is not one."""
 HTTP_LIFT_PIPE = HTTP_STOP_FILTERS | {"grep", "egrep", "fgrep"}
 HTTP_STOP_PATH = re.compile(r"/stop(?![A-Za-z0-9])", re.I)
 
@@ -733,7 +739,10 @@ HTTP_LIFT_OPTIONS = {
 }
 for _alias in ("https", "httpie", "xh", "xhs"):
     HTTP_LIFT_OPTIONS[_alias] = HTTP_LIFT_OPTIONS["http"]
-HTTP_LIFT_URL = re.compile(r"(?:https?://)?(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):[0-9]{1,5}"
+HTTP_LIFT_CLIENTS = frozenset(HTTP_LIFT_OPTIONS)
+"""The clients whose request URL is their literal argument, those HTTP_LIFT_OPTIONS reads; a raw socket client (nc,
+socat, telnet) is not one."""
+HTTP_LIFT_URL = re.compile(r"(?:https?://)?(?:%s):[0-9]{1,5}" % LOOPBACK +
                            r"(?:/[A-Za-z0-9._~/-]*)?(?:\?[A-Za-z0-9._~=&+,-]*)?")
 """The only URL shape (b) lifts: an http(s) URL on a localhost host with a port, a path and an optional query of
 plain characters; no userinfo, fragment (`#`), percent-escape, backslash, glob or whitespace."""
@@ -1010,7 +1019,7 @@ def _relaxed_writes_namespace(command, ns_re):
         if grep(ARTIFACT_WRITE_VERB_RE + ".*" + ns_re, one):
             return True
     one = command.replace("\n", " ")
-    listed = any(c.kind in ("for", "select") and any(grep(ns_re, w.text) for w in c.header[1:])
+    listed = any(c.kind in LOOP_VAR_KINDS and any(grep(ns_re, w.text) for w in c.header[1:])
                  for c in _compounds(command) or ())
     return bool(
         (sites is not None and _xargs_fed_writer(command))
@@ -1187,7 +1196,7 @@ def _relaxation_shape_ok(command, carries):
         if k.kind in ("cond", "arith"):
             continue
         text = command[k.span[0]:k.span[1]]
-        if k.kind in ("function", "coproc") or not text or piped or k.redirects or "<<" in command \
+        if k.kind in DEFINER_KINDS or not text or piped or k.redirects or "<<" in command \
                 or "$'" in text or carries(text) or carries(re.sub(r"""[\\'"]""", "", text)):
             return False
     sites = _parsed_sites(command)
@@ -1248,9 +1257,9 @@ _SHAPE_SUDO_OPTS = frozenset({"-u", "--user", "-g", "--group", "-E", "--preserve
 other option (-D, -R, -A, -C, -T ...) changes where or how it runs."""
 _SHAPE_HEAD_RE = re.compile(r"[^/]+|/(usr/)?bin/[^/]+")
 """A command word: a bare name found on PATH, or exactly /bin/<name> or /usr/bin/<name>."""
-_SHAPE_DIR_CHANGE = frozenset({"cd", "pushd", "popd"})
-_GIT_DIR_OPTS = ("-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--attr-source", "--exec-path",
-                 "--config-env")
+# The global options that point git at another directory, file, ref namespace or program set (every value option
+# but -c, and --exec-path).
+_GIT_DIR_OPTS = (GIT_GLOBAL_VALUE_OPTS | {"--exec-path"}) - {"-c"}
 _SHAPE_RUNS_FILE = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|busybox|i?python[0-9.]*|pypy[0-9.]*|node(js)?[0-9.]*|deno|bun"
                               r"|perl[0-9.]*|ruby[0-9.]*|php[0-9.]*|lua[0-9.]*|tclsh|wish|expect|make|[gmn]?awk|sed"
                               r"|gsed|exec|source|\.|eval|xargs|parallel|watch|script|su|builtin|strace|ltrace)")
@@ -1366,7 +1375,7 @@ def _shape_strict_ok(command, carries, sites):
             if name not in _SHAPE_WRAPPERS or (name == "env" and opts) or \
                     (name == "sudo" and any(o not in _SHAPE_SUDO_OPTS for o, _v in opts)):
                 return False
-        if res.name in _SHAPE_DIR_CHANGE:
+        if res.name in CWD_BUILTINS:
             return False
         if res.name == "git":
             for w in res.args:
@@ -1541,6 +1550,11 @@ def commit_artifact_rules(command, state):
 # The flag's name has one definition, next to its reader (lib/allowlist.has_do_consent); hooks/prompt-workflow.py
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
+from lib.shell_parse import INTO_DIR_VERBS  # noqa: E402 -- the copy, move and link verbs
+from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
+    BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, COMMON_SHELLS, CWD_BUILTINS,
+    DECLARATION_BUILTINS, DEFINER_KINDS, GIT_RESTORE_SOURCE_OPTS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
+    OUTPUT_REDIRECT_OPS, PIPE_OPS, REDIRECT_OPS)
 from lib import locations  # noqa: E402
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
@@ -1560,7 +1574,7 @@ _CONSENT_GIT_COMMIT_OPTS = frozenset({"-a", "--all", "-q", "--quiet", "-s", "--s
                                       "--allow-empty", "--amend", "--no-edit", "--no-verify", "-n", "--"})
 _CONSENT_TMP_VARS = frozenset({"TMPDIR", "TMP", "TEMP", "TEMPDIR", "CLAUDE_TMPDIR"})
 _CONSENT_DIR_CREATORS = frozenset({"touch", "mkdir", "mkfifo", "mknod"})
-_CONSENT_COPIERS = frozenset({"cp", "mv", "ln", "install", "rsync", "link"})
+_CONSENT_COPIERS = frozenset(INTO_DIR_VERBS + ("link",))  # link(1): read failing closed
 # Tools that extract or check out files whose names they read from a file (an archive, a package, a stored gzip
 # name) into a directory: program -> how _consent_unpack_dirs reads its options (rule 3b). git checkout-index
 # --prefix and git init/clone are read by _consent_git_tree.
@@ -1652,6 +1666,12 @@ def _consent_compounds(script, sp, depth=0):
                     yield from _consent_compounds(body, sp, depth + 1)
 
 
+# The consent view's lattice: a token's origin is lit, glob, state (the state directory itself) or unk (a value
+# not known here); a variable's kind is static, word, text, state or any.
+_CONSENT_UNKNOWN = ("unk", "state")  # an origin that is no known literal
+_CONSENT_STATEFUL = ("state", "any")  # a variable kind that depends on what ran before
+
+
 class _ConsentView:
     """What one command can do to the consent flag in `state`: variables, working directories and path words read
     as glob tokens tagged by origin (lit, glob, state: the state directory itself, unk: a value not known here)."""
@@ -1668,7 +1688,7 @@ class _ConsentView:
             for a in cmd.assignments:
                 self._define(a.name, a)
             r = sp.resolve(cmd)
-            if r.name in ("export", "declare", "typeset", "local", "readonly"):
+            if r.name in sp.DECLARATION_BUILTINS:
                 for w in r.args:
                     m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?\+?=", w.raw.text)
                     if m:
@@ -1684,7 +1704,7 @@ class _ConsentView:
         scripts[id(script)] = script
         for sc in scripts.values():
             for c in _consent_compounds(sc, sp):
-                if c.kind in ("for", "select") and c.header and c.header[0].value():
+                if c.kind in sp.LOOP_VAR_KINDS and c.header and c.header[0].value():
                     name = c.header[0].value()
                     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
                         for w in c.header[1:] or [None]:
@@ -1694,9 +1714,9 @@ class _ConsentView:
         self.cwds = [(cwd, False)]
         for s in sites:
             r = sp.resolve(s.cmd)
-            if r.name not in ("cd", "pushd"):
+            if r.name not in sp.CD_TARGET_BUILTINS:
                 continue
-            args = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+            args = [w for w in r.args if (w.value() or "") not in sp.CD_OPTIONS]
             if not args:
                 self.cwds.append((self.home or "/", True))
                 continue
@@ -1741,7 +1761,7 @@ class _ConsentView:
         if self.cwd_state(".") and re.search(r"\bpwd\b|\bO?L?D?PWD\b|\$\{?PWD|\bdirs\b", text):
             return True
         for name in re.findall(r"\$\{?!?([A-Za-z_][A-Za-z0-9_]*)", text):
-            if self.var(name)[0] in ("state", "any"):
+            if self.var(name)[0] in _CONSENT_STATEFUL:
                 return True
         return False
 
@@ -1947,14 +1967,14 @@ class _ConsentView:
         base, dtoks = self.split(toks)
         if CONSENT_TOKEN in "".join(t[1] for t, _ in base if t[0] == "c").lower():
             return "its target is named like the consent flag"
-        if named and any(o in ("unk", "state") for _, o in toks):
+        if named and any(o in _CONSENT_UNKNOWN for _, o in toks):
             return "its target is computed in a command that names the consent flag"
         if not base or not _consent_name_may_match([t for t, _ in base]):
             return None
         where = self.dir_state(dtoks)
         if where is None:
             return None
-        if any(o in ("unk", "state") and t[0] != "c" for t, o in base):
+        if any(o in _CONSENT_UNKNOWN and t[0] != "c" for t, o in base):
             return "its computed target can be the consent flag in the state directory"
         if where == "explicit":
             return "its target can match the consent flag in the state directory"
@@ -1976,7 +1996,7 @@ class _ConsentView:
             return True
         if not base or not _consent_name_may_match([t for t, _ in base]):
             return False
-        if any(o in ("unk", "state") and t[0] != "c" for t, o in base):
+        if any(o in _CONSENT_UNKNOWN and t[0] != "c" for t, o in base):
             return True  # a name not known here
         return where == "explicit"  # a glob: refused into an explicitly named state dir
 
@@ -2008,25 +2028,13 @@ _CONSENT_SPEC_TEXT = {
     "sed": ("-n -E -r -s -u -z -i --quiet --silent --debug --follow-symlinks --posix --regexp-extended --separate "
             "--sandbox --unbuffered --null-data --in-place --help --version",
             "-e -f -l --expression --file --line-length"),
-    "cp": ("-a -b -d -f -i -H -l -L -n -P -p -R -r -s -T -u -v -x -Z --archive --attributes-only --backup "
-           "--copy-contents --force --interactive --link --dereference --no-clobber --no-dereference --preserve "
-           "--parents --recursive --reflink --remove-destination --strip-trailing-slashes --symbolic-link "
-           "--no-target-directory --update --verbose --one-file-system --context --debug --keep-directory-symlink "
-           "--help --version",
-           "-S -t --suffix --target-directory --no-preserve --sparse"),
-    "mv": ("-b -f -i -n -T -u -v -Z --backup --force --interactive --no-clobber --no-target-directory "
-           "--strip-trailing-slashes --update --verbose --context --no-copy --exchange --debug --help --version",
-           "-S -t --suffix --target-directory"),
-    "ln": ("-b -d -F -f -i -L -n -P -r -s -T -v --backup --directory --force --interactive --logical "
-           "--no-dereference --physical --relative --symbolic --no-target-directory --verbose --help --version",
-           "-S -t --suffix --target-directory"),
-    "install": ("-b -c -C -d -D -p -s -T -v -Z --backup --compare --directory --preserve-timestamps --strip "
-                "--no-target-directory --verbose --preserve-context --context --debug --help --version",
-                "-g -m -o -S -t --group --mode --owner --strip-program --suffix --target-directory"),
 }
 
 
 def _consent_spec(name):
+    if name in ("cp", "mv", "ln", "install"):  # the copy verbs' getopt tables are the parser's
+        from lib import shell_parse as sp
+        return sp.VERBS[name][0]
     if name not in _CONSENT_SPECS and name in _CONSENT_SPEC_TEXT:
         from lib import shell_parse as sp
         bools, vals = _CONSENT_SPEC_TEXT[name]
@@ -2137,10 +2145,11 @@ def _consent_operands(view, r):
                     return ops, None, True, False, (f"`{r.name}` reads {err}, and an operand can be the state "
                                                      "directory")
         names = {o for o, _, _ in opts}
-        no_dir = bool(names & {"-T", "--no-target-directory"}) or (
+        from lib.shell_parse import NO_TARGET_DIR_OPTS, TARGET_DIR_OPTS
+        no_dir = bool(names.intersection(NO_TARGET_DIR_OPTS)) or (
             r.name == "ln" and bool(names & {"-n", "--no-dereference"}))
         recursive = bool(names & {"-r", "-R", "-a", "--recursive", "--archive"})
-        targets = [v for o, v, _ in opts if o in ("-t", "--target-directory")]
+        targets = [v for o, v, _ in opts if o in TARGET_DIR_OPTS]
         if targets:
             return ops, targets[-1] or [], True, recursive, None
         if r.name == "ln" and len(ops) == 1:
@@ -2176,6 +2185,9 @@ def _consent_operands(view, r):
     if len(ops) < 2:
         return ops, None, False, True, None
     return ops[:-1], view.tokens(ops[-1]), True, True, None
+
+
+_EXTRACT_LETTERS = ("x", "e")  # the one-letter commands of rar, unrar, 7z and lha that extract
 
 
 def _consent_unpack_dirs(view, r):
@@ -2389,8 +2401,8 @@ def _consent_unpack_dirs(view, r):
             elif name in ("rar", "lha") and first and not (name == "rar" and lead.startswith("-")):
                 first = False
                 k = lead.lstrip("-")
-                extracts = len(lead) < len(toks) or (k[:1] in ("x", "e") if name == "rar" else bool(
-                    set(k.split("w=")[0]) & {"x", "e"}))
+                extracts = len(lead) < len(toks) or (k[:1] in _EXTRACT_LETTERS if name == "rar" else bool(
+                    set(k.split("w=")[0]) & set(_EXTRACT_LETTERS)))
                 if name == "lha" and "w=" in lead:
                     dests.append(toks[lead.index("w=") + 2:])
                     outdir = True
@@ -2398,7 +2410,7 @@ def _consent_unpack_dirs(view, r):
                 dests.append(toks)
             i += 1 + skip
         return extracts, dests + ([] if outdir else [here])
-    extracts = bool(lex) and lex[0][1] in ("x", "e")
+    extracts = bool(lex) and lex[0][1] in _EXTRACT_LETTERS
     return extracts, [toks[2:] for toks, lead in lex if lead.startswith("-o") and len(toks) > 2]
 
 
@@ -2445,7 +2457,7 @@ def _consent_git_tree(view, sp, r):
             vlead = "".join(t[1] for t, _ in val[:m])
             key, has_eq, _ = vlead.partition("=")
             if not has_eq or len(key) + 1 > len(val):
-                if any(o in ("state", "unk") for _, o in val):
+                if any(o in _CONSENT_UNKNOWN for _, o in val):
                     return why + " (a computed git config key)"
                 continue
             if key.strip().lower() == "core.worktree":
@@ -2463,7 +2475,7 @@ def _consent_git_tree(view, sp, r):
             trees.append(view.tokens(a.value) if a.value is not None else [(("*",), "state")])
     if "GIT_WORK_TREE" in view.defs:
         info = view.var("GIT_WORK_TREE")
-        if info[0] in ("state", "any"):
+        if info[0] in _CONSENT_STATEFUL:
             return why
         trees.extend(view.tokens(text=v) for v in ((info[1],) if info[0] == "static" else
                                                     info[1] if info[0] == "multi" else ()))
@@ -2522,7 +2534,7 @@ def _consent_git_tree(view, sp, r):
     def at(d):
         """Can directory tokens d ([]: git's own directory) read from git's directory (-C, else the cwd) be the
         state directory?"""
-        if d and (d[0][0] == ("c", "/") or d[0][1] in ("state", "unk") or any(o == "state" for _, o in d)):
+        if d and (d[0][0] == ("c", "/") or d[0][1] in _CONSENT_UNKNOWN or any(o == "state" for _, o in d)):
             return view.into_dir(toks=d)
         if here:
             return any(h and view.into_dir(toks=list(h) + [slash] + list(d)) for h in here)
@@ -2538,7 +2550,7 @@ def _consent_git_tree(view, sp, r):
                 gitdirs.append(view.tokens(a.value) if a.value is not None else [(("*",), "state")])
         if "GIT_DIR" in view.defs:
             info = view.var("GIT_DIR")
-            if info[0] in ("state", "any"):
+            if info[0] in _CONSENT_STATEFUL:
                 return f"it runs `git {sub}` with the state directory as its git directory"
             gitdirs.extend(view.tokens(text=v) for v in ((info[1],) if info[0] == "static" else
                                                          info[1] if info[0] == "multi" else ()))
@@ -2615,7 +2627,7 @@ def _consent_git_config_file(view, t):
     base, parent = parts[-1], (parts[-2] if len(parts) > 1 else None)
     if base == ".gitconfig":
         return True
-    if base in ("config", "config.worktree"):
+    if base in GIT_DIR_CONFIG_FILES:
         if parent is None:
             return any(c is None or re.search(r"\.git(/|$)", c) for c, _ in view.cwds)
         if parent.endswith(".git") or parent == "git" or "*" in parent or "/.git/" in "/" + text:
@@ -2647,13 +2659,14 @@ def _consent_text_names_state(view, text):
     if view.cwd_state(".") and re.search(r"\bpwd\b|\$\{?O?L?D?PWD\b|\bdirs\b", text):
         return True
     for name in re.findall(r"\$\{?!?([A-Za-z_][A-Za-z0-9_]*)", text):
-        if view.var(name)[0] in ("state", "any"):
+        if view.var(name)[0] in _CONSENT_STATEFUL:
             return True
     return False
 
 
 def _consent_read_only(cmd, name, view, named_writes):
     """None when the simple command is one of the read-only shapes, else why not."""
+    from lib.shell_parse import AWK_DATA_OPTS, AWK_NAMES
     words = list(cmd.words[1:])
     vals = [w.value() for w in words]
     if name in _CONSENT_STRICT_ARGS and any(v is None and any(p.kind not in ("lit", "glob") for p in w.parts)
@@ -2684,13 +2697,13 @@ def _consent_read_only(cmd, name, view, named_writes):
             if re.search(r"[wWe]", s):
                 return "a `sed` script can write a file or run a command"
         return None
-    if name in ("awk", "gawk", "mawk", "nawk"):
+    if name in AWK_NAMES:
         prog, skip = None, False
         for i, v in enumerate(vals):
             if skip:
                 skip = False
                 continue
-            if v in ("-F", "-v", "--field-separator", "--assign"):
+            if v in AWK_DATA_OPTS:
                 skip = True
                 continue
             if v.startswith("-F") or v.startswith("-v") or v.startswith("--field-separator=") or v.startswith(
@@ -2721,15 +2734,11 @@ def _consent_read_only(cmd, name, view, named_writes):
                 named_writes.append(w)
         return None
     if name == "git":
-        i = 0
-        while i < len(vals) and vals[i].startswith("-"):
-            if vals[i] == "-C":
-                i += 2
-                continue
-            if vals[i] in ("--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs", "--no-replace-objects"):
-                i += 1
-                continue
-            return f"`git {vals[i]}` is not a read-only git option"
+        gopts, i = git_global_options(vals)
+        i = len(vals) if i is None else i
+        for o, _v in gopts:
+            if vals[o] != "-C" and vals[o] not in GIT_INERT_FLAGS:
+                return f"`git {vals[o]}` is not a read-only git option"
         sub = vals[i] if i < len(vals) else None
         opts = vals[i + 1:]
         if sub in _CONSENT_GIT_READS:
@@ -2850,7 +2859,7 @@ def consent_flag_verdict(command, cwd, state):
                                 "state directory")
         # 3a. xargs, parallel and find -exec build their operands at run time: none may aim at the state directory.
         head = s.cmd.head().value() if s.cmd.words and s.cmd.head().value() else ""
-        if "xargs" in [n for n, _ in r.wrappers] or sp.basename(head) in ("xargs", "parallel") or \
+        if "xargs" in [n for n, _ in r.wrappers] or sp.basename(head) in sp.ITEM_RUNNERS or \
                 "exec_argv" in s.context:
             if view.cwd_state(".") == "explicit":
                 return "it runs a command with operands built at run time in the state directory"
@@ -2944,15 +2953,13 @@ _BULK_INTERPRETER = re.compile(r"((ba|z|da|k|c|tc|fi|r)?sh|i?python[0-9.]*|node(
                                r"|php[0-9.]*|lua[0-9.]*)")
 _BULK_FIND_ACTIONS = frozenset({"-exec", "-execdir", "-delete", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf",
                                 "-fls"})
-_GIT_VALUE_OPTS = frozenset({"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
-                             "--super-prefix", "--attr-source"})
 _GIT_PLAIN = frozenset({"diff", "log", "show", "grep", "status", "add", "commit", "rm", "mv", "restore", "checkout",
                         "switch", "reset", "blame", "annotate", "ls-files", "ls-tree", "cat-file", "rev-parse",
                         "rev-list", "shortlog", "whatchanged", "describe", "check-ignore", "check-attr", "diff-tree",
                         "diff-files", "diff-index", "range-diff", "reflog", "branch", "tag", "merge-base", "name-rev",
                         "show-ref", "for-each-ref", "stash", "merge", "cherry-pick", "revert", "version"})
 """git subcommands that take a protected name as a path or message to read, never as code or an output file."""
-_GIT_RUN_OR_WRITE_OPTS = ("--output", "--ext-diff", "--open-files-in-pager")
+_GIT_RUN_OR_WRITE_OPTS = git_facts.GIT_RUN_OR_WRITE_OPTIONS
 _BULK_BENIGN = frozenset({"echo", "printf", "cd", "pwd", "true", "false", ":"})
 """Commands that neither run nor write what they are handed (beside a redirection, read on its own)."""
 _BULK_DECLARE = frozenset({"export", "declare", "local", "readonly", "typeset", "alias", "let"})
@@ -2992,7 +2999,8 @@ def _bulk_filter_runs(res):
     if name == "git":
         return _git_runs_bulk_name(res)
     if name == "rg":
-        return any(v is None or v.split("=", 1)[0] in ("--pre", "--hostname-bin") for v in vals)
+        from lib.shell_parse import RG_PROGRAM_OPTS
+        return any(v is None or v.split("=", 1)[0] in RG_PROGRAM_OPTS for v in vals)
     if name == "file":
         return any(v is None or v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals)
     if name == "find":
@@ -3096,13 +3104,12 @@ _GIT_INERT_CONFIG_RE = re.compile(
 """The exact `git -c` keys that only change how git prints: two segments, a value with no dot or path. Any other
 setting (diff.external, diff.<driver>.textconv or .command, core.pager=<program>, core.editor, core.hooksPath,
 core.sshCommand, include.path, alias.*, a filter or a credential helper, safe.directory ...) can make git run a
-program or read another repository's config, so beside a protected name it is refused."""
-_GIT_RUN_KEY_RE = re.compile(r"[^=]*\.(command|textconv|external|driver|program|cmd|helper|path)(=.*)?", re.IGNORECASE)
+program or read another repository's config, so beside a protected name it is refused. The one key on the list that runs a
+program, core.pager, is on it only with a value that reads (git_facts.GIT_RUN_CONFIG_KEY_RE holds the keys that run)."""
 
 
 def _git_config_inert(setting):
-    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting)) and \
-        not _GIT_RUN_KEY_RE.fullmatch(setting)
+    return setting is not None and bool(_GIT_INERT_CONFIG_RE.fullmatch(setting))
 
 
 
@@ -3123,7 +3130,7 @@ def _git_runs_bulk_name(res):
             return True
         if v.startswith("--exec-path=") or v.startswith("--config-env"):
             return True
-        if v in _GIT_VALUE_OPTS and k + 1 < len(args):
+        if v in GIT_GLOBAL_VALUE_OPTS and k + 1 < len(args):
             k += 1
             if _bulk_word_mentions(args[k]):
                 return True
@@ -3250,8 +3257,7 @@ def _base_bulk_sentinel_decision(cmd):
     if tokens and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[0]):
         return 'DENY'
     keywords = {'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'function', 'select'}
-    redirects = {'>', '>>', '<', '<>', '>|', '&>', '&>>', '>&', '<&', '<<', '<<-', '<<<'}
-    if any(t in keywords or t in redirects for t in tokens) or 'xargs' in tokens or 'tee' in tokens:
+    if any(t in keywords or t in REDIRECT_OPS for t in tokens) or 'xargs' in tokens or 'tee' in tokens:
         return 'DENY'
     actions = {'-exec', '-execdir', '-delete', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'}
     for t in tokens:
@@ -3294,6 +3300,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
     sentinel is minted only by the userprompt-bulk-commit-capability hook, never from Bash. A command the parser
     cannot read is TOKENIZER_ERROR.
     """
+    from lib.shell_parse import RG_PROGRAM_OPTS
     sites = _parsed_sites(cmd)
     if sites is None:
         return 'TOKENIZER_ERROR'
@@ -3302,7 +3309,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
         return 'DENY'
     if named:
         compounds = _compounds(cmd)
-        if compounds is None or any(k.kind in ("for", "select") and any(_bulk_word_mentions(w) for w in k.header[1:])
+        if compounds is None or any(k.kind in LOOP_VAR_KINDS and any(_bulk_word_mentions(w) for w in k.header[1:])
                                     for k in compounds):
             return 'DENY'
     for site, res in sites:
@@ -3335,7 +3342,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
             return 'DENY'
         if name in _BULK_READERS:
             vals = [w.value() if w.value() is not None else w.static_prefix() for w in res.args]
-            if name == "rg" and any(v.split("=", 1)[0] in ("--pre", "--hostname-bin") for v in vals):
+            if name == "rg" and any(v.split("=", 1)[0] in RG_PROGRAM_OPTS for v in vals):
                 return 'DENY'
             if name == "file" and any(v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals):
                 return 'DENY'
@@ -3397,10 +3404,11 @@ def executable_view_or_raw(command):
         return command
 
 
-_HB_NOEXEC_SHELLS = frozenset({"bash", "sh", "dash"})
+_HB_NOEXEC_SHELLS = ("bash", "sh", "dash")
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile("(%s)?(bash|sh|dash)" % "|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS))
+_HB_SHELL_WORD = re.compile("(%s)?(%s)" % ("|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS),
+                                            "|".join(_HB_NOEXEC_SHELLS)))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
 # Options an inert noexec shell may carry: none of them runs, echoes or sources anything.
@@ -3425,7 +3433,7 @@ def _hb_shell_options(args):
         v = args[k].value()
         if v is None:
             return None
-        if v in ("--", "-"):
+        if v in OPTION_ENDS:
             k += 1
             break
         if v.startswith("--"):
@@ -3763,13 +3771,11 @@ def _subcommands(command):
 _SENSITIVE_WRITERS = frozenset({"tee", "cp", "mv", "install", "rsync", "ln", "dd", "curl", "wget", "sed", "truncate"})
 # The verbs that write what they read into another file: a listed name among their operands is a secret read
 # into a file, as an argument of a command whose output is redirected into one is.
-_SENSITIVE_COPIERS = frozenset({"cp", "mv", "install", "rsync", "ln"})
+_SENSITIVE_COPIERS = frozenset(INTO_DIR_VERBS)
 # The writers the base never judged without an output redirection: a source-code or Markdown/reST document operand
 # of theirs (`sed -i ... src/password_reset.py`, `mv docs/password-reset.md docs/pw.md`) is no secret file
 # (lib/sensitive_names.is_code_or_doc_operand).
 _OPERAND_WRITERS = _SENSITIVE_COPIERS | {"sed"}
-# The network clients whose non-output arguments may be URLs: a URL there names no local file.
-_NETWORK_CLIENTS = frozenset({"curl", "wget", "http", "https", "httpie", "xh", "aria2c"})
 # The verbs whose source operand, copied into a path that is not sensitive, may be a template (`.env.example`).
 _TEMPLATE_COPIERS = frozenset({"cp", "cat"})
 # How each network client reads its options: which long options take a value and which take none, which short
@@ -3855,6 +3861,9 @@ _CLIENT_OPTIONS = {
                {"o": "out", "Z": "force-sequential", "i": "input-file"}),
     "http": _HTTPIE_OPTIONS, "https": _HTTPIE_OPTIONS, "httpie": _HTTPIE_OPTIONS, "xh": _HTTPIE_OPTIONS,
 }
+# The network clients whose non-output arguments may be URLs (a URL there names no local file): those
+# _CLIENT_OPTIONS reads.
+_NETWORK_CLIENTS = frozenset(_CLIENT_OPTIONS)
 _HTTPIE_CLIENTS = frozenset({"http", "https", "httpie", "xh"})
 # curl's URL globbing (`{a,b}`, `[1-3]`) and aria2c's parameterized URIs: with them an output name may be built from
 # the URL (`curl "https://x/{.env}" -o "#1"` writes ./.env).
@@ -4054,11 +4063,14 @@ def _command_name(cmd):
         return None
 
 
-def sensitive_redirect(command):
+def sensitive_redirect(command, kept=False):
     """BS-20/21 (audit BS-10/11). 'write' when a command writes a file lib/sensitive_names.py calls sensitive (a
     redirection into it, or tee, cp, mv, install, rsync, ln, dd of=, curl -o, wget -O, sed -i or truncate naming
     it), 'redirect' when such a name is a word or an input redirection of a command whose output goes to a file, or
-    a source operand of cp, mv, install, rsync or ln other than a source-code file; None otherwise.
+    a source operand of cp, mv, install, rsync or ln other than a source-code file; None otherwise. A word counts
+    only where it can be a source: not a grep or rg pattern, not echo's or printf's static text, and a command line
+    a shell or a runner (docker exec, ssh, watch ...) is handed is read as the commands it holds, their output kept
+    (``kept``) as its own is.
 
     Read from lib/shell_parse.py's parsed commands, payloads included (eval, bash -c, a heredoc-fed shell), so a
     name inside quoted data or a heredoc body that no command reads as a path is data. The full path text is judged
@@ -4079,7 +4091,7 @@ def sensitive_redirect(command):
                                      is_sensitive_name)
     try:
         from lib.bash_read_only import is_read_only
-        from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
+        from lib.shell_parse import SHELLS, _DEFAULT_INTO, parse, resolve, walk, write_targets
         script = parse(command)
         if script.error is not None:
             raise ValueError(script.error.code)
@@ -4103,7 +4115,7 @@ def sensitive_redirect(command):
             network = name in _NETWORK_CLIENTS
             writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
                                               if network else (False, False, {}))
-            if any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs) and tuple(site.context) == ("top",) \
+            if any(r.fd == 1 or r.op in BOTH_STREAMS_OPS for r in outputs) and tuple(site.context) == ("top",) \
                     and is_read_only(command[slice(*site.cmd.span)]):
                 outputs = []  # lib/bash_read_only.py's reader, its output thrown into /dev/null: what it reads lands nowhere
             if not outputs and network and writes:
@@ -4111,8 +4123,19 @@ def sensitive_redirect(command):
                 if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
                     return "redirect"
                 continue
-            if outputs:
-                words = list(enumerate(site.cmd.words[1:]))
+            if outputs or kept:
+                args = resolve(site.cmd).args
+                texts = [w.text if w.value() is None else w.value() for w in args]
+                spec = {"grep": _SD_GREP, "egrep": _SD_GREP, "fgrep": _SD_GREP, "rg": _SD_RG}.get(name)
+                data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in ("echo", "printf") else ()
+                skip = {id(args[k]) for k in data if k < len(args) and (spec or args[k].value() is not None)}
+                for w in args if name in SHELLS or name in _OPAQUE_RUNNERS else ():
+                    if any(c.isspace() for c in w.value() or "") and parse(w.value()).error is None:
+                        inner = sensitive_redirect(w.value(), True)
+                        if inner:
+                            return inner
+                        skip.add(id(w))
+                words = [(i, w) for i, w in enumerate(site.cmd.words[1:]) if id(w) not in skip]
             elif name in _SENSITIVE_COPIERS:
                 # A copy's source operands, its options and their values aside (`rsync --exclude .env`): a
                 # source-code file is no secret read (its destination was judged above).
@@ -4261,6 +4284,7 @@ class ServiceView:
 # npx, nsenter, git -c alias.x='!..', git rebase --exec, PAGER=..) loses no refusal the rules had before.
 _PLAIN_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "ls", "echo",
                             "printf", "wc"})
+_KILL_PROBE_OPTS = ("-0", "-l", "-L")  # kill -0 probes a pid, -l / -L list the signals: nothing is sent
 _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "wc"})
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
@@ -4314,7 +4338,7 @@ def _plain_redirects(cmd, sv, reads_ok=True):
         elif x.op == "<":
             if not reads_ok or x.fd != 0 or x.target is None or not _plain_word(x.target):
                 return False
-        elif x.op in (">", ">>", ">|", "&>", "&>>"):
+        elif x.op in OUTPUT_REDIRECT_OPS:
             if x.fd not in (1, 2, None) or x.target is None or not _plain_file(x.target, sv):
                 return False
         else:
@@ -4345,17 +4369,14 @@ def _plain_dd(vals, sv):
 
 
 def _plain_git(words):
-    """A git read subcommand, past only -C DIR, --no-pager and -P; no -c, --config-env, alias, pager or output."""
+    """A git read subcommand, past only -C DIR and inert flags; no -c, --config-env, alias, pager or output."""
     vals = [w.value() if _plain_word(w) else None for w in words]
     if None in vals:
         return False
-    k = 0
-    while k < len(vals) and vals[k] in ("-C", "--no-pager", "-P"):
-        k += 2 if vals[k] == "-C" else 1
-    if k >= len(vals) or vals[k] not in _PLAIN_GIT_READS:
+    k = git_plain_subcommand_index(vals, GIT_INERT_FLAGS)
+    if k is None or vals[k] not in _PLAIN_GIT_READS:
         return False
-    return not any(v.startswith(("--output", "--open-files-in-pager", "--ext-diff", "--textconv", "--exec"))
-                   or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
+    return not any(v.startswith(_GIT_RUN_OR_WRITE_PREFIXES) or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
 
 
 def _plain_simple(cmd, sv, piped):
@@ -4373,7 +4394,7 @@ def _plain_simple(cmd, sv, piped):
     if piped and name not in _PLAIN_FILTERS:
         return False
     if name == "kill":  # a probe or a listing of literal words, or `kill -0 "$PID"` alone
-        return bool(vals) and vals[0] in ("-0", "-l", "-L") and _plain_kill_args(args[1:]) \
+        return bool(vals) and vals[0] in _KILL_PROBE_OPTS and _plain_kill_args(args[1:]) \
             and _plain_redirects(cmd, sv, reads_ok=False)
     if name == "dd":
         return _plain_dd(vals, sv) and _plain_redirects(cmd, sv, reads_ok=False)
@@ -4484,6 +4505,7 @@ def _raw_workflow(text, view):
 def _daemon_json_write(sv):
     """A redirection into daemon.json; tee, cp or mv naming it; dd with of= it; sed or awk editing it in place or naming
     it in code."""
+    from lib.shell_parse import AWK_NAMES
     for site in sv.redirect_sites:
         if any(x.writes() and x.target is not None and DOCKER_DAEMON_JSON in x.target.text for x in site.cmd.redirects):
             return True
@@ -4500,7 +4522,7 @@ def _daemon_json_write(sv):
             continue
         if name in ("tee", "cp", "mv"):
             return True
-        if name in ("sed", "gsed", "awk", "gawk", "mawk", "nawk"):
+        if name in ("sed", "gsed") + AWK_NAMES:
             vals = [w.value() for w in args]
             in_place = any(v is not None and (re.match(r"^-[A-Za-z]*i", v) or v.startswith("--in-place")
                                               or v in ("inplace", "--include=inplace")) for v in vals)
@@ -4644,7 +4666,7 @@ def _kill_protected_family(sv, family):
 
 def _kill_signal(sv):
     """kill with an option other than the exact -0 (probe), -l or -L (list): -09 is SIGKILL."""
-    return any(v is not None and v.startswith("-") and v not in ("-0", "-l", "-L")
+    return any(v is not None and v.startswith("-") and v not in _KILL_PROBE_OPTS
                for _n, args, _s, _r in sv.named("kill") for v in (w.value() for w in args))
 
 
@@ -4665,7 +4687,7 @@ def _production_systemctl(sv, env):
 
 def _workflow_state_removal(command, sv):
     """rm, mv, git rm or git mv naming a workflow state path; with computed operands, one the command names."""
-    from lib.shell_parse import _git_from_resolved
+    from lib.shell_parse import GIT_MV_RM, _git_from_resolved
     for name, args, site, r in sv.sites:
         if name == "git":
             # The subcommand as git reads it: past global options and their values (-C dir, -c k=v, --work-tree d).
@@ -4673,9 +4695,9 @@ def _workflow_state_removal(command, sv):
             if not invs:
                 continue
             sub, unresolved = invs[0].subcommand, invs[0].unresolved
-            if sub not in ("rm", "mv") and not (sub is None and unresolved):
+            if sub not in GIT_MV_RM and not (sub is None and unresolved):
                 continue
-        elif name not in ("rm", "mv"):
+        elif name not in GIT_MV_RM:
             continue
         if any(re.search(WORKFLOW_STATE_RE, w.text) for w in args):
             return True
@@ -4743,921 +4765,89 @@ def service_rules(command, view, env, sv=None):
 
 # ── Removal policy (BS-32, BS-33) ────────────────────────────────────────────
 
-# Degraded question 3: once a command on any line ends on an option, every command on every line must have a head on
-# the allowlist _DG_ALLOW below (fail-closed by construction: an unlisted head refuses as the base fallback did).
-# The layers that follow still apply to an allowed command: no command on it, and no
-# shell string inside a quoted argument, may be one the analyzer's own tables (lib/bash_execution_boundary.py: SHELLS,
-# INTERPRETERS, AWKS, WRAPPERS, REMOVAL_EXES, its `_h_*` handlers, INERT_ARGV_CONSUMERS and SELECTOR_DATA_OPTIONS)
-# prove cannot be missing an operand that is code, a command or a value, and no word on it names a program from
-# those tables or the degraded-only extras below. The
-# tables are read by importing the module, which runs no analysis; if the import fails or hangs, every such line
-# refuses. The degraded path may be stricter than the analyzer, never laxer.
-DEGRADED_TRAILING_OPTION = re.compile(r"(^|[ \t])[-+][A-Za-z0-9=_-]*[ \t]*$")
-# Degraded-only extras the analyzer does not model: shells, interpreters and editors with a code option, exec
-# wrappers, and GNU g-prefixed removal programs.
-_DG_SHELL_RE = re.compile(r"(ba|da|z|k|mk|pdk|ya|tc|c|a|rba|lk|po|fi|ok|o|y|xon)?sh[0-9.]*|fish|pwsh|powershell|"
-                          r"xonsh|elvish|nu|rc")
-_DG_INTERP_RE = re.compile(r"(python|pypy|ipython|perl|ruby|irb|node|nodejs|deno|bun|php|lua|luajit|tclsh|wish|"
-                           r"Rscript|R|julia|osascript|expect|jshell|g?awk|mawk|nawk|g?sed|vim?|nvim|g?vim|ex|emacs|"
-                           r"guile|racket|sbcl|clisp|elixir|iex|erl|escript|qjs|octave|gnuplot|cmake|groovy|scala|"
-                           r"clojure|clj|lldb|gdb|kotlin|jrunscript|jshell|ghci|runghc|tcc)[0-9.]*")
-_DG_EXTRA_PROGRAMS = frozenset(
-    "sudo doas su runuser pkexec env exec command builtin eval source nohup nice ionice time timeout setsid xargs "
-    "parallel chroot unshare nsenter taskset chrt stdbuf unbuffer flock watch script systemd-run at batch busybox "
-    "toybox strace ltrace fakeroot firejail bwrap proot sg chpst npx bunx pnpx uvx pipx trap coproc xterm "
-    "entr nix nix-shell direnv rm rmdir unlink shred srm wipe wipefs truncate rsync dd grm grmdir gunlink gshred "
-    "gtruncate".split())
-_DG_FIND_EXTRA = frozenset("-fprint -fprint0 -fprintf -fls".split())
-_DG_INFO = frozenset(("--version", "--help"))
-_DG_CODE_MODULES = frozenset("code runpy pdb timeit cProfile profile trace idlelib doctest IPython asyncio "
-                             "unittest pytest".split())
-# Handler-owned heads given a narrower reading below instead of a blanket refusal; any other handler refuses.
-_DG_READ_HANDLERS = frozenset(("git", "docker", "kubectl", "find", "hash", "ssh"))
-_DG_DOCKER_EXEC = frozenset("run exec create start attach debug cp commit".split())
-_DG_KUBECTL_EXEC = frozenset("exec run debug attach cp port-forward proxy apply replace patch".split())
-_DG_GIT_EXEC = frozenset("clean rm rebase difftool mergetool filter-branch filter-repo daemon instaweb "
-                         "send-email".split())
-# git text that runs a command: an ext:: remote and the settings that enable or alias it. The options whose value is a
-# program or a written file are in _DG_GIT_ALL / _DG_GIT_SUB and go through the option matcher.
-_DG_GIT_RUNS = re.compile(r"ext::|protocol\.(ext\.)?allow|insteadof", re.I)
-_DG_TABLES = None
+def let_through_unproven(entry, payload):
+    """THE SEAM for the refusal record: the one place that learns an unproven command was let run.
+
+    decide() calls it once per Bash call, and only when that call's verdict is ALLOW and removal_policy() could not
+    prove the command safe (so not when a later rule of this hook refuses the call, and not under a /do or /allow
+    release, which the removal policy never sees). `payload` is the parsed PreToolUse payload. `entry` is what
+    removal_policy() returned:
+        {"rule": "removal-policy", "kind": "let_through_unproven",
+         "path": "primary" (the analyzer answered UNRESOLVED) or "degraded" (it gave no usable verdict),
+         "reason": "UNRESOLVED <the analyzer's reason>" or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
+    This module writes no log of its own: the record's writer is called from here.
+    """
 
 
-def _dg_removal_reference():
-    """lib/pol_degraded_removal_reference.ere compiled, or None (every trailing-option line then refuses)."""
+def _scratch_owner(payload):
+    """The write policy's answers about the calling actor's own scratch directory: (owner test for a path, the note
+    naming that directory or ""). Both are hooks/pretool-tool-policy.py's own (_scratch_status, _note_own_scratch),
+    loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an actor may write
+    scratch files, with no second one here. An actor the write policy gives no directory (the main agent, a
+    subagent whose role does not resolve) owns nothing, and so does any failure to ask."""
+    import importlib.util
+    import io
     try:
-        with open(os.path.join(LIB, "pol_degraded_removal_reference.ere"), encoding="utf-8", errors="replace") as fh:
-            pattern = next((ln.rstrip("\n") for ln in fh if ln.strip() and not ln.lstrip().startswith("#")), "")
-        return re.compile(pattern) if pattern else None
-    except (OSError, re.error):
-        return None
+        spec = importlib.util.spec_from_file_location("_tool_policy_scratch", os.path.join(HOOKS, "pretool-tool-policy.py"))
+        policy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(policy)
+        policy._bootstrap_security()
+        role = policy.resolve_agent_type(payload)
+        note = io.StringIO()
+        with contextlib.redirect_stderr(note):  # the note for a refused write to system temp names the directory
+            policy._note_own_scratch(role, payload, os.path.join(locations.DEFAULT_TEMP_DIR, "removal"))
+    except BaseException:  # noqa: BLE001 - also a bootstrap that exits: nothing is owned
+        return (lambda path: False), ""
 
-
-def _degraded_tables():
-    """The analyzer's static tables, or None: a failed or slow import refuses every trailing-option line."""
-    global _DG_TABLES
-    if _DG_TABLES is None:
-        def load():
-            import bash_execution_boundary as eb
-            handlers = frozenset(n[3:] for n in dir(eb.Analyzer) if n.startswith("_h_") and len(n) > 3)
-            return {
-                "eb": eb, "handlers": handlers, "shells": frozenset(eb.SHELLS),
-                "interps": frozenset(eb.INTERPRETERS), "awks": frozenset(eb.AWKS),
-                "wrappers": frozenset(eb.WRAPPERS), "removal": frozenset(eb.REMOVAL_EXES),
-                "consumers": eb.INERT_ARGV_CONSUMERS, "selectors": eb.SELECTOR_DATA_OPTIONS,
-                "git_global": eb.GIT_GLOBAL, "git_subs": frozenset(eb.GIT_SUBCOMMANDS),
-                "git_forward": frozenset(eb.GIT_PAYLOAD_FORWARDING_SUBCOMMANDS),
-                "docker_global": eb.DOCKER_GLOBAL, "docker_rm": frozenset(eb.DOCKER_RESOURCE_RM),
-                "find_ops": frozenset(eb.FIND_EXEC_OPS) | frozenset(eb.FIND_DELETE_OPS) | _DG_FIND_EXTRA,
-                "drop": frozenset(eb.Analyzer.DROP), "header": frozenset(eb.Analyzer.HEADER),
-                "rmref": _dg_removal_reference(),
-            }
+    def owns(path):
         try:
-            _DG_TABLES = with_alarm(5, load)  # 2 s flaked once under heavy load; a slow import still refuses
-        except BaseException:  # noqa: BLE001 - an analyzer module that will not even import: refuse
-            _DG_TABLES = False
-    return _DG_TABLES or None
-
-
-def _dg_handler(t, base):
-    return bool(base) and base.replace("-", "_").replace(".", "_") in t["handlers"]
-
-
-def _dg_sensitive(t, base):
-    """A program whose argv or missing operand can be code, a command, or a removal."""
-    return bool(base in t["shells"] or base in t["interps"] or base in t["awks"] or base in t["wrappers"]
-                or base in t["removal"] or (_dg_handler(t, base) and base not in _DG_READ_HANDLERS)
-                or _DG_SHELL_RE.fullmatch(base) or _DG_INTERP_RE.fullmatch(base) or base in _DG_EXTRA_PROGRAMS)
-
-
-def _dg_missing_value(model, word):
-    """`word`, last in its command, is a declared exec or data option of an inert consumer, so its value is missing."""
-    eb = _DG_TABLES["eb"]
-    takes = model["exec"] | model["val"]
-    if word.startswith("--"):
-        return "=" not in word and eb._resolve_ic_long(word, model) in takes
-    if len(word) > 1 and word[0] in "-+":
-        for j in range(1, len(word)):
-            ch = word[0] + word[j]
-            if ch not in model["bool"]:
-                return ch in takes and j == len(word) - 1
-    return False
-
-
-def _dg_names_exec_option(model, word):
-    """Any use of a declared exec option (`man -P`, `sort --compress-program=`): degraded mode refuses it."""
-    eb = _DG_TABLES["eb"]
-    if word.startswith("--"):
-        return eb._resolve_ic_long(word.split("=", 1)[0], model) in model["exec"]
-    if len(word) > 1 and word[0] in "-+":
-        for j in range(1, len(word)):
-            ch = word[0] + word[j]
-            if ch not in model["bool"]:
-                return ch in model["exec"]
-    return False
-
-
-def _dg_spec_reads(spec, words):
-    """Walk `words` as options of a _spec: the index of the first operand, or None on a missing or unknown option."""
-    i = 0
-    while i < len(words):
-        w = words[i]
-        if w == "--":
-            return i + 1
-        if not w.startswith("-") or w == "-":
-            return i
-        name = w.split("=", 1)[0]
-        if w.startswith("--"):
-            if name in spec["val"] and "=" not in w:
-                if i + 1 >= len(words):
-                    return None
-                i += 2
-                continue
-            if name not in spec["bool"] and name not in spec["val"]:
-                return None
-            i += 1
-            continue
-        if w[:2] in spec["val"]:
-            if len(w) == 2:
-                if i + 1 >= len(words):
-                    return None
-                i += 1
-        elif w not in spec["bool"]:
-            return None
-        i += 1
-    return i
-
-
-def _dg_read_handler(t, base, words, depth=0):
-    """git, docker, kubectl, find, hash and ssh: the forms degraded mode can read as plain."""
-    if base == "git":
-        i = _dg_spec_reads(t["git_global"], words[1:])
-        if i is None or i + 1 >= len(words):
-            return i is not None  # `git --version`: global options only
-        sub = words[1 + i]
-        if _dg_git_runs(words) or (sub in ("clone", "archive") and _dg_opts_hit(words[2 + i:], ("-u",))):
+            return bool(role) and policy._scratch_status(role, path, payload) == "owner"
+        except Exception:  # noqa: BLE001
             return False
-        return sub in t["git_subs"] and sub not in t["git_forward"] and sub not in _DG_GIT_EXEC
-    if base == "docker":
-        i = _dg_spec_reads(t["docker_global"], words[1:])
-        return i is not None and not (
-            set(words[1 + i:]) & (_DG_DOCKER_EXEC | t["docker_rm"]))
-    if base == "kubectl":  # the analyzer runs whatever follows `--` as a command; so is it read here
-        if "--" in words[1:]:
-            payload = words[words.index("--", 1) + 1:]
-            if payload and (depth >= _DG_MAX_NESTING or not _degraded_command_is_plain(t, payload, depth + 1)):
-                return False
-            words = words[:words.index("--", 1)]
-        return not set(words[1:]) & _DG_KUBECTL_EXEC
-    if base == "find":
-        return not set(words[1:]) & t["find_ops"]
-    if base == "hash":
-        return all(w in ("-r", "-l", "-t", "-d") for w in words[1:])
-    return len(words) == 2 and words[1] == "-V"  # ssh: only its version query
+    return owns, note.getvalue().strip()
 
 
-_DG_META = re.compile(r"""[\s;&|()<>'"\\]""")
-_DG_MAX_NESTING = 8
-
-
-def _dg_value_is_plain(t, value, depth):
-    """A word's embedded text (a quoted shell string, an assignment or `--opt=` value): plain as a command line."""
-    if _DG_META.search(value):
-        parsed = _dg_commands(value)
-        return parsed is not None and depth < _DG_MAX_NESTING and all(
-            _degraded_command_is_plain(t, words, depth + 1) for words in parsed[0])
-    if "=" in value and not _dg_value_is_plain(t, value.split("=", 1)[1], depth):
-        return False  # `--checkpoint-action=exec=sh`: the value after a second `=` is read too
-    base = value.rsplit("/", 1)[-1]
-    return not (_dg_sensitive(t, base) and base not in _DG_READ_HANDLERS)
-
-
-def _dg_last_words(words):
-    """The words that may end a command: its last word, and the one before a `#` word (a possible comment)."""
-    lasts = [words[-1]] if words else []
-    hashed = next((i for i, w in enumerate(words) if w.startswith("#")), 0)
-    return lasts + ([words[hashed - 1]] if hashed > 0 else [])
-
-
-def _degraded_command_is_plain(t, words, depth=0):
-    """One simple command. A word holding whitespace or shell syntax is a string some program may run as a command
-    line, so it is read again as one; a head holding either refuses. Assignment values are read the same way."""
-    while words and (words[0] in t["drop"] or re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", words[0])):
-        if words[0] not in t["drop"] and not _dg_value_is_plain(t, words[0].split("=", 1)[1], depth):
+def _removal_in_own_scratch(proof, payload, owns):
+    """Whether every file a removal names (lib/bash_execution_boundary.py `removal_targets`) lies inside the caller's
+    own scratch directory, from every directory the command may run it in (the call's cwd and each literal `cd`,
+    as written and normalised). A file passes when the place it resolves to and the directory holding its entry
+    both pass the write policy's owner test, so a link outside that directory pointing into it does not."""
+    targets, dirs, cwd = proof.get("targets"), proof.get("cwds"), payload.get("cwd")
+    if not isinstance(targets, list) or not targets:
+        return False
+    for target in targets:
+        if not isinstance(target, str) or not target:
             return False
-        words = words[1:]
-    if not words:
-        return True
-    if words[0] in t["header"] or words[0] == "." or _DG_META.search(words[0]):
-        return False
-    # The removal-reference predicate again, on each word as the shell will pass it (`r''m`, `-de''lete`): a
-    # forwarded or wrapped command (`kubectl x -- find … -de''lete`) hides behind quotes the raw text keeps.
-    if t["rmref"] is None or any(t["rmref"].search(w) for w in words):
-        return False
-    for w in words[1:]:
-        if _DG_META.search(w) and not _dg_value_is_plain(t, w, depth):
-            return False
-        if "=" in w and not _dg_value_is_plain(t, w.split("=", 1)[1], depth):
-            return False  # `-c core.pager=sh`, `--to-command=sh`: a value naming a program
-    base = [w.rsplit("/", 1)[-1] for w in words]
-    head = base[0]
-    if len(words) == 2 and words[1] in _DG_INFO and not (head in t["wrappers"] or _dg_handler(t, head)
-                                                          or head in t["removal"]):
-        return True
-    if len(words) == 2 and words[1] == "-V" and (head in t["interps"] or re.fullmatch(r"python[0-9.]*", head)):
-        return True
-    rest = base[1:]
-    if re.fullmatch(r"(python|pypy)[0-9.]*", head) and len(words) > 2 and words[1] == "-m" \
-            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", words[2]) \
-            and words[2].split(".", 1)[0] not in _DG_CODE_MODULES:
-        rest = base[3:]
-    elif head in _DG_READ_HANDLERS:
-        hashed = next((i for i, w in enumerate(words) if w.startswith("#")), len(words))
-        if not _dg_read_handler(t, head, words, depth) or (
-                hashed < len(words) and not _dg_read_handler(t, head, words[:hashed], depth)):
-            return False
-    elif _dg_sensitive(t, head):
-        return False
-    elif head == "fd" and _dg_opts_hit(words[1:], *_DG_REFUSED_OPTS["fd"]):
-        return False
-    elif head in t["consumers"]:
-        model = t["consumers"][head]
-        if any(_dg_missing_value(model, w) for w in _dg_last_words(words[1:])) \
-                or any(_dg_names_exec_option(model, w) for w in words[1:]):
-            return False
-    if set(_dg_last_words(words[1:])) & set(t["selectors"].get(head, ())):
-        return False
-    return not any(_dg_sensitive(t, w) and w not in _DG_READ_HANDLERS for w in rest)
-
-
-def _dg_commands(text):
-    """`text` as simple commands (redirections dropped), or None when it does not tokenize."""
-    import shlex
-    try:
-        lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        tokens = list(lexer)
-    except ValueError:
-        return None
-    commands, words, skip = [], [], False
-    for tok in tokens:
-        if tok and set(tok) <= set(";&|()"):
-            commands.append(words)
-            words, skip = [], False
-        elif tok and set(tok) <= set("<>&"):
-            if words and words[-1].isdigit():
-                words.pop()  # an io-number: `2>&1` is not an argument
-            skip = True
-        elif skip:
-            skip = False  # the redirection's target is not an argument either
+        if os.path.isabs(target):
+            paths = [target]
+        elif not isinstance(dirs, list) or not isinstance(cwd, str) or not os.path.isabs(cwd):
+            return False  # a relative name after a `cd` this reading cannot follow
         else:
-            words.append(tok)
-    if skip:
-        return None  # a redirection with no target
-    commands.append(words)
-    return [words for words in commands if words], tokens
-
-
-def _dg_ends_on_option(line):
-    """The line, or any command on it, ends on an option-like word: as written, once quotes are removed (`-x''`,
-    `"-c''"`), or before a redirection, a comment or a closing parenthesis (`docker create -l 2>/dev/null`)."""
-    if DEGRADED_TRAILING_OPTION.search(line):
-        return True
-    parsed = _dg_commands(line)
-    return bool(parsed) and any(w[:1] in ("-", "+") for words in parsed[0] for w in _dg_last_words(words))
-
-
-_DG_RESERVED = frozenset(("if", "then", "else", "elif", "while", "until", "do", "!", "{", "time"))
-
-
-def _dg_quoted_head(line):
-    """A command head that, quotes removed, holds whitespace or shell syntax (`'bash -c' x`, `env\\ -S x`)."""
-    parsed = _dg_commands(line)
-    for words in (parsed[0] if parsed else ()):
-        for w in words:
-            if re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", w) or w in _DG_RESERVED:
-                continue
-            if _DG_META.search(w):
-                return True
-            break
-    return False
-
-
-# ── The degraded allowlist: the only heads a trailing-option command may have ──
-# Once any command on any line ends on an option-like word, every command on every line must have a head below, in a
-# form its entry accepts; anything else refuses exactly as the base fallback did. An entry is a program whose options
-# neither run a program or code (from argv, stdin or a file it is pointed at) nor write outside its own operands; the
-# reason is given per group. The denylist layers (analyzer-table exec options, removal references in dequoted words,
-# git command text, shell strings inside words) still apply to every allowed command.
-
-
-def _dg_opt_hit(word, refused, values="", fold=False):
-    """True when `word` spells one of the `refused` options, as getopt_long, clap and git would read it.
-
-    A long option matches exactly, as `--name=value`, or abbreviated to any prefix of a refused name (ambiguous
-    prefixes included: strict), in any letter case when `fold` (less reads `--LOG-FILE` and `--Lesskey-File`). A
-    short option matches anywhere in a cluster (`-iOsh`) or with an attached value (`-xpython3`); the scan of a
-    cluster stops only at a letter in `values`, an option whose parser hands it the rest of the word as its value
-    (`date -Iseconds`); a parser that keeps scanning after a value option (tree) declares none. A `+`-word matches
-    only exactly."""
-    if word.startswith("--") and len(word) > 2:
-        name = word[2:].split("=", 1)[0]
-        if fold:
-            return any(r.startswith("--") and r[2:].lower().startswith(name.lower()) for r in refused)
-        return any(r.startswith("--") and r[2:].startswith(name) for r in refused)
-    if len(word) > 1 and word[0] == "-":
-        for c in word[1:]:
-            if "-" + c in refused:
-                return True
-            if c in values:
+            paths = [os.path.join(d, target) for d in [cwd] + dirs + [os.path.normpath(d) for d in dirs]]
+        for path in paths:
+            if not (owns(path) and owns(os.path.dirname(path.rstrip(os.sep)) or os.sep)):
                 return False
-        return False
-    return word in refused
-
-
-def _dg_opts_hit(words, refused, values="", fold=False):
-    return any(_dg_opt_hit(w, refused, values, fold) for w in words)
-
-
-def _dg_any(t, words):
     return True
-
-
-def _dg_options_only(*allowed):
-    """At least one option, only the listed ones, and no operand (an operand would be a value to set; bare, some of
-    these act: `ssh-add` loads keys, `gpg` reads stdin)."""
-    return lambda t, words: len(words) > 1 and all(w in allowed for w in words[1:])
-
-
-def _dg_operands(words, valued):
-    """The operands of a command whose options in `valued` take a separate value."""
-    out, skip = [], False
-    for i, w in enumerate(words[1:], 1):
-        if skip:
-            skip = False
-        elif w == "--":
-            return out + words[i + 1:]  # every word after `--` is an operand
-        elif w.startswith("-") and len(w) > 1:
-            skip = w in valued
-        else:
-            out.append(w)
-    return out
-
-
-# Options each entry refuses, as (options, short options whose parser hands them the rest of the word as their value,
-# and optionally True when long names are read in any letter case). One registry, so tests enumerate every spelling
-# of every refused option. The reason sits beside each; the value letters were checked against each parser:
-# GNU sort (-k -S -t -T), file (-m -f -F -e -P), ripgrep/clap (-e -f -g -t -T -A -B -C -m -M -j -r -E), fd/clap
-# (-e -t -E), GNU date (-I -d -r), man-db and whatis/apropos argp (-M -L -m -S -s -e -p -E -r -R -T), GNU info
-# (-d -f -n). tree's parser takes -P/-I/-T/-H/-o values from the NEXT word and keeps scanning the cluster, and less,
-# ss, apt and git are scanned whole, so they declare none.
-_DG_REFUSED_OPTS = {
-    "sort": (("-o", "--output", "--compress-program"), "kStT"),     # writes a file it names; runs a compressor
-    "tree": (("-o", "-H", "-R"), ""),                               # writes a file; HTML output (-R rewrites dirs)
-    "rg": (("--pre", "--pre-glob", "--hostname-bin", "-z", "--search-zip"), "efgtTABCmMjrE"),  # run programs
-    "fd": (("-x", "-X", "--exec", "--exec-batch"), "etE"),          # run a command per match
-    "date": (("-s", "--set", "-f", "--file"), "Idr"),               # set the clock; read dates from a file
-    "hostname": (("-F", "--file", "-b", "--boot"), ""),             # set the host name
-    "man": (("-P", "--pager", "-H", "--html", "-B", "--browser", "-C", "--config-file", "-X", "--gxditview",
-             "-l", "--local-file"), "MLmSsepErRT"),                 # name a program or format a file it is given
-    # Key-binding files (a lesskey `#env LESSOPEN=|cmd` runs a command), log files it writes, tags files it follows.
-    "less": (("-k", "--lesskey-file", "--lesskey", "--lesskey-src", "--lesskey-content", "-o", "-O", "--log-file",
-              "--LOG-FILE", "-t", "--tag", "-T", "--tag-file"), "", True),
-    # writes a file or directory it names; a --config (file or inline `cache-dir=`) can name one too
-    "ruff": (("-o", "--output-file", "--cache-dir", "--config"), ""),
-    # a kubeconfig's exec plugin is code; klog and profile files are written; dump writes a directory
-    "kubectl": (("--kubeconfig", "--kuberc", "--log-file", "--log-dir", "--cache-dir", "--profile-output",
-                 "--output-directory"), ""),
-    "pip": (("--python", "--log", "--local-log", "--log-file", "--cache-dir", "--report"), ""),  # interpreter; writes
-    # APT reads long names in any case: config can name hooks (Pre-Invoke …); -p/-s overwrite the cache files named
-    "apt": (("-o", "--option", "-c", "--config-file", "-p", "--pkg-cache", "-s", "--src-cache"), "", True),
-    "ss": (("-K", "--kill", "-D", "--diag"), ""),                    # closes the sockets it lists; -D writes a file
-    # tsc reads option names in any case; these write files (build output, profiles, build info, a new config).
-    "tsc": (("-b", "--build", "-w", "--watch", "-i", "--incremental", "--init", "--generateTrace",
-             "--generateCpuProfile", "--tsBuildInfoFile", "--outDir", "--outFile", "--out", "--declarationDir"),
-            "", True),
-}
-
-
-def _dg_refusing(head, then=_dg_any):
-    refused, values, *fold = _DG_REFUSED_OPTS[head]
-    return lambda t, words: not _dg_opts_hit(words[1:], refused, values, bool(fold and fold[0])) and then(t, words)
-
-
-def _dg_subcommands(*allowed):
-    """A program whose first word after it is one of `allowed` (or a sole --version/--help), without `--`."""
-    def check(t, words):
-        if len(words) == 2 and words[1] in _DG_INFO:
-            return True
-        return len(words) > 1 and words[1] in allowed and "--" not in words
-    return check
-
-
-# git: read and local-history subcommands. No global option but --no-pager/-P/--version/--help (so no -c,
-# --config-env, -C, --exec-path, --git-dir: config and paths that can name a program from argv). Writes stay inside
-# the repository the command is run in (add, commit, fetch, pull, switch, merge, stash); a pager, diff driver, hook or
-# filter the repository's own config names runs for every git command, trailing option or not, and is not argv.
-_DG_GIT_GLOBAL_OK = frozenset(("--no-pager", "-P", "--version", "--help"))
-# Options no subcommand may carry: a file written (--output), a program named (upload/receive pack, archive --exec,
-# grep's pager). Per subcommand: (refused options, refused words); interactive patch modes and history rewriting.
-_DG_GIT_ALL = ("--output", "--upload-pack", "--receive-pack", "--exec", "--open-files-in-pager")
-_DG_GIT_SUB = {
-    **dict.fromkeys(("status", "log", "diff", "show", "rev-parse", "describe", "shortlog", "ls-files", "ls-tree",
-                     "cherry", "count-objects", "blame", "commit", "version", "range-diff", "merge-base",
-                     "show-ref", "rev-list", "cat-file", "whatchanged", "switch", "remote", "config", "fetch"),
-                    ((), ())),
-    "pull": (("-s", "--strategy"), ()),                                      # as merge
-    "help": (("-w", "--web", "-i", "--info"), ()),                           # start a browser or info program
-    "grep": (("-O",), ()),                                                   # -O<pager> runs it
-    "ls-remote": (("-u",), ()),                                              # -u <upload-pack>
-    "add": (("-i", "--interactive", "-p", "--patch", "-e", "--edit"), ()),
-    "checkout": (("-p", "--patch"), ()), "restore": (("-p", "--patch"), ()),
-    "merge": (("-s", "--strategy"), ()),                                     # -s names git-merge-<x> on PATH
-    "stash": (("-p", "--patch"), ("clear", "drop", "create", "store")),
-    "worktree": ((), ("add", "remove", "move", "prune", "repair", "lock", "unlock")),
-    "notes": ((), ("add", "copy", "append", "edit", "merge", "remove", "prune")),
-    "reflog": ((), ("expire", "delete", "drop")),
-    "fsck": (("--lost-found",), ()),
-    "branch": (("-d", "-D", "-m", "-M", "-c", "-C", "-f", "-u", "--delete", "--move", "--copy", "--force",
-                "--set-upstream-to", "--unset-upstream", "--edit-description"), ()),
-    "tag": (("-d", "-a", "-s", "-u", "-f", "-m", "-F", "-e", "--delete", "--annotate", "--sign", "--force",
-             "--message", "--file", "--edit", "--local-user"), ()),
-}
-
-
-def _dg_git_runs(words):
-    """git words that name a program or a written file (shared with the denylist layer)."""
-    i = 1
-    while i < len(words) and words[i].startswith("-"):
-        i += 1 + (words[i] in ("-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace",
-                               "--exec-path", "--super-prefix", "--attr-source"))
-    sub = words[i] if i < len(words) else ""
-    refused = _DG_GIT_ALL + _DG_GIT_SUB.get(sub, ((), ()))[0]
-    return any(_DG_GIT_RUNS.search(w) for w in words[1:]) or _dg_opts_hit(words[i + 1:], refused)
-
-
-def _dg_git(t, words):
-    i = 1
-    while i < len(words) and words[i] in _DG_GIT_GLOBAL_OK:
-        i += 1
-    if i >= len(words):
-        return True  # `git --version`
-    sub, rest = words[i], words[i + 1:]
-    if sub not in _DG_GIT_SUB or _dg_git_runs(words):
-        return False
-    if sub == "remote":  # listing only: `git remote [-v]`, `git remote [-v] show|get-url [options] name`
-        words_ = [w for w in rest if not w.startswith("-")]
-        return all(w in ("-v", "--verbose", "-n", "--push", "--all") for w in rest if w.startswith("-")) and (
-            not words_ or words_[0] in ("show", "get-url"))
-    if sub == "config":  # reading only, in the old and the subcommand syntax; never set, unset or edit
-        reads = ("-l", "--list", "--get", "--get-all", "--get-regexp", "--show-origin", "--show-scope", "--global",
-                 "--local", "--system", "--name-only", "-z", "--null")
-        if not all(w in reads for w in rest if w.startswith("-")):
-            return False
-        ops = [w for w in rest if not w.startswith("-")]
-        if ops and ops[0] in ("get", "list"):  # `git config get KEY`, `git config list`
-            return len(ops) <= (2 if ops[0] == "get" else 1)
-        if ops and ops[0] in ("set", "unset", "edit", "rename-section", "remove-section"):
-            return False
-        if any(w in ("-l", "--list") for w in rest):
-            return not ops
-        return len(ops) <= (2 if any(w.startswith("--get") for w in rest) else 1)
-    return not set(rest) & set(_DG_GIT_SUB[sub][1])
-
-
-# ── Positive option lists ──
-# For heads whose option surface is large or read from plugins and configuration, every option word must be one the
-# everyday lists need or an obviously inert display option; anything else refuses (an unknown option, an
-# abbreviation, a `_` spelling kubectl would normalise, an option glued to a value it does not take).
-
-
-def _dg_opts(flags="", valued="", longs=(), vlongs=(), operand=None, fold=False, under=False, value_ok=None,
-             optional="", numeric=""):
-    """A checker for options from index `start`: short `flags` (clusterable), short `valued` options (value attached
-    or the next word), `optional` ones (value only when attached: `date -Iseconds`), `numeric` ones (attached digits,
-    after which the cluster scan continues, as less and top read them, or the next word at the end of the word),
-    long `longs` flags and `vlongs` taking `=value` or the next word, all matched exactly (after `_`→`-` when
-    `under`, case-folded when `fold`). `operand` vets each non-option word (None: any)."""
-    norm = (lambda n: n.lower()) if fold else (lambda n: n)
-    longs_n, vlongs_n = {norm(x) for x in longs}, {norm(x) for x in vlongs}
-
-    def check(t, words, start=1):
-        i, n = start, len(words)
-        while i < n:
-            w = words[i]
-            if w == "--":
-                return operand is None or all(operand(x) for x in words[i + 1:])
-            if w.startswith("--"):
-                name, eq, val = w[2:].partition("=")
-                name = norm(name.replace("_", "-") if under else name)
-                if name in longs_n and not eq:
-                    i += 1
-                    continue
-                if name not in vlongs_n:
-                    return False
-                if not eq:
-                    if i + 1 >= n:
-                        return False
-                    i, val = i + 1, words[i + 1]
-                if value_ok and not value_ok("--" + name, val):
-                    return False
-                i += 1
-                continue
-            if w.startswith("-") and len(w) > 1:
-                j, take = 1, 0
-                while j < len(w):
-                    c = w[j]
-                    j += 1
-                    if c in flags:
-                        continue
-                    if c in optional:
-                        break
-                    if c in numeric:
-                        k = j
-                        while j < len(w) and (w[j].isdigit() or w[j] in ".,"):
-                            j += 1
-                        take += k == j == len(w)
-                        continue
-                    if c not in valued:
-                        return False
-                    val = w[j:]
-                    if not val:
-                        if i + take + 1 >= n:
-                            return False
-                        take += 1
-                        val = words[i + take]
-                    if value_ok and not value_ok("-" + c, val):
-                        return False
-                    break
-                if i + take >= n:
-                    return False
-                i += 1 + take
-                continue
-            if operand is not None and not operand(w):
-                return False
-            i += 1
-        return True
-    return check
-
-
-def _dg_kubectl_output(name, value):
-    """kubectl -o: a printed format, never a template or column file."""
-    if name not in ("-o", "--output"):
-        return True
-    return value in ("wide", "yaml", "json", "name") or value.startswith(
-        ("jsonpath=", "jsonpath-as-json=", "custom-columns=", "go-template=")) and "-file" not in value.split("=")[0]
-
-
-# kubectl (pflag; `_` is normalised to `-`): the read subcommands' display, selection and log options. Not
-# --kubeconfig/--kuberc (an exec plugin is code), not log, cache, profile or dump paths.
-_DG_KUBECTL_OPTS = _dg_opts(
-    flags="Awpf", valued="nolcL",
-    longs=("all-namespaces", "show-labels", "no-headers", "watch", "watch-only", "follow", "previous", "client",
-           "all-containers", "timestamps", "show-kind", "ignore-not-found", "minify", "flatten", "raw", "recursive",
-           "prefix", "help"),
-    vlongs=("namespace", "output", "selector", "field-selector", "sort-by", "container", "tail", "since",
-            "since-time", "context", "label-columns", "request-timeout", "chunk-size", "api-version", "limit-bytes"),
-    under=True, value_ok=_dg_kubectl_output)
-# pip list/show/freeze/check (optparse, which would accept abbreviations: exact names only here).
-_DG_PIP_OPTS = _dg_opts(
-    flags="vqlouef", valued="",
-    longs=("verbose", "quiet", "local", "outdated", "uptodate", "files", "user", "not-required", "exclude-editable",
-           "include-editable", "editable", "pre", "all", "no-color", "disable-pip-version-check", "no-input",
-           "help", "version"),
-    vlongs=("format", "exclude"))
-# set: errexit, nounset, xtrace and pipefail only (not -k, which turns later `X=v` words into environment).
-_DG_SET_OPTS = _dg_opts(flags="eux", valued="o",
-                        value_ok=lambda n, v: v in ("pipefail", "errexit", "nounset", "xtrace"),
-                        operand=lambda w: False)
-
-
-def _dg_set(t, words):
-    plus = [w for w in words[1:] if w.startswith("+")]
-    return _DG_SET_OPTS(t, [w if not w.startswith("+") else "-" + w[1:] for w in words]) and all(
-        len(w) > 1 for w in plus)
-
-
-# date: report forms. Operands only `+FORMAT` (a `MMDDhhmm` operand sets the clock).
-_DG_DATE_OPTS = _dg_opts(flags="uR", valued="dr", optional="I",
-                         longs=("utc", "universal", "rfc-email", "iso-8601", "help", "version"),
-                         vlongs=("iso-8601", "rfc-3339", "date", "reference"),
-                         operand=lambda w: w.startswith("+"))
-# apt (option names read in any case): the listing flags of show/list/search/policy.
-_DG_APT_OPTS = _dg_opts(flags="aqh", longs=("all-versions", "installed", "upgradable", "manual-installed", "quiet",
-                                            "help", "full", "names-only"), fold=True)
-# docker read subcommands: display, filter and log options.
-_DG_DOCKER_OPTS = _dg_opts(
-    flags="aqslt", valued="fn",
-    longs=("all", "quiet", "no-trunc", "size", "latest", "no-stream", "timestamps", "details", "follow", "digests",
-           "services", "help"),
-    vlongs=("format", "filter", "last", "tail", "since", "until", "type"))
-# ruff check/format: rule selection and reporting; paths as operands. Not --config, --cache-dir, -o, --watch.
-_DG_RUFF_OPTS = _dg_opts(
-    flags="qvsen",
-    longs=("fix", "no-fix", "check", "diff", "show-fixes", "statistics", "quiet", "verbose", "silent", "exit-zero",
-           "exit-non-zero-on-fix", "no-cache", "unsafe-fixes", "preview", "no-preview", "isolated", "show-files",
-           "help"),
-    vlongs=("select", "ignore", "extend-select", "output-format", "line-length", "target-version", "exclude",
-            "extend-exclude"))
-# ss: socket-listing flags; filter words (`dst 1.2.3.4`, `state established`) are operands. Not -K, -D, -F, -N.
-_DG_SS_OPTS = _dg_opts(
-    flags="tulnpaemois46xwrHO",
-    longs=("tcp", "udp", "listening", "numeric", "processes", "all", "extended", "memory", "options", "info",
-           "summary", "ipv4", "ipv6", "unix", "raw", "resolve", "no-header", "oneline", "help"))
-# man: lookup and section options; operands are page names (no `/`: a path is formatted as a local file).
-_DG_MAN_OPTS = _dg_opts(flags="afkwWiI7", valued="sS",
-                        longs=("all", "whatis", "apropos", "where", "regex", "wildcard", "names-only", "ignore-case",
-                               "match-case", "no-hyphenation", "no-justification", "help"),
-                        vlongs=("sections",), operand=lambda w: "/" not in w)
-# less (long names in any case): display options. Not -k/-o/-O/-t/-T or the lesskey/log/tag options, no `+` word.
-_DG_LESS_OPTS = _dg_opts(
-    flags="NnRrSFXiIMmsEeqQgGJwWKcCaBfLuUV~", valued="pP", numeric="#xyzbhj",
-    longs=("line-numbers", "raw-control-chars", "chop-long-lines", "quit-if-one-screen", "no-init", "ignore-case",
-           "squeeze-blank-lines", "mouse", "quiet", "silent", "status-column", "long-prompt", "help", "version"),
-    vlongs=("tabs", "pattern", "shift", "window", "jump-target"), fold=True,
-    operand=lambda w: not w.startswith("+"))
-
-
-def _dg_tree(t, words):
-    """tree: display flags; -L/-P/-I take the NEXT word (or -L attached digits) and the cluster scan continues."""
-    flags, nexts = set("adlfxiqNQpugshDFvtcUrCnASJX"), set("LPI")
-    longs = ("--du", "--si", "--dirsfirst", "--noreport", "--prune", "--matchdirs", "--ignore-case", "--gitignore",
-             "--help", "--version")
-    i = 1
-    while i < len(words):
-        w, take = words[i], 0
-        if w.startswith("--"):
-            if w not in longs:
-                return False
-        elif w.startswith("-") and len(w) > 1:
-            j = 1
-            while j < len(w):
-                c = w[j]
-                if c == "L" and w[j + 1:j + 2].isdigit():
-                    j += 1
-                    while j < len(w) and w[j].isdigit():
-                        j += 1
-                    continue
-                if c in nexts:
-                    take += 1
-                elif c not in flags:
-                    return False
-                j += 1
-        i += 1 + take
-    return True
-
-
-# fd (clap): search flags; extension, type, exclude and depth values. Not -x/-X/--exec*, -l (runs ls).
-_DG_FD_OPTS = _dg_opts(
-    flags="HIusigFapL01q", valued="etEdSojc",
-    longs=("hidden", "no-ignore", "case-sensitive", "ignore-case", "glob", "fixed-strings", "absolute-path",
-           "follow", "full-path", "print0", "quiet", "show-errors", "help", "version"),
-    vlongs=("extension", "type", "exclude", "max-depth", "min-depth", "exact-depth", "size", "changed-within",
-            "changed-before", "owner", "threads", "max-results", "color"))
-# rg (clap): search and output flags. Not --pre/--pre-glob/--hostname-bin/-z/--search-zip.
-_DG_RG_OPTS = _dg_opts(
-    flags="isSwxvnNclLHIFuUaoq0bp", valued="efgtTABCmMjrEd",
-    longs=("hidden", "no-ignore", "files", "type-list", "pretty", "json", "vimgrep", "count", "files-with-matches",
-           "files-without-match", "no-heading", "heading", "line-number", "no-line-number", "column", "trim",
-           "smart-case", "ignore-case", "case-sensitive", "word-regexp", "fixed-strings", "multiline", "follow",
-           "stats", "unrestricted", "passthru", "no-messages", "null", "invert-match", "only-matching", "help",
-           "version"),
-    vlongs=("regexp", "file", "glob", "iglob", "type", "type-not", "after-context", "before-context", "context",
-            "max-count", "max-columns", "threads", "replace", "encoding", "max-depth", "sort", "sortr", "color",
-            "colors"))
-# sort: ordering flags and key, separator and buffer values. Not -o/--output, --compress-program, -T.
-_DG_SORT_OPTS = _dg_opts(
-    flags="nrufbdghiMRVscCmz", valued="ktS",
-    longs=("numeric-sort", "reverse", "unique", "ignore-case", "ignore-leading-blanks", "dictionary-order",
-           "general-numeric-sort", "human-numeric-sort", "ignore-nonprinting", "month-sort", "random-sort",
-           "version-sort", "stable", "check", "merge", "zero-terminated", "help", "version"),
-    vlongs=("key", "field-separator", "buffer-size", "sort"))
-# find: tests, global options and printing actions; values are paths, patterns or numbers.
-_DG_FIND_WORDS = frozenset((
-    "-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex", "-iregex", "-lname", "-ilname",
-    "-type", "-xtype", "-maxdepth", "-mindepth", "-mtime", "-mmin", "-atime", "-amin", "-ctime", "-cmin", "-newer",
-    "-anewer", "-cnewer", "-size", "-empty", "-user", "-group", "-uid", "-gid", "-nouser", "-nogroup", "-perm",
-    "-links", "-inum", "-samefile", "-readable", "-writable", "-executable", "-true", "-false", "-print",
-    "-print0", "-printf", "-ls", "-prune", "-quit", "-not", "-a", "-o", "-and", "-or", "-L", "-H", "-P", "-xdev",
-    "-mount", "-follow", "-depth", "-daystart", "-noleaf", "-fstype", "-help", "-version"))
-
-
-def _dg_find(t, words):
-    return all(not w.startswith("-") or w in _DG_FIND_WORDS or re.fullmatch(r"-\d+[a-zA-Z]?", w)
-               for w in words[1:])
-
-
-# top (batch reports) and ps (listing formats): display options only.
-_DG_TOP_OPTS = _dg_opts(flags="bcHiS1", valued="opuUEw", numeric="nd", longs=("help", "version"),
-                        operand=lambda w: False)
-_DG_PS_OPTS = _dg_opts(
-    flags="efFlajAdNxHLTwyMZ", valued="uUpCoOGgtsq",
-    longs=("forest", "no-headers", "headers", "help", "version", "cumulative", "deselect"),
-    vlongs=("sort", "format", "pid", "ppid", "user", "User", "group", "Group", "cols", "columns", "lines"),
-    operand=lambda w: re.fullmatch(r"[auxewfjlvrhcSTmgnsZ]+|\d+", w) is not None)
-
-
-# docker / kubectl: read subcommands only, never `--` (kubectl runs what follows it).
-_DG_DOCKER_READ = frozenset("ps images logs inspect version info stats top port history events".split())
-_DG_KUBECTL_READ = frozenset("get describe logs version explain api-resources api-versions cluster-info top "
-                             "config".split())
-
-
-def _dg_docker(t, words):
-    if len(words) == 2 and words[1] in ("--version", "-v", "--help"):
-        return True
-    rest = words[1:]
-    if rest and rest[0] in ("network", "volume", "image", "container", "system", "compose") and len(rest) > 1:
-        rest = rest[1:]  # `docker network ls`, `docker compose ps`
-        return rest[0] in _DG_DOCKER_READ | {"ls", "df"} and "--" not in rest
-    return bool(rest) and rest[0] in _DG_DOCKER_READ and "--" not in rest
-
-
-def _dg_kubectl(t, words):
-    if "--" in words:
-        return False
-    if len(words) > 2 and words[1] == "config":
-        return words[2] in ("view", "current-context", "get-contexts", "get-clusters", "get-users")
-    return len(words) > 1 and words[1] in _DG_KUBECTL_READ
-
-
-def _dg_pip(t, words):
-    if len(words) == 2 and words[1] in ("--version", "-V", "--help"):
-        return True
-    return len(words) > 1 and words[1] in ("list", "show", "freeze", "check") and _DG_PIP_OPTS(t, words, 2)
-
-
-_DG_PIP = _dg_refusing("pip", _dg_pip)
-
-
-def _dg_docker_read(t, words):
-    if not _dg_docker(t, words):
-        return False
-    start = 3 if words[1] in ("network", "volume", "image", "container", "system", "compose") else 2
-    return _DG_DOCKER_OPTS(t, words, start)
-
-
-def _dg_kubectl_read(t, words):
-    return _dg_kubectl(t, words) and _DG_KUBECTL_OPTS(t, words, 3 if words[1] == "config" else 2)
-
-
-def _dg_python(t, words):
-    """An interpreter only reports its version; `python -m pip` only its read forms."""
-    if len(words) == 2 and words[1] in ("--version", "-V", "-VV"):
-        return True
-    return len(words) > 3 and words[1:3] == ["-m", "pip"] and _DG_PIP(t, words[2:])
-
-
-def _dg_tsc(t, words):
-    """tsc type-checks and, with --noEmit and none of its file-writing options, writes nothing; it never runs the
-    code it reads. (The runtime guard refuses tsc before this fallback is reached, so this has no end-to-end
-    effect today.)"""
-    return (len(words) == 2 and words[1] in _DG_INFO) or (
-        any(w.lower() == "--noemit" for w in words) and _dg_refusing("tsc")(t, words))
-
-
-def _dg_version_only(*forms):
-    """Exactly the head and one version or help word: anything after it (`javac -version -J-javaagent:…`,
-    `java -version -agentpath:…`, `mvn -v -f …`) is read by the program and refuses."""
-    return lambda t, words: len(words) == 2 and words[1] in forms
-
-
-# Pruned to the heads the owner's everyday lists need on a line where a command ends on an option (the 143-command
-# list, the 486-command corpus, the R5 mentions and the multi-line and pipe lists); every other head refuses on such
-# a line as the base fallback does. hooks/tests/test_bash_safety_degraded_fallback.py checks each head below is used
-# by one of those lists.
-_DG_ALLOW = {
-    # Text readers and listings: options select, format or count; operands are files read.
-    **dict.fromkeys(("head", "tail", "wc", "jq", "ls", "du", "df", "pwd", "cd", "echo"), _dg_any),
-    # base64: GNU coreutils flags only (the BSD -o/-i forms write and read named files).
-    "base64": _dg_opts(flags="di", valued="w", longs=("decode", "ignore-garbage", "help", "version"),
-                       vlongs=("wrap",)),
-    "sort": _dg_refusing("sort", _DG_SORT_OPTS), "tree": _dg_refusing("tree", _dg_tree),
-    # One input operand: a second operand is the file uniq writes.
-    "uniq": lambda t, w: len(_dg_operands(w, ("-f", "-s", "-w", "--skip-fields", "--skip-chars",
-                                              "--check-chars"))) <= 1,
-    # Pager: no `+command` start-up word, no key-binding file (bindings run commands), no log or tags file. Reading
-    # keys needs a terminal, which a tool call does not have.
-    "less": _dg_refusing("less", _DG_LESS_OPTS),
-    # cat as a pipe sink (`git diff --stat | cat`): GNU cat's options only number or mark what it prints.
-    "cat": _dg_opts(flags="AbeEnstTuv", longs=("show-all", "number-nonblank", "number", "squeeze-blank",
-                                               "show-ends", "show-tabs", "show-nonprinting", "help", "version")),
-    "cp": _dg_any,  # copies its operands; the analyzer's relocator class (no option runs a program)
-    "find": lambda t, w: not set(w[1:]) & t["find_ops"] and _dg_find(t, w),  # no exec, delete or fprint action
-    "fd": _dg_refusing("fd", _DG_FD_OPTS),
-    # Search tools: patterns and paths are data; rg's preprocessor and decompressor options run programs.
-    "grep": _dg_any, "rg": _dg_refusing("rg", _DG_RG_OPTS),
-    # System inspection: read-only reports. hostname, date, stty and ulimit can also set; only reading forms.
-    **dict.fromkeys(("uname", "id", "nproc", "uptime", "free", "netstat"), _dg_any),
-    "ps": _DG_PS_OPTS, "top": _DG_TOP_OPTS,
-    "ss": _dg_refusing("ss", _DG_SS_OPTS),
-    "date": _dg_refusing("date", _DG_DATE_OPTS),
-    "hostname": _dg_refusing("hostname", lambda t, w: all(x.startswith("-") for x in w[1:])),
-    "stty": _dg_options_only("-a", "--all", "-g", "--save"),
-    "ulimit": _dg_options_only("-a"),
-    "set": _dg_set,
-    "hash": _dg_options_only("-r", "-l", "-t", "-d"),
-    "history": lambda t, w: all(x.isdigit() for x in w[1:]),
-    # Arithmetic: bc's language has no command or file-writing statement (unlike dc's `!`).
-    "bc": _dg_any,
-    # man formats an operand holding a `/` as a local file, as -l does.
-    "man": _dg_refusing("man", _DG_MAN_OPTS),
-    "apt": _dg_refusing("apt", lambda t, w: _dg_subcommands(
-        "show", "list", "search", "policy", "depends", "rdepends", "showsrc")(t, w) and _DG_APT_OPTS(t, w, 2)),
-    # Version control and orchestration CLIs, read forms (see above).
-    "git": _dg_git, "docker": _dg_docker_read, "kubectl": _dg_refusing("kubectl", _dg_kubectl_read),
-    "terraform": _dg_subcommands("version", "fmt"),  # fmt rewrites its operand files, loads no provider
-    # Version reports: exactly the head and the word. Not `cargo fmt`: fmt is an external subcommand, so a
-    # `[alias] fmt = "run …"` in the repository's .cargo/config.toml runs repository code.
-    "gh": _dg_version_only("--version"), "aws": _dg_version_only("--version"),
-    "gcloud": _dg_version_only("--version"), "cargo": _dg_version_only("--version", "-V"),
-    "rustc": _dg_version_only("--version", "-V"), "java": _dg_version_only("-version", "--version"),
-    "javac": _dg_version_only("-version", "--version"), "mvn": _dg_version_only("-v", "--version"),
-    "ssh": _dg_version_only("-V"), "mysql": _dg_version_only("--version", "-V"),
-    # Interpreters: version reports and `-m pip` read forms only.
-    **dict.fromkeys(("python", "python3"), _dg_python),
-    "pip": _DG_PIP, "tsc": _dg_tsc,
-    "ruff": _dg_refusing("ruff", lambda t, w: (len(w) == 2 and w[1] in _DG_INFO) or (
-        len(w) > 1 and w[1] in ("check", "format") and _DG_RUFF_OPTS(t, w, 2))),
-    # Keys and agents: listing only.
-    "ssh-add": _dg_options_only("-l", "-L"),
-    "gpg": _dg_options_only("--list-keys", "-k", "--list-secret-keys", "-K", "--fingerprint", "--version"),
-    # psql: listing databases or the version only, alone (bare, it reads SQL and its shell escapes from stdin).
-    "psql": _dg_version_only("-l", "--list", "--version", "-V"),
-}
-# Any other head ending a command on an option-like word may still report its version or usage, alone, unless it
-# is a wrapper, a handler-owned program, a removal program or one of the degraded extras.
-
-
-def _dg_allowlisted(t, words):
-    """True when this simple command's head and form are on the allowlist above."""
-    while words and words[0] in t["drop"]:
-        words = words[1:]
-    if not words:
-        return True
-    if re.match(r"[A-Za-z_][A-Za-z0-9_]*\+?=", words[0]):
-        return False  # an assignment prefix (LD_PRELOAD=, PAGER=, GIT_*=) can make any program run another
-    head = words[0]
-    if "/" in head or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", head):
-        return False  # a path is whatever file sits there, not the program the allowlist names
-    entry = _DG_ALLOW.get(head)
-    if entry is not None:
-        return entry(t, words)
-    return len(words) == 2 and words[1] in _DG_INFO and not (
-        head in t["wrappers"] or _dg_handler(t, head) or head in t["removal"])
-
-
-def degraded_trailing_option_is_plain(line):
-    """True when every command on the line is provably plain (degraded_refuses asks it of every line once any line
-    ends a command on an option)."""
-    t = _degraded_tables()
-    parsed = _dg_commands(line) if t is not None else None
-    if parsed is None:
-        return False
-    return all(_dg_allowlisted(t, words) and _degraded_command_is_plain(t, words) for words in parsed[0])
-
-
-def _dg_unbalanced(command):
-    """The command's quoting does not close (a shell syntax error), unless the open quote sits in a `#` comment."""
-    import shlex
-    for commenters in ("", "#"):
-        try:
-            lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-            lexer.whitespace_split = True
-            lexer.commenters = commenters
-            list(lexer)
-            return False
-        except ValueError:
-            continue
-    return True
-
-
-_DG_TIME_LIMIT = 3.0
-
-
-def degraded_refuses(command, rmref):
-    """The degraded fallback's verdict: True unless the command is provably plain (see removal_policy). Once any
-    line ends a command on an option, every command on every line must be plain: a newline separates commands."""
-    return bool(grep(rmref, command) or grep(r"[\]$`\[?*{}!]|<<", command) or grep(r"\\$", command)
-                or any(_dg_quoted_head(ln) for ln in lines_of(command))
-                or (any(_dg_ends_on_option(ln) for ln in lines_of(command))
-                    and not all(degraded_trailing_option_is_plain(ln) for ln in lines_of(command)))
-                or grep(r"[<>|&;][ \t]*$", command) or _dg_unbalanced(command))
 
 
 def removal_policy(payload_text, command):
-    """Every execution boundary must be proven inert or a safe removal by lib/bash_execution_boundary.py.
+    """lib/bash_execution_boundary.py's verdict, then the owner's rule (2026-11-19) for what it cannot prove.
 
-    The analyzer runs in its own process under a time and memory limit. When it gives no usable verdict the
-    command passes only if it is provably plain: no removal reference (lib/pol_degraded_removal_reference.ere), no
-    assembly channel (expansion, substitution, glob, brace, bang, heredoc, line continuation), no line ending on a
-    dangling operator or redirect, balanced quoting, no command head holding whitespace or shell syntax, and no
-    command ending on an option-like word unless every command on every line has an allowlisted head (_DG_ALLOW) and
-    passes degraded_trailing_option_is_plain()'s table-derived layers (degraded_refuses), within a 3 s bound.
+    The analyzer runs in its own process under a time and memory limit. A command it proves (PROVEN_INERT,
+    PROVEN_SAFE_REMOVAL) passes; a filesystem removal it finds (FORBIDDEN_REMOVAL) is refused, unless the analyzer
+    knows every file the command removes and each lies inside the calling actor's own scratch directory as the
+    write policy defines it (the owner, 2026-11-19: one's own temp folder may be deleted). A command it cannot
+    prove safe, because it answers UNRESOLVED (the primary path) or gives no usable verdict (timeout, memory
+    ceiling, crash, bad JSON: the degraded path), is refused when its text holds a removal word, by the single
+    definition in lib/pol_degraded_removal_reference.ere, and otherwise runs. Both paths ask that one question of the
+    same text, so they give an unproven command the same answer, and the primary path lets through unproven nothing
+    the degraded path denies.
+
+    Returns None for a proven command and, for an unproven one let run, the entry described at
+    let_through_unproven().
     """
     analyzer = os.path.join(LIB, "bash_execution_boundary.py")
-    decision = ""
+    decision, proof = "", None
     limit = duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "15s")
     if os.access(analyzer, os.R_OK) and limit is not None:
         try:
@@ -5683,34 +4873,49 @@ def removal_policy(payload_text, command):
                 elif verdict in ("PROVEN_INERT", "PROVEN_SAFE_REMOVAL", "FORBIDDEN_REMOVAL", "UNRESOLVED") \
                         and v.get("allowed") is False:
                     decision = "DENY " + verdict + " " + str(v.get("reason", ""))[:200]
+                    proof = v.get("removal_targets") if verdict == "FORBIDDEN_REMOVAL" else None
         except Exception:  # noqa: BLE001 - timeout, memory ceiling, crash, bad JSON: degraded mode
-            decision = ""
+            decision, proof = "", None
     if decision == "ALLOW":
-        return
-    if decision.startswith("DENY "):
+        return None
+    unproven = not decision or decision.startswith("DENY UNRESOLVED ")
+    named = True  # a removal the analyzer found is refused whatever the text holds
+    if unproven:
+        ere_file = os.path.join(LIB, "pol_degraded_removal_reference.ere")
+        try:
+            with open(ere_file, encoding="utf-8", errors="replace") as fh:
+                rmref = next((ln.rstrip("\n") for ln in fh if not re.match(r"^\s*#", ln) and not re.match(r"^\s*$", ln)), "")
+        except OSError:
+            rmref = ""
+        if not rmref:
+            refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
+                       f"missing or empty. Denied conservatively.", f"Command: {command}")
+        named = grep(rmref, command)
+    own = ()
+    if named:
+        try:
+            payload = json.loads(payload_text)
+        except ValueError:
+            payload = None
+        owns, note = _scratch_owner(payload if isinstance(payload, dict) else {})
+        if isinstance(proof, dict) and isinstance(payload, dict) and _removal_in_own_scratch(proof, payload, owns):
+            return None  # every file it removes is written out and lies in the caller's own scratch directory
+        own = (note, "A removal runs when every file it names is written out in the command (no variable, pattern "
+               "or `~`) and lies inside that directory.") if note else ()
+    if decision and named:
         refuse(f"BLOCKED: removal-policy — {decision[5:]}", f"Command: {command}",
                    "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. "
                    "git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no "
-                   "submodule); this command has a boundary that is none of these.", released_line())
-    ere_file = os.path.join(LIB, "pol_degraded_removal_reference.ere")
-    try:
-        with open(ere_file, encoding="utf-8", errors="replace") as fh:
-            rmref = next((ln.rstrip("\n") for ln in fh if not re.match(r"^\s*#", ln) and not re.match(r"^\s*$", ln)), "")
-    except OSError:
-        rmref = ""
-    if not rmref:
-        refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
-                   f"missing or empty. Denied conservatively.", f"Command: {command}")
-    _degraded_tables()  # loaded under its own alarm, before the bound below
-    try:
-        refused = with_alarm(_DG_TIME_LIMIT, degraded_refuses, command, rmref)
-    except (TimeoutError, RecursionError):
-        refused = True  # a fallback that cannot finish its reading refuses
-    if refused:
+                   "submodule); this command has a boundary that is none of these."
+                   + (" It could not be proven, and its text holds a removal word (an unproven command that holds none "
+                      "runs)." if unproven else ""), released_line(), *own)
+    if named:
         refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
-                   "usable verdict, and this command is not provably plain. Denied conservatively.",
-                   f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; never widen this "
-                   f"fallback to allow.")
+                   "usable verdict, and this command's text holds a removal word. Denied conservatively.",
+                   f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; an unproven command "
+                   f"runs only when its text holds no removal word (lib/pol_degraded_removal_reference.ere).", *own)
+    return {"rule": "removal-policy", "kind": "let_through_unproven", "path": "primary" if decision else "degraded",
+            "reason": decision[5:] or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
 
 
 def kill_pid_rule(command, view, sv=None):
@@ -5777,7 +4982,7 @@ def _interpreter_code(res, cmd):
         if a in value_opts:
             k += 2
             continue
-        if a == "--" or a == "-" or not a.startswith("-"):
+        if a in OPTION_ENDS or not a.startswith("-"):
             break
         k += 1
     if all(a is None or a == "-" or a.startswith("-") for a in args):
@@ -5816,7 +5021,7 @@ _SAFE_DEVICES = locations.TERMINAL_SINKS | {locations.FD_DIR + "1", locations.FD
 _SHAPE_GIT_SUBS = frozenset({"status", "show", "diff", "log", "restore", "add", "commit", "rev-parse", "ls-files",
                              "stash", "checkout", "clean", "blame", "shortlog", "describe", "branch", "switch",
                              "cat-file", "ls-tree", "merge-base", "reflog", "tag"})
-_SHAPE_GIT_GLOBALS = frozenset({"-C", "--no-pager", "-P", "--no-optional-locks"})
+_SHAPE_GIT_GLOBALS = GIT_INERT_FLAGS | {"-C"}
 _EXEC_DOC_EXT_RE = re.compile(r"\.(sh|bash|zsh|ksh|fish|csh|tcsh|command|mk|mak|make|py|pl|pm|rb|js|mjs|cjs|ts|php|"
                               r"tcl|lua|awk|sed|ps1|bat|cmd|service|timer|desktop|cron|rc|env|envrc)$", re.I)
 _EXEC_DOC_NAMES = frozenset({"makefile", "gnumakefile", "crontab", ".bashrc", ".bash_profile", ".bash_login",
@@ -5942,6 +5147,7 @@ def _ack_ag_options_ok(args):
 
 def _shape_simple(cmd, invs, stage, state):
     """One simple command of the data shape: a pipeline's first stage, or a later pure-filter stage."""
+    from lib.shell_parse import RG_RUN_OPTS
     from lib.shell_parse import SimpleCommand, resolve
     if not isinstance(cmd, SimpleCommand) or cmd.assignments or not cmd.words \
             or not all(_word_is_static(w) for w in cmd.words):
@@ -5958,7 +5164,7 @@ def _shape_simple(cmd, invs, stage, state):
     args = [w.value() or "" for w in cmd.words[1:]]
     if name == "printf" and any(a.startswith("-v") for a in args):
         return False
-    if name in _SHAPE_SEARCHERS and any(a.startswith(("--pre", "--pager", "--hostname-bin", "--search-zip"))
+    if name in _SHAPE_SEARCHERS and any(a.startswith(RG_RUN_OPTS + ("--pager",))
                                          or (name == "rg" and a.startswith("-") and not a.startswith("--")
                                              and "z" in a) for a in args):
         return False
@@ -5998,7 +5204,7 @@ def data_shape(command, invs):
             return False
         state = {"writes": False, "git": False}
         for pipeline, sep in script.items:
-            if sep not in (None, "", ";", "&&", "||", "\n") or any(p not in ("|", "|&") for p in pipeline.pipes):
+            if sep not in (None, "", ";", "&&", "||", "\n") or any(p not in PIPE_OPS for p in pipeline.pipes):
                 return False
             if not all(_shape_simple(stage, invs, k, state) for k, stage in enumerate(pipeline.stages)):
                 return False
@@ -6075,10 +5281,14 @@ def _wide_path_after_dashdash(args):
     return path in (".", "*") or (path or "").endswith("/")
 
 
+# The first words after `git stash` that save the working tree (and with -u/-a its untracked files) and reset it.
+_STASH_SAVE_WORDS = ("push", "save", "create", "store", "-u", "--include-untracked", "-a", "--all")
+_STASH_SAVE_ALT = "|".join(map(re.escape, _STASH_SAVE_WORDS))
+
+
 def _stash_pushes(args):
-    bad = {"push", "save", "create", "store", "-u", "--include-untracked", "-a", "--all"}
     first = args[0] if args else None
-    return first is not None and (first in bad or (
+    return first is not None and (first in _STASH_SAVE_WORDS or (
         first.startswith("-") and not first.startswith("--") and any(c in first[1:] for c in "ua")))
 
 
@@ -6183,7 +5393,7 @@ def _worktree_raw_fallback(command, globals_=False):
         return _worktree_global_scan(command)
     g = r"git\s+"
     return {
-        "push": grep(g + r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b", command)
+        "push": grep(g + r"stash\s+(" + _STASH_SAVE_ALT + r")\b", command)
         or grep(g + r"stash\s+-[ua]+\b", command),
         "bare": grep(g + r"stash\s*($|[;&|])", command),
         "checkout": grep(g + r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])", command),
@@ -6200,7 +5410,8 @@ def _worktree_base_hits(command, view):
     hit["bare"] = hit["bare"] or any(not i["args"] for i in view.outer("stash"))
     hit["checkout"] = hit["checkout"] or any(_wide_path_after_dashdash(i["args"]) for i in view.outer("checkout"))
     hit["restore"] = hit["restore"] or any(
-        any(a in ("--source", "-s") or a.startswith(("--source=", "-s=")) for a in i["args"])
+        any(a in GIT_RESTORE_SOURCE_OPTS or a.startswith(tuple(o + "=" for o in GIT_RESTORE_SOURCE_OPTS))
+            for a in i["args"])
         and _wide_path_after_dashdash(i["args"]) for i in view.outer("restore"))
     return hit
 
@@ -6289,11 +5500,11 @@ _WT_VALOPTS = frozenset(["-C", "-c"] + ["--" + n for n in GC_VALOPT_NAMES.split(
 _WT_VALUE_SHAPED_RE = re.compile(rf"[{GC_VMARK}]")
 _WT_SEPS = frozenset(";&|()`")
 _WT_SUB_RE = re.compile(r"(stash|checkout|restore)\b")
-_WT_PUSH_RE = re.compile(r"stash\s+(push|save|create|store|-u|--include-untracked|-a|--all)\b")
+_WT_PUSH_RE = re.compile(r"stash\s+(" + _STASH_SAVE_ALT + r")\b")
 _WT_PUSH_FLAGS_RE = re.compile(r"stash\s+-[ua]+\b")
 _WT_BARE_RE = re.compile(r"stash\s*($|[;&|])")
 _WT_CHECKOUT_RE = re.compile(r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])")
-_WT_SOURCE_RE = re.compile(r"(?=(--source\b|-s\b))")
+_WT_SOURCE_RE = re.compile(r"(?=(%s))" % "|".join(o + r"\b" for o in GIT_RESTORE_SOURCE_OPTS))
 _WT_WIDE_RE = re.compile(r"(?=(--\s+(\.|\*|[^ /]+/)\s*($|[;&|])))")
 
 
@@ -6435,6 +5646,9 @@ def _git_clean_base(command, stripped, view):
     return verdict, fail_closed
 
 
+_ALLOW_VERDICTS = ("", "ALLOW")  # the runtime guard's verdicts that let the command run
+
+
 def git_clean_rule(command, stripped, view, invs, shape=False):
     """BS-43: `git clean` passes only as a provable dry run. The invocations come from lib/shell_parse.py; a clean
     they do not account for (an exec-taking git subcommand, a launcher the parser does not read) is found by the
@@ -6450,9 +5664,9 @@ def git_clean_rule(command, stripped, view, invs, shape=False):
             verdict = "BLOCK:trust"
     # The shape lifts a base refusal only where no clean runs: a real clean beside a mention keeps the base count.
     lift = invs is not None and shape and not any(i.subcommand == "clean" for i, _ctx in invs)
-    if verdict in ("", "ALLOW") and not lift:
+    if verdict in _ALLOW_VERDICTS and not lift:
         base_verdict, base_fc = _git_clean_base(command, stripped, view)
-        if base_fc or base_verdict not in ("", "ALLOW"):
+        if base_fc or base_verdict not in _ALLOW_VERDICTS:
             verdict, fail_closed = ("" if base_fc else base_verdict), base_fc
     has_inv = bool(verdict)
     detail = {
@@ -6545,8 +5759,7 @@ _SD_GIT_GREP = ("efABCm", "aiIwvhHEGFPnlLcopWzqr",
                  "--function-context", "--break", "--heading", "--all-match", "--quiet", "--and", "--or", "--not",
                  "--no-color"},
                 {"--color"}, {"--textconv", "-O", "--open-files-in-pager"})
-_SD_GIT_GLOBAL_FLAGS = {"--no-pager", "-p", "--paginate", "-P", "--no-optional-locks", "--no-replace-objects",
-                        "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"}
+_SD_GIT_GLOBAL_FLAGS = GIT_INERT_FLAGS | {"-p", "--paginate"}
 # git log options. A value option takes the next word (or its `=value`); a flag takes nothing; an attached option
 # takes a value only after `=` (git reads an optional or `=`-only value, as `--unified[=<n>]` or `--orderfile=<f>`, never
 # from the next word, so such an option is a flag or attached-only, never a value option). An option on none of these lists (a new one included) leaves no allowed mention, since
@@ -6592,8 +5805,7 @@ _SD_LOG_SHORT_ATTACHED = "nUMCBlIO"  # a short option whose value may follow it 
 _SD_COMMIT_SHORT_VALUES = "mFCct"
 _SD_COMMIT_SHORT_OPTIONAL = "Su"
 _SD_COMMIT_SHORT_FLAGS = "aqvsneiopz"
-_SD_COMMIT_LONG_VALUES = {"--message", "--file", "--reuse-message", "--reedit-message", "--template", "--author",
-                          "--date", "--cleanup", "--fixup", "--squash", "--trailer", "--pathspec-from-file"}
+_SD_COMMIT_LONG_VALUES = git_facts.GIT_COMMIT_VALUE_OPTIONS
 _SD_COMMIT_LONG_FLAGS = {"--all", "--patch", "--quiet", "--verbose", "--signoff", "--no-signoff", "--no-verify",
                          "--verify", "--amend", "--no-edit", "--edit", "--allow-empty", "--allow-empty-message",
                          "--dry-run", "--short", "--branch", "--porcelain", "--long", "--null", "--include", "--only",
@@ -6618,6 +5830,7 @@ def sd_normalize(text):
 def _sd_scan(args, spec, permute=True, operands=None):
     """The arg indexes a grep-like program reads as its pattern; None when an option is unknown or refuses the name.
     operands, when given, receives the indexes of the other positional words (paths, revisions, pathspecs)."""
+    from lib.shell_parse import GREP_PATTERN_LONG
     short_val, short_flag, long_val, long_flag, long_opt, refused = spec
     patterns, positional, explicit, k, dashdash = set(), [], False, 0, False
     while k < len(args):
@@ -6635,7 +5848,7 @@ def _sd_scan(args, spec, permute=True, operands=None):
             if name in refused:
                 return None
             if name in long_val:
-                if name in ("--regexp", "--file"):
+                if name in GREP_PATTERN_LONG:
                     explicit = True
                 if name == "--regexp":
                     patterns.add(k if eq else k + 1)
@@ -6672,15 +5885,8 @@ def _sd_scan(args, spec, permute=True, operands=None):
 def _sd_git(args):
     """(allowed arg indexes, message comes from stdin) for a git call that names the file only as a search pattern
     or in a commit message; None when any part of it is not read."""
-    k = 0
-    while k < len(args) and args[k].startswith("-"):
-        if args[k] == "-C" and k + 1 < len(args):
-            k += 2
-            continue
-        if args[k] not in _SD_GIT_GLOBAL_FLAGS:
-            return None
-        k += 1
-    if k >= len(args):
+    k = git_plain_subcommand_index(args, _SD_GIT_GLOBAL_FLAGS)
+    if k is None:
         return None
     sub, rest, base = args[k], args[k + 1:], k + 1
     if sub == "grep":
@@ -6716,7 +5922,7 @@ def _sd_git(args):
         allowed, stdin, j = set(), False, 0
         while j < len(rest):
             a = rest[j]
-            if a == "--" or not a.startswith("-") or a == "-":
+            if a in OPTION_ENDS or not a.startswith("-"):
                 return allowed, stdin  # a pathspec follows: its words are not messages
             if a.startswith("--"):
                 name, eq, val = a.partition("=")
@@ -6942,7 +6148,7 @@ def _sd_env(sites):
         found = list(site.cmd.assignments)
         try:
             res = resolve(site.cmd)
-            if res.name in ("export", "declare", "typeset", "local", "readonly"):
+            if res.name in DECLARATION_BUILTINS:
                 found += [Assignment(w) for w in res.args if "=" in w.text]
         except Exception:  # noqa: BLE001
             pass
@@ -6980,6 +6186,7 @@ def _sd_glob_operand(res, out_safe):
     """The glob a program applies to file names itself (find -name/-path/-regex, rg -g, grep --include, git
     pathspecs, tar --wildcards/--include, rsync --include/--filter) when it matches the file; None otherwise. A
     find that only lists names to the terminal is left alone."""
+    from lib.shell_parse import TAR_NAMES
     name = res.name
     vals = [w.value() if w.value() is not None else w.text for w in res.args]
     hits = []
@@ -7023,7 +6230,7 @@ def _sd_glob_operand(res, out_safe):
             m = re.match(r"(\+|include)[ ,_]\s*(.*)", r)
             if m:
                 hits.append(m.group(2))
-    elif name in ("tar", "bsdtar", "gtar"):
+    elif name in TAR_NAMES:
         hits = opt_values({"--include"})
         if "--wildcards" in vals:
             hits += [v for v in vals if not v.startswith("-")]
@@ -7055,6 +6262,7 @@ def _sd_glob_operand(res, out_safe):
 def _sd_interpreter_code(res, cmd):
     """The code an interpreter call runs from its own words or its stdin: a -c/-e/-r style option's value (awk's
     program operand), and a heredoc or here-string. A script path and the script's arguments are not code."""
+    from lib.shell_parse import AWK_PROGFILE_OPTS, AWK_SOURCE_OPTS, AWK_VALUE_OPTS
     name = res.name.lower()
     vals = [w.value() if w.value() is not None else w.text for w in res.args]
     code = []
@@ -7068,13 +6276,12 @@ def _sd_interpreter_code(res, cmd):
             if not a.startswith("-") or a == "-":
                 break
             nm, eq, v = a.partition("=")
-            if a in ("-f", "--file") or a.startswith("-f"):
+            if nm in AWK_PROGFILE_OPTS or a.startswith("-f"):
                 from_file = True
-            if nm in ("-e", "--source"):
+            if nm in AWK_SOURCE_OPTS:
                 code.append(v if eq else (vals[k + 1] if k + 1 < len(vals) else ""))
                 from_file = True
-            if a in ("-f", "-v", "-F", "-e", "--file", "--assign", "--field-separator", "--source", "-i", "-l",
-                     "--include", "--load"):
+            if a in AWK_VALUE_OPTS:
                 k += 2
                 continue
             k += 1
@@ -7086,7 +6293,7 @@ def _sd_interpreter_code(res, cmd):
         k = 0
         while k < len(vals):
             a = vals[k]
-            if a in ("--", "-"):
+            if a in OPTION_ENDS:
                 break
             if a.startswith("--"):
                 nm, eq, v = a.partition("=")
@@ -7178,7 +6385,7 @@ def _sd_streams(node, out, err):
     for r in node.redirects:
         if r.op in ("<", "<<", "<<-", "<<<", "<&"):
             continue
-        both = r.op in ("&>", "&>>") or (r.op == ">&" and r.io is None and r.dup is None and not r.close)
+        both = r.op in BOTH_STREAMS_OPS or (r.op == ">&" and r.io is None and r.dup is None and not r.close)
         fd = None if both else r.fd
         if fd is None and not both:
             out = err = False  # a {NAME}> form
@@ -7230,7 +6437,7 @@ def _sd_display_args(spec, vals, numeric):
     while k < len(vals):
         a = vals[k]
         k += 1
-        if dashdash or a == "-" or not a.startswith(("-", "+")) or (a.startswith("+") and not numeric):
+        if dashdash or a == "-" or not a.startswith(OPTION_SIGNS) or (a.startswith("+") and not numeric):
             operands += 1
             continue
         if a == "--":
@@ -7300,7 +6507,7 @@ def _sd_output_safety(script, traced=False):
                     if res.payload is not None and res.payload_kind:
                         visit(res.payload, o, e, ctx + (res.payload_kind,))
                 elif isinstance(st, Compound):
-                    inner = st.kind not in ("function", "coproc")
+                    inner = st.kind not in DEFINER_KINDS
                     for body in st.body:
                         visit(body, o and inner, e and inner, ctx)
 
@@ -7320,7 +6527,7 @@ def _sd_redefines(site):
     if any(n in _SD_DEFINERS for n in names):
         return True
     texts = [a.word.text for a in cmd.assignments] + [a.word.text for a in res.assignments]
-    if res.name in ("export", "declare", "typeset", "readonly", "local", "set", "env"):
+    if res.name in DECLARATION_BUILTINS + ("set", "env"):
         texts += [w.value() or w.text for w in res.args]
     return any(_SD_VARIABLE.match(t.lstrip("'\"")) for t in texts)
 
@@ -7342,15 +6549,8 @@ _SD_SHELL = re.compile(r"(ba|da|z|k|mk|y|r|po)?sh|busybox")
 
 def _sd_git_sub(vals):
     """The subcommand of a git call after its global options; None when a global option is not plain."""
-    k = 0
-    while k < len(vals) and vals[k].startswith("-"):
-        if vals[k] == "-C" and k + 1 < len(vals):
-            k += 2
-            continue
-        if vals[k] not in _SD_GIT_GLOBAL_FLAGS:
-            return None
-        k += 1
-    return vals[k] if k < len(vals) else None
+    k = git_plain_subcommand_index(vals, _SD_GIT_GLOBAL_FLAGS)
+    return None if k is None else vals[k]
 
 
 def _sd_traces(sites):
@@ -7406,10 +6606,9 @@ def _sd_reads_back(site, res):
 # into display filters and redirected only to /dev/null or between stdout and stderr. Nothing in it assigns or
 # exports a variable, defines, configures or reads back anything, or writes a file.
 _SD_PLAIN_WRAPPERS = frozenset({"timeout", "nice", "command"})
-_SD_PLAIN_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh"})
 _SD_PLAIN_GIT = frozenset({"status", "diff", "log", "show", "push", "fetch"})
 # git options of those subcommands that run a program or write a file (taken in any abbreviation).
-_SD_PLAIN_GIT_REFUSED = ("--ext-diff", "--textconv", "--receive-pack", "--upload-pack", "--exec")
+_SD_PLAIN_GIT_REFUSED = git_facts.GIT_RUN_OR_WRITE_OPTIONS
 _SD_PLAIN_COMPOUNDS = frozenset({"group", "subshell", "if"})
 
 
@@ -7478,7 +6677,7 @@ def _sd_plain_command(cmd):
     if not literal or not _sd_quiet_redirects(cmd.redirects):
         return False
     vals = [w.value() for w in res.args]
-    if name in _SD_PLAIN_SHELLS:
+    if name in COMMON_SHELLS:
         return len(vals) == 2 and vals[0] == "-c" and isinstance(res.payload, Script) and \
             _sd_plain_script(res.payload)
     if name == "find":
@@ -7487,7 +6686,7 @@ def _sd_plain_command(cmd):
             (not actions or (isinstance(res.payload, Script) and _sd_plain_script(res.payload)))
     if res.payload is not None:
         return False
-    if name in ("echo", "true", "false", ":", "pwd", "ls", "cd"):
+    if (name in _BULK_BENIGN and name != "printf") or name == "ls":  # printf: below
         return True
     if name == "printf":
         return bool(vals) and vals[0] != "-v"
@@ -7501,7 +6700,7 @@ def _sd_plain_script(script):
     if script.error is not None:
         return False
     for pl, sep in script.items:
-        if sep == "&" or any(p not in ("|", "|&") for p in pl.pipes):
+        if sep == "&" or any(p not in PIPE_OPS for p in pl.pipes):
             return False
         for k, st in enumerate(pl.stages):
             if k > 0:
@@ -7613,20 +6812,22 @@ def session_dirs_rule(command):
 # ── Entry ────────────────────────────────────────────────────────────────────
 
 def environment():
-    tmp = os.environ.get("CLAUDE_TMPDIR") or os.environ.get("TMPDIR") or locations.DEFAULT_TEMP_DIR
     helper = os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_HELPER", "")
     return {
         "prefix": os.environ.get("CLAUDE_PROTECTED_DAEMON_PREFIX", ""),
         "targets": os.environ.get("CLAUDE_PROTECTED_DAEMON_TARGETS", ""),
         "family": os.environ.get("CLAUDE_PROTECTED_PROCESS_FAMILY", ""),
         "dev_systemd": os.environ.get("CLAUDE_DEV_SYSTEMD", ""),
-        "grant_dir": os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_DIR") or tmp,
+        "grant_dir": os.environ.get("CLAUDE_DAEMON_RESTART_SENTINEL_DIR")
+                     or locations.DEFAULT_TEMP_DIR,  # the owner's helper's own rule
         "grant_hint": helper or "<daemon-restart grant helper>",
     }
 
 
 def decide(payload_text):
     """The verdict token, or a refusal (refuse() exits 2)."""
+    global PAYLOAD
+    PAYLOAD = payload_text
     try:
         payload = json.loads(payload_text)
     except ValueError:
@@ -7668,12 +6869,14 @@ def decide(payload_text):
     executable = executable_view_or_raw(command)
     sv = ServiceView(command, get("cwd"))
     service_rules(command, executable, env, sv)
-    removal_policy(payload_text, command)
+    unproven = removal_policy(payload_text, command)
     kill_pid_rule(command, executable, sv)
     invs = git_view(command)
     shape = data_shape(command, invs)
     worktree_git_rules(command, invs, view, shape)
     git_clean_rule(command, executable, view, invs, shape)
+    if unproven:
+        let_through_unproven(unproven, payload)
     return "ALLOW"
 
 

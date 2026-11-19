@@ -159,7 +159,7 @@ show_status() {
 show_logs() {
     local path="$1"
     # The watcher writes one log per repository (git-fswatch-<repo>.log), not a shared one
-    local log_file=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/logs/git-fswatch-*.log)
+    local log_file=("$(. "${BASH_SOURCE[0]%/*}/lib/claude_home.sh" && claude_config_home)"/logs/git-fswatch-*.log)
 
     if [ ! -f "$log_file" ]; then
         echo -e "${YELLOW}⚠${NC} No log file found: $log_file"

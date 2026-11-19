@@ -35,7 +35,7 @@ Resolve the target spec, first match wins:
    only when all populated values agree. A fan-out cycle does not need, and
    this command must not create, a parent context merely to resolve the spec.
 3. A new spec from `<HARNESS_ROOT>/templates/overnight-spec.md`, created at
-   `${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md`
+   `${CLAUDE_PROJECT_DIR:-$PWD}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md`
    by `spec-write.py create --spec <path>` with the populated template on stdin.
 
 `<HARNESS_ROOT>/scripts/spec-write.py` is the one writer of
