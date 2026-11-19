@@ -1361,7 +1361,7 @@ _PROGRAM_OPTIONS = {
 _PROGRAM_HINT_RE = re.compile(r'(?:\A|[\s/;&|(`\'"])(?:rg|ag|ack|sort|git)\b')
 # Commands that print their arguments, and the shell reads what they print
 # when a pipe feeds it (`echo "git push" | sh`).
-_PRINTERS = frozenset({'echo', 'printf'})
+_PRINTERS = shell_parse.PRINTERS
 # The backslash escapes printf and `echo -e` print as characters: `\xHH`, an
 # octal `\NNN` or `\0NNN`, and the letters. Read whatever the options say.
 _ESCAPE_RE = re.compile(r'\\(x[0-9A-Fa-f]{1,2}|0?[0-7]{1,3}|[abefnrtv\\])')

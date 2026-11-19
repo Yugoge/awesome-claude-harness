@@ -1554,7 +1554,7 @@ from lib.shell_parse import INTO_DIR_VERBS  # noqa: E402 -- the copy, move and l
 from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
     BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, COMMON_SHELLS, CWD_BUILTINS,
     DECLARATION_BUILTINS, DEFINER_KINDS, GIT_RESTORE_SOURCE_OPTS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
-    OUTPUT_REDIRECT_OPS, PIPE_OPS, REDIRECT_OPS)
+    OUTPUT_REDIRECT_OPS, PIPE_OPS, PRINTERS, REDIRECT_OPS)
 from lib import locations  # noqa: E402
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
@@ -2901,7 +2901,7 @@ def consent_flag_verdict(command, cwd, state):
         why = _consent_read_only(cmd, name, view, named_writes)
         if why:
             return why + ", and the command names the consent flag"
-        if name in ("echo", "printf") and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
+        if name in PRINTERS and any(CONSENT_TOKEN in _consent_norm(w.text) for w in cmd.words[1:]):
             emits = True
     for w in named_writes:
         why = (view.target(toks=w[1], named=True) if isinstance(w, tuple) else
@@ -4127,7 +4127,7 @@ def sensitive_redirect(command, kept=False):
                 args = resolve(site.cmd).args
                 texts = [w.text if w.value() is None else w.value() for w in args]
                 spec = {"grep": _SD_GREP, "egrep": _SD_GREP, "fgrep": _SD_GREP, "rg": _SD_RG}.get(name)
-                data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in ("echo", "printf") else ()
+                data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in PRINTERS else ()
                 skip = {id(args[k]) for k in data if k < len(args) and (spec or args[k].value() is not None)}
                 for w in args if name in SHELLS or name in _OPAQUE_RUNNERS else ():
                     if any(c.isspace() for c in w.value() or "") and parse(w.value()).error is None:
