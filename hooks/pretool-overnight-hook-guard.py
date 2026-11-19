@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib import command_span, overnight, shell_parse as sp, stop_contract  # noqa: E402
 from lib.git_command_classifier import GIT_GLOBAL_VALUE_OPTS  # noqa: E402
+from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES  # noqa: E402
 
 try:  # optional contract runtime + agent resolver for the self_repair grant
     from lib import contract_runtime as _contract_runtime  # noqa: E402
@@ -1625,7 +1626,7 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
         return []
     common_real = os.path.realpath(gcd)
     args: list[str] = []
-    for leaf in ('config', 'hooks', _KEYSTONE_HOOKS_LEAF):
+    for leaf in GIT_COMMON_DIR_PROTECTED + (_KEYSTONE_HOOKS_LEAF,):
         p = os.path.join(common_real, leaf)
         if os.path.exists(p):
             args += ['--ro-bind', p, p]
@@ -1766,7 +1767,7 @@ class _GitConfigPaths:
         self.hook_dirs: set[str] = set()
         for dirs in checkouts:
             for d in dirs:
-                self.files.update(os.path.join(os.path.realpath(d), leaf) for leaf in ('config', 'config.worktree'))
+                self.files.update(os.path.join(os.path.realpath(d), leaf) for leaf in GIT_DIR_CONFIG_FILES)
             if dirs:
                 self.hook_dirs.add(os.path.realpath(os.path.join(os.path.realpath(dirs[-1]), _KEYSTONE_HOOKS_LEAF)))
 

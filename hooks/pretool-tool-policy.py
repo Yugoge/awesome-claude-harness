@@ -1873,8 +1873,9 @@ def _home_git_files(home) -> list:
         git_dir, common = out.stdout.splitlines()[:2] if out.returncode == 0 else ("", "")
     except (OSError, subprocess.SubprocessError, ValueError):
         git_dir = common = ""
-    for root, names, label in ((common, ("config", "hooks"), "git common dir's"),
-                               (git_dir, ("config", "config.worktree"), "git dir's")):
+    from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES
+    for root, names, label in ((common, GIT_COMMON_DIR_PROTECTED, "git common dir's"),
+                               (git_dir, GIT_DIR_CONFIG_FILES, "git dir's")):
         held += [(os.path.join(root, n), f"the harness home's {label} {n}") for n in names if root]
     return held
 

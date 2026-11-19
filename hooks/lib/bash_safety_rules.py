@@ -1524,6 +1524,7 @@ def commit_artifact_rules(command, state):
 # The flag's name has one definition, next to its reader (lib/allowlist.has_do_consent); hooks/prompt-workflow.py
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
+from lib.git_facts import GIT_DIR_CONFIG_FILES  # noqa: E402
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
 # Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
@@ -2587,7 +2588,7 @@ def _consent_git_config_file(view, t):
     base, parent = parts[-1], (parts[-2] if len(parts) > 1 else None)
     if base == ".gitconfig":
         return True
-    if base in ("config", "config.worktree"):
+    if base in GIT_DIR_CONFIG_FILES:
         if parent is None:
             return any(c is None or re.search(r"\.git(/|$)", c) for c, _ in view.cwds)
         if parent.endswith(".git") or parent == "git" or "*" in parent or "/.git/" in "/" + text:
