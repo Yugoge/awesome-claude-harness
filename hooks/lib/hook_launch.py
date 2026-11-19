@@ -84,7 +84,7 @@ HOOKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_TIMEOUT = 60.0          # the CLI's default hook timeout, seconds
 RECORD_ENV = "CLAUDE_HOOK_LAUNCH_RECORD_FD"
 MARK_ENV = "CLAUDE_HOOK_LAUNCH_MARKS"  # a traced replay's marker directory (tests/replay/trace.py)
-TOOL_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"})
+from lib.hook_launch_fallback import TOOL_EVENTS  # noqa: E402 -- the stdlib-only fallback holds the one list
 PLAIN_CONTEXT_EVENTS = frozenset({"UserPromptSubmit", "SessionStart"})
 TIMEOUT = "timeout"             # a hook's status when it ran past its timeout
 # Standard-library modules imported once before the forks, so each fork does not import them again:

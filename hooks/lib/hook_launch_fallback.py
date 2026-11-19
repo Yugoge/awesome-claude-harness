@@ -16,6 +16,8 @@ import sys
 import time
 
 HOOKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The hook events whose payload names a tool (the dispatchers select their rules by it); defined
+# here, the standard-library-only module, and read by lib/hook_launch.py.
 TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest")
 
 
