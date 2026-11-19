@@ -17,12 +17,10 @@ the shipped settings.json sets (P2's arming; the code default stays advisory):
 A report without a lane_set declares no fan-out: a singular cycle, or one of
 the overnight pipelines' dev-report-<ts>-<N>.json, which the filenames alone
 would read as lanes of task <ts>. The canonical's one producer is the lane
-completeness watch, which runs the harness's aggregator whenever a lane report
-is written; a lane report's is its lane's dev. A hook has no dispatch of its
-own, so a canonical finding also names the dispatch that reaches it (P1b E5
-(a)): the declaring dispatch of one lane report, run again, whose write of
-that report runs the watch. That is the lane this QA dispatch's task id names,
-else the first declared lane.
+completeness watch, run by each lane report's write; a hook has no dispatch, so
+a canonical finding names the lane whose declaring dispatch, run again, runs it
+(P1b E5 (a)): the first the aggregator's reasons for refusing the lane reports
+name, which a missing canonical states (W1), else this QA's lane or the first.
 
 Task-id scoping (BUG-AGGCHK-2): the check covers the cycle of the task the
 QA dispatch's own obligation names. A shard family is in scope when its id and
@@ -57,8 +55,10 @@ Fail-open contract: parsing failures, missing stdin, missing project dir,
 unexpected exceptions -> exit 0. Never crash the orchestrator on a self-bug.
 """
 
+import functools
 import json
 import os
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -249,9 +249,13 @@ def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
         if missing:
             continue
         if not canonical.is_file():
+            refused = aggregator_refusal(dev_dir, task_id)
+            named = [lane for lane in sorted(declared) if own_refusal(refused, lane)]
             violations.append((
                 "canonical_missing", canonical,
-                f"the canonical aggregate of lanes {', '.join(sorted(declared))} is missing", None, via,
+                f"the canonical aggregate of lanes {', '.join(sorted(declared))} is missing"
+                + (f"; its producer, scripts/aggregate-dev-report.py, refuses: {'; '.join(refused)}" if refused else ""),
+                None, (named[0], lane_reports[task_id].get(named[0], via[1])) if named else via,
             ))
             continue
         if scope_task_id is None:
@@ -267,6 +271,25 @@ def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
                 "the lane_set declares", None, via,
             ))
     return violations
+
+
+@functools.lru_cache(maxsize=None)
+def aggregator_refusal(dev_dir, task_id):
+    """The aggregator's reasons for refusing task_id's lane reports (--dry-run); () if it accepts or cannot run."""
+    script, project = Path(__file__).resolve().parent.parent / "scripts" / "aggregate-dev-report.py", dev_dir.parent.parent
+    try:
+        run = subprocess.run([sys.executable, str(script), "--task-id", task_id, "--dry-run", "--project-dir",
+                              str(project)], capture_output=True, text=True, timeout=30)
+    except Exception:
+        return ()
+    return tuple(ln.strip() for ln in run.stderr.splitlines() if ln.startswith("  ")) if run.returncode == 1 else ()
+
+
+def own_refusal(reasons, label):
+    """Those about lane `label`'s report; one comparing it with another's only while no other is refused (W1)."""
+    mine = lambda r: r.startswith((f"shard '{label}':", f"'{label}':"))  # noqa: E731
+    cross = lambda r: " != first shard " in r or r.endswith("snapshot mismatch")  # noqa: E731
+    return [r for r in reasons if mine(r) and not (cross(r) and any(not mine(o) and not cross(o) for o in reasons))]
 
 
 def _roster(value):

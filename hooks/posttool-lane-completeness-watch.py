@@ -1,34 +1,17 @@
 #!/usr/bin/env python3
 """PostToolUse Hook (Write|Edit|NotebookEdit|MultiEdit matcher): the one
 producer of a fan-out's canonical aggregate dev-report (P1b E5). Every write
-of a lane report runs the harness's aggregator for its task, so the canonical
-follows the lane reports as they land, without waiting for the orchestrator's
-next dispatch or a later /close (ticket 20261001-161041-r05).
-
-Trigger: tool_input.file_path's basename matches a per-worker ("lane")
-dev-report shard filename (lib.dev_report_shard_patterns.classify_filename
-returns ("worker", task_id, lane)) and the report's own `lane_set` declares
-the fan-out (schema v2 requires it non-null when `lane` is a string --
-schemas/dev-report.v2.json). Canonical-aggregate writes, a report without a
+of a lane report (lib.dev_report_shard_patterns.classify_filename reads it as
+("worker", task_id, lane); its own `lane_set` declares the fan-out) runs the
+harness's `scripts/aggregate-dev-report.py --task-id <task_id> --project-dir
+<project>` (bounded timeout), so the canonical follows the lane reports as they
+land and the last lane's write rewrites an earlier one (ticket
+20261001-161041-r05). Any other path, a canonical, or a report without a
 lane_set (a singular cycle, an overnight pipeline's dev-report-<ts>-<N>.json)
-and every other file path are a no-op with no filesystem I/O beyond reading
-stdin and that report.
-
-This hook decides nothing about the roster: whether every lane the lane_set
-declares has reported, and whether the canonical names them all, is G3's
-collection check before QA (hooks/pretool-aggregate-check.py). A canonical
-written before the last lane lands is rewritten by that lane's write.
-
-S1: the hook runs the harness's own
-`scripts/aggregate-dev-report.py --task-id <task_id> --project-dir <project>`
-(bounded timeout). Both of the aggregator's own legitimate outcomes -- exit 0, or
-exit 1 with nothing written (a shard mismatch) -- count as "invocation
-completed," never as a hook malfunction. Any exception/timeout/non-zero
-exit is swallowed; the hook's own exit code is unaffected (AC6).
-
-Fail-open contract (universal in this codebase): parsing failures, missing
-stdin, missing project dir, unexpected exceptions -> exit 0. This hook
-NEVER blocks or delays the writer's own tool call on a self-bug.
+is a no-op. The roster is G3's (hooks/pretool-aggregate-check.py); the
+aggregator's refusal is not reported here but at the lane's stop (G2, its
+reasons about that lane's report) and the main agent's QA dispatch (G3, all of
+them). Fail-open: nothing here blocks or delays the writer's tool call (AC6).
 """
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
@@ -41,9 +24,7 @@ finally:
     sys.path.pop(0)
 
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -82,10 +63,7 @@ def _read_json(path):
 
 
 def _invoke_aggregator(project_dir, task_id):
-    """S1: best-effort aggregator auto-invocation. The aggregator's own
-    exit 1 on a shard mismatch, a timeout, or any unexpected
-    exception are all swallowed here -- never raised into this hook's own
-    exit code (AC6)."""
+    """Best effort: the aggregator's exit 1, a timeout or an exception never reaches this hook's exit (AC6)."""
     try:
         # The harness's own copy, next to this hook: a product repository has
         # no scripts/ of its own.

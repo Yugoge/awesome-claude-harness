@@ -2448,6 +2448,23 @@ class TestFanoutCollectionCheck:
                 f"docs/dev/dev-report-{BARE_TID}-l2.json (lane l2), which writes that report "
                 "again in that dispatch; the write runs it") in result.stderr
 
+    @pytest.mark.parametrize("mode", [None, "block"])
+    def test_missing_canonical_names_the_producers_reason_and_the_lane_it_refuses(self, project_dir, tmp_path, mode):
+        # W1: the producer refuses lane l1's report; QA stays refused, and the finding reaches the main agent
+        # with the producer's reason and the dispatch that can repair it, l1's, whichever lane this QA names.
+        dev_dir = project_dir / "docs" / "dev"
+        for lane in ("l1", "l2"):
+            self._lane(dev_dir, BARE_TID, lane, ["l1", "l2"])
+        path = dev_dir / f"dev-report-{BARE_TID}-l1.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "baseline_dirty_snapshot": "see the manifest"}))
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l2", mode)
+        assert result.returncode == 2
+        assert (f"[canonical_missing] {dev_dir / f'dev-report-{BARE_TID}.json'}: the canonical aggregate of "
+                "lanes l1, l2 is missing; its producer, scripts/aggregate-dev-report.py, refuses: shard 'l1': "
+                "baseline_dirty_snapshot is neither verbatim porcelain output nor a leading-count summary") in result.stderr
+        assert (f"| reached by: dispatching again the dev dispatch that declared "
+                f"docs/dev/dev-report-{BARE_TID}-l1.json (lane l1)") in result.stderr
+
     def test_canonical_that_misses_a_lane_is_stale(self, project_dir, tmp_path):
         dev_dir = project_dir / "docs" / "dev"
         for lane in ("l1", "l2", "l3"):
