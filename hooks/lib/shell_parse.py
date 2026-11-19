@@ -3182,6 +3182,12 @@ NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the w
 INSTALL_DIR_OPTS = ("-d", "--directory")  # install makes every operand a directory (no source)
 TAR_NAMES = ("tar", "bsdtar", "gtar")  # the program names that are tar
 AWK_NAMES = ("awk", "gawk", "mawk", "nawk")  # the program names that are awk
+# awk's options that take a value (POSIX awk and gawk), by what the value is:
+AWK_DATA_OPTS = ("-F", "--field-separator", "-v", "--assign")  # a separator or an assignment
+AWK_SOURCE_OPTS = ("-e", "--source")  # program text
+AWK_PROGFILE_OPTS = ("-f", "--file", "-E", "--exec")  # a file holding the program
+AWK_LIB_OPTS = ("-i", "--include", "-l", "--load")  # a source library or extension it loads
+AWK_VALUE_OPTS = AWK_DATA_OPTS + AWK_SOURCE_OPTS + AWK_PROGFILE_OPTS + AWK_LIB_OPTS
 # ripgrep: the options whose value is a program it runs, and every option that makes it run
 # one (--search-zip, short -z, runs the decompressors). --pre-glob only narrows --pre.
 RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")

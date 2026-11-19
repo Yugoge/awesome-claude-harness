@@ -2636,7 +2636,7 @@ def _consent_text_names_state(view, text):
 
 def _consent_read_only(cmd, name, view, named_writes):
     """None when the simple command is one of the read-only shapes, else why not."""
-    from lib.shell_parse import AWK_NAMES
+    from lib.shell_parse import AWK_DATA_OPTS, AWK_NAMES
     words = list(cmd.words[1:])
     vals = [w.value() for w in words]
     if name in _CONSENT_STRICT_ARGS and any(v is None and any(p.kind not in ("lit", "glob") for p in w.parts)
@@ -2673,7 +2673,7 @@ def _consent_read_only(cmd, name, view, named_writes):
             if skip:
                 skip = False
                 continue
-            if v in ("-F", "-v", "--field-separator", "--assign"):
+            if v in AWK_DATA_OPTS:
                 skip = True
                 continue
             if v.startswith("-F") or v.startswith("-v") or v.startswith("--field-separator=") or v.startswith(
@@ -6978,6 +6978,7 @@ def _sd_glob_operand(res, out_safe):
 def _sd_interpreter_code(res, cmd):
     """The code an interpreter call runs from its own words or its stdin: a -c/-e/-r style option's value (awk's
     program operand), and a heredoc or here-string. A script path and the script's arguments are not code."""
+    from lib.shell_parse import AWK_PROGFILE_OPTS, AWK_SOURCE_OPTS, AWK_VALUE_OPTS
     name = res.name.lower()
     vals = [w.value() if w.value() is not None else w.text for w in res.args]
     code = []
@@ -6991,13 +6992,12 @@ def _sd_interpreter_code(res, cmd):
             if not a.startswith("-") or a == "-":
                 break
             nm, eq, v = a.partition("=")
-            if a in ("-f", "--file") or a.startswith("-f"):
+            if nm in AWK_PROGFILE_OPTS or a.startswith("-f"):
                 from_file = True
-            if nm in ("-e", "--source"):
+            if nm in AWK_SOURCE_OPTS:
                 code.append(v if eq else (vals[k + 1] if k + 1 < len(vals) else ""))
                 from_file = True
-            if a in ("-f", "-v", "-F", "-e", "--file", "--assign", "--field-separator", "--source", "-i", "-l",
-                     "--include", "--load"):
+            if a in AWK_VALUE_OPTS:
                 k += 2
                 continue
             k += 1

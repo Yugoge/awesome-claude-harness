@@ -989,13 +989,13 @@ class _Scan:
             v = vals[k]
             if v is None:
                 return False
-            if v in ('-f', '--file', '-E', '--exec', '-l', '--load', '-i', '--include') or \
+            if v in _sp.AWK_PROGFILE_OPTS + _sp.AWK_LIB_OPTS or \
                     v.startswith('--file=') or v.startswith('--load='):
                 return False
-            if v in ('-F', '-v', '--assign', '--field-separator'):
+            if v in _sp.AWK_DATA_OPTS:
                 k += 2
                 continue
-            if v in ('-e', '--source'):
+            if v in _sp.AWK_SOURCE_OPTS:
                 if k + 1 >= len(vals) or not _awk_inert(vals[k + 1]):
                     return False
                 prog = vals[k + 1]

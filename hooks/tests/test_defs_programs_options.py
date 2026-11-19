@@ -55,3 +55,14 @@ def test_the_git_guard_reads_every_rg_option_that_runs_a_program(project, comman
     assert [(i.cmd_token, i.subcommand) for i in git_command_classifier.iter_git_invocations(command)] == [
         ("git", "commit")]
     assert _hook("pretool-git-privilege-guard.py", command, project) == 2
+
+
+@pytest.mark.parametrize("command", ["awk --source 'BEGIN{system(\"rm -rf build\")}'",
+                                     "awk --source='BEGIN{system(\"rm -rf build\")}'",
+                                     "awk -e 'BEGIN{system(\"rm -rf build\")}'"])
+def test_the_removal_analyzer_reads_every_awk_program_option(project, command):
+    assert _hook("pretool-bash-safety.sh", command, project) == 2
+
+
+def test_a_plain_awk_read_stays_free(project):
+    assert _hook("pretool-bash-safety.sh", "awk -F: -v x=1 '{print $1}' /etc/hostname", project) == 0
