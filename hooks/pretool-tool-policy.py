@@ -2074,9 +2074,11 @@ def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None
     subagent is started into a stop gate (G2) it cannot pass. Each declared file is put to this
     hook's own decision (_decide) as that subagent's Write of it, its dispatch recorded as the CLI
     records one (the call, the child's first record and meta) in a store of its own."""
-    prompt = tool_input.get("prompt") if tool_name in ("Agent", "Task") else None
+    prompt = tool_input.get("prompt") if tool_name in ("Agent", "Task") and isinstance(tool_input, dict) else None
     if not isinstance(prompt, str) or "<obligation" not in prompt:
         return
+    import contextlib
+    import io
     import shutil
     import tempfile
     from lib import obligation
@@ -2090,31 +2092,27 @@ def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None
         return
     root = tempfile.mkdtemp(prefix="dispatch-writes-")
     try:
-        os.makedirs(os.path.join(root, "s", "subagents"))
-        for name, record in (("s.jsonl", {"type": "assistant", "message": {"role": "assistant", "content": [
-                {"type": "tool_use", "id": call, "name": tool_name, "input": tool_input}]}}),
-                ("s/subagents/agent-dispatch.jsonl", {"type": "user", "message": {"role": "user", "content": prompt}}),
-                ("s/subagents/agent-dispatch.meta.json", {"agentType": role, "toolUseId": call})):
+        for name, record in (("s/subagents/agent-dispatch.jsonl", {"type": "user", "message": {"role": "user",
+                             "content": prompt}}), ("s/subagents/agent-dispatch.meta.json", {"agentType": role,
+                             "toolUseId": call}), ("s.jsonl", {"type": "assistant", "message": {"role": "assistant",
+                             "content": [{"type": "tool_use", "id": call, "name": tool_name, "input": tool_input}]}})):
+            os.makedirs(os.path.dirname(os.path.join(root, name)), exist_ok=True)
             with open(os.path.join(root, name), "w") as fh:
                 fh.write(json.dumps(record) + "\n")
         for path in paths:
-            write = {**data, "transcript_path": os.path.join(root, "s.jsonl"), "tool_name": "Write", "agent_id":
-                     "dispatch", "agent_type": role, "tool_input": {"file_path": os.path.join(project, path)}}
-            saved, sys.stderr = sys.stderr, __import__("io").StringIO()
+            target, saved, sys.stderr = os.path.join(project, path), sys.stderr, io.StringIO()
             try:
-                _decide(write)
+                _decide({**data, "transcript_path": os.path.join(root, "s.jsonl"), "tool_name": "Write",
+                         "agent_id": "dispatch", "agent_type": role, "tool_input": {"file_path": target}})
             except SystemExit as stop:
-                refusal = sys.stderr.getvalue().strip().partition("\n")[0].replace("BLOCKED by tool-policy.v1: ", "")
+                refusal, sys.stderr = sys.stderr.getvalue(), saved
                 if stop.code == 2:
-                    sys.stderr = saved
-                    try:
-                        refusal = json.loads(refusal)["deny_reason"]
-                    except (ValueError, KeyError, TypeError):
-                        pass
+                    with contextlib.suppress(ValueError, KeyError, TypeError):
+                        refusal = json.loads(refusal.partition("\n")[0].partition(": ")[2])["deny_reason"]
                     _emit_block("main", tool_name, path, f"this dispatch declares {path} for its {role} subagent, and "
                                 f"tool-policy.v1 (hooks/pretool-tool-policy.py) would refuse that subagent's Write of "
-                                f"{write['tool_input']['file_path']}: {refusal}; its stop gate would demand a file it "
-                                "may not write, so no subagent is started")
+                                f"{target}: {refusal.strip()}"
+                                "; its stop gate would demand a file it may not write, so no subagent is started")
                     sys.exit(2)
             finally:
                 sys.stderr = saved
@@ -2126,9 +2124,7 @@ def main() -> None:
     # Bootstrap the deny-logic FIRST, fail-closed (exit 2) on import error.
     _bootstrap_security()
     data = _read_payload()
-    if not data:
-        sys.exit(0)
-    if not isinstance(data.get("tool_name"), str):
+    if not data or not isinstance(data.get("tool_name"), str):
         sys.exit(0)
     _observe_reports(data)
     _decide(data)
