@@ -61,6 +61,7 @@ import shlex  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
 import shell_parse  # noqa: E402 -- the one reading of a Bash command
+import git_facts  # noqa: E402 -- what git's subcommands do to the files they name
 from bash_read_only import _git as _git_reads  # noqa: E402 -- the one proof that a git command only reads
 sys.path.pop(0)
 
@@ -71,8 +72,7 @@ SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
 READ_ONLY = {"cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "wc", "ls", "stat",
              "file", "jq", "diff", "cmp", "md5sum", "sha256sum", "test", "[", "echo", "printf", "realpath",
              "readlink", "basename", "dirname", "find"}
-GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "check-attr", "cat-file",
-                 "grep", "rev-parse", "stash"}
+GIT_READ_ONLY = git_facts.GIT_KEEPS_NAMED_FILES  # git calls that write no file they name
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
@@ -175,12 +175,14 @@ def _commands(command: str, bodies: str, every_word: bool = False, depth: int = 
 
 
 def _read_only(words: list) -> bool:
-    words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+    while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        words = words[1:]  # the command's prefix assignments (`-c a=b` keeps its value word)
     if not words:
         return True
     head = os.path.basename(words[0])
     if head == "git":
-        sub = next((w for w in words[1:] if not w.startswith("-")), "")
+        k = shell_parse.git_subcommand_index(words[1:])
+        sub = "" if k is None else words[1 + k]
         return (sub in GIT_READ_ONLY or _git_reads(words[1:])) and "-delete" not in words
     return head in READ_ONLY and "-delete" not in words and "-exec" not in words
 

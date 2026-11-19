@@ -95,6 +95,8 @@ import tempfile
 OK = 0
 EXCLUDE = 10
 HARD = 2
+# The git tree modes of a regular file (non-executable, executable); a hunk can split only these.
+_REGULAR_MODES = ("100644", "100755")
 
 
 def _excluded(reason):
@@ -206,7 +208,7 @@ def _validate_checkpoint_record(git_root, rel, item, expected_task_id):
     after = _tree_entry(git_root, end, rel)
     if not before or not after or before[1] != "blob" or after[1] != "blob":
         return _excluded("path/blob absent from checkpoint tree")
-    if before[0] != after[0] or before[0] not in ("100644", "100755"):
+    if before[0] != after[0] or before[0] not in _REGULAR_MODES:
         return _excluded("mode-changing checkpoint interval is not hunk-splittable")
     if before[2] != item.get("base_blob") or after[2] != item.get("owned_end_blob"):
         return _excluded("declared path blob does not match checkpoint tree")
@@ -761,7 +763,7 @@ def _composed_main(ns, plan):
     if _is_binary(worktree):
         return _excluded("binary current worktree path: %s" % rel)
     index_mode = _tracked_mode(ns.git_root, rel)
-    if index_mode not in ("100644", "100755"):
+    if index_mode not in _REGULAR_MODES:
         return _excluded("target file is not a regular tracked index path: %s" % rel)
     current_mode = _worktree_mode(worktree_path)
     if current_mode != index_mode:
