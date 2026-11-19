@@ -776,7 +776,8 @@ def _resolve_transcript_path(session_id: str) -> str:
     if not isinstance(session_id, str) or not session_id:
         return ''
     try:
-        for project_dir in (Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'projects').iterdir():
+        from subagent_restart import account_project_roots  # every account's projects/, not only this one's
+        for project_dir in (d for root in account_project_roots() for d in root.iterdir()):
             candidate = project_dir / f'{session_id}.jsonl'
             if candidate.exists():
                 return str(candidate)

@@ -66,10 +66,9 @@ if [[ ! "$SESSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
   exit 0
 fi
 
-# Claude Code maps CWD to project dir by replacing '/' with '-'.
-# e.g. /root -> -root; /srv/harness/example-project -> -srv-harness-example-project
-# Strategy: replace every '/' with '-'. A leading '/' becomes a leading '-'.
-PROJECT_NAME="$(printf '%s' "$CWD" | sed 's|/|-|g')"
+# Claude Code's project folder name: every character other than an ASCII letter or digit becomes '-'
+# (hooks/lib/subagent_restart.py project_slug), e.g. /root/.codex -> -root--codex.
+PROJECT_NAME="$(printf '%s' "$CWD" | sed 's/[^A-Za-z0-9]/-/g')"
 
 if [[ -z "$PROJECT_NAME" || "$PROJECT_NAME" == "-" ]]; then
   exit 0
