@@ -841,19 +841,9 @@ def _hits(cand: str, dirs: list) -> bool:
 
 
 def _known_text(text: str, cwd: str | None = None):
-    """``text`` with ~, $HOME, $CLAUDE_PROJECT_DIR and (at the call's start) $PWD expanded; None
-    when an expansion stays."""
-    known = {"HOME": os.environ.get("HOME") or os.path.expanduser("~")}
-    if cwd:
-        known["PWD"] = cwd
-    if os.environ.get("CLAUDE_PROJECT_DIR"):
-        known["CLAUDE_PROJECT_DIR"] = os.environ["CLAUDE_PROJECT_DIR"]
-    for name, value in known.items():
-        text = text.replace("${%s}" % name, value).replace("$" + name, value)
-    text = text.replace('"', "").replace("'", "")
-    if any(c in text for c in "$`*?["):
-        return None
-    return os.path.expanduser(text) if text.startswith("~") else text
+    from lib import claude_home
+
+    return claude_home.known_text(text, cwd)
 
 
 def _call_dirs(script, sp, cwd: str):

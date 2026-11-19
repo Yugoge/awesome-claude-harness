@@ -556,10 +556,11 @@ _STEP5_PATHS = {PUSH_CALL: HARNESS / "scripts" / PUSH_CALL, MERGE_CALL: HOOKS / 
 def step5_call(command: str, call: str, ref: str | None = None) -> bool:
     """``command`` runs Step 5's script ``call`` as push.md / merge.md write it, alone: one simple command (no
     list, pipe, subshell, second line or VAR=value prefix) whose command word, after an interpreter, is this
-    harness's own script (<HARNESS_ROOT>/scripts/execute-push.py, <HARNESS_ROOT>/hooks/merge.sh, by an absolute
-    path); no --help or -h; execute-push.py with each of its required flags, merge.sh with one ref (and
+    harness's own script (<HARNESS_ROOT>/scripts/execute-push.py, <HARNESS_ROOT>/hooks/merge.sh, by a path that
+    is absolute once ~, $HOME and ${CLAUDE_HOME:-$HOME/.claude} are expanded; line continuations joined); no --help or -h; execute-push.py with each of its required flags, merge.sh with one ref (and
     --no-commit), ``ref`` where given. Arguments end at a redirect (`2>&1`). A command that only mentions the
     script (`echo merge.sh; false`), another file of its name, or another ref is none."""
+    command = command.replace("\\\n", " ")  # a line continuation, as push.md writes the call
     if "\n" in command.strip():
         return False
     try:
@@ -577,7 +578,8 @@ def step5_call(command: str, call: str, ref: str | None = None) -> bool:
         words = words[1:]
         while words and words[0].startswith("-"):
             words = words[1:]
-    path = os.path.expanduser(words[0]) if words else ""
+    # the word as the shell expands it: ~, $HOME, ${CLAUDE_HOME:-$HOME/.claude} (claude_home.known_text)
+    path = (importlib.import_module("lib.claude_home").known_text(words[0]) or "") if words else ""
     if not os.path.isabs(path) or os.path.realpath(path) != os.path.realpath(_STEP5_PATHS[call]):
         return False
     args = next((words[1:k] for k in range(1, len(words)) if operator(words[k])), words[1:])  # up to a redirect
@@ -611,7 +613,14 @@ def _bulk_block(span, profile: str = "commit-bulk"):
     as G1 reads them (lib/agent_returns.py): its Agent call's result, the
     task-notification of a background or resumed analyst, or a cut analyst's
     own recorded stop. A dispatch refused before it ran started no analyst."""
-    returns, found = importlib.import_module("lib.agent_returns").Returns(span), None
+    blocks = _status_blocks(span, profile)
+    return blocks[-1][1] if blocks else None
+
+
+def _status_blocks(span, profile: str) -> list:
+    """(the dispatch's obligation, its analyst's status block or None) for each ``profile`` dispatch whose
+    analyst stopped, in order (_bulk_block's reading)."""
+    returns, out = importlib.import_module("lib.agent_returns").Returns(span), []
     for call, doc in span.dispatches():
         if doc.get("profile") != profile or not (call.ok or returns.agent(call)):
             continue
@@ -621,19 +630,22 @@ def _bulk_block(span, profile: str = "commit-bulk"):
             found = json.loads(text.split(begin, 1)[1].split(end, 1)[0]) if begin and end and begin in text else None
         except ValueError:
             found = None
-    return found if isinstance(found, dict) else None
+        out.append((doc, found if isinstance(found, dict) else None))
+    return out
 
 
-REFUSED_LINE = re.compile(r"^REFUSED: \S", re.M)
+REFUSED_LINE = re.compile(r"^REFUSED: .* for task (\S+?)\.?$", re.M)
 
 
-def hook_refused_landing(span) -> bool:
-    """commit.md Step 7: the analyst of the span's last commit-landing dispatch reported `hook_blocked` (a hook
-    refused its commit) and the span's last main-agent text holds the REFUSED: line that reports it. The commit is
-    not retried and nobody is asked, so the run ends there; a later landing dispatch's block replaces it."""
-    block = _bulk_block(span, "commit-landing")
-    return bool(block) and block.get("failure_code") == "hook_blocked" and bool(
-        REFUSED_LINE.search(span.last_text() or ""))
+def hook_refused_tasks(span) -> set:
+    """commit.md Step 7 (and its --auto walk): the tasks whose last commit-landing analyst reported `hook_blocked`
+    (a hook refused its commit) and that a REFUSED: line of the span's text names (`... for task <id>`). Such a
+    commit is not retried and nobody is asked: that task's landing is no longer owed by this run."""
+    canon, last = importlib.import_module("lib.obligation").canonical_task_id, {}
+    for doc, block in _status_blocks(span, "commit-landing"):
+        last[canon(doc.get("task_id"))] = block
+    named = {canon(t) for t in REFUSED_LINE.findall("\n".join(span.texts()))}
+    return {t for t, block in last.items() if t in named and (block or {}).get("failure_code") == "hook_blocked"}
 
 
 def p_commit(span, root, payload) -> list[str]:
@@ -657,10 +669,10 @@ def p_commit(span, root, payload) -> list[str]:
         return unresolved
     if targets is None:
         return ["commit: no target task resolved"]
-    if "--auto" not in args and hook_refused_landing(span):
-        return []  # Step 7: a hook refused the commit; reported as refused, nobody asked
-    names = _cycle_names(span)
-    return [g for task in targets for name in _names(names, task) for g in disposition(root, name, "commit")]
+    refused = hook_refused_tasks(span)  # Step 7: reported as refused, nobody asked; the other targets still land
+    canon, names = importlib.import_module("lib.obligation").canonical_task_id, _cycle_names(span)
+    return [g for task in targets if canon(task) not in refused
+            for name in _names(names, task) for g in disposition(root, name, "commit")]
 
 
 # ---------------------------------------------------------------- git facts (merge, push)
