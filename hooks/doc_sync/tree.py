@@ -9,7 +9,7 @@ from pathlib import Path
 # Debt 7 / AC-07 test).
 try:
     from .extract import extract_description
-    from .config import SKIP_FILES
+    from .config import SKIP_FILES, SKIP_PREFIXES
 except ImportError:
     import importlib as _importlib
     import os as _os
@@ -20,6 +20,7 @@ except ImportError:
     _extract = _importlib.import_module("hooks.doc_sync.extract")
     extract_description = _extract.extract_description  # type: ignore[no-redef]
     SKIP_FILES = _importlib.import_module("hooks.doc_sync.config").SKIP_FILES  # type: ignore[no-redef]
+    SKIP_PREFIXES = _importlib.import_module("hooks.doc_sync.config").SKIP_PREFIXES  # type: ignore[no-redef]
 
 IGNORE_DIRS = {
     'node_modules', '.git', '__pycache__', '.venv', 'venv',
@@ -35,12 +36,7 @@ IGNORE_DIRS = {
     'projects', 'session-env', 'sessions', 'shell-snapshots', 'state',
     'statsig', 'tasks', 'todos', 'worktrees',
 }
-# Prefix-aware leak suppression (spec-20260518-225715 Cycle 3 Debt 7 / AC-07):
-# cp-state-*.json runtime telemetry and spec-2026*-* spec views must NOT
-# appear in any rendered INDEX tree. We use a `startswith` prefix filter
-# applied via _matches_skip_prefix because timestamped variants cannot be
-# enumerated as exact set members.
-SKIP_PREFIXES = ('cp-state-', 'spec-2026')
+# Prefix-aware leak suppression (config.SKIP_PREFIXES): applied via _matches_skip_prefix.
 
 
 def _matches_skip_prefix(name: str) -> bool:

@@ -36,6 +36,9 @@ SKIP_FILES = frozenset({
     # The rating log logs/lifecycle.jsonl (gitignored, untracked) and its lock file.
     'lifecycle.jsonl', 'lifecycle.jsonl.lock',
 })
+# File-name prefixes left out the same way: cp-state-*.json runtime telemetry and spec-2026*
+# spec views, whose timestamped names a set cannot enumerate (spec-20260518-225715 Cycle 3).
+SKIP_PREFIXES = ('cp-state-', 'spec-2026')
 
 # While a PostToolUse event regenerates, a file not yet in the index but not gitignored counts
 # as published: `git add -A` would stage it, so the text written now is the text the tree-wide

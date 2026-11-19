@@ -13,7 +13,7 @@ from pathlib import Path
 # the one class object defined in regions, never a second copy.
 try:
     from .extract import extract_description
-    from .config import SKIP_FILES as SKIP_NAMES, tracked_names, is_github_reserved_subtree
+    from .config import SKIP_FILES as SKIP_NAMES, SKIP_PREFIXES, tracked_names, is_github_reserved_subtree
     from .folder_doc import write_folder_doc
     from .regions import (
         README_MARKER_ID, RegenStatus, classify_region, marker_close, marker_line_numbers,
@@ -32,6 +32,7 @@ except ImportError:
     write_folder_doc = _importlib.import_module("hooks.doc_sync.folder_doc").write_folder_doc  # type: ignore[no-redef]
     extract_description = _extract.extract_description  # type: ignore[no-redef]
     SKIP_NAMES = _config.SKIP_FILES  # type: ignore[no-redef]
+    SKIP_PREFIXES = _config.SKIP_PREFIXES  # type: ignore[no-redef]
     tracked_names = _config.tracked_names  # type: ignore[no-redef]
     is_github_reserved_subtree = _config.is_github_reserved_subtree  # type: ignore[no-redef]
     README_MARKER_ID = _regions.README_MARKER_ID  # type: ignore[no-redef]
@@ -44,13 +45,7 @@ except ImportError:
 
 
 SKIP_DIRS = {'__pycache__', '.git', 'node_modules'}
-# Prefix-aware suppression (spec-20260518-225715 Cycle 3 Debt 7 / AC-07):
-# cp-state-*.json and spec-2026*-* artifacts are runtime telemetry / spec
-# views that must NOT appear in any generated README. Set membership cannot
-# match timestamped variants (cp-state-ba.json, cp-state-qa.json, cp-state-
-# dev.json, spec-20260520-221059, spec-20260524-test ...), so we use a
-# prefix-aware `startswith` filter applied in _build_stats and _list_files.
-SKIP_PREFIXES = ('cp-state-', 'spec-2026')
+# Prefix-aware suppression (config.SKIP_PREFIXES), applied in _build_stats and _list_files.
 # The GitHub-reserved-subtree skip lives in config.is_github_reserved_subtree
 # (canonicalized whole-subtree membership) and is applied in regen_readme().
 
