@@ -1475,7 +1475,7 @@ class _Scan:
                         matches.append(c)
         for kind, argv in risky:
             for m in matches[:200]:
-                if kind in ('-execdir', '-okdir'):
+                if kind in _sp.FIND_EXEC_IN_MATCH_DIR:
                     absm = m if os.path.isabs(m) else os.path.join(sorted(self.cwds)[0], m)
                     rep, cwds = './' + os.path.basename(absm), {os.path.dirname(absm)}
                 else:

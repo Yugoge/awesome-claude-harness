@@ -464,6 +464,7 @@ SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
 PRINTERS = ("echo", "printf")  # print their arguments and run nothing
+FIND_EXEC_IN_MATCH_DIR = ("-execdir", "-okdir")  # find actions that run in each match's directory
 MOVE_MECHANISMS = ("mv", "git-mv")  # WriteTarget mechanisms of a move: its sources follow as <mechanism>-source
 NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
 RUNUSER_USER_OPTS = ("-u", "--user")  # runuser: the option naming the user COMMAND runs as
@@ -3831,7 +3832,7 @@ def _payload_carrier(site, raw, carrier):
 def _runs_elsewhere(res):
     """True when the code ``res`` hands on runs in another directory than its own command: ssh on
     another host, find's -execdir and -okdir in each match's directory."""
-    return res.name == "ssh" or (res.name == "find" and any(w.value() in ("-execdir", "-okdir")
+    return res.name == "ssh" or (res.name == "find" and any(w.value() in FIND_EXEC_IN_MATCH_DIR
                                                             for w in res.args))
 
 
