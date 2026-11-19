@@ -29,7 +29,10 @@ REPO = Path(__file__).resolve().parents[1]
 READER = REPO / "scripts" / "refusals"
 sys.path.insert(0, str(REPO / "hooks"))
 
-from lib import refusal_record as R  # noqa: E402
+try:
+    from lib import refusal_record as R  # noqa: E402
+except ImportError:  # the writer is gone: each test below fails by name, instead of this file not loading
+    R = None
 
 SID = "7e1f0a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b"
 POLICY = ("hooks/pretool-tool-policy.py", 'BLOCKED by tool-policy.v1: {"role":"ba","tool":"TodoWrite","target":null,'

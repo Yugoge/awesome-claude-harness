@@ -37,7 +37,10 @@ REPO = Path(__file__).resolve().parents[2]
 HOOKS = REPO / "hooks"
 sys.path.insert(0, str(HOOKS))
 
-from lib import refusal_record as R  # noqa: E402
+try:
+    from lib import refusal_record as R  # noqa: E402
+except ImportError:  # the writer is gone: each test below fails by name, instead of this file not loading
+    R = None
 
 SID = "5d0c2f6e-8a41-4b7c-9e15-2f3a6b7c8d90"
 
@@ -399,6 +402,51 @@ def test_writer_and_reader_resolve_one_directory_in_every_layout(tmp_path):
     assert len(seen) == 1 and seen != {here}                                # one place, and another home's is another
     other = _home(tmp_path / "second-home")
     assert _writer_dir(other / "hooks", base, tmp_path) not in seen
+
+
+def _bash_hook(command: str, call: str, tmp_path) -> tuple[int, str]:
+    """hooks/pretool-bash-safety.sh, as registered, on a Bash call; its project a git repository of its own."""
+    project = tmp_path / "project"
+    if not project.exists():
+        project.mkdir()
+        subprocess.run(["git", "init", "-q", str(project)], check=True, env={"PATH": os.environ["PATH"], "HOME": str(tmp_path),
+                                                                              "GIT_CONFIG_GLOBAL": os.devnull})
+    p = payload(tool_input={"command": command}, call=call, cwd=str(project))
+    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "CLAUDE_STATE_DIR", "CLAUDE_PYTHON_BIN",
+                                                        "CLAUDE_PROTECTED_RUNTIME_FILE", "TMPDIR")}
+    done = subprocess.run(["bash", str(HOOKS / "pretool-bash-safety.sh")], input=json.dumps(p), capture_output=True, text=True,
+                          env={**env, "PYTHONDONTWRITEBYTECODE": "1", "GIT_CEILING_DIRECTORIES": str(tmp_path)},
+                          cwd=project, timeout=300)
+    return done.returncode, done.stderr
+
+
+def test_the_bash_rules_report_their_own_refusal_once(tmp_path):
+    """lib/bash_safety_rules.py refuses through refuse(), which reports the rule's own text; the shell entry's
+    report at its exit 2 names the same file and adds no second rule and no second line."""
+    code, stderr = _bash_hook("rm -rf /", "toolu_rm", tmp_path)
+    assert code == 2 and stderr.strip()
+    assert _bash_hook("echo hello", "toolu_echo", tmp_path)[0] == 0
+    (line,) = lines()                                                      # the allowed call: no line
+    (rule,) = line["rules"]
+    assert (rule["hook"], rule["by"]) == ("hooks/lib/bash_safety_rules.py", "hooks/lib/bash_safety_rules.py")
+    assert rule["id"] == R.rule_id(stderr, {"Bash"}) != ""
+    assert line["message"] == stderr.strip("\n")[:R.MESSAGE_MAX]
+    assert (line["tool_use_id"], line["refused"], line["tool"]) == ("toolu_rm", "rm -rf /", "Bash")
+
+
+def test_the_bash_rules_can_report_a_command_let_through_unproven(tmp_path):
+    """The seam for the removal policy's let-through: bash_safety_rules.record(text, "unproven")."""
+    code = ("import json, sys; sys.argv = ['bash_safety_rules.py', sys.argv[1]]; sys.path.insert(0, sys.argv[1] + '/lib'); "
+            "import bash_safety_rules as B; B.PAYLOAD = sys.stdin.read(); "
+            "B.record('BLOCKED: removal-policy \u2014 UNRESOLVED dynamic_command_head:x=$(date)', 'unproven'); print('ALLOW')")
+    env = {"PATH": os.environ["PATH"], "HOME": os.environ["HOME"], "PYTHONDONTWRITEBYTECODE": "1"}
+    done = subprocess.run([sys.executable, "-c", code, str(HOOKS)], input=json.dumps(payload(tool_input={"command": "x=$(date)"})),
+                          capture_output=True, text=True, env=env, cwd=tmp_path, timeout=120)
+    assert (done.returncode, done.stdout.strip()) == (0, "ALLOW"), done.stderr
+    (line,) = lines()
+    assert (line["kind"], line["refused"], line["tool_use_id"]) == ("unproven", "x=$(date)", "toolu_01")
+    assert line["rules"] == [{"hook": "hooks/lib/bash_safety_rules.py", "by": "hooks/lib/bash_safety_rules.py",
+                              "id": "blocked-removal-policy-unresolved-dynamic_command_head"}]
 
 
 def test_a_shell_hook_reports_through_the_command_line(tmp_path):

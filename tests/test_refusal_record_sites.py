@@ -32,8 +32,13 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "hooks"))
 
-from lib import launch_settings, refusal_record  # noqa: E402
+from lib import launch_settings  # noqa: E402
 from tests.replay import sites  # noqa: E402
+
+try:
+    from lib import refusal_record  # noqa: E402
+except ImportError:  # the writer is gone: every command below fails, by name, instead of this file not loading
+    refusal_record = None
 
 MARK = "STAND-IN REFUSAL"
 INPUTS = {"Bash": {"command": "true"}, "Monitor": {"command": "true"}, "TodoWrite": {"todos": []},
@@ -119,6 +124,7 @@ def scratch(tmp_path_factory):
 def cases():
     """{registered command: {(event, stand-in file): (matcher, the stand-in is a rule of the command)}} for
     every blocking site of the enumeration, at the events an exit 2 refuses."""
+    assert refusal_record is not None, "hooks/lib/refusal_record.py, the refusal record's writer, does not load"
     enumerated, commands = sites.Enumerator(str(REPO)), registered_commands()
     out, elsewhere = {}, set()
     for site in enumerated.sites():
@@ -137,7 +143,9 @@ def cases():
     return out, enumerated.children
 
 
-REFUSING = sorted({command for (event, _hook), command in registered_commands().items() if event in refusal_record.EVENTS})
+# The registered commands of the events at which an exit 2 refuses (every registered command while the writer is gone).
+REFUSING = sorted({command for (event, _hook), command in registered_commands().items()
+                   if refusal_record is None or event in refusal_record.EVENTS})
 
 
 @pytest.mark.parametrize("command", REFUSING)
