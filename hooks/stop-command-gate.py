@@ -560,7 +560,7 @@ def step5_call(command: str, call: str, ref: str | None = None) -> bool:
     is absolute once ~, $HOME and ${CLAUDE_HOME:-$HOME/.claude} are expanded; line continuations joined); no --help or -h; execute-push.py with each of its required flags, merge.sh with one ref (and
     --no-commit), ``ref`` where given. Arguments end at a redirect (`2>&1`). A command that only mentions the
     script (`echo merge.sh; false`), another file of its name, or another ref is none."""
-    command = command.replace("\\\n", " ")  # a line continuation, as push.md writes the call
+    command = re.sub(r"\\\n", " ", command)  # a line continuation, as push.md writes the call
     if "\n" in command.strip():
         return False
     try:
