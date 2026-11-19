@@ -3126,6 +3126,34 @@
      }
     ]
    ]
+  },
+  {
+   "id": "shell-long-bool-options",
+   "source": "defs-shell lane, audit f199dfb1e family shell-long-bool-options (undecided)",
+   "reason": "bash_execution_boundary.SHELL_LONG_BOOL is bash's long options that take no value (for splitting a shell's options); bash_safety_rules._HB_SHELL_LONG the long options the harmless-bash reader can read at all (others make the reading None); _HB_INERT_LONG the subset that leaves the run inert (not --login, which reads profile files, nor --verbose, which echoes the script). Three questions; bash --help decides only the first.",
+   "sides": [
+    [
+     {
+      "name": "<module>.SHELL_LONG_BOOL",
+      "fingerprint": "e492c1875a7a2ccd",
+      "at": "hooks/lib/bash_execution_boundary.py:742"
+     }
+    ],
+    [
+     {
+      "name": "<module>._HB_SHELL_LONG",
+      "fingerprint": "04d85930163341a1",
+      "at": "hooks/lib/bash_safety_rules.py:3377"
+     }
+    ],
+    [
+     {
+      "name": "<module>._HB_INERT_LONG",
+      "fingerprint": "6e88ad672964cb97",
+      "at": "hooks/lib/bash_safety_rules.py:3383"
+     }
+    ]
+   ]
   }
  ]
 }
