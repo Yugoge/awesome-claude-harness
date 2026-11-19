@@ -97,7 +97,7 @@ never an error to retry.
      child exists, then carry on with the active gated command from its checklist step in
      progress, by step 8's rules: the rule of step 5 and of the overnight wake. The turn ends only
      when no gated command's checklist is open. Never end it with an offer to continue ("say if
-     you want me to continue"); a real owner decision is asked with `AskUserQuestion` only, and
+     you want me to continue") or a question; nothing is asked, and
      `/stop` is the exit.
    - **Guidance present**: continue to step 8.
 8. **Continue this session's own main agent.** With no interrupted child, the main agent is what

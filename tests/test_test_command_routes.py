@@ -15,9 +15,10 @@ def _step(text: str, number: int) -> str:
     return match.group(0)
 
 
-def test_step_15_asks_in_turn_and_offers_no_exit() -> None:
+def test_step_15_asks_nobody_and_offers_no_exit() -> None:
     step = _step(TEST_MD.read_text(encoding="utf-8"), 15)
-    assert "AskUserQuestion" in step
+    assert "AskUserQuestion" not in step and "Nobody is asked." in step
+    assert "Step 16's report lists it as not fixed" in step
     assert "Step 10" in step and "Step 16" in step
     exit_menu = re.compile(r"Select option|\[1-\d\]|Ignore failures|Cancel\b|Exit without report|report and exit")
     assert exit_menu.findall(step) == []
