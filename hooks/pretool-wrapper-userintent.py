@@ -444,6 +444,9 @@ class _Scan:
         self.pager_env = {}        # GIT_PAGER / PAGER the command sets (str or _COMPUTED)
         self.git_config_written = False  # git config the command writes or overrides
         self.computed_targets = []  # run-target words with a part computed at run time
+        self.why = None            # what a fail-closed refusal saw and could not resolve
+        self.loop_unread = False   # a for list item the body runs that the guard cannot read
+        self.waived = None         # a fail-closed reading the wrapper cannot become: let through unproven
         script = _sp.parse(command)
         if script.error is not None:
             self.unsure = True
@@ -474,11 +477,26 @@ class _Scan:
         for site in self.sites:
             self._classify(site)
         self._uncovered()
-        if self.match is None and any(self._names_harness(w) or self._resolves_harness(w)
-                                      for w in self.computed_targets):
-            self.match = 'stop'  # fail closed: a run target computed inside the harness dirs
-        if self.computed_run and self.match is None and self._harness_context():
+        for w in self.computed_targets if self.match is None else ():
+            cands = self._loop_resolved(w)
+            if cands is not None:  # every value the loop list writes out: run only if one is the wrapper
+                if any(self._wrapper_value(c) for c in cands):
+                    self.match = 'stop'
+                continue
+            if self._names_harness(w) or self._resolves_harness(w):
+                self.match = 'stop'  # fail closed: a run target computed inside the harness dirs
+                self.why = 'a run target computed at run time in the harness hooks/ or scripts/ directory: ' + w.text
+        if self.computed_run and self.match is None and self._harness_context(names_only=False):
             self.match = 'stop'  # fail closed: a run built at run time beside the wrapper
+            self.why = 'a run built at run time beside the harness hooks/ or scripts/ directory or a file in one'
+        if self.loop_unread and self.match is None:
+            # a loop list item the guard cannot read: refused only where it can be the wrapper (the list or
+            # the command names the harness directory itself, a glob or a wrapper in it)
+            if self._harness_context():
+                self.match = 'stop'
+                self.why = 'a loop over a list the guard cannot read, beside the harness hooks/ or scripts/ directory'
+            elif self._harness_context(names_only=False):
+                self.waived = 'a loop over a list the guard cannot read; it names harness files, none the wrapper'
 
     # -- structure -----------------------------------------------------------
     def _map_script(self, script, consumer, writes):
@@ -2122,7 +2140,7 @@ class _Scan:
             vals = self._values(w)
             if not vals:
                 self.unsure = True
-                self.computed_run = True
+                self.loop_unread = True  # a loop list item the guard cannot read, run by the body
                 continue
             for v, g in vals:
                 for f in self._existing(v, g) or []:
@@ -3104,19 +3122,24 @@ class _Scan:
                 continue
         return out
 
-    def _harness_context(self) -> bool:
+    def _harness_context(self, names_only=True) -> bool:
         """The command runs in the harness home's hooks/ or scripts/ directory, names one of
-        them or a name directly in one, or names a file that is a wrapper."""
+        them, a glob or a wrapper's name in one, or names a file that is a wrapper. With
+        names_only False, any non-directory name in one counts too (the reading before the
+        wrapper's name decided: a named file that is not the wrapper cannot become it)."""
         dirs = _harness_dirs()
 
-        def inside(p):
-            """The directory itself, or a non-directory name directly in it. The harness's own eval
+        def inside(p, is_glob=False):
+            """The directory itself, or a glob or the wrapper's name directly in it. The harness's own eval
             emitters (/commit Phase 3's `eval "$(python3 .../session-index.py init ...)"`) print shell
             assignments, not a run: naming one is no context for the wrapper."""
             for q in (os.path.normpath(p), os.path.realpath(p)):
                 if os.path.basename(q) in _EVAL_EMITTERS and os.path.dirname(q) in dirs:
                     return False
-                if q in dirs or (os.path.dirname(q) in dirs and not os.path.isdir(q)):
+                if q in dirs:
+                    return True
+                if os.path.dirname(q) in dirs and not os.path.isdir(q) and (
+                        not names_only or is_glob or os.path.basename(q) in self.by_name):
                     return True
             return False
 
@@ -3135,12 +3158,40 @@ class _Scan:
                 bases = [''] if os.path.isabs(v) else sorted(self.cwds)
                 for base in bases:
                     cand = os.path.join(base, v) if base else v
-                    if inside(cand):
+                    if inside(cand, g):
                         return True
                 for f in self._existing(v, g) or []:
                     if os.path.isfile(f) and self._wrapper_file(f) is not None:
                         return True
         return False
+
+    def _loop_resolved(self, word):
+        """The values a run target takes when every computed part of it is a for-loop variable whose
+        list the guard reads in full (`scripts/todo/$c.py` over `for c in dev close ...`); None otherwise."""
+        loopvals = self._loop_values()
+        out = ['']
+        try:
+            parts = list(word.parts)
+        except Exception:
+            return None
+        for p in parts:
+            if p.kind == 'lit':
+                choices = [p.text or '']
+            elif p.kind == 'param' and isinstance(loopvals.get((p.text or '').strip('{}')), list):
+                choices = loopvals[(p.text or '').strip('{}')]
+            else:
+                return None
+            out = [a + b for a in out for b in choices]
+            if not out or len(out) > self._ALT_CAP:
+                return None
+        return out
+
+    def _wrapper_value(self, value) -> bool:
+        """A value names the wrapper: its basename is a wrapper's, or it is an existing wrapper file."""
+        if os.path.basename(value) in self.by_name:
+            return True
+        return any(os.path.isfile(f) and self._wrapper_file(f) is not None
+                   for f in self._existing(value, False) or [])
 
     # -- mentions ------------------------------------------------------------
     def _transparent(self, word, site) -> bool:
@@ -3234,23 +3285,32 @@ class _Scan:
             self.unproven = True
 
 
-def _matched_wrapper(command: str, cwd: str | None = None) -> str | None:
+def _matched_wrapper(command: str, cwd: str | None = None, seen: list | None = None) -> str | None:
     """Return the sentinel command-name when the command is a RUN decision: it
     runs a guarded wrapper of the harness home, or the base text rule refuses
     it and the guard cannot prove every mention harmless. A command whose
-    mentions are all proven harmless returns None (and keeps the sentinel)."""
+    mentions are all proven harmless returns None (and keeps the sentinel).
+    ``seen``, when given, receives ('refused', what the guard could not resolve)
+    for a fail-closed refusal and ('unproven', why) for a call let through unproven."""
     cwd = cwd or os.getcwd()
+    seen = [] if seen is None else seen
     base = _base_refuses(command)
     if _sp is None:  # pragma: no cover - the parser is part of the harness
         return base
     try:
         s = _Scan(command, cwd)
     except Exception:  # fail closed on a reader failure over a mention
+        seen.append(('refused', 'a command the guard cannot read that mentions the wrapper'))
         return 'stop' if (base or _dequoted_mentions(command)) else None
     if s.match is not None:
+        if s.why:
+            seen.append(('refused', s.why))
         return s.match
     if s.unproven and (s.unsure or s.persist):
+        seen.append(('refused', 'a mention of the wrapper beside a run the guard cannot read'))
         return 'stop'
+    if s.waived:
+        seen.append(('unproven', s.waived))
     if base is not None and s.unproven:
         return base
     return None
@@ -3320,10 +3380,13 @@ def _consume_sentinel(path: Path) -> bool:
         return False
 
 
-def _block(cmd_name: str, command: str) -> None:
+def _block(cmd_name: str, command: str, why: str | None = None) -> None:
+    head = (f'\nUSER-INTENT GUARD: direct invocation of the /{cmd_name} release wrapper is blocked. '
+            if not why else
+            f'\nUSER-INTENT GUARD: this command may run the /{cmd_name} release wrapper and the guard '
+            f'could not resolve it ({why}), so it is blocked. ')
     sys.stderr.write(
-        f'\nUSER-INTENT GUARD: direct invocation of the /{cmd_name} release '
-        'wrapper is blocked. This wrapper (break-overnight-lock.py / stop.sh) '
+        head + 'This wrapper (break-overnight-lock.py / stop.sh) '
         'is the only sanctioned setter of isolation_released_at and may run '
         f'ONLY via the /{cmd_name} slash command, which writes a single-use '
         'user-intent sentinel. No live sentinel was found for this session, so '
@@ -3342,8 +3405,12 @@ def main() -> None:
         sys.exit(0)
     cwd = data.get('cwd') if isinstance(data.get('cwd'), str) and os.path.isabs(data.get('cwd')) \
         else os.getcwd()
-    cmd_name = _matched_wrapper(command, cwd)
+    seen = []
+    cmd_name = _matched_wrapper(command, cwd, seen)
     if cmd_name is None:
+        for kind, why in seen:
+            if kind == 'unproven':
+                _report_unproven(data, why)
         sys.exit(0)
     sid = _get_session_id(data)
     sentinel = _sentinel_path(cmd_name, sid)
@@ -3352,7 +3419,18 @@ def main() -> None:
         # helper can validate it (defense in depth), then allow.
         _mint_helper_auth(cmd_name, sid)
         sys.exit(0)
-    _block(cmd_name, command)
+    _block(cmd_name, command, next((why for kind, why in seen if kind == 'refused'), None))
+
+
+def _report_unproven(data: dict, why: str) -> None:
+    """One line in the refusal record: the call ran although the guard could not read all of it."""
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lib'))
+        import refusal_record
+        refusal_record.report(data, [(__file__, 'USER-INTENT GUARD: let through unproven: ' + why)], __file__,
+                              refusal_record.UNPROVEN)
+    except Exception:  # a record that cannot be written changes nothing
+        pass
 
 
 if __name__ == '__main__':
