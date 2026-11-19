@@ -193,11 +193,8 @@ _STDIN_DATA = _READERS | {'tee', 'sed', 'sort', 'uniq', 'jq', 'xxd', 'less', 'mo
 # _site_writes finds; one named inside code-looking text (`rsync -e 'cp x ...'`) is not settled.
 _OPERAND_COMMANDS = frozenset({'rg', 'ag', 'tar', 'find', 'touch', 'sort', 'zip', 'unzip', 'patch',
                                'perl', 'cd', 'pushd', 'popd'})
-_GIT_READS = frozenset({
-    'log', 'diff', 'show', 'status', 'blame', 'annotate', 'ls-files', 'ls-tree', 'rev-parse',
-    'shortlog', 'describe', 'cat-file', 'commit', 'add', 'grep', 'whatchanged', 'reflog',
-    'check-ignore', 'show-ref',
-})
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib.git_facts import GIT_KEEPS_NAMED_FILES as _GIT_READS  # noqa: E402 -- git calls that write no file they name
 
 
 def _protected_kind(text: str) -> str:

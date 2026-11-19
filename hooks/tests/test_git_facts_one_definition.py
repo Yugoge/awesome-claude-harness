@@ -121,3 +121,33 @@ class TestGitCommandParsing:
         assert sp.GIT_INERT_FLAGS <= sp.GIT_GLOBAL_FLAGS and sp.GIT_LOCATION_OPTS <= sp.GIT_GLOBAL_VALUE_OPTS
         assert bsr._SD_GIT_GLOBAL_FLAGS == sp.GIT_INERT_FLAGS | {"-p", "--paginate"}
         assert bsr._DG_GIT_GLOBAL_OK == sp.GIT_INERT_FLAGS | {"--version", "--help"}
+
+
+# audit f05 part 2: reads of the harness-switch rule's settings file it refused, and the stash it passed.
+READS_OF_A_NAMED_FILE = [
+    "git annotate {T}", "git whatchanged -- {T}", "git shortlog -- {T}", "git rev-list HEAD -- {T}",
+    "git ls-tree HEAD {T}", "git check-ignore {T}", "git diff-tree HEAD -- {T}", "git diff-index HEAD -- {T}",
+    "git diff-files -- {T}", "git reflog -- {T}",
+]
+
+
+class TestGitReadSubcommands:
+    """git-read-subcommands: which git subcommands only read the files they name."""
+
+    @pytest.mark.parametrize("template", READS_OF_A_NAMED_FILE)
+    def test_harness_switch_rule_passes_a_read(self, scratch, template):
+        assert run_hook(scratch, "pretool-harness-switch-guard.py", template.format(T=".claude/settings.json")) == 0
+
+    def test_harness_switch_rule_refuses_a_stash_of_the_file(self, scratch):
+        """`git stash push -- <file>` saves the file and reverts it: a write."""
+        assert run_hook(scratch, "pretool-harness-switch-guard.py", "git stash push -- .claude/settings.json") == 2
+
+    @pytest.mark.parametrize("sub", sorted(__import__("lib.git_facts", fromlist=["x"]).GIT_READ_SUBCOMMANDS))
+    def test_three_readers_agree(self, sub):
+        from lib.bash_read_only import is_read_only
+        hs = _load("pretool-harness-switch-guard.py")
+        cg = _load("pretool-claude-config-guard.py")
+        assert hs._read_only(["git", sub, "f"])
+        assert sub in cg._GIT_READS
+        assert is_read_only(f"git {sub}")
+        assert not hs._read_only(["git", "stash", "push", "--", "f"])

@@ -50,6 +50,7 @@ import bash_active_syntax_census as census_mod  # noqa: E402
 from shell_parse import (  # noqa: E402
     SimpleCommand, active_parts, parse, resolve, walk, write_targets)
 from shell_parse import GIT_INERT_FLAGS  # noqa: E402
+from git_facts import GIT_LISTING_SUBCOMMANDS, GIT_READ_SUBCOMMANDS  # noqa: E402
 sys.path.pop(0)
 
 MAX_COMMAND_LEN = 8192
@@ -261,13 +262,8 @@ def _awk(args) -> bool:
 _GIT_FORBIDDEN = ("--output", "--output-directory", "--ext-diff", "--textconv", "--open-files-in-pager",
                   "--filters", "--exec", "--upload-pack", "--receive-pack", "--edit", "--paginate")
 
-# Builtin subcommands that only read (git never lets an alias shadow a builtin).
-_GIT_READ = frozenset({
-    "status", "log", "show", "diff", "rev-parse", "ls-files", "ls-tree", "blame", "describe", "shortlog",
-    "rev-list", "grep", "merge-base", "diff-tree", "diff-index", "diff-files", "show-ref", "for-each-ref",
-    "cat-file", "count-objects", "check-ignore", "name-rev", "whatchanged",
-    "branch", "tag", "remote", "config", "stash", "worktree", "reflog",
-})
+# Builtin subcommands that only read, and those that read in a listing form _git_sub checks.
+_GIT_READ = GIT_READ_SUBCOMMANDS | GIT_LISTING_SUBCOMMANDS
 
 _BRANCH_FLAGS = frozenset({"-a", "-r", "-v", "-vv", "--all", "--remotes", "--verbose", "--show-current",
                            "--no-color", "--color", "--no-column"})

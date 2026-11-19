@@ -3084,6 +3084,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "git-printing-vs-ext-diff-subcommands",
+   "source": "lane defs-git (git-read-subcommands)",
+   "reason": "bash_safety_rules._http_reader_ok takes log, show, diff and grep as git calls that only print text; userintent._git_reader names the subcommands whose --ext-diff runs a diff driver, and git grep has no --ext-diff (git refuses it as an unknown option).",
+   "sides": [
+    [
+     {
+      "name": "_http_reader_ok:in",
+      "fingerprint": "b8172cbd74a376b3",
+      "at": "hooks/lib/bash_safety_rules.py:615"
+     }
+    ],
+    [
+     {
+      "name": "_Scan._git_reader:in",
+      "fingerprint": "8d7e1b15ee29d49e",
+      "at": "hooks/pretool-wrapper-userintent.py:1077"
+     }
+    ]
+   ]
   }
  ]
 }
