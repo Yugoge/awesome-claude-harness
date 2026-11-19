@@ -3105,6 +3105,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "git-data-operand-vs-all-subcommands",
+   "source": "lane defs-git (git-all-subcommands, undecided in the audit)",
+   "reason": "bash_execution_boundary.GIT_SUBCOMMANDS lists the subcommands whose operands the removal policy may call data (it marks them inert); git_command_classifier._GIT_SUBCOMMANDS is every word git takes as a verb, to see a verb after a computed word. The classifier-only names include filter-branch, difftool, mergetool, send-email and instaweb, which run commands they are handed: merged into the removal policy table they would become inert.",
+   "sides": [
+    [
+     {
+      "name": "<module>.GIT_SUBCOMMANDS",
+      "fingerprint": "b17652e52fa8e42b",
+      "at": "hooks/lib/bash_execution_boundary.py:798"
+     }
+    ],
+    [
+     {
+      "name": "<module>._GIT_SUBCOMMANDS",
+      "fingerprint": "022827c06019fae2",
+      "at": "hooks/lib/git_command_classifier.py:243"
+     }
+    ]
+   ]
   }
  ]
 }
