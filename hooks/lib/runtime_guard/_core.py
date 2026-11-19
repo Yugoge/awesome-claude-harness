@@ -4066,22 +4066,9 @@ def _git_inspection_head(head: str, rest: list) -> bool:
     git GLOBAL options that take an argument (`git -C <dir> status`)."""
     if head != "git":
         return False
-    skip_next = False
-    for t in rest:
-        st = _strip_quotes(t)
-        if skip_next:
-            skip_next = False
-            continue
-        if not st:
-            continue
-        if st in _GIT_GLOBAL_OPTS_WITH_ARG:
-            skip_next = True          # its operand is NOT the subcommand
-            continue
-        if st.startswith("-"):
-            continue                  # bare/fused global flag (no separate arg)
-        return st in _GIT_READONLY_SUBCMDS
+    sub, _i = _git_subcommand_index(["git"] + list(rest), 0)
     # bare `git` (or only global options) with no subcommand: treat as inspection
-    return True
+    return sub is None or sub in _GIT_READONLY_SUBCMDS
 
 
 # Options that turn an otherwise-inspection head into a COMMAND-EXECUTOR:

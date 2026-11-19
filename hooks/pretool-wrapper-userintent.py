@@ -190,13 +190,8 @@ _CMD_VAR_RE = re.compile(
     r'PERL5OPT|PERL5DB|RUBYOPT|NODE_OPTIONS|LD_PRELOAD|LD_AUDIT|BROWSER|TERMINAL|FCEDIT|'
     r'GIT_SSH|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|SSH_ASKPASS|SUDO_ASKPASS|'
     r'\w*(?:EDITOR|PAGER|_COMMAND|_CMD|ASKPASS|_PROGRAM|_HOOK|_HOOKS))$')
-# git configuration keys whose value runs a command.
-_GIT_RUN_KEY = re.compile(
-    r'^(?:alias\..*|core\.(?:pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy)|'
-    r'pager\..*|sequence\.editor|include\..*|includeif\..*|filter\..*|diff\..*|merge\..*|'
-    r'gpg\..*|credential.*|uploadpack\..*|receive\..*|man\..*|web\..*|browser\..*|'
-    r'sendemail\..*|interactive\..*|.*\.(?:pager|editor|command|cmd|textconv|program|helper|'
-    r'external|path|tool|hook|sshcommand|difffilter|clean|smudge|process))$', re.IGNORECASE)
+# git configuration keys whose value runs a command (lib/git_facts.py).
+from lib.git_facts import GIT_RUN_CONFIG_KEY_RE as _GIT_RUN_KEY  # noqa: E402
 _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 'ls-files',
                             'ls-tree', 'status', 'cat-file', 'rev-parse', 'shortlog', 'describe',
                             'show-ref', 'whatchanged', 'rev-list', 'add', 'commit', 'diff-tree',
@@ -204,8 +199,10 @@ _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 
                             'check-attr', 'count-objects', 'reflog', 'stash', 'restore',
                             'branch', 'tag', 'remote', 'fetch', 'push', 'pull', 'switch',
                             'checkout', 'mv', 'rm', 'init', 'clone', 'version', 'help'))
-_GIT_GLOBAL_VALUE = frozenset(('-C', '-c', '--git-dir', '--work-tree', '--namespace',
-                               '--config-env', '--super-prefix', '--exec-path'))
+_GIT_GLOBAL_VALUE = _sp.GIT_GLOBAL_VALUE_OPTS if _sp is not None else frozenset()  # read by _Scan, which needs _sp
+from lib.git_facts import GIT_CONFIG_READ_OPTIONS as _GIT_CONFIG_READS  # noqa: E402
+from lib.git_facts import GIT_CONFIG_READ_SUBCOMMANDS as _GIT_CONFIG_READ_SUBS  # noqa: E402
+from lib.git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS as _GIT_SHELL_PAYLOAD_SUBS  # noqa: E402
 _GH_MESSAGE_SUBS = frozenset(('pr', 'issue', 'release'))
 _RC_FILES = frozenset(('.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_logout',
                        '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.kshrc', '.mkshrc',
@@ -1622,12 +1619,12 @@ class _Scan:
             break
         sub = vals[k] if k < len(vals) else None
         rest = [x for x in vals[k + 1:] if x is not None]
-        if sub == 'config' and not any(r in ('--get', '--get-all', '--list', '-l', '--get-regexp',
-                                             '--show-origin', '--unset') for r in rest):
+        if sub == 'config' and not (any(r in _GIT_CONFIG_READS for r in rest) or rest[:1] and rest[0] in
+                                    _GIT_CONFIG_READ_SUBS):
             self.git_config_written = True  # it may set the pager git grep -O opens
             if any(_mentions(r) for r in rest):
                 self.persist = True
-        if sub in ('rebase', 'bisect', 'submodule', 'filter-branch', 'difftool', 'mergetool'):
+        if sub in _GIT_SHELL_PAYLOAD_SUBS:
             if any(_mentions(r) for r in rest):
                 self.unsure = True
 

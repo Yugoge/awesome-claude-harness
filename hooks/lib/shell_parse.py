@@ -3609,12 +3609,44 @@ def _flag_values(args, short, long_opt, env):
     return out
 
 
+def _git_discarded_paths(sub, args, env, context):
+    """The files a forced `git clean`, `checkout-index` or `stash push` names (none for a whole-tree form)."""
+    vals = [a.value() for a in args]
+    if None in vals:
+        return []
+    dd = vals.index("--") if "--" in vals else len(vals)
+    head, tail = vals[:dd], list(args[dd + 1:])
+    shorts = "".join(v[1:] for v in head if v.startswith("-") and not v.startswith("--"))
+    kind = TRUNCATE
+    if sub == "clean":
+        if not ("--force" in head or "f" in shorts) or "--dry-run" in head or "n" in shorts:
+            return []
+        kind, skip = DELETE, ("-e", "--exclude")
+    elif sub == "checkout-index":
+        skip = ()
+    elif head[:1] == ["push"] or (not head and tail):
+        skip, head = ("-m", "--message", "--pathspec-from-file"), head[1:]
+        args = args[1:] if vals[:1] == ["push"] else args
+    else:
+        return []
+    ops, k = [], 0
+    while k < len(head):
+        v = head[k]
+        if v in skip:
+            k += 1
+        elif not v.startswith("-"):
+            ops.append(args[k])
+        k += 1
+    return [WriteTarget(path, kind, "git-" + sub, None, dec, w, None, context)
+            for w in ops + tail for path, dec in [_project(w, env)]]
+
+
 def _git_write_targets(res, env, context):
     out = []
     for inv in _git_from_resolved(res, context):
         sub = inv.subcommand
         args = inv.arg_words
-        if sub in ("rm", "mv"):
+        if sub in GIT_MV_RM:
             vals = [a.value() for a in args]
             resolved = list(inv.args)
             if sub == "rm" and "--cached" in resolved[:vals.index("--") if "--" in vals else len(vals)]:
@@ -3631,7 +3663,9 @@ def _git_write_targets(res, env, context):
                 for w in ops[:-1]:
                     sp, sdec = _project(w, env)
                     out.append(WriteTarget(sp, DELETE, "git-mv-source", None, sdec, w, None, context))
-        elif sub in ("checkout", "restore"):
+        elif sub in GIT_WORKTREE_DISCARDERS - GIT_RESTORE_PATHS:
+            out += _git_discarded_paths(sub, args, env, context)
+        elif sub in GIT_RESTORE_PATHS:
             vals = [a.value() for a in args]
             if sub == "checkout":
                 if "--" not in vals:
@@ -3677,6 +3711,44 @@ GIT_GLOBAL_FLAGS = frozenset({
     "--no-lazy-fetch", "--no-advice", "--html-path", "--man-path", "--info-path",
     "-v", "--version", "-h", "--help", "--exec-path", "--list-cmds",
 })
+# The global options that move where git finds the repository or the working tree.
+GIT_LOCATION_OPTS = frozenset({"-C", "--git-dir", "--work-tree"})
+# The global options that point git at another repository, work tree or ref namespace than its directory.
+GIT_REDIRECT_OPTS = (GIT_LOCATION_OPTS - {"-C"}) | {"--namespace"}
+# The global flags that change only how a pathspec matches.
+GIT_PATHSPEC_FLAGS = frozenset({
+    "--literal-pathspecs", "--no-literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"})
+# The global flags after which a subcommand still runs, on the same repository with the same programs.
+GIT_INERT_FLAGS = GIT_PATHSPEC_FLAGS | {
+    "-P", "--no-pager", "--no-optional-locks", "--no-replace-objects", "--no-lazy-fetch", "--no-advice"}
+
+
+def git_global_options(args):
+    """git's global options as git reads them from ``args`` (strings, None where computed):
+    ([(option index, its value's index or None)], the subcommand's index or None)."""
+    opts, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a is None or not a.startswith("-"):
+            return opts, i
+        if a in GIT_GLOBAL_VALUE_OPTS:
+            opts.append((i, i + 1 if i + 1 < len(args) else None))
+            i += 2
+            continue
+        opts.append((i, None))
+        i += 1
+    return opts, None
+
+
+def git_subcommand_index(args):
+    """The index of the subcommand among git's arguments (see git_global_options), or None."""
+    return git_global_options(args)[1]
+
+
+def git_plain_subcommand_index(args, flags):
+    """The subcommand's index when every global option before it is `-C <dir>` or in ``flags``, else None."""
+    opts, k = git_global_options(args)
+    return k if all(args[i] in flags or args[i] == "-C" and j is not None for i, j in opts) else None
 
 # Long options of the git subcommands whose options the hooks read, so an
 # abbreviation git accepts (`--har` for `--hard`) resolves to its full name.
@@ -3761,7 +3833,12 @@ GIT_LONG_OPTIONS = {
                "--show-origin", "--show-scope", "--default", "--fixed-value"),
 }
 
-GIT_EXEC_SUBCOMMANDS = frozenset({"rm", "mv"})
+# The git subcommands that move or remove working-tree files as mv and rm do.
+GIT_MV_RM = frozenset({"rm", "mv"})
+# The git subcommands that overwrite or remove working-tree files (stash setting the changes aside).
+GIT_WORKTREE_DISCARDERS = frozenset({"checkout", "checkout-index", "clean", "reset", "restore", "stash"})
+# The two that write the paths they name with their copy in the index or a tree.
+GIT_RESTORE_PATHS = frozenset({"checkout", "restore"})
 
 
 class GitInvocation:
