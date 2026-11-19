@@ -773,8 +773,7 @@ _UNSAFE_TARGET_CHARS = re.compile(r'[$`*?\[\]{}!]')
 # gh pr / gh issue subcommands that change nothing in the working tree (not checkout, merge).
 _GH_READS = frozenset({'create', 'view', 'list', 'comment', 'edit', 'status', 'close', 'reopen', 'diff',
                        'checks', 'ready', 'review'})
-_SED_BOOL_LONG = frozenset({'--quiet', '--silent', '--regexp-extended', '--separate', '--unbuffered',
-                            '--null-data', '--posix', '--debug', '--sandbox'})
+_SED_BOOL_LONG = bash_read_only.SED_LONG_FLAGS
 
 
 _ENV_PATH_WORD = re.compile(

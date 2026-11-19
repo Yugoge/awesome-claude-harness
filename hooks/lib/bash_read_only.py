@@ -232,7 +232,8 @@ def _sed_script_ok(script: str) -> bool:
     return bool(script) and _SED_SCRIPT_RE.fullmatch(script) is not None
 
 
-_SED_LONG_FLAGS = frozenset({"--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered",
+# The long sed options that take no value (also the config guard's sed proof).
+SED_LONG_FLAGS = frozenset({"--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered",
                              "--null-data", "--posix", "--sandbox", "--debug"})
 
 
@@ -247,7 +248,7 @@ def _sed(args) -> bool:
         if a.startswith("--"):
             if a.startswith("--expression="):
                 scripts.append(a.split("=", 1)[1])
-            elif a not in _SED_LONG_FLAGS:
+            elif a not in SED_LONG_FLAGS:
                 return False  # --in-place, --file, an abbreviation of either, ...
         elif _short_cluster(a):
             body = a[1:]
