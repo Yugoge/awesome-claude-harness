@@ -1824,7 +1824,7 @@ class _Scan:
                 vw = None if eq else (args[k + 1] if takes and k + 1 < len(args) else None)
                 if name in _sp.RG_PROGRAM_OPTS:
                     progs.append(vw if not eq else val)
-                if name in ('--regexp', '--file'):
+                if name in _sp.GREP_PATTERN_LONG:
                     given = True
                 k += 1 if (eq or not takes) else 2
                 continue

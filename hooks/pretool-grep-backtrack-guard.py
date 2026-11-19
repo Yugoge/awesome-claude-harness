@@ -237,15 +237,15 @@ def _extract_patterns(tokens):
             explicit.append(t.split("=", 1)[1])
             i += 1
             continue
-        if t.startswith("--file=") or t == "-f" or t == "--file":
+        if t.startswith("--file=") or t in shell_parse.GREP_PATTERN_FILE_OPTS:
             # pattern read from a file: cannot statically inspect -> skip this one
             from_file = True
-            if t == "-f" or t == "--file":
+            if t in shell_parse.GREP_PATTERN_FILE_OPTS:
                 i += 2
             else:
                 i += 1
             continue
-        if t in ("-e", "--regexp"):
+        if t in shell_parse.GREP_PATTERN_OPTS:
             if i + 1 < n:
                 explicit.append(tokens[i + 1])
             i += 2

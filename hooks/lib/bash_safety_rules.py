@@ -6540,6 +6540,7 @@ def sd_normalize(text):
 def _sd_scan(args, spec, permute=True, operands=None):
     """The arg indexes a grep-like program reads as its pattern; None when an option is unknown or refuses the name.
     operands, when given, receives the indexes of the other positional words (paths, revisions, pathspecs)."""
+    from lib.shell_parse import GREP_PATTERN_LONG
     short_val, short_flag, long_val, long_flag, long_opt, refused = spec
     patterns, positional, explicit, k, dashdash = set(), [], False, 0, False
     while k < len(args):
@@ -6557,7 +6558,7 @@ def _sd_scan(args, spec, permute=True, operands=None):
             if name in refused:
                 return None
             if name in long_val:
-                if name in ("--regexp", "--file"):
+                if name in GREP_PATTERN_LONG:
                     explicit = True
                 if name == "--regexp":
                     patterns.add(k if eq else k + 1)

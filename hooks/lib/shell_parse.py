@@ -3191,6 +3191,10 @@ AWK_VALUE_OPTS = AWK_DATA_OPTS + AWK_SOURCE_OPTS + AWK_PROGFILE_OPTS + AWK_LIB_O
 # ripgrep: the options whose value is a program it runs, and every option that makes it run
 # one (--search-zip, short -z, runs the decompressors). --pre-glob only narrows --pre.
 RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
+# grep's (and rg's) options that carry the pattern, and a file of patterns; their long forms.
+GREP_PATTERN_OPTS = ("-e", "--regexp")
+GREP_PATTERN_FILE_OPTS = ("-f", "--file")
+GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
 RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip",)
 VERBS["awk"] = VERBS["gawk"]  # where awk is gawk, `awk -i inplace` edits in place
 
