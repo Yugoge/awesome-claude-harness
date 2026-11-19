@@ -445,7 +445,7 @@ def _session_scratch_of(real: str, sid: str) -> str | None:
         base = os.path.join(os.path.realpath(root), f"claude-{os.getuid()}")
         if _inside(real, base) and real != base:
             parts = os.path.relpath(real, base).split(os.sep)
-            if len(parts) >= 3 and parts[0] not in (".", "..") and parts[1] == sid and parts[2] == "scratchpad":
+            if len(parts) >= 3 and parts[0] not in (os.curdir, os.pardir) and parts[1] == sid and parts[2] == "scratchpad":
                 candidates.append((os.path.join(base, parts[0], sid, "scratchpad"), False))
     for scratch, owned in candidates:
         if real == scratch or not _inside(real, scratch):

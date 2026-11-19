@@ -93,7 +93,7 @@ from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     AWK_NAMES, AWK_SOURCE_OPTS, HEREDOC_OPS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     CD_TARGET_BUILTINS, COMMAND_OPTS, DECLARATION_BUILTINS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
     OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
-    _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    FIND_EXEC, GIT_CONFIG_OPTS, HERE_DOCUMENT_OPS, LITERAL_PART_KINDS, SHELL_FILE_OPTS, _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
 from shell_parse import GIT_LONG_OPTIONS  # noqa: E402
 from git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS  # noqa: E402
@@ -488,13 +488,13 @@ _GREP_DATA = GREP_VALUE_OPTS
 # selector's own value position.
 SELECTOR_DATA_OPTIONS = {
     "pytest": ("-k", "-m", "--deselect", "--ignore", "--ignore-glob"),
-    "py.test": ("-k", "-m", "--deselect", "--ignore", "--ignore-glob"),
     "go": ("-run", "-bench", "-skip"),
     "cargo": ("--test", "--bench", "--example"),
     "ctest": ("-R", "-E", "--tests-regex", "--exclude-regex"),
     "tox": ("-e",),
     "nox": ("-s",),
 }
+SELECTOR_DATA_OPTIONS["py.test"] = SELECTOR_DATA_OPTIONS["pytest"]  # pytest's older entry point, the same program
 
 GIT_DATA_OPTIONS = frozenset((
     # `-m` is git's own short spelling of `--message`; both spellings must
@@ -906,14 +906,15 @@ SHELL_SHORT_BOOL = set("abBCefhHiklmnpPrstTuvxD")
 SHELL_LONG_BOOL = {"--posix", "--norc", "--noprofile", "--login", "--restricted",
                    "--verbose", "--debugger", "--dump-strings", "--dump-po-strings",
                    "--help", "--version", "--noediting", "--protected", "--pretty-print"}
-SHELL_LONG_VAL = {"--rcfile", "--init-file"}
+SHELL_LONG_VAL = set(SHELL_FILE_OPTS)
 
 INTERPRETERS = {
     "python": ("-c",), "python2": ("-c",), "python3": ("-c",),
     "perl": ("-e", "-E"), "ruby": ("-e",), "node": ("-e", "--eval", "-p", "--print"),
-    "nodejs": ("-e", "--eval", "-p"), "php": ("-r",), "lua": ("-e",),
+    "php": ("-r",), "lua": ("-e",),
     "lua5.1": ("-e",), "lua5.3": ("-e",), "deno": ("eval",),
 }
+INTERPRETERS["nodejs"] = INTERPRETERS["node"]  # Debian's name for node, the same program
 AWKS = set(AWK_NAMES) | {"busybox-awk"}  # and busybox's applet, as this reader names it
 
 # Calls that only render text. A removal token reaching one of these and
@@ -998,7 +999,7 @@ WATCH = PEEL["watch"][0]
 
 SSH_SPEC = _SSH_SPEC
 
-FIND_EXEC_OPS = {"-exec", "-execdir", "-ok", "-okdir"}
+FIND_EXEC_OPS = set(FIND_EXEC)
 FIND_DELETE_OPS = {"-delete"}
 
 BWRAP_NARGS = {
@@ -1208,7 +1209,7 @@ def word_chunks(w):
 # those answers "it could".
 # ---------------------------------------------------------------------------
 
-_PATTERN_SEGS = ("lit", "glob", "brace")
+_PATTERN_SEGS = LITERAL_PART_KINDS
 # Glob or brace text whose meaning ``_glob_to_regex`` / ``_brace_alternatives``
 # do not model: an extglob group, a POSIX bracket class / equivalence class /
 # collating symbol, a sequence expression, and any expansion, substitution or
@@ -1639,7 +1640,7 @@ class Analyzer:
         head = words[k].literal() if k < len(words) else None
         if stdin or head is None or basename(head) not in INERT_ARGV_CONSUMERS:
             for r in (t[1] for t in toks if t[0] == "R"):
-                if r.op in ("<<", "<<-") and r.heredoc is not None:
+                if r.op in HERE_DOCUMENT_OPS and r.heredoc is not None:
                     parts.append(r.heredoc[2].text)
                 elif r.op == "<<<" and r.target is not None:
                     parts.append(self._word_text(r.target))
@@ -2139,7 +2140,7 @@ class Analyzer:
         if not words and not redirs:
             return
         for r in redirs:
-            if r.op in ("<<", "<<-"):
+            if r.op in HERE_DOCUMENT_OPS:
                 self.note("heredoc", r.off)
                 # An UNQUOTED delimiter leaves the body subject to expansion, so
                 # any substitution inside it runs even when the body is mere
@@ -2232,7 +2233,7 @@ class Analyzer:
 
     DROP = {"if", "then", "else", "elif", "fi", "while", "until", "do", "done",
             "esac", "!", "{", "}", "in", ";;"}
-    HEADER = {"for", "case", "select", "function"}
+    HEADER = {"for", "case", "select"}
 
     def eval_command(self, words, redirs, env, piped):
         while words:
@@ -2243,6 +2244,9 @@ class Analyzer:
             if lit in self.HEADER:
                 self._shell_state(lit, words[1:])  # `for`/`select` assign their variable
                 return  # loop/case header: its words are patterns, not commands
+            if lit == "function":  # `function NAME` heads a body of commands, read as `NAME() { ...; }` is
+                words = words[2:]
+                continue
             if lit == "coproc":
                 words = words[1:]
                 if len(words) >= 2 and words[0].literal() and \
@@ -3082,7 +3086,7 @@ class Analyzer:
     def _stdin_code(self, redirs):
         """Return the Src of code arriving on stdin, or None when not provable."""
         for r in redirs:
-            if r.op in ("<<", "<<-") and (r.io in (None, "0")):
+            if r.op in HERE_DOCUMENT_OPS and (r.io in (None, "0")):
                 if r.heredoc is None:
                     return None
                 delim, quoted, body = r.heredoc
@@ -3264,7 +3268,7 @@ class Analyzer:
                 self.structural("interpreter_stdin_code_rewritten", base, self._scope_text())
                 return
             fed = [r for r in (t[1] for t in self._last or () if t[0] == "R")
-                   if r.op in ("<<", "<<-") and r.heredoc is not None and r.heredoc[1]] if piped else []
+                   if r.op in HERE_DOCUMENT_OPS and r.heredoc is not None and r.heredoc[1]] if piped else []
             if fed:  # `cat <<'EOF' | python3`: the program is that here-document, read as code
                 for r in fed:
                     self._classify_inline_code(base, r.heredoc[2].text)
@@ -3414,7 +3418,7 @@ class Analyzer:
                 break
             if not lit.startswith("-"):
                 break
-            if lit in ("-c", "--config-env") or lit.startswith("-c="):
+            if lit in GIT_CONFIG_OPTS or lit.startswith("-c="):
                 val = None
                 val_word = None
                 if "=" in lit and lit.startswith("--config-env="):

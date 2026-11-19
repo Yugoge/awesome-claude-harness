@@ -959,7 +959,7 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
     # is a file inside the project now, or has a directory part and a dotted name.
     named = set()
     for token in _PATH_RUN.findall(command):
-        if token in (".", "..") or token.startswith("-"):
+        if token in (os.curdir, os.pardir) or token.startswith("-"):
             continue
         rel = _project_relative(token, cwd, root)
         if rel is None:

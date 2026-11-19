@@ -671,7 +671,7 @@ def _invocations(words, aliases=None, depth=0, seen=frozenset()):
     i = 0
     while i < k:
         opt = gvals[i]
-        pair = gvals[i + 1] if opt in ('-c', '--config-env') and i + 1 < k else (
+        pair = gvals[i + 1] if opt in GIT_CONFIG_OPTS and i + 1 < k else (
             opt[len('--config-env='):] if opt.startswith('--config-env=') else '')
         key, eq, val = pair.partition('=')
         if eq and key.lower().startswith('alias.'):
@@ -702,7 +702,7 @@ _TEXT_ONLY_GIT_SUBCOMMANDS = frozenset({'commit'})
 # `git grep` without `-O`/`--open-files-in-pager` (that option runs a pager),
 # and `git log` reading a `--grep` pattern.
 _TEXT_SEARCH_GIT_SUBCOMMANDS = frozenset({'grep', 'log'})
-_GIT_CONFIG_OPTS = ('-c', '--config-env')
+_GIT_CONFIG_OPTS = GIT_CONFIG_OPTS = shell_parse.GIT_CONFIG_OPTS
 # rg reads its pattern as text, unless it runs a program (shell_parse.RG_RUN_OPTS:
 # `--pre`, `--hostname-bin`, `--search-zip`) or a config file it is pointed at may add one.
 _RG_PROGRAM_OPTS = shell_parse.RG_RUN_OPTS
@@ -1273,7 +1273,7 @@ def _shell_c_operand(words, i):
             i += 1
             break
         if value.startswith('--'):
-            i += 2 if value in ('--rcfile', '--init-file') else 1
+            i += 2 if value in shell_parse.SHELL_FILE_OPTS else 1
         elif len(value) > 1 and value[0] in '-+':
             seen_c = seen_c or 'c' in value[1:]
             i += 1 + value[1:].count('o') + value[1:].count('O')  # -o / -O take a name
@@ -1684,7 +1684,7 @@ def _shell_args_run_runtime(args, as_command):
             i += 1
             break
         if value.startswith('--'):
-            n = 1 if value in ('--rcfile', '--init-file') else 0
+            n = 1 if value in shell_parse.SHELL_FILE_OPTS else 0
         elif len(value) > 1 and value[0] in '-+':
             seen_c = seen_c or 'c' in value[1:]
             seen_s = seen_s or 's' in value[1:]

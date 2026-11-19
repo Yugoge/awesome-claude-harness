@@ -300,7 +300,7 @@ def _dev_report_has_sibling_shards(dev_dir: Path, task_id: str) -> bool:
 
 
 def _safe_task_id(task_id: str) -> bool:
-    return bool(task_id not in {".", ".."} and TASK_ID_RE.fullmatch(task_id))
+    return bool(task_id not in (os.curdir, os.pardir) and TASK_ID_RE.fullmatch(task_id))
 
 
 def _lane_paths(dev_dir: Path, task_id: str, worker: str) -> dict[str, Path]:

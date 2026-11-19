@@ -219,7 +219,7 @@ def _into_dir_texts(script, dirs):
         for s in sources:
             src = _word_text(s)
             base = os.path.basename(src.rstrip("/")) if src else ""
-            if base and base not in (".", ".."):
+            if base and base not in (os.curdir, os.pardir):
                 out.append(os.path.join(dest, base))
     return out
 

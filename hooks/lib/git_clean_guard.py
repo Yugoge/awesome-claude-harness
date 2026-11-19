@@ -68,10 +68,10 @@ import sys
 
 try:
     from lib.shell_parse import BODY_PART_KINDS, DYNAMIC_PART_KINDS, GIT_REDIRECT_ENV_VARS
-    from lib.shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
+    from lib.shell_parse import CWD_BUILTINS, GIT_CONFIG_OPTS, GIT_GLOBAL_VALUE_OPTS, HERE_DOCUMENT_OPS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
     from shell_parse import BODY_PART_KINDS, DYNAMIC_PART_KINDS, GIT_REDIRECT_ENV_VARS
-    from shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
+    from shell_parse import CWD_BUILTINS, GIT_CONFIG_OPTS, GIT_GLOBAL_VALUE_OPTS, HERE_DOCUMENT_OPS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 try:
     from . import locations
 except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
@@ -211,7 +211,7 @@ def _commands(text, info):
         at_start, prev = False, None
         if tok[0] == "R":
             redir = tok[1]
-            if redir.op in ("<<", "<<-"):
+            if redir.op in HERE_DOCUMENT_OPS:
                 # hd holds the body, terminated or (read to the end of the
                 # text) not; a `<<` that ends the text has none: empty stdin.
                 if redir.hd is not None:
@@ -347,7 +347,7 @@ def _git_invocation(words, start, ignore_dry_run=False):
             redirect = True
             i += 1
             continue
-        if tok in ("-c", "--config-env"):
+        if tok in GIT_CONFIG_OPTS:
             if i + 1 < n and _is_redirect_config(words[i + 1].text):
                 redirect = True
             i += 2
