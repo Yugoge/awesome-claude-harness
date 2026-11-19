@@ -253,7 +253,7 @@ def test_a2_dev_at_one_step_blocks_naming_open_todos_and_the_missing_dispatch(en
     assert text.startswith("COMMAND_GATE /dev: not complete\n")
     assert f"- todo: not completed: {steps[1]['content']}" in text
     assert f"GAP artifact={qa} problem=MISSING_ARTIFACT: absent lane=- step=\"Step 9: QA validation\"" in text
-    assert "AskUserQuestion only for a real decision" in text
+    assert "What a rule refuses is reported as refused, with the hook's output; nobody is asked about it." in text
     for word in ("stop", "Stop", "AWAITING_INPUT", "owner"):
         assert word not in text.split("not complete\n", 1)[1].replace("COMMAND_GATE", ""), word
 

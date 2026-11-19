@@ -129,7 +129,7 @@ def test_a_mistyped_argument_corrected_in_the_turn_is_checked_on_the_corrected_v
     held = _on_the_transcript(r, str(tmp_path), "gap")
     assert held["command"] == "close" and held["args"] == made["typed"], held
     assert held["decision"] == [2, f"COMMAND_GATE /close: not complete\n- close {tid}: the stand-in disposition\n"
-                                   "Finish the gaps above. Ask with AskUserQuestion only for a real decision the "
-                                   "user must make.\n"], held
+                                   "Finish the gaps above. What a rule refuses is reported as refused, with the "
+                                   "hook's output; nobody is asked about it.\n"], held
     assert typo not in held["decision"][1]
     assert _on_the_transcript(r, str(tmp_path), "pass")["decision"] == [0, ""]
