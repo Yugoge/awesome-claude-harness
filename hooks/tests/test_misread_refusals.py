@@ -555,7 +555,7 @@ def repo_project(tmp_path):
 
 
 @pytest.mark.parametrize("command", [
-    "cd /tmp/claude-scratch/ba/r00rev && jq '.forms' forms_b.json > t_forms_b.json && cat t_forms_b.json > forms_b.json",
+    "cd /tmp/claude-scratch/ba/rev1 && jq '.forms' forms.json > t_forms.json && cat t_forms.json > forms.json",
     "cd {P}/docs/codex; sed -i '2,4d' note-r05.md && sed -n '1,3p' note-r05.md | cut -c1-80",
     "cd {P}/docs/codex && grep -n x note-r04.md | cut -c1-80; sed -i 's/17/18/' note-r04.md; grep -c 18 note-r04.md",
 ])
