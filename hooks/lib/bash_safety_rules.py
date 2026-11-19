@@ -2157,6 +2157,9 @@ def _consent_operands(view, r):
     return ops[:-1], view.tokens(ops[-1]), True, True, None
 
 
+_EXTRACT_LETTERS = ("x", "e")  # the one-letter commands of rar, unrar, 7z and lha that extract
+
+
 def _consent_unpack_dirs(view, r):
     """(extracts?, [destination tokens]) of an archive extraction; no destination: the cwd. Short option clusters,
     attached values (`-xC<dir>`), `--directory=<dir>`, its unique prefixes (`--dir`) and tar's old-style keys
@@ -2368,8 +2371,8 @@ def _consent_unpack_dirs(view, r):
             elif name in ("rar", "lha") and first and not (name == "rar" and lead.startswith("-")):
                 first = False
                 k = lead.lstrip("-")
-                extracts = len(lead) < len(toks) or (k[:1] in ("x", "e") if name == "rar" else bool(
-                    set(k.split("w=")[0]) & {"x", "e"}))
+                extracts = len(lead) < len(toks) or (k[:1] in _EXTRACT_LETTERS if name == "rar" else bool(
+                    set(k.split("w=")[0]) & set(_EXTRACT_LETTERS)))
                 if name == "lha" and "w=" in lead:
                     dests.append(toks[lead.index("w=") + 2:])
                     outdir = True
@@ -2377,7 +2380,7 @@ def _consent_unpack_dirs(view, r):
                 dests.append(toks)
             i += 1 + skip
         return extracts, dests + ([] if outdir else [here])
-    extracts = bool(lex) and lex[0][1] in ("x", "e")
+    extracts = bool(lex) and lex[0][1] in _EXTRACT_LETTERS
     return extracts, [toks[2:] for toks, lead in lex if lead.startswith("-o") and len(toks) > 2]
 
 
