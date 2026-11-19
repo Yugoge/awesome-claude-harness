@@ -27,6 +27,12 @@ try:
     from .pathmatch import _normalize_path, _strip_quotes
 except ImportError:  # executed under the top-level-script shim (no package)
     from pathmatch import _normalize_path, _strip_quotes  # type: ignore[no-redef]
+try:
+    from .. import locations
+except ImportError:  # a top-level package or the script shim: hooks/lib may not be on sys.path
+    import sys
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import locations  # type: ignore[no-redef]
 
 
 # ── The single generic data-file path ────────────────────────────────────────
@@ -170,13 +176,10 @@ def _config_path_variants() -> set:
 # Generic, too-broad ancestor roots whose mutation must NOT be treated as a config
 # self-protection hit — protecting them would over-block routine filesystem ops on
 # the home/system roots (`mv /root /backup`, `rm -rf /tmp`). The data file's OWN
-# parent dir(s) BELOW these roots ARE protected. NO project names — generic POSIX
-# system/home roots derived structurally.
-_ANCESTOR_STOP_ROOTS = frozenset({
-    "/", "/root", "/home", "/etc", "/usr", "/var", "/tmp", "/opt", "/bin",
-    "/lib", "/lib64", "/sbin", "/srv", "/mnt", "/media", "/dev", "/proc",
-    "/sys", "/run", "/boot",
-})
+# parent dir(s) BELOW these roots ARE protected. The roots are lib/locations'
+# (is_broad_root): the system directories, and the user's own home and what lies
+# above it, whoever the user is.
+_ANCESTOR_STOP_ROOTS = locations.SYSTEM_ROOTS
 
 
 def _config_ancestor_dirs() -> set:
@@ -191,7 +194,7 @@ def _config_ancestor_dirs() -> set:
     out = set()
     norm = os.path.normpath(DATA_FILE_PATH)
     d = os.path.dirname(norm)
-    while d and d not in _ANCESTOR_STOP_ROOTS:
+    while d and not locations.is_broad_root(d):
         out.add(d)
         # Generic: add the ~/-prefixed variant for ANY ancestor
         # under the real user home, not only /root/.

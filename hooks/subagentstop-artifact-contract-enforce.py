@@ -269,13 +269,9 @@ AGGREGATE_CHECK = Path(__file__).resolve().parent / "pretool-aggregate-check.py"
 
 
 def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
-    """C5 for G3's canonical_missing: the canonical aggregate's one producer,
-    the lane-completeness watch, runs on a lane report's Write or Edit. While
-    G3's own rule (pretool-aggregate-check.py _find_violations) finds the
-    canonical missing, the lane whose report is its fan-out's newest is
-    returned at its own stop: that report reached disk another way (a shell
-    redirection), and its Edit runs the producer. A sibling's later report is
-    the sibling's own (its watch may still be running)."""
+    """C5 for G3's canonical_missing (pretool-aggregate-check.py _find_violations), for what this lane's report
+    repairs: the aggregator's reasons for refusing it; with every report accepted, the fan-out's newest reached disk
+    past the Write/Edit watch (a shell redirection) and its Edit runs it. A sibling's is G3's, at QA's dispatch."""
     try:
         spec = importlib.util.spec_from_file_location("pretool_aggregate_check", AGGREGATE_CHECK)
         g3 = importlib.util.module_from_spec(spec)
@@ -285,16 +281,18 @@ def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
         own = (Path(project_dir) / report_rel).resolve()
         findings = []
         for family, reports in lane_reports.items():
-            stamps = {path.resolve(): path.stat().st_mtime_ns for path in reports.values()}
-            if stamps.get(own) != max(stamps.values()):
-                continue
+            label = next((label for label, path in reports.items() if path.resolve() == own), None)
+            newest = label is not None and max(p.stat().st_mtime_ns for p in reports.values()) == own.stat().st_mtime_ns
             for code, path, problem, *_ in g3._find_violations({family: reports}, canonicals, dev_dir, task_id):
-                if code == "canonical_missing":
+                every = g3.aggregator_refusal(dev_dir, family) if code == "canonical_missing" else ()
+                refused = g3.own_refusal(every, label)
+                if code == "canonical_missing" and (refused or not every and newest):
                     findings.append({"path": report_rel, "reason": code, "errors": [
-                        f"{os.path.relpath(path, project_dir)}: {problem}. Its producer, "
-                        "hooks/posttool-lane-completeness-watch.py, runs on a lane report's Write or Edit, "
-                        "and this report, the fan-out's newest, reached disk another way: Read it, save it "
-                        "again with Edit (its timestamp), then stop again."]})
+                        f"{os.path.relpath(path, project_dir)} is missing: scripts/aggregate-dev-report.py refuses this report: "
+                        f"{'; '.join(refused)}. Correct that with Edit, which runs it again, then stop again." if refused else
+                        f"{os.path.relpath(path, project_dir)}: {problem}. Its producer, hooks/posttool-lane-completeness-watch.py, "
+                        "runs on a lane report's Write or Edit, and this report, the fan-out's newest, reached disk another "
+                        "way: Read it, save it again with Edit (its timestamp), then stop again."]})
         return findings
     except Exception:
         return []  # a wire that cannot run judges nothing
@@ -390,7 +388,7 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
              f"written but not declared: {listed(map(show, extra))}", "set dev.files_modified and dev.files_created "
              "to exactly: " + "; ".join(f"{key}: {', '.join(sorted(v)) or '[]'}" for key, v in expected.items())]
     lines += ["a file your own Bash produced counts once one of your Bash commands names it (for example "
-              "`ls -l <path>`): name it and keep it listed"] if missing else []
+              "`ls -l <path>`): name it and keep it listed"] if any(map(change, missing)) else []  # else nothing lands
     if unreadable:
         lines.append(f"unreadable, so its files count only once your own Bash names them: {listed(unreadable)}")
     return lines

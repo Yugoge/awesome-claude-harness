@@ -56,11 +56,13 @@ harness_switch.exit_if_off()
 
 import json  # noqa: E402
 import re  # noqa: E402
+import shlex  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
 import shell_parse  # noqa: E402 -- the one reading of a Bash command
 import bash_read_only  # noqa: E402 -- the one list of the programs that only read
+from bash_read_only import _git as _git_reads  # noqa: E402 -- the one proof that a git command only reads
 sys.path.pop(0)
 
 HOME = harness_switch.harness_home()
@@ -182,7 +184,7 @@ def _read_only(words: list) -> bool:
     head = os.path.basename(words[0])
     if head == "git":
         sub = next((w for w in words[1:] if not w.startswith("-")), "")
-        return sub in GIT_READ_ONLY and "-delete" not in words
+        return (sub in GIT_READ_ONLY or _git_reads(words[1:])) and "-delete" not in words
     args, it = [], iter(words[1:])
     for w in it:
         if REDIRECT_OP.match(w):
@@ -195,13 +197,17 @@ def _read_only(words: list) -> bool:
 def _written_words(words: list, written: list, everything=None) -> list:
     """The words of one simple command that name what it writes: the paths it writes, and, for a
     command that is not read-only (cp, mv, tee, sed -i, python, ...), every word (`everything`
-    False: the paths alone)."""
-    plain = [w for w in words if not ASSIGNMENT.match(w)]
+    False: the paths alone). The command is judged at its command word as hooks/lib/shell_parse.py
+    resolves it: of a reader behind wrappers (command, timeout, env ...) only the wrappers' words."""
+    own = plain = [w for w in words if not ASSIGNMENT.match(w)]
     if everything is None:
-        everything = bool(plain) and not _read_only(plain)
-    if everything and os.path.basename(plain[0]) == "sed":
-        everything = any(re.fullmatch(r"-[A-Za-z]*i.*|--in-place.*", w) for w in plain[1:])
-    return written + (words if everything else [])
+        cmd = next(shell_parse.iter_commands(shell_parse.parse(shlex.join(plain)), into=()), None)
+        head = shell_parse.resolve(cmd).head
+        own = plain[cmd.words.index(head):] if cmd is not None and head in cmd.words else plain
+        everything = bool(own) and not _read_only(own)
+    if everything and os.path.basename(own[0]) == "sed":
+        everything = any(re.fullmatch(r"-[A-Za-z]*i.*|--in-place.*", w) for w in own[1:])
+    return written + (words if everything else plain[:len(plain) - len(own)])
 
 
 def writes_settings_file(command: str) -> bool:

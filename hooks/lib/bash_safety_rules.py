@@ -46,9 +46,8 @@ def grep(pattern, text):
 
 
 def state_dir():
-    """The hook state root as lib/harness_state_dir.sh resolves it."""
-    v = os.environ.get("CLAUDE_STATE_DIR", "")
-    return (v.rstrip("/") or "/") if v.startswith("/") else "/tmp"
+    """The hook state root: its one resolution (lib/locations.state_root)."""
+    return locations.state_root()
 
 
 def one_slash(d):
@@ -160,6 +159,23 @@ def commit_guard_applies(command):
     return ("commit" in s or "config" in s) and re.search(r"(^|[^\w])git", s) is not None
 
 
+def _no_commit_or_config(command):
+    """lib/shell_parse.py's reading of a command whose quoting the commit guard's own splitter cannot follow: True
+    when it parses, no command word or payload is computed, no computed word spells git with commit or config, and
+    every git invocation it runs or carries in a static string is read whole, sets no configuration and is neither
+    commit nor config."""
+    try:
+        from lib.shell_parse import git_invocations, parse, walk
+        script = parse(command)
+        return not script.errors() and not any(
+            s.dynamic or s.templated or any(w.value() is None and commit_guard_applies(w.text) for w in s.cmd.words)
+            for s in walk(script)) and all(
+            i.unresolved is None and i.subcommand not in (None, "commit", "config") and not (i.config_pairs or i.env)
+            for i in git_invocations(script, strings=True))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def commit_guard(payload):
     """BS-04, BS-05, BS-06: 'HOOKS <why>', 'CONFIG <key>', 'FILTER <top>[\\t<why>]' or 'OK'.
 
@@ -227,7 +243,8 @@ def commit_guard(payload):
             m = (DQ if st[-1:] == '"' else UQ).match(t, i)
             k, s, i = m.lastgroup, m.group(), m.end()
             o += s.translate({36: '_', 96: ')'}) if k in ('e', 's') else s
-            if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]):
+            if k == 'd' and st[-1:] == ')' and '"' in st and re.search(r'(^|[\s;&|(])(-\w*c|eval)\s+"$', o) and gitish(t[i:]) \
+                    and not _no_commit_or_config(d.get('tool_input', {}).get('command', '')):
                 unread('a double-quoted bash -c/eval string inside a double-quoted $(...)')
             st = st + '!' if k == 'x' and (s != '${' or st) or k == 'c' and st[-1:] != ')' else st[:-1] if k == 'c' or k == 'd' and st[-1:] == '"' else st + {'o': ')', 'd': '"'}.get(k, '')
         return t if st else o
@@ -590,7 +607,7 @@ def _http_reader_ok(site, r):
     if name not in HTTP_STOP_READERS | HTTP_STOP_FILTERS:
         return False
     for rd in site.cmd.redirects:
-        if rd.writes() and not (rd.target is not None and rd.target.value() == "/dev/null"):
+        if rd.writes() and not (rd.target is not None and rd.target.value() == locations.NULL_DEVICE):
             return False
     args = [w.value() if w.value() is not None else w.text for w in site.cmd.words[1:]]
     if name in ("sed", "rg", "git") and any(w.value() is None for w in site.cmd.words[1:]):
@@ -744,7 +761,7 @@ def _http_lift_value_ok(kind, v):
 def _http_out_path_ok(v):
     """A place shape (b)'s client (or its option) may write to: /dev/null, or a plain literal file path with no
     `..` segment that is not under /dev or /proc (no /dev/tcp, /dev/udp, /dev/fd or /proc/*/fd socket)."""
-    if v == "/dev/null":
+    if v == locations.NULL_DEVICE:
         return True
     if not re.fullmatch(r"[A-Za-z0-9_./][A-Za-z0-9_./-]*", v):
         return False
@@ -1352,9 +1369,9 @@ def _shape_strict_ok(command, carries, sites):
             body = r.hd.body if r.hd is not None else (r.target.text if r.op == "<<<" and r.target is not None else None)
             if body is not None and (carries(body) or carries(re.sub(r"""[\\'"]""", "", body)) or "$'" in body):
                 return False
-            if r.target is not None and r.writes() and r.target.value() != "/dev/null":
+            if r.target is not None and r.writes() and r.target.value() != locations.NULL_DEVICE:
                 return False
-        if any(t != "/dev/null" for t in _arg_write_targets(res)):
+        if any(t != locations.NULL_DEVICE for t in _arg_write_targets(res)):
             return False
         if writer:
             names = {res.name} | {n for n, _o in res.wrappers}
@@ -1366,7 +1383,7 @@ def _shape_strict_ok(command, carries, sites):
     if writer:
         try:
             from lib.shell_parse import parse, write_targets
-            if any(t.path != "/dev/null" for t in write_targets(parse(command))):
+            if any(t.path != locations.NULL_DEVICE for t in write_targets(parse(command))):
                 return False
         except Exception:  # noqa: BLE001
             return False
@@ -1515,6 +1532,7 @@ def commit_artifact_rules(command, state):
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
 from lib.shell_parse import INTO_DIR_VERBS  # noqa: E402 -- the copy, move and link verbs
+from lib import locations  # noqa: E402
 
 CONSENT_TOKEN = CONSENT_PREFIX.split("-", 1)[1].rstrip("-")
 # Once a command names the flag (its text after quote removal, heredoc and here-string bodies included, comments
@@ -1542,7 +1560,7 @@ _CONSENT_UNPACKERS = {
     "7z": "7z", "7za": "7z", "7zr": "7z", "gzip": "gzip", "gunzip": "gzip", "zcat": "gzip", "pigz": "gzip",
     "unpigz": "gzip", "ar": "ar", "dpkg-deb": "deb", "dpkg": "deb", "pax": "pax", "unrar": "rar", "rar": "rar",
     "unar": "unar", "lha": "lha", "lhasa": "lha"}
-_CONSENT_DEVICES = ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty")
+_CONSENT_DEVICES = locations.TERMINAL_SINKS
 _CONSENT_UNKNOWN = ("_", "BASH_REMATCH", "BASH_ARGV", "COMP_WORDS", "REPLY", "MAPFILE")
 
 
@@ -1637,7 +1655,7 @@ class _ConsentView:
 
     def __init__(self, sp, script, sites, command, cwd, state):
         self.sp, self.state = sp, state
-        self.state_is_tmp = _consent_same_dir(state, "/tmp")
+        self.state_is_tmp = _consent_same_dir(state, locations.DEFAULT_TEMP_DIR)
         self.home = os.environ.get("HOME", "")
         self.command = command
         self.defs = {}  # variable -> list of ("static", text) | ("word", Word) | ("text", source text) | ("state",)
@@ -1702,12 +1720,20 @@ class _ConsentView:
         else:
             self.defs.setdefault(name, []).append(("text", a.word.text))
 
+    def made(self, p):
+        """The path `$(mktemp [-d] TEMPLATE)` prints, written as its template: mktemp makes that name new, below the
+        template's directory, so it is never the state directory itself. None for any other substitution."""
+        cmds = [s.cmd for s in self.sp.walk(p.body)] if p.body is not None and p.body.error is None else []
+        vals = [w.value() for w in cmds[0].words] if len(cmds) == 1 and not (cmds[0].redirects or cmds[0].assignments) else []
+        ops = [v for v in vals[1:] if v not in ("-d", "-q", "--directory", "--quiet")]
+        return ops[0] if vals[:1] == ["mktemp"] and None not in vals and len(ops) == 1 and ops[0][:1] not in ("-", "") else None
+
     def marks_state(self, text):
         """Does computed source text (a substitution's body, a read's input) point at the state directory?"""
         text = text or ""
         if self.state in text or os.path.realpath(self.state) in text or "CLAUDE_STATE_DIR" in text:
             return True
-        if self.state_is_tmp and re.search(r"/tmp\b|\bTE?MP(DIR)?\b|\bmktemp\b", text):
+        if self.state_is_tmp and re.search(locations.DEFAULT_TEMP_DIR + r"\b|\bTE?MP(DIR)?\b|\bmktemp\b", text):
             return True
         if self.cwd_state(".") and re.search(r"\bpwd\b|\bO?L?D?PWD\b|\$\{?PWD|\bdirs\b", text):
             return True
@@ -1831,6 +1857,8 @@ class _ConsentView:
                         out.append((("*",), "state"))
                 else:
                     out.append((("*",), "unk"))
+            elif p.kind in ("cmdsub", "backtick") and self.made(p):
+                out.extend((("c", ch), "lit") for ch in self.made(p))
             elif p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") and self.marks_state(p.text):
                 out.extend((("c", ch), "state") for ch in self.state)
             else:
@@ -2775,7 +2803,7 @@ def consent_flag_verdict(command, cwd, state):
     for t in sp.write_targets(script):
         if t.mode == "delete" and deletes_state(t):
             return "it deletes or moves the state directory that holds the consent flag"
-        if t.path is not None and (t.path in _CONSENT_DEVICES or t.path.startswith("/dev/fd/")):
+        if t.path is not None and (t.path in _CONSENT_DEVICES or t.path.startswith(locations.FD_DIR)):
             continue
         real_writes = True
         config_writes = config_writes or _consent_git_config_file(view, t)
@@ -3376,7 +3404,7 @@ def executable_view_or_raw(command):
 _HB_NOEXEC_SHELLS = frozenset({"bash", "sh", "dash"})
 _HB_SHELL_LONG = frozenset({"--norc", "--noprofile", "--noediting", "--posix", "--restricted", "--verbose", "--login"})
 # The command word of a shell read as inert: written bare, or as an absolute path in a system bin directory.
-_HB_SHELL_WORD = re.compile(r"(/bin/|/usr/bin/|/usr/local/bin/)?(bash|sh|dash)")
+_HB_SHELL_WORD = re.compile("(%s)?(bash|sh|dash)" % "|".join(d + "/" for d in locations.SYSTEM_BIN_DIRS))
 _HB_TEST_WORD = re.compile(r"test|\[")
 _HB_PLAIN_WORD = re.compile(r"echo|printf|true|false|:")
 # Options an inert noexec shell may carry: none of them runs, echoes or sources anything.
@@ -3502,7 +3530,7 @@ def _hb_inert_redirect(r):
         return False
     if r.op in (">&", "<&"):
         return r.dup is not None or r.close
-    return r.op in ("<", ">", ">>") and _hb_plain(r.target) and r.target.literal() == "/dev/null"
+    return r.op in ("<", ">", ">>") and _hb_plain(r.target) and r.target.literal() == locations.NULL_DEVICE
 
 
 def _hb_inert_shell(words):
@@ -3664,9 +3692,25 @@ def hard_ban_mask(t):
     return t if o is None or _HB_RUNS_TEXT.search("".join(u)) else "".join(o)
 
 
+def _hb_only_reads(command):
+    """True when lib/bash_read_only.py proves the whole command read-only, a command word in a system program directory
+    (lib/locations.SYSTEM_BIN_DIRS) read as its bare name: it runs nothing it chooses, so a name in it is only read."""
+    try:
+        from lib.bash_read_only import is_read_only
+        from lib.shell_parse import parse, walk
+        out = list(command)
+        for w in filter(None, (site.cmd.head() for site in walk(parse(command), into=()))):
+            if (name := w.text.rpartition("/"))[0] in locations.SYSTEM_BIN_DIRS and name[2]:
+                out[w.span[0]:w.span[1]] = name[2].rjust(len(w.text))
+        return is_read_only("".join(out))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def hard_ban_rule(command):
     """Scripts that manage session state or restart daemons. A set CLAUDE_HARD_BANNED_SCRIPTS is '|'-separated EREs,
-    each matched anywhere; unset, session-recovery and restart-all-sessions match only as the command word: in the
+    each matched anywhere in a command that is not read-only as a whole (_hb_only_reads: a search, listing or print
+    of the script's file runs nothing); unset, session-recovery and restart-all-sessions match only as the command word: in the
     text with its quoted data masked (unless a word outside quotes names a program that runs text), or in the
     parser's executable view, which keeps what a shell `-c`, a git alias or a substitution runs and blanks the data
     an option such as git's `-c` merely configures. The default names pass a whole command of hard_ban_inert_shape
@@ -3690,6 +3734,8 @@ def hard_ban_rule(command):
             text = command + hard_ban_run_lines(command)
         except Exception:  # noqa: BLE001
             text = command
+    elif _hb_only_reads(command):
+        return
     for ban in bans:
         if configured:
             rx = ban
@@ -4037,6 +4083,7 @@ def sensitive_redirect(command):
     from lib.sensitive_names import (RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_code_or_doc_operand,
                                      is_sensitive_name)
     try:
+        from lib.bash_read_only import is_read_only
         from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
         script = parse(command)
         if script.error is not None:
@@ -4061,6 +4108,9 @@ def sensitive_redirect(command):
             network = name in _NETWORK_CLIENTS
             writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
                                               if network else (False, False, {}))
+            if any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs) and tuple(site.context) == ("top",) \
+                    and is_read_only(command[slice(*site.cmd.span)]):
+                outputs = []  # lib/bash_read_only.py's reader, its output thrown into /dev/null: what it reads lands nowhere
             if not outputs and network and writes:
                 # A client writing its own output file reads a `file:` URL into it (curl file:///.env -o /tmp/y).
                 if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
@@ -4143,20 +4193,23 @@ class ServiceView:
 
     def __init__(self, command, cwd=None):
         self.raw, self.sites, self.code, self.runners, self.redirect_sites = False, [], [], [], []
-        self.exec_redirects, self.plain = [], False
+        self.exec_redirects, self.plain, self.command, self.sets = [], False, command, {}
         self.cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
         try:
-            from lib.shell_parse import parse, resolve, walk
+            from lib.shell_parse import _AssignScope, parse, resolve, walk
             script = parse(command)
             if script.error is not None:
                 raise ValueError(script.error.code)
-            nested = False
+            nested, scope = False, _AssignScope(script)
             for site in walk(script):
                 r = resolve(site.cmd)
                 if site.dynamic or site.templated or (r.unresolved and not str(r.unresolved).startswith("xargs_")):
                     self.raw = True
                 nested = nested or tuple(site.context) != ("top",)
                 self.redirect_sites.append(site)
+                if not site.cmd.words and tuple(site.context) == ("top",) and scope.certain(site, site.cmd):
+                    self.sets.update((a.name, (a.word.span[0], a.static_value())) for a in site.cmd.assignments
+                                     if a.static_value() and not a.append)
                 if [w.value() for w in site.cmd.words] == ["exec"]:
                     self.exec_redirects.extend(site.cmd.redirects)  # they hold for every later command
                 name = r.name
@@ -4182,6 +4235,30 @@ class ServiceView:
     def named(self, *names):
         return [(n, a, s, r) for n, a, s, r in self.sites if n in names]
 
+    def set_once(self, word, at, rx):
+        """True for a word that ends in one bare `$name` (or `${name}`) whose name the command sets once, to a static
+        value `rx` matches whole, unconditionally and before offset `at`, and names nowhere else but as `$name`, and
+        which sources and evals nothing: nothing else can have set it."""
+        p = word.parts[-1]
+        n = re.escape(p.text)
+        where, value = self.sets.get(p.text, (at, "")) if p.kind == "param" else (at, "")
+        return where < at and re.fullmatch(rx, value) is not None and not self.named("source", ".", "eval") \
+            and len(re.findall(rf"(?<![A-Za-z0-9_]){n}(?![A-Za-z0-9_])", self.command)) \
+            == 1 + len(re.findall(rf"\$(?:{n}(?![A-Za-z0-9_])|\{{{n}\}})", self.command))
+
+    def without(self, view, name, whole):
+        """`view` without the `name` commands the command-position reading reads whole (`whole(cmd, self)`): the
+        command word of an unwrapped simple command at the top level (inside if, for, while and until too), where
+        the program runs, so the raw reading of the rest of the command has nothing to add about it."""
+        out = list(view)
+        for _n, _a, site, r in self.named(name) if not self.raw and len(view) == len(self.command) else ():
+            words = site.cmd.words
+            if tuple(site.context) == ("top",) and not (site.cmd.assignments or r.wrappers or r.payload is not None
+                                                        or r.unresolved) and whole(site.cmd, self) \
+                    and _plain_redirects(site.cmd, self, reads_ok=False):
+                out[words[0].span[0]:words[-1].span[1]] = " " * (words[-1].span[1] - words[0].span[0])
+        return "".join(out)
+
 
 # The plain shape. Only a command made wholly of these simple commands, each with static arguments and plain
 # redirections, is read at command position alone; every other command also keeps the pre-OB-L11 whole-command
@@ -4192,7 +4269,6 @@ _PLAIN_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", 
 _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "wc"})
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
-_PLAIN_UNSAFE_DIRS = ("/dev/", "/proc/", "/sys/", "/etc/", "/boot/", "/run/", "/var/run/")
 _SED_PRINT = re.compile(r"^(([0-9]+|\$)(,([0-9]+|\$))?)?p$")
 _PLAIN_HEREDOC_OPS = ("<<", "<<-", "<<<")
 
@@ -4218,7 +4294,7 @@ def _plain_file(w, sv):
     p = _abs_norm(v, sv.cwd)
     if not v.startswith("/") and sv.named("cd", "pushd", "popd"):
         return False
-    return all(q == "/dev/null" or q.startswith("/dev/shm/") or not (q + "/").startswith(_PLAIN_UNSAFE_DIRS)
+    return all(q == locations.NULL_DEVICE or not locations.is_system_path(q)
                for q in (p, _abs_norm(os.path.realpath(p))))
 
 
@@ -4259,14 +4335,14 @@ def _plain_dd(vals, sv):
         if not v.startswith("of="):
             continue
         path = v[3:]
-        if path.startswith("/") and _abs_norm(path) in ("/dev/null", "/dev/stdout", "/dev/stderr"):
+        if path.startswith("/") and _abs_norm(path) in locations.STD_SINKS:
             continue
         if not path or path.startswith("~") or (not path.startswith("/") and sv.named("cd", "pushd", "popd")):
             return False
         p = _abs_norm(path, sv.cwd)
-        if re.match(r"^/dev/fd/[0-9]+$", p):
+        if locations.FD_PATH.match(p):
             continue  # its command's redirections are plain (fd 1 and 2 only), so N is inherited or stdout/stderr
-        if (p + "/").startswith(_PLAIN_UNSAFE_DIRS) and not p.startswith("/dev/shm/"):
+        if locations.is_system_path(p):
             return False
         if _dd_target_refused(path, sv):
             return False
@@ -4335,6 +4411,27 @@ def _plain_kill_args(words):
     return len(words) == 1 and len(words[0].parts) == 1 and words[0].parts[0].kind == "param" \
         and words[0].parts[0].quote == "double" and re.match(r"^([A-Za-z_][A-Za-z0-9_]*|[0-9])$", words[0].parts[0].text) \
         and not words[0].substitutions()
+
+
+def _dd_whole(cmd, sv):
+    """dd that only reads: every word is one of its own operands and none is of=, so its output goes to standard
+    output alone (a pipe, or the plain redirection `without` asks for). A word is static, or an operand name and one
+    `$name` the command sets once to a plain path (ServiceView.set_once), which no splitting turns into an of=."""
+    return all(w.static_prefix().startswith(_DD_OPERANDS) and not w.static_prefix().startswith("of=") and (
+        w.value() is not None or len(w.parts) == 2 and sv.set_once(w, cmd.span[0], "[A-Za-z0-9_.,:+@%/-]+"))
+        for w in cmd.words[1:])
+
+
+def _kill_probe(cmd, sv):
+    """The liveness probe, which sends no signal: `kill -0` and then only PIDs, as literal words that are no option,
+    one double-quoted bare parameter, or one `$name` alone that the command sets once to digits
+    (ServiceView.set_once: digits split into digits, never into `-s SIG`)."""
+    rest = cmd.words[2:]
+    if not rest or [w.value() if _plain_word(w) else None for w in cmd.words[:2]] != ["kill", "-0"] \
+            or any((w.value() or w.text).startswith("-") for w in rest):
+        return False
+    return _plain_kill_args(rest) or (len(rest) == 1 and len(rest[0].parts) == 1
+                                      and sv.set_once(rest[0], cmd.span[0], "[0-9]+"))
 
 
 def _plain_script(script, sv):
@@ -4460,7 +4557,7 @@ def _dd_target_refused(path, sv):
         return True
     if _dd_fd_of(_abs_norm(path) if path.startswith("/") else path) is not None:
         return False  # a descriptor: the command's own redirections are checked as dd's targets
-    if re.match(r"^/proc/[^/]+/fd(/|$)", _abs_norm(path, "/x")):
+    if locations.PROC_FD.match(_abs_norm(path, "/x")):
         return True  # /proc/<pid>/fd/N of a process other than this shell: its file cannot be read here
     if path.startswith("~"):
         path = os.path.expanduser(path)  # bash expands a tilde after of= too
@@ -4474,10 +4571,9 @@ def _dd_target_refused(path, sv):
     with contextlib.suppress(Exception):
         paths.append(_abs_norm(os.path.realpath(paths[0])))
     for p in paths:
-        if p == "/dev" or p.startswith("/dev/"):
-            rel = p[5:]
-            if not (rel in DD_DEV_OK or rel.startswith(("fd/", "shm/"))):  # /dev/shm/x: a tmpfs file
-                return True
+        rel = locations.device_name(p)  # a file of the tmpfs mounted there (/dev/shm/x) is no device
+        if rel is not None and not (rel in DD_DEV_OK or rel.startswith("fd/") or not locations.is_device(p)):
+            return True
     return False
 
 
@@ -4618,7 +4714,7 @@ def service_rules(command, view, env, sv=None):
         return structural() or any(raw_rule(t) for t in sv.code + sv.runners) \
             or (not sv.plain and raw_rule(command))
 
-    def reads_view(view_rule, structural):  # an executable-view rule: runner lines keep it
+    def reads_view(view_rule, structural, view=view):  # an executable-view rule: runner lines keep it
         if sv.raw:
             return view_rule(view)
         return structural() or any(view_rule(t) for t in sv.runners) or (not sv.plain and view_rule(view))
@@ -4629,12 +4725,12 @@ def service_rules(command, view, env, sv=None):
         refuse("BLOCKED: docker-compose down/stop/restart is refused", f"Command: {command}", released_line())
     if reads(_raw_prune, lambda: _docker_prune_all(sv)):
         refuse("BLOCKED: docker system prune -a is refused", f"Command: {command}", released_line())
-    if reads_view(_raw_disk, lambda: _destructive_disk(sv)):
+    if reads_view(_raw_disk, lambda: _destructive_disk(sv), sv.without(view, "dd", _dd_whole)):
         refuse("BLOCKED: Destructive disk operation detected", f"Command: {command}", released_line())
     if reads_view(lambda t: _raw_killall(t, family), lambda: _kill_protected_family(sv, family)):
         refuse(f"BLOCKED: Killing {family + '/' if family else ''}claude/docker processes is refused",
                    f"Command: {command}", released_line())
-    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv)):
+    if reads_view(_raw_kill_signal, lambda: _kill_signal(sv), sv.without(view, "kill", _kill_probe)):
         refuse("BLOCKED: kill with signals is refused — use graceful shutdown methods", f"Command: {command}",
                    released_line())
     prefix = env["prefix"]
@@ -5722,7 +5818,7 @@ def _interpreter_shell_texts(code):
 _PIPE_FILTERS = frozenset({"head", "tail", "wc", "sort", "uniq", "cut", "less", "more", "grep", "rg"})
 _SHAPE_SEARCHERS = frozenset({"grep", "egrep", "fgrep", "rg", "ag", "ack"})
 _SHAPE_COMMANDS = frozenset({"echo", "printf", "cat", "ls", "true", "git"}) | _SHAPE_SEARCHERS
-_SAFE_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/1", "/dev/fd/2"})
+_SAFE_DEVICES = locations.TERMINAL_SINKS | {locations.FD_DIR + "1", locations.FD_DIR + "2"}
 _SHAPE_GIT_SUBS = frozenset({"status", "show", "diff", "log", "restore", "add", "commit", "rev-parse", "ls-files",
                              "stash", "checkout", "clean", "blame", "shortlog", "describe", "branch", "switch",
                              "cat-file", "ls-tree", "merge-base", "reflog", "tag"})
@@ -6405,7 +6501,7 @@ _SD_DECODE = (
     (re.compile(r"\\0?([0-7]{1,3})"), 8),
 )
 _SD_DROP = re.compile(r"""['"\\$+`\s]""")
-_SD_HEAD_DIRS = ("/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin")
+_SD_HEAD_DIRS = locations.BIN_DIRS
 # What can change which program a search or commit call runs, or what it reads: a shell function of that name
 # (read with quotes, blanks and escapes gone), a command that defines one or an alias or rehashes a path, and a
 # variable that moves the program, its options or its config.
@@ -6640,7 +6736,7 @@ def _sd_git(args):
                     value = val if eq else (rest[j + 1] if j + 1 < len(rest) else None)
                     if name == "--message":
                         allowed.add(base + value_at)
-                    if name == "--file" and value in ("-", "/dev/stdin"):
+                    if name == "--file" and value in ("-", locations.STDIN_DEVICE):
                         stdin = True
                     j += 1 if eq else 2
                     continue
@@ -6656,7 +6752,7 @@ def _sd_git(args):
                     value = a[c_at + 1:] if attached else (rest[j + 1] if j + 1 < len(rest) else None)
                     if c == "m":
                         allowed.add(base + (j if attached else j + 1))
-                    if c == "F" and value in ("-", "/dev/stdin"):
+                    if c == "F" and value in ("-", locations.STDIN_DEVICE):
                         stdin = True
                     if not attached:
                         j += 1
@@ -7348,7 +7444,7 @@ def _sd_quiet_redirects(redirects, stdin_doc=False):
             if r.fd not in (1, 2) or r.dup not in (1, 2):
                 return False
             continue
-        if not r.writes() or r.target is None or r.target.value() != "/dev/null" or \
+        if not r.writes() or r.target is None or r.target.value() != locations.NULL_DEVICE or \
                 any(p.kind != "lit" for p in r.target.parts):
             return False
     return True
@@ -7529,7 +7625,7 @@ def session_dirs_rule(command):
 # ── Entry ────────────────────────────────────────────────────────────────────
 
 def environment():
-    tmp = os.environ.get("CLAUDE_TMPDIR") or os.environ.get("TMPDIR") or "/tmp"
+    tmp = os.environ.get("CLAUDE_TMPDIR") or os.environ.get("TMPDIR") or locations.DEFAULT_TEMP_DIR
     helper = os.environ.get("CLAUDE_DAEMON_RESTART_GRANT_HELPER", "")
     return {
         "prefix": os.environ.get("CLAUDE_PROTECTED_DAEMON_PREFIX", ""),

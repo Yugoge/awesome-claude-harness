@@ -85,8 +85,16 @@ class _Transcript:
 
 @pytest.fixture
 def session(tmp_path):
+    # The project outside /tmp and /var/tmp, where BA may write its requirement round (the dispatch
+    # check of pretool-tool-policy.py refuses a dispatch whose declared file its role could not write).
+    from test_report_provenance_gate import project_outside_temp
+    with project_outside_temp() as outside:
+        yield _maker(outside.parent)
+
+
+def _maker(base: Path):
     def make(end_minutes: int) -> _Transcript:
-        root = tmp_path / "main"
+        root = base / "main"
         root.mkdir()
         subprocess.run(["git", "init", "-q", "-b", "trunk"], cwd=root, env=GIT_ENV, check=True)
         subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=root, env=GIT_ENV, check=True)

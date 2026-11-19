@@ -49,7 +49,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import bash_read_only  # noqa: E402 -- the one list of the programs that only read
-sys.path.pop(0)
+from lib import locations  # noqa: E402
+
 
 SENTINEL_NAME = '.hook-refactor-allow'
 BLOCK_LITERAL = 'BLOCKED: claude config guard'
@@ -71,18 +72,11 @@ def _sentinel_present() -> bool:
     return (_project_dir() / '.claude' / SENTINEL_NAME).exists()
 
 
-def _is_hooks_path(file_path: str) -> bool:
-    """True iff file_path targets .claude/hooks/."""
-    if not file_path:
-        return False
-    return '.claude/hooks/' in file_path.replace('\\', '/')
-
-
-def _is_commands_path(file_path: str) -> bool:
-    """True iff file_path targets .claude/commands/."""
-    if not file_path:
-        return False
-    return '.claude/commands/' in file_path.replace('\\', '/')
+def _located_kind(path: str, base=None) -> str:
+    """'hooks' or 'commands' when ``path`` (a relative one from ``base``) is or lies in a protected
+    folder by where it is: its real path and an account's link count as `~/.claude/` does, and a
+    folder that only ends in the text `.claude/hooks/` does not (lib/locations)."""
+    return locations.config_folder(path.replace('\\', '/'), base or str(_project_dir())) if path else ''
 
 
 def _matches_any(command: str, patterns: list) -> bool:
@@ -655,7 +649,7 @@ def _cd_dirs(sp, sites) -> list:
     return dirs
 
 
-def _parsed_kind(command: str) -> tuple:
+def _parsed_kind(command: str, start: str = None) -> tuple:
     """(kind, settled): the protected folder ('hooks', 'commands' or '') a path the shared parser
     (or _site_writes) reads ``command`` to write lies in, each relative path read from the
     directories a `cd` before it in its own shell may have left, and whether that reading settles
@@ -706,7 +700,7 @@ def _parsed_kind(command: str) -> tuple:
                         if base:
                             candidates.append(os.path.normpath(os.path.join(base, spelled)))
             for candidate in candidates:
-                kinds.add(_protected_kind(candidate))
+                kinds.add(_protected_kind(candidate) or _located_kind(candidate, start or os.getcwd()))
     # a hooks write is never exempt (the /clean approval covers commands/ only): it decides first
     kind = 'hooks' if 'hooks' in kinds else 'commands' if 'commands' in kinds else ''
     return kind, settled
@@ -746,8 +740,7 @@ def _env_path_word(word) -> bool:
 def _protected_roots() -> set:
     """The protected folders as absolute paths (as written and real): the project's and the
     harness home's hooks/ and commands/."""
-    bases = [os.path.join(str(_project_dir()), '.claude'), os.path.expanduser('~/.claude')]
-    bases += [os.environ[v] for v in _HOME_VARS if os.environ.get(v)]
+    bases = [os.path.join(str(_project_dir()), '.claude')] + list(locations.config_homes())
     roots = set()
     for base in bases:
         for sub in ('hooks', 'commands'):
@@ -943,10 +936,10 @@ def _temp_path(path: str) -> bool:
     """Whether ``path`` is a scratch location no tool reads config or code from: a device sink, or
     a path under /tmp, /var/tmp or $TMPDIR that is not in the project, the home or the harness
     home, and has no git work tree or repository (`.git`) on the way up to the temp root."""
-    if path in ('/dev/null', '/dev/stdout', '/dev/stderr', '/dev/tty') or path.startswith('/dev/fd/'):
+    if path in locations.TERMINAL_SINKS or path.startswith(locations.FD_DIR):
         return True
     roots = set()
-    for root in ('/tmp', '/var/tmp', os.environ.get('TMPDIR') or '/tmp'):
+    for root in locations.SYSTEM_TEMP_DIRS + (locations.temp_root(),):
         if os.path.isabs(root) and os.path.normpath(root) != '/':
             roots |= _forms_of(root)
     excluded = set()
@@ -983,7 +976,7 @@ def _on_search_path(path: str) -> bool:
     holds a directory on PATH, or PATH has a relative entry."""
     entries = os.environ.get('PATH', '').split(':')
     if any(not e or not os.path.isabs(e) for e in entries):
-        return not (path.startswith('/dev/'))
+        return not locations.is_device(path)
     dirs = set()
     for e in entries:
         dirs |= _forms_of(e)
@@ -1132,7 +1125,7 @@ def _proven_harmless(command: str, start: str) -> bool:
             except (OSError, ValueError):
                 pass
             for form in forms:
-                if _protected_kind(form):
+                if _protected_kind(form) or _located_kind(form):
                     return False
                 if subtree and any(r == form or r.startswith(form.rstrip('/') + '/') for r in roots):
                     return False
@@ -1228,7 +1221,7 @@ def _classify_bash_target(command: str, start: str = None) -> str:
     if not command:
         return ''
     try:
-        kind, _settled = _parsed_kind(command)
+        kind, _settled = _parsed_kind(command, start)
     except Exception:
         kind = ''
     legacy = _legacy_kind(command)
@@ -1374,9 +1367,10 @@ def _clean_approved_bash(command: str, data: dict) -> bool:
 def _evaluate_write_edit(tool_name: str, tool_input: dict, data: dict) -> None:
     """Apply guard for Write/Edit/MultiEdit/NotebookEdit tools."""
     file_path = tool_input.get('file_path', '') or ''
-    if _is_hooks_path(file_path):
+    kind = _located_kind(file_path, data.get('cwd'))
+    if kind == 'hooks':
         _block_path(tool_name, file_path, 'hooks')
-    if (_is_commands_path(file_path) and not _dev_command_product_file(file_path, data)
+    if (kind == 'commands' and not _dev_command_product_file(file_path, data)
             and not _clean_approved_edit(file_path, data)):
         _block_path(tool_name, file_path, 'commands')
 

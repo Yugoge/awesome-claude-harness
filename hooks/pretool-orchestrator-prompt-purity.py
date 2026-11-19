@@ -138,7 +138,7 @@ USER_VERBATIM_RE = re.compile(
 # dev-registry heredoc rooted at a non-root home, so that block escaped
 # redaction on every non-root install. `\S*` keeps the old form matching too.
 DEV_REGISTRY_HEREDOC_RE = re.compile(
-    r"cat\s*>\s*\S*/dev-registry/[^\n]*<<\s*['\"]?REGEOF['\"]?"
+    r"cat\s*>\s*\S*/%s/[^\n]*<<\s*['\"]?REGEOF['\"]?" % "dev-registry" +  # the registry folder's name
     r".*?\nREGEOF\b",
     re.DOTALL,
 )

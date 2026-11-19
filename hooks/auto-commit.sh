@@ -53,11 +53,10 @@ if write_checkpoint "" "stop hook: auto-commit.sh"; then
     echo -e "${GREEN}   Ref: ${REF}${NC}"
     echo -e "${GREEN}   Tip: $(git rev-parse --short "$TIP")${NC}"
   fi
-elif [ "$?" -eq 3 ]; then  # refused, nothing written: a one-line notice (systemMessage), never a Stop block
-  NOTICE="Checkpoint snapshot refused by $checkpoint_refused_by: nothing written, see logs/checkpoint.log${NOTICE:+; $NOTICE}"
-else
+elif [ "$?" -ne 3 ]; then  # 3: refused, nothing written: the notice below (systemMessage), never a Stop block
   echo -e "${RED}❌ Checkpoint failed. See ~/.claude/logs/checkpoint.log${NC}"
   exit 1
 fi
+[ -z "$checkpoint_notice" ] || NOTICE="${checkpoint_notice}${NOTICE:+; $NOTICE}"  # refused or a file left out
 
 notice; exit 0
