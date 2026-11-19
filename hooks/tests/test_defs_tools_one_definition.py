@@ -196,3 +196,14 @@ def test_scratch_init_and_doc_sync_notice_agree_on_a_session_dir_name(sid, tmp_p
     assert (_doc_sync("notice").state_path_for({"session_id": sid}) is not None) is safe
     gate = _hook("pretool-orchestrator-gate.py")
     assert "_SCRATCH_SID" not in vars(gate)
+
+
+# ---------------------------------------------------------------- settings-switch-permissions
+def test_the_shipped_settings_deny_the_switch_rules_the_renderer_keeps():
+    """scripts/install/render-settings.SWITCH_PERMISSIONS is the one definition of the switch's
+    own permission rules (the off form keeps them); settings.json is JSON and cannot read it, so
+    this keeps the shipped deny list in step with it."""
+    from importlib.machinery import SourceFileLoader
+    render = SourceFileLoader("_render_settings_defs", str(ROOT / "scripts" / "install" / "render-settings")).load_module()
+    deny = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))["permissions"]["deny"]
+    assert render.SWITCH_PERMISSIONS and set(render.SWITCH_PERMISSIONS) <= set(deny)
