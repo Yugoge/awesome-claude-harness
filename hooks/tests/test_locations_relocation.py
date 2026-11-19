@@ -723,5 +723,6 @@ def test_the_installer_loads_the_runtime_guard_config_with_pathmatch_alone(tmp_p
     probe = ("import sys; sys.path.insert(0, sys.argv[1]); from runtime_guard import config; "
              "print(sorted(config._config_ancestor_dirs())[:1], config._locations().__name__)")
     proc = subprocess.run([sys.executable, "-B", "-c", probe, str(HOOKS / "lib")], capture_output=True, text=True,
-                          cwd=str(tmp_path), timeout=60, env={"PATH": "/usr/bin:/bin", "HOME": "/home/alice"})
-    assert proc.returncode == 0 and "/home/alice/.config" in proc.stdout and "locations" in proc.stdout, proc.stdout + proc.stderr
+                          cwd=str(tmp_path), timeout=60, env={"PATH": "/usr/bin:/bin", "HOME": f"/srv/{NEVER}/home"})
+    assert proc.returncode == 0 and f"/srv/{NEVER}/home/.config" in proc.stdout and "locations" in proc.stdout, \
+        proc.stdout + proc.stderr
