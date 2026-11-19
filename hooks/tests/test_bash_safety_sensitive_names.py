@@ -177,7 +177,7 @@ REGRESSIONS = [
     ("python3 -c 'print(open(\".env\").read())' > /tmp/x", READ),
     ("cat .env-prod > /tmp/x", READ),
     ("cp .env.example .env", WRITE),
-    ("grep -n password src/auth.py > /tmp/hits.txt", READ),  # an over-block the base had too; kept
+    ("grep -n password config/secrets.yaml > /tmp/hits.txt", READ),  # a file the search reads, not its pattern
 ]
 
 
@@ -185,6 +185,18 @@ REGRESSIONS = [
 def test_a_name_the_base_refused_by_substring_is_still_refused(sandbox, command, label):
     r = run(sandbox, command)
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# A word counts only where it can be the source of what the redirect keeps (the owner's ruling of 2026-11-19): a
+# search pattern and echo's own text are not files. Until then this was "an over-block the base had too; kept".
+@pytest.mark.parametrize("command", [
+    "grep -n password src/auth.py > /tmp/hits.txt",
+    'grep -rn -E "token|password|secret" src docs > /tmp/hits.txt',
+    'echo "rotate the password monthly" > /tmp/policy-note.txt',
+])
+def test_a_pattern_or_printed_text_is_no_secret_source(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
 
 
 # The exemptions lift the substring check only for a plain static name of these kinds.

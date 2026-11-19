@@ -4050,11 +4050,14 @@ def _command_name(cmd):
         return None
 
 
-def sensitive_redirect(command):
+def sensitive_redirect(command, kept=False):
     """BS-20/21 (audit BS-10/11). 'write' when a command writes a file lib/sensitive_names.py calls sensitive (a
     redirection into it, or tee, cp, mv, install, rsync, ln, dd of=, curl -o, wget -O, sed -i or truncate naming
     it), 'redirect' when such a name is a word or an input redirection of a command whose output goes to a file, or
-    a source operand of cp, mv, install, rsync or ln other than a source-code file; None otherwise.
+    a source operand of cp, mv, install, rsync or ln other than a source-code file; None otherwise. A word counts
+    only where it can be a source: not a grep or rg pattern, not echo's or printf's static text, and a command line
+    a shell or a runner (docker exec, ssh, watch ...) is handed is read as the commands it holds, their output kept
+    (``kept``) as its own is.
 
     Read from lib/shell_parse.py's parsed commands, payloads included (eval, bash -c, a heredoc-fed shell), so a
     name inside quoted data or a heredoc body that no command reads as a path is data. The full path text is judged
@@ -4075,7 +4078,7 @@ def sensitive_redirect(command):
                                      is_sensitive_name)
     try:
         from lib.bash_read_only import is_read_only
-        from lib.shell_parse import _DEFAULT_INTO, parse, walk, write_targets
+        from lib.shell_parse import SHELLS, _DEFAULT_INTO, parse, resolve, walk, write_targets
         script = parse(command)
         if script.error is not None:
             raise ValueError(script.error.code)
@@ -4107,8 +4110,19 @@ def sensitive_redirect(command):
                 if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
                     return "redirect"
                 continue
-            if outputs:
-                words = list(enumerate(site.cmd.words[1:]))
+            if outputs or kept:
+                args = resolve(site.cmd).args
+                texts = [w.text if w.value() is None else w.value() for w in args]
+                spec = {"grep": _SD_GREP, "egrep": _SD_GREP, "fgrep": _SD_GREP, "rg": _SD_RG}.get(name)
+                data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in ("echo", "printf") else ()
+                skip = {id(args[k]) for k in data if k < len(args) and (spec or args[k].value() is not None)}
+                for w in args if name in SHELLS or name in _OPAQUE_RUNNERS else ():
+                    if any(c.isspace() for c in w.value() or "") and parse(w.value()).error is None:
+                        inner = sensitive_redirect(w.value(), True)
+                        if inner:
+                            return inner
+                        skip.add(id(w))
+                words = [(i, w) for i, w in enumerate(site.cmd.words[1:]) if id(w) not in skip]
             elif name in _SENSITIVE_COPIERS:
                 # A copy's source operands, its options and their values aside (`rsync --exclude .env`): a
                 # source-code file is no secret read (its destination was judged above).
