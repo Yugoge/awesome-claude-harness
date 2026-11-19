@@ -102,6 +102,8 @@ CASES = [
     ("wrapper-option-specs", "systemd-run -H V {}", ("gp", "bs", "tp")),
     ("wrapper-option-specs", "sudo -U V {}", ("gp", "bs", "tp")),
     ("privilege-wrappers", "runuser -u root -- {}", ("gp", "bs", "tp")),
+    ("opaque-runners", "script -c '{}'", ("gp", "bs", "tp", "hs")),
+    ("opaque-runners", "sg root '{}'", ("gp", "bs", "tp", "hs")),
     # the git classifier's hidden-code reading knows the interpreters its _INTERPRETERS knows
     ("interpreters", "php -r 'system(\"{}\");'", ("gp", "bs")),
     ("interpreters", "lua -e 'os.execute(\"{}\")'", ("gp", "bs")),

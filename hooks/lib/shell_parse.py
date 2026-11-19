@@ -2469,6 +2469,10 @@ _SU_SPEC = _spec(("-l", "--login", "-m", "-p", "--preserve-environment", "-P", "
                   "-f", "--fast", "-"),
                  ("-c", "--command", "-s", "--shell", "-g", "--group", "-G", "--supp-group",
                   "-w", "--whitelist-environment", "--session-command"))
+_SCRIPT_SPEC = _spec(("-a", "--append", "-e", "--return", "-f", "--flush", "-q", "--quiet"),
+                     ("-c", "--command", "-E", "--echo", "-I", "--log-in", "-O", "--log-out",
+                      "-B", "--log-io", "-T", "--log-timing", "-m", "--logging-format",
+                      "-o", "--output-limit"))
 _SSH_SPEC = _spec(("-4", "-6", "-A", "-a", "-C", "-f", "-G", "-g", "-K", "-k", "-M", "-N",
                    "-n", "-q", "-s", "-T", "-t", "-V", "-v", "-X", "-x", "-Y", "-y"),
                   ("-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l",
@@ -2682,6 +2686,23 @@ def resolve(cmd, depth=None):
             return r
         if name == "find":
             return _resolve_find(r, head, words, cmd, depth)
+        if name == "sg":
+            # sg [-] GROUP [-c] COMMAND: /bin/sh -c COMMAND with GROUP as the group
+            ops = [w for w in words[1:] if w.value() not in ("-", "-c")]
+            if len(ops) > 1:
+                r.head = head
+                r.args = tuple(words[1:])
+                _set_payload(r, ops[1:], "shell_c", depth, "sg_dynamic")
+                return r
+        if name == "script":
+            # script [options] [FILE]: -c/--command runs COMMAND in a shell (util-linux)
+            opts, rest, err = split_options(words, _SCRIPT_SPEC, 1, permute=True, lenient=True)
+            code = [v for o, v in opts if o in COMMAND_OPTS]
+            if code:
+                r.head = head
+                r.args = tuple(words[1:])
+                _set_payload(r, [code[-1]], "shell_c", depth, "script_c_dynamic")
+                return r
         if name == "runuser" and not _has_c(words):
             # runuser -u USER [--] COMMAND [ARG...] runs COMMAND as USER, with no shell
             opts, rest, err = split_options(words, PEEL["runuser"][0], 1)
