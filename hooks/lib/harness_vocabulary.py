@@ -1,4 +1,4 @@
-"""Tool names the harness's hooks decide by, each list defined once.
+"""Small vocabularies the harness's hooks decide by (tool names, gate modes), each defined once.
 
 Plain data, standard library only: a hook imports it before it reads its payload.
 """

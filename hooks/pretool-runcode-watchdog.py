@@ -34,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
-from lib.tool_vocabulary import RUN_CODE_TOOLS  # noqa: E402
+from lib.harness_vocabulary import RUN_CODE_TOOLS  # noqa: E402
 
 WATCHDOG_SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "runcode-watchdog.py")
 
