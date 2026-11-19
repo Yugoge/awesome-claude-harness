@@ -7,8 +7,9 @@ name, the part of its identity that survives a move to another line or file:
              (also class attributes, annotated assignments and a dict value: NAME[key])
   py-in      x in ("a", "b")  /  x.startswith(("a", "b"))          -> <scope>:in
   py-eq      x == "a" or x == "b"                                   -> <scope>:eq
-  py-regex   an alternation (a|b|c) inside a string passed to re.*, or assigned to a name the
-             file passes to re.*; one definition per group      -> <scope>:re  (or <scope>.NAME:re)
+  py-regex   an alternation (a|b|c) inside a string passed to re.* (or a literal part of the
+             pattern it builds), or assigned to a name the file uses in a re.* pattern; one
+             definition per group                               -> <scope>:re  (or <scope>.NAME:re)
   sh-case    one case arm a|b|c)                                    -> <function>:case
              (not an arm of `case "$1"` whose words are all options: that is the script's
              own command line, like argparse in Python, not a fact about another program)
@@ -256,24 +257,29 @@ class _Py(ast.NodeVisitor):
             m = _strs(n.args[0])
             if m is not None:
                 self.add("py-in", n.lineno, f"{self.where()}:in", m)
-        if isinstance(fn, ast.Attribute) and fn.attr in RE_FUNCS and isinstance(fn.value, ast.Name) \
-                and fn.value.id in ("re", "regex") and n.args:
-            a = n.args[0]
-            if isinstance(a, ast.Constant) and isinstance(a.value, str):
-                for s in regex_tables(a.value):
-                    self.add("py-regex", n.lineno, f"{self.where()}:re", s)
+        if _is_re_call(n):
+            for c in ast.walk(n.args[0]):     # the pattern, or the literal parts it is built from
+                if isinstance(c, ast.Constant) and isinstance(c.value, str):
+                    for s in regex_tables(c.value):
+                        self.add("py-regex", c.lineno, f"{self.where()}:re", s)
         self.generic_visit(n)
 
 
+def _is_re_call(n) -> bool:
+    fn = n.func
+    return (isinstance(fn, ast.Attribute) and fn.attr in RE_FUNCS and isinstance(fn.value, ast.Name)
+            and fn.value.id in ("re", "regex") and bool(n.args))
+
+
 def _re_names(tree) -> set[str]:
-    """Names this module passes as the pattern of a re.* call."""
+    """Names this module uses in the pattern of a re.* call: the pattern itself, or a
+    fragment it is built from (`re.compile(SHELLS + "|x")`, an f-string)."""
     names = set()
     for n in ast.walk(tree):
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in RE_FUNCS \
-                and isinstance(n.func.value, ast.Name) and n.func.value.id in ("re", "regex") and n.args:
-            a = n.args[0]
-            if isinstance(a, (ast.Name, ast.Attribute)):
-                names.add(_target(a))
+        if isinstance(n, ast.Call) and _is_re_call(n):
+            for a in ast.walk(n.args[0]):
+                if isinstance(a, (ast.Name, ast.Attribute)):
+                    names.add(_target(a))
     return names
 
 
