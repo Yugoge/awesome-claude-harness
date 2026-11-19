@@ -824,20 +824,6 @@ def _sed_proof(args) -> tuple:
     return True, (ops if inplace else [])
 
 
-def _sort_reads(vals) -> bool:
-    """Whether a sort call writes nothing but its standard output: no -o (also in a cluster),
-    no --output, --compress-program or --temporary-directory (nor an abbreviation), no -T."""
-    for v in vals:
-        if v == '--':
-            break
-        if v.startswith('--'):
-            if v.split('=', 1)[0][:3] in ('--o', '--c', '--t'):
-                return False
-        elif v.startswith('-') and len(v) > 1 and set(v[1:]) & set('oT'):
-            return False
-    return True
-
-
 # git subcommands the proof takes: not commit (hooks), add (clean filters) or status (the fsmonitor
 # and post-index-change hooks). The others may still run textconv, diff drivers or a pager the
 # existing configuration names; the proof only makes sure the same command planted none of them.
@@ -1073,17 +1059,14 @@ def _proven_harmless(command: str, start: str) -> bool:
         if any(v is None and not (name in _PROOF_WRITERS and _env_path_word(w))
                for v, w in zip(vals, res.args)):
             return False  # a computed word: it may split into options or other paths
-        if name == 'printf':
-            if any(v.startswith('-v') for v in vals):
-                return False
+        if name in ('printf', 'sort'):
+            if not bash_read_only.reads_only(name, vals):
+                return False  # printf -v; sort -o, --compress-program, -T
         elif name == 'find':
             if _FIND_ACTIONS & set(vals):
                 return False
         elif name == 'rg':
             if not _rg_proof(vals):
-                return False
-        elif name == 'sort':
-            if not _sort_reads(vals):
                 return False
         elif name == 'git':
             if not _git_settled(res, command) or 'add' in vals or any(

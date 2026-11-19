@@ -583,22 +583,6 @@ def _git_grep_pager(arg):
     return False
 
 
-def _uniq_operands(args):
-    """The number of file operands of a `uniq` call (`uniq IN OUT` writes OUT); an option taking a separate value
-    (`-f N`, `-s N`, `-w N`) does not count its value."""
-    n, skip, ended = 0, False, False
-    for a in args:
-        if skip:
-            skip = False
-        elif not ended and a == "--":
-            ended = True
-        elif not ended and a in ("-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"):
-            skip = True
-        elif ended or a == "-" or not a.startswith("-"):
-            n += 1
-    return n
-
-
 def _http_reader_ok(site, r):
     """True if the simple command only prints or filters text: a reader or a pure filter, as written, whose
     redirections write nowhere but /dev/null."""
@@ -617,10 +601,8 @@ def _http_reader_ok(site, r):
         return bool(args) and args[0] in ("log", "show", "diff", "grep") and not any(
             a.startswith(("--ext-diff", "--output", "--textconv", "-O", "--open-files-in-pager")) for a in args) \
             and not (args[0] == "grep" and any(_git_grep_pager(a) for a in args[1:]))
-    if name == "uniq":
-        return _uniq_operands(args) < 2
-    if name == "sort":
-        return _bash_read_only.reads_only("sort", args)  # not -o, not --compress-program
+    if name in ("uniq", "sort"):
+        return _bash_read_only.reads_only(name, args)  # uniq IN OUT; sort -o, --compress-program
     if name == "sed":
         quiet, scripts, operands, take = False, [], [], False
         for a in args:

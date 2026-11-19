@@ -135,11 +135,12 @@ def _rg(args) -> bool:
     return not any(_long_hits(a, RG_RUN_OPTS) or _cluster_has(a, "z") for a in args)
 
 
-_SORT_FORBIDDEN = ("--output", "--compress-program")
+# -o writes the output file, --compress-program runs a program, -T writes temporary files into a directory.
+_SORT_FORBIDDEN = ("--output", "--compress-program", "--temporary-directory")
 
 
 def _sort(args) -> bool:
-    return not any(_long_hits(a, _SORT_FORBIDDEN) or _cluster_has(a, "o") for a in args)
+    return not any(_long_hits(a, _SORT_FORBIDDEN) or _cluster_has(a, "oT") for a in args)
 
 
 def _uniq(args) -> bool:
