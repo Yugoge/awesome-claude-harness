@@ -26,7 +26,7 @@ group: Ship
 
 ## Agentic dispatch protocol (pre-execution)
 
-Run these steps in order. Where one refuses, ask ONE AskUserQuestion in this turn instead of exiting: the question is the refusal's message with its facts; the options are the action the refusal names, marked (Recommended), and "I give another instruction". Act on the answer; a refusal met again after it is reported in the reply, not asked again.
+Run these steps in order. Where one refuses, end with the refusal reported in the reply: its message with its facts and the action it names. Nobody is asked about it, and the refused call is not run again.
 
 **Step 0: Parse arguments and resolve remote**
 

@@ -573,20 +573,18 @@ with no round cap. `scope_violation` means the tree changed after QA reviewed it
 and dispatch a fresh QA over the actual set.
 
 **A hook rejection** (`hook_blocked`, or any hook refusing a tool call during `/commit`) is
-the owner's decision (CLAUDE.md Subagent Hook Discipline #1-#3): the rejected operation is
-never retried without the owner's grant, and never wrapped or bypassed. This rule does not
+reported, never asked about (CLAUDE.md Subagent Hook Discipline #1-#4): the rejected operation is
+never retried, wrapped or bypassed. This rule does not
 cover `grant_missing`, `grant_expired` and `grant_consumed`, though each reaches the analyst as
 the privilege guard refusing the commit for want of a live grant: they are the commit grant's
 own lifecycle (absent, past `expires_at`, or spent by an earlier attempt;
 `agents/changelog-analyst.md` § failure_code values keeps them apart from `hook_blocked`), not a
 hook refusing an operation. The Retryable rule above takes a fresh grant for them and asks
-nothing, and after a landing the Non-retryable rule routes them. Ask one
-AskUserQuestion — header `Authorize`,
-question `<hook> refused <the operation> for task <TASK_ID>: authorize it?` with the hook's
-output verbatim, options `Authorize it` (description: the exact command the owner runs to
-authorize it, for example `/allow <op> <args>`; `/commit` runs the operation again once the
-grant exists) and `Do not authorize` (description: `/commit` goes on without that operation
-where every acceptance criterion still holds without it, Hook Discipline #4).
+nothing, and after a landing the Non-retryable rule routes them. For a hook rejection, print one
+line `REFUSED: <hook> refused <the operation> for task <TASK_ID>` and the hook's output verbatim;
+`/commit` goes on without that operation where every acceptance criterion still holds without it
+(Hook Discipline #4), and otherwise ends there with that report. The operation runs again only on
+the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses; no agent asks for one.
 
 ### Step 8: Spec-update dispatch (post-commit, advisory)
 
@@ -675,9 +673,8 @@ time, through the same unmodified Step 3 to Step 8 an explicit `/commit <task-id
    `nothing_to_commit`, `push_gate_reconciled`, `nothing_to_commit_precommitted`) or, under
    `--dry-run`, the preview end. Gaps, a `COMMIT: REJECT` and changelog-analyst failures are routed
    inside the walk (Steps 3-7); a `partially_committed` parent continues its remaining repositories
-   in order under fresh grants (Step 7). A hook rejection, or another decision only the owner can
-   make, is one AskUserQuestion naming that parent and the decision (Step 7's question for a hook);
-   the walk goes on after the answer.
+   in order under fresh grants (Step 7). A hook rejection is reported for that parent as Step 7
+   reports it (`REFUSED:` and the hook's output), never asked about; the walk goes on.
 4. **Batch summary**: once every parent has landed, print one line per parent:
    `task-id: <landed outcome>`.
 

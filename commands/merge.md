@@ -28,10 +28,8 @@ In_place means the main checkout, which other sessions may share: `hooks/merge.s
 
 ## Implementation
 
-**Refusals.** Where a step below refuses, ask ONE AskUserQuestion in this turn instead of exiting: the
-question is the refusal's message with its facts; the options are the action the refusal names, marked
-(Recommended), and "I give another instruction". Act on the answer. A refusal met again after the
-answer is reported in the reply, not asked again.
+**Refusals.** Where a step below refuses, end with the refusal reported in the reply: its message with
+its facts and the action it names. Nobody is asked about it, and the refused call is not run again.
 
 ### Step 0: Determine worktree shape, then resolve branch name
 

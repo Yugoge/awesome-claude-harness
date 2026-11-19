@@ -207,7 +207,7 @@ RETURN VALUE. Your response ends with the verdict line your branch names (`CLOSE
 
 Echo the final line QA returned in the orchestrator's text message. QA wrote the close-report in Step 2; make sure `docs/dev/close-report-<task-id>.md` exists.
 
-- **Round-open** (`CLOSE_FINDINGS: <n> items`, or a `CLOSE_REPORT_APPEND_` line): route each finding (Routes), run Step 0's call again, then a fresh close-QA round (Step 2). A cause in the environment that persists (no space left, a read-only filesystem) is one owner question naming it (header `Append`), whose options are the remedies for that cause, each followed by the next round. Nothing below runs for a round-open echo.
+- **Round-open** (`CLOSE_FINDINGS: <n> items`, or a `CLOSE_REPORT_APPEND_` line): route each finding (Routes), run Step 0's call again, then a fresh close-QA round (Step 2). A cause in the environment that persists (no space left, a read-only filesystem) is reported in one line naming it and its remedies; nobody is asked, and the next round follows once the cause is gone. Nothing below runs for a round-open echo.
 - **Landed** (`CLOSE: YES*`, any suffix): the Session Summary, the next step, then Step 4.
 
 The close-report FILE ends with exactly the verdict line (Step 2); the message holds the `CLOSE:` echo and, landed only, the Session Summary and the next step. Step 4's question is a tool call, in no output channel of the close-report.
@@ -253,6 +253,6 @@ The dialog adds its own Skip control and free-text box; no other option is added
 
 2. **Walk the steps over the parents.** Each TodoStep runs for every parent, in list order, before it is marked completed: Step 0 binds `TASK_ID` to the parent as Task-id resolution binds a timestamp argument (a `/do` parent's `DO_REPORT` included) and makes its own disposition call; Step 2 runs each parent's close judgment until it lands; Step 4 asks one rating question per landed parent. No two dispatches run at once; `codex_required` is shared by the batch.
 
-3. **An owner decision** a parent meets — a hook rejection (CLAUDE.md Subagent Hook Discipline: the rejected operation is never retried, disguised or worked around) or a genuine choice — is one owner question naming the parent and the decision (header `Authorize` for a hook rejection: the rejected operation, the exact command the human may authorize, and declining it under Hook Discipline #4). The parent then goes on to its landed verdict; no parent is recorded and passed over.
+3. **A hook rejection** a parent meets (CLAUDE.md Subagent Hook Discipline: the rejected operation is never retried, disguised or worked around) is reported in the batch line for that parent, with the rejected operation and the hook's output, as refused; nobody is asked about it. The parent then goes on to its landed verdict without the operation (Hook Discipline #4); no parent is recorded and passed over.
 
 4. **Batch line**: after Step 3, one line per parent (`<task-id>: <its landed CLOSE: line>`), then each `skipped:` line of the discovery, verbatim.
