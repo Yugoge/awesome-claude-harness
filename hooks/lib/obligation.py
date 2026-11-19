@@ -847,27 +847,6 @@ def read_first_record_prompt(transcript_path: str | Path) -> str | None:
     return None
 
 
-def candidate_transcript_paths(
-    session_id: str,
-    agent_id: str,
-    project_dir: str | Path,
-    roots: Iterable[str | Path] | None = None,
-) -> list[Path]:
-    """Session-scoped candidate paths across every account root (design
-    §1.3-G2 L1): ``<root>/<slug>/<session_id>/subagents/agent-<agent_id>.jsonl``.
-
-    Reuses ``project_slug`` / ``account_project_roots``
-    (subagent_restart.py:551-577). Session scoping kills the observed
-    cross-session agent-id reuse (agent_resolver.py:23-29). Multi-root copies
-    are split views of the SAME child (design :196-199)."""
-    resolved_roots = list(roots) if roots is not None else account_project_roots()
-    slug = project_slug(project_dir)
-    return [
-        Path(root) / slug / session_id / "subagents" / f"agent-{agent_id}.jsonl"
-        for root in resolved_roots
-    ]
-
-
 def _meta_path(transcript_path: Path) -> Path:
     return transcript_path.with_name(transcript_path.stem + ".meta.json")
 

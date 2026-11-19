@@ -241,28 +241,6 @@ def normalize_step_text(value: str) -> str:
     return value
 
 
-def codex_plan_matches_canonical(plan: list, canonical: list) -> bool:
-    if not canonical or len(plan) != len(canonical):
-        return False
-    for item, expected in zip(plan, canonical):
-        if not isinstance(item, dict):
-            return False
-        status = item.get('status', 'pending')
-        if status not in TODO_STATUSES:
-            return False
-        step_text = item.get('step') or item.get('content') or item.get('title') or ''
-        actual = normalize_step_text(str(step_text))
-        expected_texts = {
-            normalize_step_text(str(expected.get('content', ''))),
-            normalize_step_text(str(expected.get('activeForm', ''))),
-        }
-        if actual not in expected_texts:
-            return False
-    completed = sum(1 for item in plan if item.get('status') == 'completed')
-    in_progress = [idx for idx, item in enumerate(plan) if item.get('status') == 'in_progress']
-    return completed == 0 and (not in_progress or in_progress == [0])
-
-
 def codex_plan_to_todos(plan: list, canonical: list, last: list | None = None) -> tuple[list, list]:
     """Convert a Codex update_plan payload to canonical TodoWrite-shaped todos: the whole
     list against the canonical one for a first plan or a length change, else each item

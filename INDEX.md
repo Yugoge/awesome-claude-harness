@@ -454,10 +454,7 @@ dot-claude/
 │   ├── `fswatch-manager.sh` - fswatch-manager.sh - Manage git-fswatch instances
 │   ├── `git-fswatch.sh` - git-fswatch.sh - Comprehensive Git file watcher using fswatch
 │   ├── `git-fswatch@.service` - service file
-│   ├── `install-auto-sync.sh` - LEGACY / DO NOT USE — describes an obsolete auto-sync model.
-│   ├── `install-git-hooks.sh` - LEGACY / DO NOT USE — describes an obsolete git-tracking model.
 │   ├── `install-protection-all.sh` - LEGACY / DO NOT USE — describes an obsolete auto-push protection model.
-│   ├── `install.sh` - LEGACY / DO NOT USE — describes an obsolete auto-commit model.
 │   ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 │   ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
 │   ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
@@ -688,7 +685,6 @@ dot-claude/
 │   ├── `check-overnight-reports.sh` - STUB: each specialist's dispatch obligation declares its report and schema, and G2
 │   ├── `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 │   ├── `check-readme-freshness.sh` - Check README.md freshness for all major folders
-│   ├── `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 │   ├── `cli-fixture-record.sh` - Description: Record the installed Claude Code CLI's hook records and hook stdin as test fixtures.
 │   ├── `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
 │   ├── `close-route-select.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
@@ -714,7 +710,6 @@ dot-claude/
 │   ├── `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
 │   ├── `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
 │   ├── `harness-switch` - harness-switch file
-│   ├── `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 │   ├── `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
 │   ├── `iterate-failed-pipelines.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
 │   ├── `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close

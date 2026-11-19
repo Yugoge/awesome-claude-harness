@@ -125,17 +125,3 @@ def stub_mandate_result():
     """Placeholder for T5's R3.0/R3.3/R3.7 mandate check."""
     return CheckResult("mandate", "N/A", "guide_version < 1", 0)
 
-
-def stub_utility_result():
-    """Placeholder for T6's R1.1 utility check."""
-    return CheckResult("utility", "N/A", "guide_version < 1", 0)
-
-
-def stub_meta_rule_result():
-    """Placeholder for T6's R5.3 meta-rule check."""
-    return CheckResult("meta_rule", "N/A", "guide_version < 1", 0)
-
-
-def stub_ambiguous_result():
-    """Placeholder for T6's R4a.3 AMBIGUOUS block gate."""
-    return CheckResult("ambiguous", "N/A", "guide_version < 1", 0)
