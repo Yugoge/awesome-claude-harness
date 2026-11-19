@@ -3182,6 +3182,10 @@ NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the w
 INSTALL_DIR_OPTS = ("-d", "--directory")  # install makes every operand a directory (no source)
 TAR_NAMES = ("tar", "bsdtar", "gtar")  # the program names that are tar
 AWK_NAMES = ("awk", "gawk", "mawk", "nawk")  # the program names that are awk
+# ripgrep: the options whose value is a program it runs, and every option that makes it run
+# one (--search-zip, short -z, runs the decompressors). --pre-glob only narrows --pre.
+RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
+RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip",)
 VERBS["awk"] = VERBS["gawk"]  # where awk is gawk, `awk -i inplace` edits in place
 
 # The commands that change a file's mode, owner, attributes or ACL: the file

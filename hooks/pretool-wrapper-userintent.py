@@ -1822,7 +1822,7 @@ class _Scan:
                 name, eq, val = v.partition('=')
                 takes = name in self._RG_VALUE_LONG
                 vw = None if eq else (args[k + 1] if takes and k + 1 < len(args) else None)
-                if name in ('--pre', '--hostname-bin'):
+                if name in _sp.RG_PROGRAM_OPTS:
                     progs.append(vw if not eq else val)
                 if name in ('--regexp', '--file'):
                     given = True
@@ -2622,9 +2622,9 @@ class _Scan:
                         continue
                     lines = [ln for ln in lines if ln and not ln.startswith('#')]
                     for i, ln in enumerate(lines):
-                        if ln in ('--pre', '--hostname-bin'):
+                        if ln in _sp.RG_PROGRAM_OPTS:
                             out.append(lines[i + 1] if i + 1 < len(lines) else None)
-                        elif ln.startswith(('--pre=', '--hostname-bin=')):
+                        elif ln.startswith(tuple(o + '=' for o in _sp.RG_PROGRAM_OPTS)):
                             out.append(ln.split('=', 1)[1])
         self._rgconf_memo = out
         return out

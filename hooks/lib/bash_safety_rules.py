@@ -2975,7 +2975,8 @@ def _bulk_filter_runs(res):
     if name == "git":
         return _git_runs_bulk_name(res)
     if name == "rg":
-        return any(v is None or v.split("=", 1)[0] in ("--pre", "--hostname-bin") for v in vals)
+        from lib.shell_parse import RG_PROGRAM_OPTS
+        return any(v is None or v.split("=", 1)[0] in RG_PROGRAM_OPTS for v in vals)
     if name == "file":
         return any(v is None or v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals)
     if name == "find":
@@ -3277,6 +3278,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
     sentinel is minted only by the userprompt-bulk-commit-capability hook, never from Bash. A command the parser
     cannot read is TOKENIZER_ERROR.
     """
+    from lib.shell_parse import RG_PROGRAM_OPTS
     sites = _parsed_sites(cmd)
     if sites is None:
         return 'TOKENIZER_ERROR'
@@ -3318,7 +3320,7 @@ def _relaxed_bulk_sentinel_decision(cmd):
             return 'DENY'
         if name in _BULK_READERS:
             vals = [w.value() if w.value() is not None else w.static_prefix() for w in res.args]
-            if name == "rg" and any(v.split("=", 1)[0] in ("--pre", "--hostname-bin") for v in vals):
+            if name == "rg" and any(v.split("=", 1)[0] in RG_PROGRAM_OPTS for v in vals):
                 return 'DENY'
             if name == "file" and any(v == "--compile" or re.fullmatch(r"-[A-Za-z]*C[A-Za-z]*", v) for v in vals):
                 return 'DENY'
@@ -5858,6 +5860,7 @@ def _ack_ag_options_ok(args):
 
 def _shape_simple(cmd, invs, stage, state):
     """One simple command of the data shape: a pipeline's first stage, or a later pure-filter stage."""
+    from lib.shell_parse import RG_RUN_OPTS
     from lib.shell_parse import SimpleCommand, resolve
     if not isinstance(cmd, SimpleCommand) or cmd.assignments or not cmd.words \
             or not all(_word_is_static(w) for w in cmd.words):
@@ -5874,7 +5877,7 @@ def _shape_simple(cmd, invs, stage, state):
     args = [w.value() or "" for w in cmd.words[1:]]
     if name == "printf" and any(a.startswith("-v") for a in args):
         return False
-    if name in _SHAPE_SEARCHERS and any(a.startswith(("--pre", "--pager", "--hostname-bin", "--search-zip"))
+    if name in _SHAPE_SEARCHERS and any(a.startswith(RG_RUN_OPTS + ("--pager",))
                                          or (name == "rg" and a.startswith("-") and not a.startswith("--")
                                              and "z" in a) for a in args):
         return False

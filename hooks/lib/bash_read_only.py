@@ -49,13 +49,13 @@ import sys
 def _parser():
     """The parser and the census, imported on the first proof only: a hook that reads just the
     program tables below (reads_only) does not load them."""
-    global census_mod, SimpleCommand, active_parts, parse, resolve, walk, write_targets
+    global census_mod, SimpleCommand, active_parts, parse, resolve, walk, write_targets, RG_RUN_OPTS
     if "parse" not in globals():
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         try:
             import bash_active_syntax_census as census_mod  # noqa: F401
             from shell_parse import (  # noqa: F401
-                SimpleCommand, active_parts, parse, resolve, walk, write_targets)
+                RG_RUN_OPTS, SimpleCommand, active_parts, parse, resolve, walk, write_targets)
         finally:
             sys.path.pop(0)
 
@@ -130,11 +130,9 @@ def _find(args) -> bool:
     return not any(a.startswith(f) for a in args for f in _FIND_FORBIDDEN)
 
 
-_RG_FORBIDDEN = ("--pre", "--pre-glob", "--hostname-bin", "--search-zip")
-
-
 def _rg(args) -> bool:
-    return not any(_long_hits(a, _RG_FORBIDDEN) or _cluster_has(a, "z") for a in args)
+    _parser()
+    return not any(_long_hits(a, RG_RUN_OPTS) or _cluster_has(a, "z") for a in args)
 
 
 _SORT_FORBIDDEN = ("--output", "--compress-program")
