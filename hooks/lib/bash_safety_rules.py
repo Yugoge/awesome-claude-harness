@@ -7418,7 +7418,7 @@ def _sd_plain_command(cmd):
             (not actions or (isinstance(res.payload, Script) and _sd_plain_script(res.payload)))
     if res.payload is not None:
         return False
-    if name in ("echo", "true", "false", ":", "pwd", "ls", "cd"):
+    if (name in _BULK_BENIGN and name != "printf") or name == "ls":  # printf: below
         return True
     if name == "printf":
         return bool(vals) and vals[0] != "-v"
