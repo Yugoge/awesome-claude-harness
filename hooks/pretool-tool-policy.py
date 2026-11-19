@@ -1802,7 +1802,7 @@ def _restaged_targets(tool_name: str, tool_input: dict) -> "set | None":
         from lib import policy_registry
 
         command = tool_input.get("command") or ""
-        found = [(bwt._render(t, command), t.mode) for t in bwt.extract_bash_write_targets_with_modes(command)]
+        found = [(p, t.mode) for t in bwt.extract_bash_write_targets_with_modes(command) for p in bwt._placed(t, command)]
         staged = [(i, os.path.abspath(p)) for i, (p, mode) in enumerate(found) if p and mode in _STAGING_MODES]
         out = set()
         for j, (path, _) in enumerate(found):

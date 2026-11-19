@@ -3222,13 +3222,16 @@ class WriteTarget:
     word: the Word it was read from; mode: truncate, append, create, link,
     copy-dest, move-dest, delete, in-place; mechanism: what writes it
     (redirect, tee, cp, mv, ...); fd: the redirected fd; source: the source
-    path of a copy, move or link; context: the walk context.
+    path of a copy, move or link; context: the walk context; dirs: the directories its
+    command may run in (CdScopes: '' the call's own, '?' unknown), set when
+    write_targets is given the raw command.
     """
 
-    __slots__ = ("path", "mode", "mechanism", "fd", "decidable", "word", "source", "context")
+    __slots__ = ("path", "mode", "mechanism", "fd", "decidable", "word", "source", "context", "dirs")
 
     def __init__(self, path, mode, mechanism, fd=None, decidable=True, word=None, source=None,
                  context=("top",)):
+        self.dirs = None
         self.path = path
         self.mode = mode
         self.mechanism = mechanism
@@ -3241,6 +3244,16 @@ class WriteTarget:
     def as_dict(self):
         return {"path": self.path, "mode": self.mode, "mechanism": self.mechanism, "fd": self.fd,
                 "decidable": self.decidable, "source": self.source, "context": list(self.context)}
+
+    def placed(self, path=None):
+        """``path`` (default: the static path) where the write lands, once per directory in ``dirs``: as written
+        when it is absolute or computed or its command runs in the call's own directory, joined to the directory
+        a `cd` moved to, and `$(pwd)/path` where that directory is unknown, so a caller sees it is unresolved."""
+        path = self.path if path is None else path
+        if not path or not self.dirs or path.startswith(("/", "~", "$", "`")):
+            return [path] if path else []
+        return [path if d == "" else os.path.expanduser(os.path.join("$(pwd)" if d == "?" else d, path))
+                for d in sorted(self.dirs)]
 
     def __repr__(self):
         return "WriteTarget(%r, %s, %s)" % (self.path, self.mode, self.mechanism)
@@ -3434,6 +3447,168 @@ def _attr_operands(name, args):
 
 
 
+class CdScopes:
+    """Where each part of the command runs: the possible (cwd, OLDPWD) pairs at each simple command,
+    a `cd` applied only to what follows it in its own shell (not past a closing subshell, a pipeline
+    stage or a background job, replaced by a later cd, `&&` and `||` followed), relative to the
+    starting directory ''. A cd that cannot be followed exactly (`cd -` with no known OLDPWD, a
+    computed target, CDPATH, popd, a function body, more than LIMIT possibilities) leaves the unknown directory '?'.
+    ``spell(word)`` is a cd operand's text (default: its static value, else as written, quotes removed);
+    ``reached(dir)`` says a directory is there now, so one `cd` to it cannot fail (default: any cd may fail)."""
+
+    UNKNOWN = ('?', '?')
+    LIMIT = 64
+
+    def __init__(self, raw: str, spell=None, reached=None):
+        self.raw, self.spans, self.visited, self.unfollowed = raw, [], set(), []
+        self.cdpath = 'CDPATH' in raw
+        self.functions = False  # a function or coprocess defined anywhere it walked
+        self.spell = spell or (lambda w: w.text.replace('"', '').replace("'", '') if w.value() is None else w.value())
+        self.reached = reached or (lambda d: False)
+
+    def _target(self, cwd: str, word) -> str:
+        arg = self.spell(word) if word is not None else '~'
+        if any(c in arg for c in '$`*?[') or (self.cdpath and not arg.startswith(('/', '~', './', '../'))):
+            return '?'
+        if arg.startswith(('/', '~')):
+            return os.path.normpath(arg)
+        if cwd == '?':
+            return '?'
+        return os.path.normpath(os.path.join(cwd, arg)) if cwd else os.path.normpath(arg)
+
+    def _cd(self, name: str, args, states) -> tuple:
+        """(the states after the cd, the states it may have failed in: all but those whose one operand is reached)."""
+        if name == 'popd':
+            return {self.UNKNOWN}, set(states)
+        ops, k = [], 0
+        while k < len(args):
+            v = args[k].value()
+            if v == '--':
+                ops += args[k + 1:]
+                break
+            if v is None or v == '-' or not v.startswith('-') or v[1:2].isdigit() or v[1:2] == '+':
+                ops.append(args[k])
+            k += 1
+        new, failed = set(), set(states)
+        for cwd, old in states:
+            if ops and ops[0].value() == '-' or (name == 'pushd' and not ops):
+                new.add((old, cwd) if old != '?' else ('?', cwd))
+            elif ops and (ops[0].value() or '').startswith(OPTION_SIGNS):
+                new.add(self.UNKNOWN)  # a pushd/cd stack index
+            else:
+                new.add((self._target(cwd, ops[0] if ops else None), cwd))
+                if len(ops) == 1 and self.reached(self._target(cwd, ops[0])):
+                    failed.discard((cwd, old))
+        return new, failed
+
+    def _record(self, span, states):
+        self.spans.append((span[0], span[1], frozenset(states)))
+
+    def run_cmd(self, cmd, states):
+        if isinstance(cmd, SimpleCommand):
+            self.visited.add(cmd.span)
+            res = resolve(cmd)
+            here = set(states)
+            for wname, opts in res.wrappers:
+                for opt, val in opts:
+                    if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
+                        here = {(self._target(cwd, val), cwd) for cwd, _old in here}
+            self._record(cmd.span, here | set(states))  # its redirections open where the shell is
+            if res.name in CWD_BUILTINS and res.payload is None:
+                return self._cd(res.name, res.args, states)
+            if res.payload is not None:
+                if res.payload_kind == 'eval':
+                    return self.run_script(res.payload, states)
+                self.run_script(res.payload, here)
+            return set(states), set(states)
+        if isinstance(cmd, Compound):
+            self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
+            self._record(cmd.span, states)
+            scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, Script)]
+            self.functions = self.functions or cmd.kind in DEFINER_KINDS
+            if cmd.kind in ('subshell', 'coproc'):
+                for s in scripts:
+                    self.run_script(s, states)
+                return set(states), set(states)
+            if cmd.kind == 'group':
+                succ, fail = set(states), set(states)
+                for s in scripts:
+                    succ, fail = self.run_script(s, succ)
+                return succ, fail
+            if cmd.kind == 'function':
+                for s in scripts:
+                    self._record(s.span, {self.UNKNOWN})
+                    self.run_script(s, {self.UNKNOWN})
+                return set(states), set(states)
+            acc = set(states)
+            for s in scripts:
+                succ, fail = self.run_script(s, acc)
+                acc |= succ | fail
+            return acc, acc
+        return set(states), set(states)
+
+    def run_pipeline(self, pl, states):
+        if len(pl.stages) == 1:
+            succ, fail = self.run_cmd(pl.stages[0], states)
+        else:
+            for stage in pl.stages:
+                self.run_cmd(stage, states)  # each stage runs in a subshell
+            succ, fail = set(states), set(states)
+        return (fail, succ) if pl.negated else (succ, fail)
+
+    def run_script(self, script, states):
+        succ, fail, prev = set(states), set(states), None
+        for pl, sep in script.items:
+            if prev == '&&':
+                enter = succ
+            elif prev == '||':
+                enter = fail
+            elif prev is None:
+                enter = set(states)
+            else:
+                enter = succ | fail
+            if len(enter) > self.LIMIT:
+                enter = {self.UNKNOWN}
+            if sep == '&':
+                self.run_pipeline(pl, enter)  # a background job: its cd stays in it
+                s, f = set(enter), set(enter)
+            else:
+                s, f = self.run_pipeline(pl, enter)
+            if prev == '&&':
+                succ, fail = s, f | fail
+            elif prev == '||':
+                succ, fail = s | succ, f
+            else:
+                succ, fail = s, f
+            prev = sep
+        return succ, fail
+
+    def run(self, script, start=''):
+        """Follow ``script`` from ``start``; a `cd` it did not follow (in a substitution, a re-parsed payload) makes
+        the directory of everything written after it unknown."""
+        self.run_script(script, {(start, '?')})
+        self.unfollowed = [s.cmd.span[0] if self.raw[slice(*s.cmd.span)].startswith(s.cmd.words[0].text) else 0
+                           for s in walk(script) if s.cmd.words and s.cmd.span not in self.visited
+                           and resolve(s.cmd).name in CWD_BUILTINS]
+        return self
+
+    def of(self, word) -> set:
+        """The possible directories of the command ``word`` is written in; '?' when the word is not its own text
+        in the command (an alias, a re-read payload) or follows an unfollowed cd."""
+        if word is None or self.raw[slice(*word.span)] != word.text:
+            return {'?'}
+        return self.at(word.span[0]) | ({'?'} if any(word.span[0] > u for u in self.unfollowed) else set())
+
+    def at(self, offset: int):
+        """The possible directories at raw ``offset``: the innermost recorded command around it."""
+        best = None
+        for a, b, states in self.spans:
+            if a <= offset < b and (best is None or b - a < best[1] - best[0]):
+                best = (a, b, states)
+        return {cwd for cwd, _old in best[2]} if best else {'?'}
+
+
+
 _PKG_MANAGERS = frozenset({
     "pip", "pip3", "npm", "pnpm", "yarn", "apt", "apt-get", "aptitude", "yum",
     "dnf", "apk", "zypper", "pacman", "brew", "cargo", "gem", "go", "poetry",
@@ -3441,8 +3616,12 @@ _PKG_MANAGERS = frozenset({
 })
 
 
-def write_targets(script, *, into=_DEFAULT_INTO, env=None):
+def write_targets(script, *, into=_DEFAULT_INTO, env=None, raw=None, reached=None):
     """Every path ``script`` writes, from redirections and from the VERBS table.
+
+    Given the raw command (``raw``, or ``script`` as text), each target carries the
+    directories its command may run in (``dirs``, by CdScopes; ``reached`` as there, never
+    trusted in a command that removes or moves something).
 
     An assignment earlier in the same list (`X=/p; ... > $X`) projects into a
     later `$X` / `${X}` target when its value is static or projects itself.
@@ -3455,7 +3634,7 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None):
     The redirections of a compound command come from walk's redirect-only Site.
     """
     if isinstance(script, str):
-        script = parse(script)
+        raw, script = script, parse(script)
     out = []
     seed = dict(env or {})
     envs, exported, prefix = {}, set(), {}
@@ -3537,6 +3716,11 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None):
         finally:
             for t in out[first:] if env is not None else ():
                 _carry_word(t, env)
+    if raw is not None and out:
+        gone = any(t.mode in (DELETE, MOVE_DEST) for t in out)
+        scopes = CdScopes(raw, lambda w: _project(w, seed)[0] or w.text, None if gone else reached).run(script)
+        for t in out:
+            t.dirs = scopes.of(t.word)
     return out
 
 
