@@ -113,7 +113,7 @@ _UGREP_ARGV0 = "ugrep"
 # ---------------------------------------------------------------------------
 # Step 1: recover (pattern, mode) pairs from the command's search invocations.
 # ---------------------------------------------------------------------------
-_SEARCH_NAMES = ("grep", "egrep", "fgrep")
+_SEARCH_NAMES = shell_parse.GREP_NAMES
 
 # Wrappers that keep the shell function in play: a search behind them still
 # reaches the embedded engine. Every other wrapper execs the named binary through

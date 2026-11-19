@@ -71,7 +71,9 @@ def test_step3_block_gets_the_same_decision_in_both_spellings():
 
 
 def test_other_dynamic_or_removal_operands_stay_refused():
-    evidence = '; echo "rm -rf test/"'
+    # The removal word sits among the words of the command whose script operand cannot be read: only there can
+    # it become something that runs (owner's rule, 2026-11-19); an echo's text elsewhere decides nothing.
+    evidence = ' "rm -rf test/"'
     for operand in (
         "${CLAUDE_HOME:-$HOME/.claude}/" + SCRIPT,       # unquoted
         CHANNEL + '../x.sh"',                             # leaves the harness home

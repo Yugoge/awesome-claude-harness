@@ -26,6 +26,8 @@ except ImportError:  # loaded outside its package (by path, or from hooks/lib): 
 # -- the literals --------------------------------------------------------------------------
 DEVICE_DIR = "/dev"
 SHM_DIR = "/dev/shm"                              # the shared-memory tmpfs mounted in it
+# The path components that name no entry of their own: empty (a doubled or trailing slash), `.` and `..`.
+NAMELESS_PARTS = ("", ".", "..")
 NULL_DEVICE = "/dev/null"
 STD_SINKS = frozenset({NULL_DEVICE, "/dev/stdout", "/dev/stderr"})
 TERMINAL_SINKS = STD_SINKS | {"/dev/tty"}
