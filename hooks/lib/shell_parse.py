@@ -3379,6 +3379,13 @@ RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
 GREP_PATTERN_OPTS = ("-e", "--regexp")
 GREP_PATTERN_FILE_OPTS = ("-f", "--file")
 GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
+# Environment variables an assignment to which cannot change what a command runs (locale, terminal,
+# identity, colour); the directory ones among them (DIR_ENV_VARS) do move where a command reads or writes.
+INERT_ENV_VARS = frozenset({
+    "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_COLLATE", "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "TZ", "TERM",
+    "COLUMNS", "LINES", "PWD", "OLDPWD", "USER", "LOGNAME", "HOSTNAME", "TMPDIR", "DISPLAY", "NO_COLOR",
+    "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"})
+DIR_ENV_VARS = frozenset({"PWD", "OLDPWD", "TMPDIR"})
 # man's options whose value names a program it runs (man-db 2.12: the pager, the HTML browser).
 MAN_PROGRAM_OPTS = ("-P", "--pager", "-H", "--html", "-B", "--browser")
 # grep's options that take a value (GNU grep 3.11 --help; --color[=WHEN] takes one only after `=`): those
