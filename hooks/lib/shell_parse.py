@@ -3581,10 +3581,7 @@ def _flag_values(args, short, long_opt, env):
 
 
 def _git_discarded_paths(sub, args, env, context):
-    """The files `git clean`, `checkout-index` or `stash` overwrites or removes by name: clean's
-    operands when it is forced (-f) and not a dry run, checkout-index's operands, and the pathspecs
-    of `stash push` (or `stash -- <paths>`). A form that names no path (reset, `clean -f` alone,
-    `checkout-index -a`, a bare `stash`) acts on the whole tree and yields no target here."""
+    """The files a forced `git clean`, `checkout-index` or `stash push` names (none for a whole-tree form)."""
     vals = [a.value() for a in args]
     if None in vals:
         return []
@@ -3611,11 +3608,8 @@ def _git_discarded_paths(sub, args, env, context):
         elif not v.startswith("-"):
             ops.append(args[k])
         k += 1
-    out = []
-    for w in ops + tail:
-        path, dec = _project(w, env)
-        out.append(WriteTarget(path, kind, "git-" + sub, None, dec, w, None, context))
-    return out
+    return [WriteTarget(path, kind, "git-" + sub, None, dec, w, None, context)
+            for w in ops + tail for path, dec in [_project(w, env)]]
 
 
 def _git_write_targets(res, env, context):
@@ -3690,26 +3684,19 @@ GIT_GLOBAL_FLAGS = frozenset({
 })
 # The global options that move where git finds the repository or the working tree.
 GIT_LOCATION_OPTS = frozenset({"-C", "--git-dir", "--work-tree"})
-# The global options that point git at another repository, work tree or ref namespace than the
-# directory it runs in (-C only changes that directory).
+# The global options that point git at another repository, work tree or ref namespace than its directory.
 GIT_REDIRECT_OPTS = (GIT_LOCATION_OPTS - {"-C"}) | {"--namespace"}
 # The global flags that change only how a pathspec matches.
 GIT_PATHSPEC_FLAGS = frozenset({
-    "--literal-pathspecs", "--no-literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
-    "--icase-pathspecs",
-})
-# The global flags after which a subcommand reads the same repository and runs the same programs, and
-# still runs: not -p/--paginate (they start the pager), --bare (the repository moves), --exec-path (it
-# moves git's programs, or alone prints and exits) or the flags that print and exit (--version ...).
+    "--literal-pathspecs", "--no-literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs"})
+# The global flags after which a subcommand still runs, on the same repository with the same programs.
 GIT_INERT_FLAGS = GIT_PATHSPEC_FLAGS | {
     "-P", "--no-pager", "--no-optional-locks", "--no-replace-objects", "--no-lazy-fetch", "--no-advice"}
 
 
 def git_global_options(args):
-    """git's reading of its arguments up to the subcommand, for a list of strings (None where
-    computed): ([(option index, its value's index or None)], the subcommand's index or None).
-    A GIT_GLOBAL_VALUE_OPTS option takes the next word; any other word that starts with '-' is
-    one option word; the first other word (or a computed one) is the subcommand."""
+    """git's global options as git reads them from ``args`` (strings, None where computed):
+    ([(option index, its value's index or None)], the subcommand's index or None)."""
     opts, i = [], 0
     while i < len(args):
         a = args[i]
@@ -3727,6 +3714,12 @@ def git_global_options(args):
 def git_subcommand_index(args):
     """The index of the subcommand among git's arguments (see git_global_options), or None."""
     return git_global_options(args)[1]
+
+
+def git_plain_subcommand_index(args, flags):
+    """The subcommand's index when every global option before it is `-C <dir>` or in ``flags``, else None."""
+    opts, k = git_global_options(args)
+    return k if all(args[i] in flags or args[i] == "-C" and j is not None for i, j in opts) else None
 
 # Long options of the git subcommands whose options the hooks read, so an
 # abbreviation git accepts (`--har` for `--hard`) resolves to its full name.
@@ -3813,10 +3806,7 @@ GIT_LONG_OPTIONS = {
 
 # The git subcommands that move or remove working-tree files as mv and rm do.
 GIT_MV_RM = frozenset({"rm", "mv"})
-# The git subcommands that overwrite or remove working-tree files, the changes in them lost or set
-# aside: checkout and restore (from the index or a tree), reset (--hard, --merge, --keep), clean
-# (untracked files, with -f), checkout-index (from the index; over existing files with -f) and stash
-# (push and save revert the files after saving their changes; apply and pop write them back).
+# The git subcommands that overwrite or remove working-tree files (stash setting the changes aside).
 GIT_WORKTREE_DISCARDERS = frozenset({"checkout", "checkout-index", "clean", "reset", "restore", "stash"})
 # The two that write the paths they name with their copy in the index or a tree.
 GIT_RESTORE_PATHS = frozenset({"checkout", "restore"})

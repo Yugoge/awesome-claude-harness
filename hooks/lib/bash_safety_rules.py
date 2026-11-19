@@ -26,7 +26,7 @@ sys.path[:0] = [p for p in (HOOKS, LIB) if p not in sys.path]
 
 from lib import git_facts  # noqa: E402
 from lib.git_facts import GIT_DIR_CONFIG_FILES  # noqa: E402
-from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, GIT_INERT_FLAGS  # noqa: E402
+from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, GIT_INERT_FLAGS, git_global_options, git_plain_subcommand_index  # noqa: E402
 # A git option word that runs a program or writes a file: grep's -O, or one starting with a long option of
 # git_facts.GIT_RUN_OR_WRITE_OPTIONS (`--output=x`, `--exec=...`).
 _GIT_RUN_OR_WRITE_PREFIXES = ("-O",) + tuple(sorted(git_facts.GIT_RUN_OR_WRITE_OPTIONS))
@@ -2699,15 +2699,11 @@ def _consent_read_only(cmd, name, view, named_writes):
                 named_writes.append(w)
         return None
     if name == "git":
-        i = 0
-        while i < len(vals) and vals[i].startswith("-"):
-            if vals[i] == "-C":
-                i += 2
-                continue
-            if vals[i] in GIT_INERT_FLAGS:
-                i += 1
-                continue
-            return f"`git {vals[i]}` is not a read-only git option"
+        gopts, i = git_global_options(vals)
+        i = len(vals) if i is None else i
+        for o, _v in gopts:
+            if vals[o] != "-C" and vals[o] not in GIT_INERT_FLAGS:
+                return f"`git {vals[o]}` is not a read-only git option"
         sub = vals[i] if i < len(vals) else None
         opts = vals[i + 1:]
         if sub in _CONSENT_GIT_READS:
@@ -4276,10 +4272,8 @@ def _plain_git(words):
     vals = [w.value() if _plain_word(w) else None for w in words]
     if None in vals:
         return False
-    k = 0
-    while k < len(vals) and (vals[k] == "-C" or vals[k] in GIT_INERT_FLAGS):
-        k += 2 if vals[k] == "-C" else 1
-    if k >= len(vals) or vals[k] not in _PLAIN_GIT_READS:
+    k = git_plain_subcommand_index(vals, GIT_INERT_FLAGS)
+    if k is None or vals[k] not in _PLAIN_GIT_READS:
         return False
     return not any(v.startswith(_GIT_RUN_OR_WRITE_PREFIXES) or re.match(r"^-[A-Za-z]*O", v) for v in vals[k + 1:])
 
@@ -6578,15 +6572,8 @@ def _sd_scan(args, spec, permute=True, operands=None):
 def _sd_git(args):
     """(allowed arg indexes, message comes from stdin) for a git call that names the file only as a search pattern
     or in a commit message; None when any part of it is not read."""
-    k = 0
-    while k < len(args) and args[k].startswith("-"):
-        if args[k] == "-C" and k + 1 < len(args):
-            k += 2
-            continue
-        if args[k] not in _SD_GIT_GLOBAL_FLAGS:
-            return None
-        k += 1
-    if k >= len(args):
+    k = git_plain_subcommand_index(args, _SD_GIT_GLOBAL_FLAGS)
+    if k is None:
         return None
     sub, rest, base = args[k], args[k + 1:], k + 1
     if sub == "grep":
@@ -7248,15 +7235,8 @@ _SD_SHELL = re.compile(r"(ba|da|z|k|mk|y|r|po)?sh|busybox")
 
 def _sd_git_sub(vals):
     """The subcommand of a git call after its global options; None when a global option is not plain."""
-    k = 0
-    while k < len(vals) and vals[k].startswith("-"):
-        if vals[k] == "-C" and k + 1 < len(vals):
-            k += 2
-            continue
-        if vals[k] not in _SD_GIT_GLOBAL_FLAGS:
-            return None
-        k += 1
-    return vals[k] if k < len(vals) else None
+    k = git_plain_subcommand_index(vals, _SD_GIT_GLOBAL_FLAGS)
+    return None if k is None else vals[k]
 
 
 def _sd_traces(sites):

@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402
 from shell_parse import (  # noqa: E402
     SimpleCommand, active_parts, parse, resolve, walk, write_targets)
-from shell_parse import GIT_INERT_FLAGS  # noqa: E402
+from shell_parse import GIT_INERT_FLAGS, git_plain_subcommand_index  # noqa: E402
 from git_facts import GIT_LISTING_SUBCOMMANDS, GIT_READ_SUBCOMMANDS  # noqa: E402
 from git_facts import GIT_CONFIG_READ_MODIFIERS, GIT_CONFIG_READ_OPTIONS, GIT_CONFIG_READ_SUBCOMMANDS  # noqa: E402
 from git_facts import GIT_REMOTE_READ_FLAGS, GIT_RUN_OR_WRITE_OPTIONS  # noqa: E402
@@ -326,21 +326,8 @@ def _git_sub(sub: str, args) -> bool:
 
 
 def _git(args) -> bool:
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a == "-C":
-            if i + 1 >= len(args):
-                return False
-            i += 2
-            continue
-        if a in GIT_INERT_FLAGS:
-            i += 1
-            continue
-        if a.startswith("-"):
-            return False  # -c, --exec-path, --git-dir, --work-tree, -p, --help, ...
-        break
-    if i >= len(args) or args[i] not in _GIT_READ:
+    i = git_plain_subcommand_index(args, GIT_INERT_FLAGS)  # not past -c, --exec-path, --git-dir, -p, --help ...
+    if i is None or args[i] not in _GIT_READ:
         return False
     return _git_sub(args[i], args[i + 1:])
 
