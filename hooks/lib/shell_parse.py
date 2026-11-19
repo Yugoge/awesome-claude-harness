@@ -2667,6 +2667,9 @@ def resolve(cmd, depth=None):
 
 
 _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
+_FIND_FILE = ("-fprint", "-fprint0", "-fprintf", "-fls")  # the next word names a file the action writes
+# Every action of find that runs a program, writes a file or deletes: the one table a guard reads.
+FIND_ACTIONS = _FIND_EXEC + _FIND_FILE + ("-delete",)
 
 
 def _resolve_find(r, head, words, cmd, depth):
@@ -3286,6 +3289,9 @@ def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_she
             if name == "git":
                 out.extend(_git_write_targets(res, env, site.context))
                 continue
+            if name == "find":
+                out.extend(_find_write_targets(res.args, env, site.context))
+                continue
             verb = VERBS.get(name)
             if verb is None:
                 continue
@@ -3549,6 +3555,24 @@ def _verb_targets(name, verb, args, env, context):
             for s in sources:
                 sp, sdec = _project(s, env)
                 out.append(WriteTarget(sp, DELETE, name + "-source", None, sdec, s, None, context))
+    return out
+
+
+def _find_write_targets(args, env, context):
+    """The file each -fprint, -fprint0, -fprintf and -fls of one find writes. The words of an
+    -exec up to `;` or `+` are another command's (walk reads them); -delete removes each match,
+    a name the command does not hold, so it names no target here."""
+    out, k = [], 0
+    while k < len(args):
+        v = args[k].value()
+        if v in _FIND_EXEC:
+            while k < len(args) and args[k].value() not in (";", "+"):
+                k += 1
+        elif v in _FIND_FILE and k + 1 < len(args):
+            k += 1
+            path, dec = _project(args[k], env)
+            out.append(WriteTarget(path, TRUNCATE, "find" + v, None, dec, args[k], None, context))
+        k += 1
     return out
 
 
