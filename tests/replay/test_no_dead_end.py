@@ -33,6 +33,15 @@ like the one before it (faults.py `forged`).
 (iv) Recall: every block of every replay this pytest session ran (test_pipelines' compliant runs,
 test_faults' faults, this file's) maps to an enumerated site of the hook that printed it, no block
 of a compliant scenario maps to a D site, and every block at a G site is cleared in its replay.
+
+(v) Every requirement has a permitted means (tests/replay/requirements.py): a site's class is one
+per site and every replay puts the project under the home directory, so the requirements are also
+enumerated from the code (each declared file artifact of each command template, created and
+repaired; G1's order rule after each template's producer has returned; G2's canonical wire at a
+fan-out lane's stop) and crossed with the roles that meet them, where the project lies (a home path,
+a RAM disk) and the transcript shapes the CLI writes; each means is put to the hook that decides it.
+A requirement with no permitted means in some situation, or a wait whose release lies with an actor
+waiting on the waiter, fails here. Nothing is exempt.
 """
 from __future__ import annotations
 
@@ -42,7 +51,7 @@ import re
 
 import pytest
 
-from tests.replay import sites, suite
+from tests.replay import requirements, sites, suite
 from tests.replay.test_faults import CLAIMS, FAULTS as FAULT_SPECS
 
 DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
@@ -399,3 +408,48 @@ def test_the_wakes_gates_are_cleared_by_the_actors_next_action(replays, catalog,
     assert all(catalog.of(s) == "G" for b in bl for s in b["sites"]), r.explain()
     bad = check_replay(r, catalog, compliant=False)
     assert not bad, "\n".join(bad)
+
+
+# ---------------------------------------------------------------- (v) every requirement has a permitted means
+
+@pytest.fixture(scope="module")
+def requirement_cells(tmp_path_factory):
+    """kind -> the cells of tests/replay/requirements.py, each requirement crossed with its situations."""
+    work = str(tmp_path_factory.mktemp("requirements"))
+    hooks = requirements.Hooks(work)
+    tpls = requirements.templates()
+    try:
+        with requirements.projects(work) as made:
+            yield {"declared artifact": requirements.artifact_cells(hooks, made, tpls),
+                   "ordering": requirements.order_cells(hooks, made, tpls),
+                   "wait": requirements.wait_cells(hooks, made, tpls)}
+    finally:
+        hooks.close()
+
+
+def _no_means(cells: list) -> list:
+    """One line per requirement with no permitted means: its row, the situations, the actor and each
+    means with the rule that refused it."""
+    rows: dict = collections.defaultdict(list)
+    for c in cells:
+        if not c.permitted:
+            rows[c.row].append(c)
+    out = []
+    for row, cs in sorted(rows.items()):
+        refusal = "; ".join(f"{m}: {v}" for m, v in cs[0].means.items())
+        details = "; ".join(dict.fromkeys(c.detail for c in cs if c.detail))
+        out.append(f"{row} [{cs[0].actor}] in {', '.join(dict.fromkeys(c.situation for c in cs))}"
+                   + (f" ({details})" if details else "") + f" -- {refusal}")
+    return out
+
+
+@pytest.mark.parametrize("kind", ["declared artifact", "ordering", "wait"])
+def test_every_requirement_has_a_permitted_means(requirement_cells, kind):
+    cells = requirement_cells[kind]
+    bad = _no_means(cells)
+    print(f"\n{kind}: {len(cells)} cells, {len({c.row for c in cells})} requirements, "
+          f"{sum(not c.permitted for c in cells)} cells in {len(bad)} requirements with no permitted means")
+    print("\n".join("  " + line for line in bad))
+    assert cells, f"no {kind} requirement was enumerated"
+    word = "circular waits" if kind == "wait" else "contradictions"
+    assert not bad, f"{kind} {word}: requirements with no permitted means:\n  " + "\n  ".join(bad)
