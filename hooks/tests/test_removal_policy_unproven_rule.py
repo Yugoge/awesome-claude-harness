@@ -6,9 +6,9 @@ run and hands one entry to the record. A removal the analyzer finds (FORBIDDEN_R
 
 "Cannot prove" has two forms and one answer: the analyzer answers UNRESOLVED (the primary path), or it gives no
 usable verdict (timeout, memory ceiling, crash: the degraded path). Before this rule every UNRESOLVED command was
-refused: 204 refusals in three days of commands that hold no removal word (a variable assigned inside a loop, a
-program name held in a variable, inline Python, a pattern with wildcard characters). The commands below are those
-shapes, rewritten with neutral names. No command is ever executed: each is data handed to the hook or the policy.
+refused, also when its text held no removal word: a variable assigned inside a loop, a program name held in a
+variable, inline Python, a pattern with wildcard characters. The commands below are those shapes, written with
+neutral names. No command is ever executed: each is data handed to the hook or the policy.
 """
 import io
 import json
@@ -45,17 +45,17 @@ MODE_ENV = {"primary": PRIMARY_ENV, **DEGRADED_ENV}
 PRIMARY_REFUSAL = "removal-policy — UNRESOLVED"
 DEGRADED_REFUSAL = "removal-policy FAIL-CLOSED"
 
-# Unproven, no removal word: one line per reason the analyzer gave for the refusals of the three days.
+# Unproven, no removal word: one group per reason the analyzer gives for not proving such a command.
 UNPROVEN_NO_REMOVAL_WORD = [
     # dynamic_command_head: an assignment inside a loop or a branch, read as a program name
     "for a in x y; do n=$(ls $a | wc -l); echo $n; done",
-    "for n in 01 02; do f=docs/ctx-r$n.json; ls -la $f; done",
+    "for n in 01 02; do f=docs/part-$n.json; ls -la $f; done",
     "x=1; if [ $x -gt 0 ]; then y=$((x+1)); echo $y; fi",
     "while read l; do n=$(echo $l | wc -c); echo $n; done < f.txt",
     # dynamic_command_head: a program name held in a variable
     "PY=venv/bin/python; $PY --version",
     "for py in python3 venv/bin/python; do $py --version; done",
-    "R=tools/ro.sh; $R \"\\d jobs\"; $R \"\\d users\"",
+    "R=tools/query.sh; $R \"\\d t1\"; $R \"\\d t2\"",
     "$TOOL --version",
     # interpreter_expansion_changes_program: inline Python holding a shell variable
     "for f in a.json b.json; do python3 -c \"import json; print(json.load(open('$f')))\"; done",
@@ -67,22 +67,22 @@ UNPROVEN_NO_REMOVAL_WORD = [
     "git --git-dir=$(cat where.txt) log -1 --format=%h",
     "S=status; git $S --short",
     # option_value_removal_reference: an option or a quoted word the analyzer misreads
-    "du -s -BM /var/backups/* | sort -rn | head",
-    "echo \"--- stdout ($(wc -l < close.stdout) lines)\"",
+    "du -s -BM /srv/data/* | sort -rn | head",
+    "echo \"--- stdout ($(wc -l < run.stdout) lines)\"",
     # unproven_boundary_with_removal_reference: a pattern, a loop variable or a substitution handed to sed, git
     # grep, git show, curl, gh, mkdir or a shell function
     "for t in a/x b/y; do find $t -type f | sed \"s|$t/||\" | sort | head; done",
-    "ls scripts | head; sed -n 1,60p scripts/$(ls scripts | grep -i -E \"backfill|reactivate\" | head -1)",
-    "git grep -n \"a_todos\\|b_canonical\\|\\.checklist(\\|input\\[.todos.\\]\" -- ':!tests' | cut -c1-230",
+    "ls scripts | head; sed -n 1,60p scripts/$(ls scripts | grep -i -E \"alpha|beta\" | head -1)",
+    "git grep -n \"alpha_x\\|beta_y\\|\\.method(\\|input\\[.key.\\]\" -- ':!tests' | cut -c1-230",
     "for f in a.py b.py; do git show \"HEAD:src/$f\" | sha256sum; done",
-    "for s in a.us b.us; do curl -s -m 20 \"https://example.com/q/l/?s=${s}&f=sd2t2ohlcv&h&e=csv\"; echo; done",
+    "for s in a b; do curl -s -m 20 \"https://example.com/api?s=${s}&f=x&h&e=csv\"; echo; done",
     "gh run list --limit 5 --json databaseId,status --jq '.[] | [.databaseId,.status[0:10],(.conclusion//\"-\")] | @tsv'",
     "mkdir -p \"out/$(date +%F)\" && ls out",
     "sha(){ sha256sum \"$1\" | cut -d' ' -f1; }; for f in a.json b.json; do echo $f $(sha data/$f); done",
     # find_operand_removal_reference, wrapper_arity_mismatch, census_fatal
     "for d in a b; do find \"/srv/$d\" -maxdepth 1 -type f | wc -l; done",
     "E=tools; for p in a b; do /usr/bin/time -f \"$p %es\" python3 $E/$p.py --help >/dev/null; done",
-    "f=docs/a.md; echo \"fence lines: $(grep -c '^```' $f) (includes two lines)\"; wc -l $f",
+    "f=docs/a.md; echo \"count: $(grep -c '^```' $f) (two lines)\"; wc -l $f",
     # Words that only resemble a removal word: the single definition decides, not a substring.
     "$TOOL removed", "$TOOL rmx form", "$TOOL rm_backup undeleted",
 ]
