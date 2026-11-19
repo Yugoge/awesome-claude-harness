@@ -3176,6 +3176,7 @@ VERBS["gsed"] = VERBS["sed"]  # GNU sed's name where sed is another one
 # cp, mv, ln and install's option that names the destination directory (every guard reads this one).
 TARGET_DIR_OPTS = ("-t", "--target-directory")
 NO_TARGET_DIR_OPTS = ("-T", "--no-target-directory")  # the destination is the written file, never a directory
+INSTALL_DIR_OPTS = ("-d", "--directory")  # install makes every operand a directory (no source)
 VERBS["awk"] = VERBS["gawk"]  # where awk is gawk, `awk -i inplace` edits in place
 
 # The commands that change a file's mode, owner, attributes or ACL: the file
@@ -3567,7 +3568,7 @@ def _verb_targets(name, verb, args, env, context):
             out.append(WriteTarget(path, mode, name, None, dec, w, None, context))
         return out
     if reading == "last":
-        if name == "install" and any(o in ("-d", "--directory") for o, _v in opts):
+        if name == "install" and any(o in INSTALL_DIR_OPTS for o, _v in opts):
             for w in operands:
                 path, dec = _project(w, env)
                 out.append(WriteTarget(path, CREATE, name, None, dec, w, None, context))

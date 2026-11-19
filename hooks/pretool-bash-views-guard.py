@@ -193,7 +193,7 @@ def _into_dir_texts(script, dirs):
         names = {o for o, _v in opts}
         if names.intersection(_sp.NO_TARGET_DIR_OPTS):
             continue
-        if res.name == "install" and names.intersection(("-d", "--directory")):
+        if res.name == "install" and names.intersection(_sp.INSTALL_DIR_OPTS):
             continue
         target_dir = [v for o, v in opts if o in _sp.TARGET_DIR_OPTS]
         if target_dir:

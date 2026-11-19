@@ -965,7 +965,7 @@ def _mutation_targets_for_verb(head: str, args: list) -> list:
         # logic below would only flag the last operand (dest), dropping a protected
         # dir that appears earlier in a multi-dir `install -d A B <protecteddir>`.
         if head == "install" and any(
-            a == "-d" or a == "--directory"
+            a in _sp.INSTALL_DIR_OPTS
             or (a.startswith("-") and not a.startswith("--") and "d" in a[1:])
             for a in args
         ):
