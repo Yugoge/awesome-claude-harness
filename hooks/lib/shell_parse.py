@@ -420,6 +420,7 @@ _OP_CHARS = ";&|()"
 _WORD_BREAK = " \t\n" + _OP_CHARS + "<>"
 _OPS = (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")")
 _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
+PIPE_OPS = ("|", "|&")  # the operators that pipe one stage into the next
 
 
 def _match_pair(t, i, opener, closer):

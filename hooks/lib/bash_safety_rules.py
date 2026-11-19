@@ -5896,13 +5896,13 @@ def data_shape(command, invs):
     if invs is None:
         return False
     try:
-        from lib.shell_parse import parse
+        from lib.shell_parse import PIPE_OPS, parse
         script = parse(command)
         if script.error is not None or script.errors() or not script.items:
             return False
         state = {"writes": False, "git": False}
         for pipeline, sep in script.items:
-            if sep not in (None, "", ";", "&&", "||", "\n") or any(p not in ("|", "|&") for p in pipeline.pipes):
+            if sep not in (None, "", ";", "&&", "||", "\n") or any(p not in PIPE_OPS for p in pipeline.pipes):
                 return False
             if not all(_shape_simple(stage, invs, k, state) for k, stage in enumerate(pipeline.stages)):
                 return False
@@ -7401,11 +7401,11 @@ def _sd_plain_command(cmd):
 def _sd_plain_script(script):
     """True when every command of a parsed list fits the plain shape (see _sd_plain_command): no background job,
     no loop, function, case or coproc, and every later pipeline stage a display filter with quiet redirections."""
-    from lib.shell_parse import Compound, SimpleCommand
+    from lib.shell_parse import PIPE_OPS, Compound, SimpleCommand
     if script.error is not None:
         return False
     for pl, sep in script.items:
-        if sep == "&" or any(p not in ("|", "|&") for p in pl.pipes):
+        if sep == "&" or any(p not in PIPE_OPS for p in pl.pipes):
             return False
         for k, st in enumerate(pl.stages):
             if k > 0:

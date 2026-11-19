@@ -67,9 +67,9 @@ import re
 import sys
 
 try:
-    from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
+    from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, PIPE_OPS, LexError, Src, _lex_into, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
-    from shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
+    from shell_parse import GIT_GLOBAL_VALUE_OPTS, PIPE_OPS, LexError, Src, _lex_into, ansi_decode, lex
 
 # git globals that point the invocation at a DIFFERENT repository / work tree.
 _REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
@@ -565,7 +565,6 @@ _SHADOWING_WORDS = frozenset({
     "source", "eval",
 })
 _SHADOWING_NAMES = ("PATH", "BASH_ENV", "ENV")
-_PIPE_OPS = ("|", "|&")
 
 
 def _data_head(words):
@@ -646,7 +645,7 @@ def _inert_data_commands(commands, info, raw: str):
     if _is_shadowing(info, commands, inert):
         return frozenset()
     for k, command in enumerate(commands):
-        if command["next_op"] in _PIPE_OPS and k + 1 not in inert:
+        if command["next_op"] in PIPE_OPS and k + 1 not in inert:
             return frozenset()
     if any(_writes_a_file(c) for c in commands):
         for k, command in enumerate(commands):

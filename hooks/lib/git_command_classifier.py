@@ -573,7 +573,7 @@ def _here_docs_are_data(toks, cmds, k, nested=False):
         if not _reads_input_as_data(cmds[j]):
             return False
         j += 1
-        if j >= len(cmds) or cmds[j].opener not in ('|', '|&'):
+        if j >= len(cmds) or cmds[j].opener not in shell_parse.PIPE_OPS:
             break
     paths, unknown = _written_paths(cmds, k, j)
     if not (paths or unknown):
@@ -868,7 +868,7 @@ def _segment_invocations(command_text, tagged=False, nested=False):
     """
     cmds, exact = _code_commands(command_text, nested=nested)
     droppable = (exact and not _NOT_DROPPABLE_RE.search(command_text)
-                 and not any(cmd.opener in ('|', '|&') and not _is_text_only(cmd.words)
+                 and not any(cmd.opener in shell_parse.PIPE_OPS and not _is_text_only(cmd.words)
                              and not _is_stdin_consumer(cmd.words) for cmd in cmds))
     for cmd in cmds:
         for inv in _invocations(cmd.words):
@@ -1159,7 +1159,7 @@ def _shell_words(text, info=None):
         if not (words or redirs):
             return False
         k = len(cmds)
-        fed = opener in ('|', '|&') or any(groups)
+        fed = opener in shell_parse.PIPE_OPS or any(groups)
         for word in words + [r.target for r in redirs if r.target is not None]:
             for kind, src, off in word.segs:
                 if kind in _BODY_PARTS:
@@ -1196,7 +1196,7 @@ def _shell_words(text, info=None):
                 opener = None
             continue
         if op == '(':
-            groups.append(opener in ('|', '|&') and not ended)
+            groups.append(opener in shell_parse.PIPE_OPS and not ended)
         elif op == ')' and groups:
             groups.pop()
         sep = opener = op
