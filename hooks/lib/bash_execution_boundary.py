@@ -32,6 +32,15 @@ holds.  So a proof here now decides whether a command that NAMES a removal may
 run, and a FORBIDDEN_REMOVAL finding still refuses a removal the text does not
 name (``r''m x``).
 
+THE FILES A REMOVAL NAMES.  When the only unsafe boundaries of a command are
+``rm`` or ``unlink`` run as a command's own head with every operand written out
+(no variable, substitution, pattern or ``~``), the result carries
+``removal_targets``: those operands, and the absolute directories a written-out
+``cd`` may leave the removal in (None when some ``cd`` cannot be followed).  The
+verdict stays FORBIDDEN_REMOVAL.  The policy alone decides whose the files are:
+it lets the command run when each lies in the calling actor's own scratch
+directory.
+
 Two failure classes are distinguished so the deny surface stays proportionate:
 
   * STRUCTURAL failures (lex/parse error, undischarged census obligation,
