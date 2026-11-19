@@ -2141,7 +2141,7 @@ def _package_runner_invocation(head: str, rest: list):
             if t in _PM_EXEC_SUBCMDS:
                 toks = rest[i + 1:]
                 break
-            if t in ("run", "run-script"):
+            if t in _PM_RUN_SUBCMDS:
                 return (None, [])
             i += 1
     if toks is None:
@@ -2624,6 +2624,7 @@ _PM_EXEC_SUBCMDS = frozenset({"exec", "x", "dlx"})
 """Package-manager subcommands that run another command: their argv after `--`
 (and npm's `-c` / `--call` string) is a nested invocation, not a script's args."""
 _PM_EXEC_RUNNERS = frozenset({"npx", "pnpx", "bunx"})
+_PM_RUN_SUBCMDS = ("run", "run-script")  # the subcommands that run a package.json script
 _PM_SUBCMDS = frozenset({
     "install", "i", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "add",
     "ci", "clean-install", "install-clean", "install-test", "it", "install-ci-test", "cit",
@@ -3457,7 +3458,7 @@ def _p9_pkgscript(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None) 
             return _resolve_bare_script(sub, cwd, cwd_det, cfg, safe_allow, protected_cmds)
         # explicit run / run-script keyword
         script_tok = None
-        if sub in ("run", "run-script"):
+        if sub in _PM_RUN_SUBCMDS:
             script_tok = _token_after(rest, sub)
         elif sub is not None and sub not in DEP_BUILTINS and not sub.startswith("-"):
             # bare form: `yarn <script>` / `pnpm <script>` / `bun <script>`
@@ -3575,10 +3576,10 @@ def _classify_post_selector(post: list, scripts: set, safe_allow: set, protected
         return _block("P9", "runtime/exec token after a workspace selector (P1)")
     # consume optional run/run-script keyword
     script_tok = first
-    if first in ("run", "run-script"):
+    if first in _PM_RUN_SUBCMDS:
         script_tok = None
         for t in post:
-            if t in ("run", "run-script"):
+            if t in _PM_RUN_SUBCMDS:
                 continue
             if t.startswith("-"):
                 continue
