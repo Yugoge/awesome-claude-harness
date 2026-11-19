@@ -119,7 +119,7 @@ class Scratch:
         self.n += 1
         p = {"session_id": SESSION, "hook_event_name": event, "cwd": str(self.root / "project"),
              "transcript_path": str(self.root / "none.jsonl"), "permission_mode": "default", "stop_hook_active": False}
-        if event in refusal_record.EVENTS[:3]:
+        if event in refusal_record.EVENTS[:3] or event == "PermissionRequest":  # the events that carry a tool call
             tool = matcher.split("|")[0] if re.fullmatch(r"[A-Za-z0-9_|]+", matcher) else "Glob"
             p.update(tool_name=tool, tool_use_id=f"toolu_{self.n:04d}", tool_response={},
                      tool_input=INPUTS.get(tool, {"file_path": str(self.root / "project" / "new.txt"), "content": "x",
@@ -180,8 +180,9 @@ def cases():
             command = commands[(event, hook)]
             if event not in refusal_record.EVENTS:
                 elsewhere.add(event)
-            elif site.file != command:
-                out.setdefault(command, {}).setdefault((event, site.file), (matcher, site.role in ("main", "rule")))
+            elif site.file != command:  # a rule of the command: the registered hook itself, or a file of that hook's table
+                runs = site.file == hook or site.file in {r.file for r in enumerated.rules.get(hook) or ()}
+                out.setdefault(command, {}).setdefault((event, site.file), (matcher, runs and site.role in ("main", "rule")))
             else:  # the registered file's own site: through each file it runs
                 own.setdefault(command, {}).setdefault((event, matcher), set()).add(int(site.line))
                 children = enumerated.children.get(command, [])
