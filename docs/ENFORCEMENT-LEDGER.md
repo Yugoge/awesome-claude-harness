@@ -552,10 +552,7 @@ no per-rule budget exists.
   under `env.CLAUDE_CODE_TMPDIR` = `env.TMPDIR`), and the role scratch `//tmp/claude-scratch/**`
   (`*/tmp/claude-scratch/<role>/` in `policies/tool-policy.v1.json`; no hook or script builds a path
   under it). The TMPDIR root is deliberately not granted: hooks read files there to decide, namely
-  the daemon-restart grant `claude-allow-daemon-restart-<target>.flag` and its lock
-  (`hooks/pretool-bash-safety.sh`, through `CLAUDE_TMPDIR`), the git blessed-token grants
-  `claude-git-blessed/<tok>.grant` (`hooks/git-keystone/reference-transaction`,
-  `scripts/mint-git-blessed-token.sh`), each session dir's `.owner` (`hooks/session-scratch-init.sh`,
+  each session dir's `.owner` (`hooks/session-scratch-init.sh`,
   trusted by `hooks/sessionend-scratch-sweep.sh` and `hooks/lib/scratch_owner.py`) and doc-sync's
   dedupe state beside it (`hooks/doc_sync/notice.py`). A first spelling of this fix granted the whole
   root and let an agent write all of those unprompted; measured, they ask again. The hook state root

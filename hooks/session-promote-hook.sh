@@ -67,7 +67,7 @@ if [[ ! "$SESSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 fi
 
 # Claude Code's project folder name: every character other than an ASCII letter or digit becomes '-'
-# (hooks/lib/subagent_restart.py project_slug), e.g. /root/.codex -> -root--codex.
+# (hooks/lib/subagent_restart.py project_slug), e.g. /srv/a.b -> -srv-a-b.
 PROJECT_NAME="$(printf '%s' "$CWD" | sed 's/[^A-Za-z0-9]/-/g')"
 
 if [[ -z "$PROJECT_NAME" || "$PROJECT_NAME" == "-" ]]; then

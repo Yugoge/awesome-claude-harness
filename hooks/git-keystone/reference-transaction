@@ -14,11 +14,9 @@
 #
 # DENY POLICY (actor-scoped — never a global lockdown):
 #   * Applies ONLY when the caller is an overnight actor:
-#       env CLAUDE_OVERNIGHT_ACTOR == "1"  AND  blessed token ABSENT.
+#       env CLAUDE_OVERNIGHT_ACTOR == "1".
 #   * A NORMAL session (no CLAUDE_OVERNIGHT_ACTOR) is UNAFFECTED — exit 0.
-#   * A blessed token (CLAUDE_GIT_BLESSED_TOKEN matching the live grant file)
-#     exempts the operation (sanctioned /commit//push//merge).
-#   For an overnight actor without the token, REJECT a transaction that:
+#   For an overnight actor, REJECT a transaction that:
 #       * updates a branch ref in the RESOLVED PROTECTED SET to a different
 #         oid, OR
 #       * moves the MAIN worktree's HEAD (oid change / detach). On git >=2.46

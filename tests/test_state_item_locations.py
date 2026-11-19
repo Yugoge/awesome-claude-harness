@@ -12,7 +12,7 @@ Situations, built under tmp_path, nothing outside it is written:
      TMPDIR/CLAUDE_CODE_TMPDIR (the committed settings) and the overlay's accounts root; the owner's
      terminal gets HOME and XDG_RUNTIME_DIR only.
   b  default install: HOME/.claude is the harness home, no CLAUDE_CONFIG_DIR.
-  c  the same under a non-root style home (/home/alice); the uid is the runner's.
+  c  the same under a non-root user's home; the uid is the runner's.
 CLAUDE_STATE_DIR points into tmp_path on every side, so no state lands in the real /tmp.
 """
 from __future__ import annotations
@@ -67,7 +67,7 @@ class World:
         self.harness = tmp / "a" / "harness"
         self.harness.mkdir(parents=True)
         (self.harness / "settings.json").write_text("{}\n")
-        self.homes = {"a": tmp / "a" / "root", "b": tmp / "b" / "root", "c": tmp / "c" / "home" / "alice"}
+        self.homes = {"a": tmp / "a" / "root", "b": tmp / "b" / "root", "c": tmp / "c" / "home" / "user"}
         self.homes["a"].mkdir(parents=True)
         (self.homes["a"] / ".claude").symlink_to(self.harness)
         for s in "bc":
@@ -118,7 +118,7 @@ def same_everywhere(w, expr):
 # ---------------------------------------------------------------------------------------------- rows
 
 def s01(w):
-    # writer: /root/bin/claude-allow-restart:32  SENTINEL_DIR="${CLAUDE_DAEMON_RESTART_SENTINEL_DIR:-/tmp}",
+    # writer: the owner's daemon-restart grant helper (outside the repository): SENTINEL_DIR="${CLAUDE_DAEMON_RESTART_SENTINEL_DIR:-/tmp}",
     # run from the owner's terminal; reader: the PreToolUse hook's environment()["grant_dir"] in a session.
     reader = "import bash_safety_rules as b; print(b.environment()['grant_dir'])"
     return [(s, sh('printf %s "${CLAUDE_DAEMON_RESTART_SENTINEL_DIR:-/tmp}"', w.terminal(s)),

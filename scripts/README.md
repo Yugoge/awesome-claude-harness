@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 111
+- **Total files**: 112
 - **Subdirectories**: 8
 - **Naming convention**: kebab
 
@@ -62,6 +62,7 @@ Organization and usage documentation for `scripts/`.
 - `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 - `measure-hero-fold.py` - Description: Renders the document that holds the hero, docs/status.md, LOCALLY from the
 - `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
+- `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
 - `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
 - `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 - `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
