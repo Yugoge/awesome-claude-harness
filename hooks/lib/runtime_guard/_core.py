@@ -1697,7 +1697,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
         _, head, rest = cw[0]
         rest_bases = [os.path.basename(_strip_quotes(t)) for t in rest]
         # service control
-        if head in ("systemctl", "service", "initctl"):
+        if head in _SERVICE_MANAGER_PROGRAMS:
             if any(v in rest_bases for v in SERVICE_VERBS) or any(v in tokens for v in SERVICE_VERBS):
                 return _block("STEP1", "indeterminate policy: service-control verb")
         # kill / proc control
@@ -1749,7 +1749,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
                          and "k" in _strip_quotes(t)[1:])
                         for t in tokens[_fi + 1:]):
                     return _block("STEP1", "indeterminate policy: fuser -k process-kill (tail)")
-            if any(b in ("systemctl", "service", "initctl") for b in exec_bases) and (
+            if any(b in _SERVICE_MANAGER_PROGRAMS for b in exec_bases) and (
                     any(v in [os.path.basename(_strip_quotes(t)) for t in tokens] for v in SERVICE_VERBS)):
                 return _block("STEP1", "indeterminate policy: service-control verb (tail)")
             if any(b in PKG_MANAGERS for b in exec_bases):
@@ -2194,7 +2194,7 @@ def _p2_service(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
         if not cw:
             continue
         _, head, rest = cw[0]
-        if head not in ("systemctl", "service", "initctl"):
+        if head not in _SERVICE_MANAGER_PROGRAMS:
             continue
         if not (any(v in rest for v in SERVICE_VERBS)):
             continue

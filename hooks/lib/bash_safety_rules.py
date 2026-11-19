@@ -504,7 +504,7 @@ def daemon_restart(command, payload, prefix):
         cwd = (payload.get("tool_input") or {}).get("cwd") or os.getcwd()
         verbs = DAEMON_VERBS[1:-1].split("|")
         return _core.evaluate(command, cwd, cfg)[0] == "BLOCK" and any(
-            r.name in ("systemctl", "service") and any(a in verbs for a in r.argv())
+            r.name in _core._SERVICE_MANAGER_PROGRAMS and any(a in verbs for a in r.argv())
             for r in (resolve(site.cmd) for site in walk(parse(command))))
     except Exception:  # noqa: BLE001 - the guard or the parser unavailable: the raw reading, which over-blocks
         return grep(r"systemctl\s+" + DAEMON_VERBS + r"(\s+|\b)", command) and grep(re.escape(prefix), command)
