@@ -76,7 +76,7 @@ RULES: tuple[Rule, ...] = (
     # ran, unrefused and outside bwrap). An error it raises before it knows the caller is an overnight
     # actor is its own exit 1 (main()), so another session still goes on as it did when this failed open.
     Rule("overnight-boundary", "pretool-overnight-hook-guard.py",
-         frozenset({"Write", "Edit", "MultiEdit", "Bash", "AskUserQuestion"}), "both", "closed",
+         WRITE_TOOLS | {"Bash", "AskUserQuestion"}, "both", "closed",
          ("outside a live /dev-overnight session the rule allows everything",
           "no /do and no /allow exemption: the overnight self-repair boundary holds for both"), 20.0),
     Rule("tool-policy", "pretool-tool-policy.py", None, "both", "closed",
