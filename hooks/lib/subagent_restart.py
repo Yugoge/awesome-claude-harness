@@ -68,8 +68,10 @@ AGENT_ID_TEXT_RE = re.compile(r"agentId:\s*([A-Za-z0-9._-]+)")
 # measurement and the three evidence tiers.
 try:  # package import (hooks.lib.subagent_restart)
     from . import interruption_signals as signals
+    from .subagent import DISPATCH_TOOLS
 except ImportError:  # direct sys.path import (lib/ on path)
     import interruption_signals as signals  # type: ignore[no-redef]
+    from subagent import DISPATCH_TOOLS  # type: ignore[no-redef]
 
 
 def _is_quota_text(value: Any) -> bool:
@@ -586,7 +588,7 @@ def _read_parent_calls(
             for block in content:
                 if not isinstance(block, dict):
                     continue
-                if block.get("type") == "tool_use" and block.get("name") in {"Agent", "Task"}:
+                if block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS:
                     tool_id = block.get("id")
                     if isinstance(tool_id, str) and tool_id:
                         tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}

@@ -449,7 +449,8 @@ def observe_call(data: dict) -> None:
             return
         info = {}
         declared = ()
-        if actor == MAIN and tool in ("Agent", "Task"):
+        from lib.subagent import DISPATCH_TOOLS
+        if actor == MAIN and tool in DISPATCH_TOOLS:
             declared = declared_in_prompt(tool_input.get("prompt"))
             if declared:
                 info["launch"] = {"bg": tool_input.get("run_in_background") is True,

@@ -580,7 +580,7 @@ class Span:
         """(call, obligation) of each Agent/Task dispatch whose prompt parses to an obligation, in span order,
         however its call came back: whether and when its agent stopped is agent_returns.Returns' reading."""
         ob = _obligation()
-        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task"))
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls(*_subagent().DISPATCH_TOOLS))
         return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
 
     def obligations(self) -> list:
@@ -739,6 +739,11 @@ OPENER_REMOTE_LINE_RE = re.compile(r"^\[/push\] remote at the opener: (\S+) ([0-
 def _obligation():  # imported when first asked: a reader that needs none loads none of it
     import importlib
     return importlib.import_module(f"{__package__}.obligation" if __package__ else "obligation")
+
+
+def _subagent():
+    import importlib
+    return importlib.import_module(f"{__package__}.subagent" if __package__ else "subagent")
 
 
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):

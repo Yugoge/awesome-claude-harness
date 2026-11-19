@@ -102,7 +102,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.subagent import is_subagent_context  # noqa: E402
+from lib.subagent import DISPATCH_TOOLS, is_subagent_context  # noqa: E402
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.allowlist import (  # noqa: E402
     has_do_consent, match_sentinel_grant_for_tool, read_tool_ran, tool_streak_path, write_tool_streak)
@@ -708,7 +708,7 @@ def main():
     # The retrieval tools' counts are kept even there: the calls of one
     # message all pass PreToolUse together, so a dispatch in the same message
     # would refill their budget before any of them ran.
-    if tool_name == "Agent":
+    if tool_name in DISPATCH_TOOLS:
         try:
             state = read_streak_state(tool_streak_path(sid))
             state["bash_consecutive"] = {"last_tool": "Agent", "count": 0}

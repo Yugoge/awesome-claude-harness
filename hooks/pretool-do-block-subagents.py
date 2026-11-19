@@ -94,7 +94,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.subagent import is_subagent_context      # noqa: E402
+from lib.subagent import DISPATCH_TOOLS, is_subagent_context      # noqa: E402
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
 
 
@@ -318,7 +318,7 @@ def _main() -> None:
         stdin_data = _parse_stdin()
         if not stdin_data:
             sys.exit(0)
-        if stdin_data.get('tool_name') not in ('Agent', 'Task'):
+        if stdin_data.get('tool_name') not in DISPATCH_TOOLS:
             sys.exit(0)
         # Only the MAIN agent is blocked; subagent contexts pass through.
         if is_subagent_context(stdin_data):

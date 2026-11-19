@@ -1396,6 +1396,7 @@ def _dev_command_product_file(file_path: str, data: dict) -> bool:
             return False
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from lib import command_span, declared_paths, obligation
+        from lib.subagent import DISPATCH_TOOLS
         transcript = Path(data['transcript_path'])
         if transcript.parent.name == 'subagents':  # <sid>/subagents/agent-x.jsonl -> <sid>.jsonl
             transcript = transcript.parent.parent.with_suffix('.jsonl')
@@ -1409,7 +1410,7 @@ def _dev_command_product_file(file_path: str, data: dict) -> bool:
         parsed = obligation.parse_obligation(prompt)
         return (isinstance(parsed, obligation.ParsedObligation) and parsed.obligation.get('role') == 'dev'
                 and any(c.id == call_id and c.input.get('prompt') == prompt
-                        and c.input.get('subagent_type') == 'dev' for c in span.iter_calls('Agent', 'Task')))
+                        and c.input.get('subagent_type') == 'dev' for c in span.iter_calls(*DISPATCH_TOOLS)))
     except Exception:
         return False
 

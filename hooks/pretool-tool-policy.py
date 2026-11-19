@@ -452,7 +452,6 @@ def _session_transcript(data: dict):
 # without one declares nothing and is no caller's dispatch. One search of this
 # needle replaces one of "Agent" and one of "Task", each a pass over the file.
 _PROMPT_KEY = b'"prompt"'
-_DISPATCH_NAMES = (b'"Agent"', b'"Task"')
 _PIECE = 1 << 22  # bytes per read of the forward scan
 _BACK_PIECE = 1 << 20  # the first read back from an offset; each further read doubles
 
@@ -553,6 +552,8 @@ class _Record:
         from the end of the file as _dispatch_calls reads a call; None when no
         call has both. Only lines that hold the id's JSON string are decoded."""
         from lib import command_span
+        from lib.subagent import DISPATCH_TOOLS
+        names = _dispatch_names(DISPATCH_TOOLS)
 
         token = json.dumps(ident).encode()
         top = self.size  # the lines from offset top on are searched
@@ -563,9 +564,9 @@ class _Record:
                 end = data.find(b"\n", pos, top - base)
                 end = top - base if end < 0 else end
                 line = data[begin:end]
-                if any(name in line for name in _DISPATCH_NAMES):
+                if any(name in line for name in names):
                     for block in command_span._blocks(command_span._decode(line)):
-                        if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+                        if (block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS
                                 and isinstance(block.get("input"), dict) and (block.get("id") or "") == ident
                                 and block["input"].get("prompt") == prompt):
                             return command_span.Call(id=ident, name=block["name"], input=block["input"],
@@ -597,6 +598,11 @@ class _Record:
         return found[1] if found else None
 
 
+def _dispatch_names(tools) -> tuple:
+    """The JSON strings of the dispatch tool names, as a record line holds them."""
+    return tuple(json.dumps(t).encode() for t in tools)
+
+
 def _dispatch_calls(record: _Record) -> list:
     """The session's Agent/Task calls, read as command_span's Span.calls reads
     them (its line reader, the main session's own records only), without the
@@ -608,13 +614,15 @@ def _dispatch_calls(record: _Record) -> list:
     against the commands that open spans, and numbering every line of a long
     transcript would be a pass of its own."""
     from lib import command_span
+    from lib.subagent import DISPATCH_TOOLS
 
+    names = _dispatch_names(DISPATCH_TOOLS)
     calls = []
     for begin, _end, line in record.lines(_PROMPT_KEY):
-        if not any(name in line for name in _DISPATCH_NAMES):
+        if not any(name in line for name in names):
             continue
         for block in command_span._blocks(command_span._decode(line)):
-            if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+            if (block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS
                     and isinstance(block.get("input"), dict)):
                 calls.append(command_span.Call(id=block.get("id") or "", name=block["name"], input=block["input"],
                                                line=begin, result_line=0, ok=False))
@@ -1623,6 +1631,7 @@ def _clean_holds(data: dict, project: str) -> list:
     """[(role, call id, prompt, paths written, paths removed)] of each producer
     dispatch of the active span when a human-typed /clean opened it, else []."""
     from lib import claude_home, command_span, obligation
+    from lib.subagent import DISPATCH_TOOLS
 
     transcript = _session_transcript(data)
     span = command_span.active_span(transcript) if transcript else None
@@ -1632,7 +1641,7 @@ def _clean_holds(data: dict, project: str) -> list:
     home = os.path.normpath(str(home)) if home else None
     root = (frozenset(f for name in _CLEAN_ROOT_DOCS for f in _clean_forms(name, project)), frozenset())
     holds, answered, approvals, read = [], False, {}, {}
-    for use in span.uses("Agent", "Task", "AskUserQuestion", "Write"):
+    for use in span.uses(*DISPATCH_TOOLS, "AskUserQuestion", "Write"):
         if use.name == "AskUserQuestion":
             answered = answered or use.ok
             continue

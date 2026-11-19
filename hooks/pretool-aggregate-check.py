@@ -67,6 +67,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
 from lib import obligation as obligation_lib  # noqa: E402
 from lib import contract_runtime  # noqa: E402
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 from lib.dev_report_shard_patterns import classify_filename as _shared_classify_filename  # noqa: E402
 
 # Filename-classification regexes and the NON_WORKER_LABELS/NON_WORKER_LABEL_RE
@@ -90,7 +91,7 @@ def _is_qa_dispatch(data):
     """Return True iff this Agent call dispatches subagent_type=qa."""
     if not isinstance(data, dict):
         return False
-    if data.get("tool_name") != "Agent" and data.get("tool_name") != "Task":
+    if data.get("tool_name") not in DISPATCH_TOOLS:
         return False
     tool_input = data.get("tool_input") or {}
     if not isinstance(tool_input, dict):
@@ -464,7 +465,7 @@ def _scan_transcript_for_prior_obligations(transcript_path, family, current_tool
                         continue
                     if block.get("type") == "tool_result":
                         results[block.get("tool_use_id")] = bool(block.get("is_error"))
-                    elif block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task"):
+                    elif block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS:
                         tool_input = block.get("input")
                         prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
                         uses.append((line_no, block.get("id"), prompt))

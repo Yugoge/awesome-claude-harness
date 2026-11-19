@@ -11,6 +11,12 @@ import json
 import os
 from pathlib import Path
 
+# The tool names under which a subagent is dispatched: "Agent", and "Task", the name the CLI
+# used before and still accepts (a transcript records the name the model called; hooks are
+# handed "Agent", hooks/tests/test_agent_tool_name_pin.py). Every hook, transcript reader and
+# launcher rule that asks "is this call a dispatch" reads this one tuple.
+DISPATCH_TOOLS: tuple[str, ...] = ("Agent", "Task")
+
 SUBAGENT_ID_KEYS: tuple[str, ...] = (
     "agent_id",
     "subagent_id",
