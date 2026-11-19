@@ -50,6 +50,7 @@ GIT_COMMIT_VALUE_OPTIONS = frozenset({
 
 # Subcommands that run a shell command given on their command line (bisect run, submodule foreach,
 # rebase -x, difftool -x, filter-branch's filters).
+GH_MESSAGE_SUBCOMMANDS = frozenset({"issue", "pr", "release"})  # gh: words are a title or body
 GIT_SHELL_PAYLOAD_SUBCOMMANDS = frozenset({"bisect", "difftool", "filter-branch", "rebase", "submodule"})
 
 # Configuration keys whose value makes git run a program or read another config or repository

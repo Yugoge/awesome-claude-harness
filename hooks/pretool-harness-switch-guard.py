@@ -273,7 +273,7 @@ def _message(plain: list) -> bool:
     """A commit, tag or PR command: its words are a message, prose that may name a path."""
     head, sub = os.path.basename(plain[0]), next((w for w in plain[1:] if not w.startswith("-")), "")
     return (head == "git" and sub in ("commit", "tag", "notes", "merge", "revert")) or (
-        head == "gh" and sub in ("pr", "issue", "release"))
+        head == "gh" and sub in git_facts.GH_MESSAGE_SUBCOMMANDS)
 
 
 def _operands(plain: list, moves: bool) -> list:
