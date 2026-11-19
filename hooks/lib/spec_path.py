@@ -22,9 +22,9 @@ EDIT_TOOLS = ("Write", "Edit", "MultiEdit")
 WRITER = "spec-write.py"
 _WRITER_LINE = re.compile(r"^spec-write: (?:create|append) (/\S+)$", re.M)
 try:  # lib.spec_path, or hooks/lib on the path
-    from .harness_vocabulary import FOLDER_DOCUMENTS as _NOT_SPECS
+    from .command_span import FOLDER_DOCUMENTS as _NOT_SPECS
 except ImportError:
-    from harness_vocabulary import FOLDER_DOCUMENTS as _NOT_SPECS  # type: ignore[no-redef]
+    from command_span import FOLDER_DOCUMENTS as _NOT_SPECS  # type: ignore[no-redef]
 
 
 def is_spec_file(path) -> bool:

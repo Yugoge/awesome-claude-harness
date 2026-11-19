@@ -33,7 +33,7 @@ from pathlib import Path
 
 PLACEHOLDER = "_Not yet populated._"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
-from harness_vocabulary import FOLDER_DOCUMENTS as _NOT_SPECS  # noqa: E402
+from command_span import FOLDER_DOCUMENTS as _NOT_SPECS  # noqa: E402
 
 
 def _spec_file(raw):

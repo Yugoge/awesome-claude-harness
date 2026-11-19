@@ -46,12 +46,17 @@ def _command_sets() -> tuple[tuple, tuple]:
 # The commands a Stop gate guards, and the commands that never open a span.
 GATED_COMMANDS, CONTROL_COMMANDS = _command_sets()
 
-# Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
-# sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
-# compaction's summary (isCompactSummary; no isMeta or origin).
 # The transcript record types that are conversation turns (the others: attachments, summaries,
 # meta, api-request blobs); only they hold a turn's calls and results.
 TURN_RECORD_TYPES = ("user", "assistant")
+# The markdown files of a folder that are its folder documents (doc-sync writes them), never its
+# content: not a command, an agent, a spec, a template or a todo script's command. Defined here,
+# in a standard-library module every loader reaches (hooks/stop-launch.py loads this file by its
+# path alone), and imported from here by every other reader.
+FOLDER_DOCUMENTS = ("INDEX.md", "README.md")
+# Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
+# sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
+# compaction's summary (isCompactSummary; no isMeta or origin).
 _NON_HUMAN_KEYS = ("isMeta", "isSidechain", "sourceToolUseID", "toolUseResult", "isCompactSummary")
 # The origin kinds of a prompt the owner typed. A session driven through the SDK entrypoint (the
 # desktop app, Remote Control: entrypoint "sdk-cli" or "remote") records its typed prompts with
@@ -69,10 +74,8 @@ _SLASH_RE = re.compile(r"\s*/([A-Za-z0-9:_-]+)(?:\s+(.*))?\Z", re.S)
 
 def harness_commands() -> frozenset:
     """commands/*.md stems of this harness, the folder documents (INDEX, README) excluded."""
-    import importlib
-    docs = importlib.import_module(f"{__package__}.harness_vocabulary" if __package__ else "harness_vocabulary")
     try:
-        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.name not in docs.FOLDER_DOCUMENTS)
+        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.name not in FOLDER_DOCUMENTS)
     except OSError:
         return frozenset()
 
