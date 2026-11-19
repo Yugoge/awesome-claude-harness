@@ -55,7 +55,7 @@ def sandbox(tmp_path):
         "HOME": str(tmp_path / "home"),
         "CLAUDE_CONFIG_DIR": str(tmp_path / "config"),
         "CLAUDE_STATE_DIR": str(tmp_path / "state"),
-        "CLAUDE_DAEMON_RESTART_GRANT_DIR": str(tmp_path / "grants"),
+        "CLAUDE_DAEMON_RESTART_SENTINEL_DIR": str(tmp_path / "grants"),
         "CLAUDE_PROTECTED_RUNTIME_FILE": str(runtime),
     })
     return tmp_path, env
@@ -350,8 +350,10 @@ def _prune_checkout(tmp_path, env):
     (home / "scripts").mkdir(parents=True)
     shutil.copy2(PRUNE, home / "scripts" / PRUNE.name)
     subprocess.run(["git", "init", "-q", str(home)], env=env, check=True)
+    project = tmp_path / "demo project.y"
+    (project / ".claude").mkdir(parents=True)
     sid = "0f0e0d0c-1234-4abc-8def-acct00000001"
-    (home / f"workflow-{sid}.json").write_text("{}\n")
+    (project / ".claude" / f"workflow-{sid}.json").write_text("{}\n")
     return home, sid
 
 
@@ -359,28 +361,31 @@ def test_prune_without_accounts_dir_refuses_and_never_scans_root(sandbox):
     tmp_path, env = sandbox
     home, _ = _prune_checkout(tmp_path, env)
     r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], env=env, text=True,
-                       capture_output=True, timeout=60)
+                       capture_output=True, timeout=60, cwd=tmp_path / "demo project.y")
     assert r.returncode == 1
     assert "WORKFLOW_PRUNE_ACCOUNTS_DIR" in r.stderr
     assert "Accounts checked" not in r.stdout
 
 
-def test_prune_project_dirname_derives_from_the_harness_home(sandbox):
+def test_prune_reads_the_bookmarks_where_the_hook_writes_them(sandbox):
+    """P01: the bookmark is <project>/.claude/workflow-<sid>.json (hooks/prompt-workflow.py, project =
+    CLAUDE_PROJECT_DIR else the cwd); its transcript folder is that project's Claude Code folder name."""
     tmp_path, env = sandbox
     home, sid = _prune_checkout(tmp_path, env)
-    derived = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(home))
+    project = tmp_path / "demo project.y"
+    derived = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(project))
     transcript = tmp_path / "accounts" / "acct-a" / "claude" / "projects" / derived / f"{sid}.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_text("{}\n")
     (tmp_path / "accounts" / "acct-b").mkdir()
     env = {**env, "WORKFLOW_PRUNE_ACCOUNTS_DIR": str(tmp_path / "accounts")}
-    r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], env=env, text=True,
-                       capture_output=True, timeout=60)
-    assert r.returncode == 0, r.stderr
-    assert f"Project dirname: {derived}" in r.stdout
-    assert "transcript found under account: acct-a" in r.stdout
-    r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], text=True,
-                       env={**env, "WORKFLOW_PRUNE_PROJECT_DIRNAME": "-opt-demo"},
-                       capture_output=True, timeout=60)
-    assert "Project dirname: -opt-demo" in r.stdout
+    for extra, cwd in (({"CLAUDE_PROJECT_DIR": str(project)}, home), ({}, project)):
+        r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], env={**env, **extra}, text=True,
+                           capture_output=True, timeout=60, cwd=cwd)
+        assert r.returncode == 0, r.stderr
+        assert f"Project dirname: {derived}" in r.stdout
+        assert "transcript found under account: acct-a" in r.stdout
+    transcript.unlink()
+    r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], text=True, env=env,
+                       capture_output=True, timeout=60, cwd=project)
     assert "CANDIDATE" in r.stdout or "ORPHAN(young)" in r.stdout
