@@ -75,7 +75,7 @@ def main():
     if data.get("tool_name") not in RUN_CODE_TOOLS:
         sys.exit(0)
 
-    session_id = os.environ.get("CLAUDE_SESSION_ID", "default")
+    session_id = str(data.get("session_id") or "default").replace("/", "_")  # the CLI never exports CLAUDE_SESSION_ID
     pid_file = f"{harness_state_dir()}/.runcode-watchdog-{session_id}.pid"
 
     if os.path.exists(pid_file):

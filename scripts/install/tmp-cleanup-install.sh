@@ -10,10 +10,10 @@
 # Categories + retention:
 #   codex outputs / prompts            >1 day
 #   Playwright Chrome profiles         >1 day
-#   hook state files                   >7 days
+#   hook state files                   >7 days  (under the state dir: CLAUDE_STATE_DIR, else /tmp)
 #   dev/test scratch dirs              >3 days  (incl. *-scratch-[0-9]*)
 #   broader stale build/deploy/etc     >7 days
-#   /tmp/claude-0/**/*.output          >1 day   (deep, carve-out — see below)
+#   <CLI temp root>/claude-<uid>/**/*.output >1 day (deep, carve-out — see below)
 #   /var/tmp/codex-outputs/            >7 days
 #
 # EXCLUSION-FIRST: a single shared EXCLUDE_PRUNE bash array is applied as
@@ -22,8 +22,8 @@
 # rm -rf --` (real) action lives INSIDE the right-hand non-prune branch — never
 # appended after the whole expression — so excluded paths are never acted on.
 #
-# CARVE-OUT: the /tmp/claude-0 deep .output query DOES NOT use EXCLUDE_PRUNE
-# because its job is to descend INTO /tmp/claude-0 (which EXCLUDE_PRUNE prunes
+# CARVE-OUT: the claude-<uid> deep .output query DOES NOT use EXCLUDE_PRUNE
+# because its job is to descend INTO /tmp/claude-<uid> (which EXCLUDE_PRUNE prunes
 # at the top level). This is the SOLE intentional exception.
 #
 # Anything not matched here is LEFT ALONE.
@@ -55,8 +55,7 @@ mkdir -p /var/tmp/codex-outputs
 # renamed debug profile across ALL sweep categories — not just Playwright.
 EXCLUDE_PRUNE=( \(
   -path /tmp/chrome-debug-profile -o
-  -path /tmp/claude-0 -o
-  -path '/tmp/claude-commit-plan-*' -o
+  -path '/tmp/claude-[0-9]*' -o
   -path '*debug-profile*'
 \) -prune )
 
@@ -82,7 +81,7 @@ run_tmp() {
     # ALL candidates from every populated tier to be observable on stdout
     # (truncating after 200 entries would mask candidates from later tiers
     # in the same run and weaken the AC verification).
-    find /tmp -maxdepth 1 "${EXCLUDE_PRUNE[@]}" -o \( "$@" -print \) 2>/dev/null || true
+    find "${SWEEP_ROOT:-/tmp}" -maxdepth 1 "${EXCLUDE_PRUNE[@]}" -o \( "$@" -print \) 2>/dev/null || true
   else
     # Codex review F4: candidate temp files MUST NOT live under /tmp — the
     # purpose of this run is to FREE /tmp, and if /tmp is at ENOSPC the
@@ -93,7 +92,7 @@ run_tmp() {
       echo "WARN: cannot create candidate temp file under /var/tmp; skipping category"
       return 0
     }
-    find /tmp -maxdepth 1 "${EXCLUDE_PRUNE[@]}" -o \( "$@" -print0 \) 2>/dev/null > "$tmpfile" || true
+    find "${SWEEP_ROOT:-/tmp}" -maxdepth 1 "${EXCLUDE_PRUNE[@]}" -o \( "$@" -print0 \) 2>/dev/null > "$tmpfile" || true
     tr '\0' '\n' < "$tmpfile" | sed '/^$/d' || true
     xargs -0r rm -rf -- < "$tmpfile" 2>/dev/null || true
     rm -f "$tmpfile" 2>/dev/null || true
@@ -101,7 +100,7 @@ run_tmp() {
 }
 
 # ── Helper for non-/tmp-top-level categories ──────────────────────────
-# Used by the /tmp/claude-0 deep query (carve-out) and /var/tmp/codex-outputs.
+# Used by the claude-<uid> deep query (carve-out) and /var/tmp/codex-outputs.
 # Does NOT use EXCLUDE_PRUNE because both targets are INSIDE paths that the
 # shared clause prunes at the top level. The action still lives INSIDE the
 # find expression (no trailing append).
@@ -144,16 +143,15 @@ run_tmp "Playwright profiles >1d in /tmp" \
 # Layer-1.5 counter files (regular file) AND their paired `.lock` files
 # (also regular file — flock is the SOLE acceptable lock primitive per OBJ-3
 # specifically because the resulting lock file matches `-type f`).
-run_tmp "hook state >7d in /tmp" \
+# The state dir is hooks/lib/harness_state_dir.sh's: CLAUDE_STATE_DIR when absolute, else /tmp.
+case "${CLAUDE_STATE_DIR:-}" in /*) STATE_DIR="${CLAUDE_STATE_DIR%/}" ;; *) STATE_DIR=/tmp ;; esac
+SWEEP_ROOT="$STATE_DIR" run_tmp "hook state >7d in $STATE_DIR" \
   -mtime +7 -type f \
   \( -name 'claude-tool-streak-*.json' \
      -o -name 'claude-orchestrator-consent-*.flag' \
      -o -name 'claude-do-task-*.json' \
      -o -name 'claude-do-resv-*' \
      -o -name 'claude-commit-grant-*.json' \
-     -o -name 'claude-push-grant-*.json' \
-     -o -name 'contract-bookmark-*.json' \
-     -o -name 'artifact-status-*.json' \
      -o -name 'claude-pressure-warn-*' \)
 
 # ── Dev/test scratch (>3 days) — known transient patterns only ──
@@ -198,15 +196,18 @@ run_tmp "broader stale >7d in /tmp" \
      -o -name '*-main.js' \
      -o -name 'ocr_env' \)
 
-# ── /tmp/claude-0 deep .output sweep (>1 day) ──
+# ── CLI task outputs: deep .output sweep (>1 day) ──
 # CARVE-OUT: this query does NOT use EXCLUDE_PRUNE — its purpose is to
-# descend INTO /tmp/claude-0 (which EXCLUDE_PRUNE protects at the top level).
-# Real .output files live at depth 6: /tmp/claude-0/<project>/<session>/tasks/*.output.
-# -mindepth 2 skips the /tmp/claude-0 root itself; -type f ensures directories
+# descend INTO claude-<uid> (which EXCLUDE_PRUNE protects at the top level of /tmp).
+# The CLI writes <CLAUDE_CODE_TMPDIR, else TMPDIR, else /tmp>/claude-<uid>/<project>/<session>/tasks/*.output:
+# the shipped settings pin CLAUDE_CODE_TMPDIR=/var/tmp/claude-scratch, a session without them uses /tmp.
+# -mindepth 2 skips the claude-<uid> root itself; -type f ensures directories
 # named *.output (if any) cannot match. -mtime +1 is the verified-safe
 # threshold (BA+QA observed lsof intersection (open AND >1d) = 0).
-run_path "claude-0 deep .output >1d" /tmp/claude-0 \
-  -mindepth 2 -type f -name '*.output' -mtime +1
+for cli_dir in /tmp/claude-[0-9]* "${CLAUDE_CODE_TMPDIR:-/var/tmp/claude-scratch}"/claude-[0-9]*; do
+  [ -d "$cli_dir" ] && run_path "CLI task outputs >1d in $cli_dir" "$cli_dir" \
+    -mindepth 2 -type f -name '*.output' -mtime +1
+done
 
 # ── /var/tmp/codex-outputs (>7 days) — on disk, less urgent but still bounded ──
 # Separate path (not /tmp), so EXCLUDE_PRUNE does not apply. Existing sweep,

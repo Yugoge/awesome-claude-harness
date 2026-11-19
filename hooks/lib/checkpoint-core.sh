@@ -63,7 +63,8 @@
 #     logs a warning about potential orphan commits under concurrency).
 # ============================================================================
 
-CHECKPOINT_LOG_DIR="${CHECKPOINT_LOG_DIR:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/logs}"
+. "${BASH_SOURCE[0]%/*}/claude_home.sh" 2>/dev/null || claude_config_home() { printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
+CHECKPOINT_LOG_DIR="${CHECKPOINT_LOG_DIR:-$(claude_config_home)/logs}"  # one per harness home, not per account
 CHECKPOINT_LOG_FILE="${CHECKPOINT_LOG_DIR}/checkpoint.log"
 CHECKPOINT_PUSH_LOG_FILE="${CHECKPOINT_LOG_DIR}/checkpoint-push.log"
 CHECKPOINT_PUSH_MIN_INTERVAL="${CHECKPOINT_PUSH_MIN_INTERVAL:-30}"  # seconds
