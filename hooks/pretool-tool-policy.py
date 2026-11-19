@@ -148,6 +148,7 @@ extract_bash_write_paths = None  # type: ignore[assignment]
 extract_bash_touched_paths = None  # type: ignore[assignment]
 is_allowed = None  # type: ignore[assignment]
 harness_state_dir = None  # type: ignore[assignment]
+locations = None  # type: ignore[assignment]
 
 
 def _bootstrap_security() -> None:
@@ -157,12 +158,13 @@ def _bootstrap_security() -> None:
     NOT be wrapped by the blanket fail-open `except` in __main__.
     """
     global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, extract_bash_touched_paths, is_allowed, \
-        harness_state_dir
+        harness_state_dir, locations
     try:
         from lib.agent_resolver import resolve_agent_type as _rat
         from lib.bash_write_targets import extract_bash_touched_paths as _ebtp, extract_bash_write_paths as _ebwp
         from lib.policy_registry import WRITE_TOOLS as _wt, is_allowed as _ia
         from lib.harness_state_dir import harness_state_dir as _hsd
+        from lib import locations as _loc
     except Exception as e:  # ImportError, bootstrap failure, resolver failure
         sys.stderr.write(
             "BLOCKED by tool-policy.v1: deny-logic bootstrap FAILED — the policy "
@@ -176,6 +178,7 @@ def _bootstrap_security() -> None:
     extract_bash_touched_paths = _ebtp
     is_allowed = _ia
     harness_state_dir = _hsd
+    locations = _loc
 
 
 def _read_payload() -> dict:
@@ -203,11 +206,6 @@ def _extract_targets(tool_name: str, tool_input: dict) -> list:
         command = tool_input.get("command") or ""
         return extract_bash_write_paths(command) if isinstance(command, str) else []
     return [None]
-
-
-_RAW_TEMP_GRANTS = {"/tmp/*", "/var/tmp/*", "*/tmp/*", "*/var/tmp/*",
-                    "/tmp/", "/var/tmp/"}
-_SYSTEM_TEMP_ROOTS = ("/tmp", "/var/tmp")
 
 
 def _project_root() -> "os.PathLike | str":
@@ -240,12 +238,12 @@ def _role_temp_exceptions(role: str) -> list:
     state = harness_state_dir()
     out = []
     for entry in allowed:
-        if not isinstance(entry, str) or entry in _RAW_TEMP_GRANTS:
+        if not isinstance(entry, str) or entry in locations.RAW_TEMP_GRANTS:
             continue
         parts = entry.strip("*").split("/")
         if "tmp" in parts:
             out.append(entry)
-        elif state not in _SYSTEM_TEMP_ROOTS and entry.startswith("*/"):
+        elif not locations.is_system_temp_root(state) and entry.startswith("*/"):
             out.append(state + entry[1:] + ("" if entry.endswith("*") else "*"))
     return out
 
@@ -307,11 +305,7 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
     try:
         rel = resolved.relative_to(scratch_root).parts
     except ValueError:
-        for root in _SYSTEM_TEMP_ROOTS:
-            root_path = Path(root)
-            if resolved == root_path or root_path in resolved.parents:
-                return "system_temp"
-        return "outside"
+        return "system_temp" if locations.in_arbitrary_temp(str(resolved), str(_project_root())) else "outside"
     dispatch_id = data.get("agent_id")
     if len(rel) >= 3 and rel[1] == role and dispatch_id and rel[2] == dispatch_id:
         return "owner"
@@ -433,10 +427,11 @@ def _write_targets(tool_name: str, targets: list) -> list:
     if tool_name != "Bash" and tool_name not in WRITE_TOOLS:
         return []
     found = targets
-    # An unexpanded word cannot name a declared path, and the device tree (a
-    # redirect's /dev/null) holds no artifact; the role rows judge both.
+    # An unexpanded word cannot name a declared path, and a device (a redirect's
+    # /dev/null; never a file of a project kept on a tmpfs: lib/locations) holds
+    # no artifact; the role rows judge both.
     return [t for t in found if isinstance(t, str) and t and not any(c in t for c in "$`\x00")
-            and not t.startswith("/dev/")]
+            and not locations.is_device(t)]
 
 
 def _session_transcript(data: dict):

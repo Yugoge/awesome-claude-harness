@@ -274,11 +274,32 @@
       "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"may be safely suppressed (`find <author-path> -path /tmp/unrelated -delete`). Returns\""
     },
     {
-      "path": "hooks/lib/runtime_guard/config.py",
-      "fingerprint": "011a7a24d90bc55c",
+      "path": "hooks/lib/locations.py",
+      "fingerprint": "0f925b7d4f47c87a",
       "ordinal": 1,
       "class": "system_path_constant_enumeration",
-      "rationale": "Element of an enumeration of bare absolute system directories (a protected-root table). Carries no author identity -- a path with a user component cannot qualify. Line: \"\"/\", \"<author-path>\", \"/home\", \"/etc\", \"/usr\", \"/var\", \"/tmp\", \"/opt\", \"/bin\",\""
+      "rationale": "Element of an enumeration of bare absolute system directories (the broad-root table, moved here from hooks/lib/runtime_guard/config.py: the one file that names system directories). Carries no author identity -- a path with a user component cannot qualify."
+    },
+    {
+      "path": "hooks/tests/test_locations_relocation.py",
+      "fingerprint": "23cac71da4f7e069",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic location of the relocation matrix: a project or a home that is never created, under the superuser's home or a fictional user's home, given to the hooks as a path to judge (hooks/tests/test_locations_relocation.py). Carries no author identity."
+    },
+    {
+      "path": "hooks/tests/test_locations_relocation.py",
+      "fingerprint": "fc6c96b7a756f259",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic location of the relocation matrix: a project or a home that is never created, under the superuser's home or a fictional user's home, given to the hooks as a path to judge (hooks/tests/test_locations_relocation.py). Carries no author identity."
+    },
+    {
+      "path": "hooks/tests/test_locations_relocation.py",
+      "fingerprint": "0bc651827e8f80f4",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic location of the relocation matrix: a project or a home that is never created, under the superuser's home or a fictional user's home, given to the hooks as a path to judge (hooks/tests/test_locations_relocation.py). Carries no author identity."
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
