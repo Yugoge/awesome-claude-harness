@@ -150,7 +150,7 @@ def _basename(tok):
 def _unquote_token(tok):
     """Strip balanced surrounding quotes: `"/usr/bin/git"` -> `/usr/bin/git`."""
     t = tok.strip()
-    while len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'"):
+    while len(t) >= 2 and t[0] == t[-1] and t[0] in shell_parse.QUOTE_CHARS:
         t = t[1:-1]
     return t
 

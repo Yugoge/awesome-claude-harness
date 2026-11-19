@@ -428,6 +428,7 @@ CD_TARGET_BUILTINS = ("cd", "pushd")  # move to the directory their operand name
 CWD_BUILTINS = ("cd", "pushd", "popd")  # change the working directory of what follows
 LOOP_VAR_KINDS = ("for", "select")  # Compound kinds whose header binds a variable to each listed word
 DEFINER_KINDS = ("function", "coproc")  # Compound kinds whose body runs later or apart, not in line
+QUOTE_CHARS = ("'", '"')  # the characters that open a quoted string
 
 
 def _match_pair(t, i, opener, closer):
@@ -2946,7 +2947,7 @@ def executable_view(text):
         script_interp = bool(_SCRIPT_INTERP_RE.match(name)) and not res.wrappers and \
             res.head is cmd.head()
         for w in res.args:
-            opens_quoted = w.text[:1] in ("'", '"')
+            opens_quoted = w.text[:1] in QUOTE_CHARS
             if script_interp and not opens_quoted and all(
                     p.kind == "lit" for p in w.parts) and not any(c in w.text for c in "<>()`"):
                 _blank(out, *w.span)
