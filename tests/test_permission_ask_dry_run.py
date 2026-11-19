@@ -29,6 +29,13 @@ ask, which only adds a prompt; `kubectl applyset`, `kubectl create-foo` and `npm
 Method of the measurement: claude -p --permission-mode default, a throwaway HOME holding only a
 `permissions` block, a throwaway cwd, a local mock Messages API issuing one Bash tool_use, and stand-in
 `npm`/`kubectl` programs on PATH. MEASURED records the decisions; the model must reproduce them.
+
+Since 2026-11-19 no ask rule remains (docs/how-it-works.md, "Permission prompts"): nobody answers a prompt. The
+six ask entries are gone and the Bash rules decide the verbs (lib/bash_safety_rules.py `outward_rule`): the
+dry runs run, the real apply, create and publish are refused with a message that names the dry run. MEASURED
+was taken under the settings of that time; `_then()` rebuilds them (today's allow and deny, which did not
+change, with the ask list of tests/fixtures/permissions-ask-until-20261119.json) and the model keeps
+reproducing it as history. The tests marked "now" check the shipped settings and the Bash rules.
 """
 from __future__ import annotations
 
@@ -36,6 +43,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -144,6 +152,23 @@ def _perms(path: Path = SETTINGS) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))["permissions"]
 
 
+OLD_ASK = json.loads((REPO / "tests" / "fixtures" / "permissions-ask-until-20261119.json").read_text())["ask"]
+
+
+def _then() -> dict:
+    """The permissions MEASURED was taken under: today's allow and deny with the ask list of that time."""
+    return dict(_perms(), ask=OLD_ASK)
+
+
+def _bash_rules_refuse(command: str) -> str:
+    """The refusal text of the harness's Bash rules for the command, "" when they let it run."""
+    payload = {"session_id": "11111111-2222-3333-4444-555555555555", "cwd": str(REPO),
+               "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": command}}
+    proc = subprocess.run([sys.executable, str(REPO / "hooks" / "lib" / "bash_safety_rules.py"), str(REPO / "hooks")],
+                          input=json.dumps(payload), capture_output=True, text=True, timeout=120)
+    return proc.stderr if proc.returncode == 2 else ""
+
+
 def _bash(entries: list[str]) -> list[str]:
     return [e[5:-1] for e in entries if e.startswith("Bash(") and e.endswith(")")]
 
@@ -194,7 +219,7 @@ def decide(perms: dict, command: str) -> str:
 
 def _variant(column: int) -> dict:
     """Column 0: the base (the three entries in deny); 1: the first spelling (in ask); 2: settings.json."""
-    perms = _perms()
+    perms = _then()
     if column == 2:
         return perms
     ask = [e for e in perms["ask"] if e not in ASK_ENTRIES]
@@ -205,17 +230,21 @@ def _variant(column: int) -> dict:
 
 # ------------------------------------------------------------------ the entries
 def test_the_three_whole_verb_entries_left_deny_for_wildcard_tier_ask_entries():
-    perms = _perms()
+    """History: the ask entries of that time; now: no ask list, and neither spelling is a deny entry."""
+    perms = _then()
     for entry in LEFT_DENY:
         assert entry not in perms["deny"] and entry not in perms["ask"], entry
     for entry in ASK_ENTRIES:
         assert entry in perms["ask"], entry
+    now = _perms()
+    assert not now.get("ask")
+    assert not (set(LEFT_DENY) | set(ASK_ENTRIES)) & set(now["deny"])
 
 
 def test_no_ask_entry_sits_in_the_exact_tier():
     """An exact-tier ask outranks a wildcard deny past a wrapper (measured): every ask entry needs a `*`
     that is not a trailing `:*`."""
-    for rule in _bash(_perms()["ask"]):
+    for rule in _bash(_then()["ask"]):
         assert "*" in (rule[:-2] if rule.endswith(":*") else rule), rule
 
 
@@ -228,12 +257,14 @@ def test_the_neighbouring_deny_entries_stay():
 # ------------------------------------------------------------------ the decisions
 @pytest.mark.parametrize("command", DRY_RUNS)
 def test_a_dry_run_prompts_instead_of_being_refused(command):
-    assert decide(_perms(), command) == "ask"
+    assert decide(_then(), command) == "ask"  # history
+    assert decide(_perms(), command) != "deny" and _bash_rules_refuse(command) == ""  # now: it runs
 
 
 @pytest.mark.parametrize("command", REAL_RUNS)
 def test_a_real_apply_create_or_publish_never_runs_unasked(command):
-    assert decide(_perms(), command) in ("ask", "deny")
+    assert decide(_then(), command) in ("ask", "deny")  # history
+    assert "run only as" in _bash_rules_refuse(command) or "runs only as" in _bash_rules_refuse(command)  # now
 
 
 @pytest.mark.parametrize("command", STILL_DENIED)
@@ -252,18 +283,21 @@ def test_the_ask_entry_beats_the_npm_allow_entry():
     """`Bash(npm:*)` is in allow and covers `npm publish`: only the ask rules, checked before allow
     ("a matching ask rule prompts even when a more specific allow rule also matches the same call"),
     keep it from running unasked."""
-    perms = _perms()
+    perms = _then()
     assert "Bash(npm:*)" in perms["allow"]
     assert rule_covers("npm:*", "npm publish")
     without = dict(perms, ask=[e for e in perms["ask"] if e not in ASK_ENTRIES])
-    assert decide(without, "npm publish") == "allow"  # the hazard the ask entries close
+    assert decide(without, "npm publish") == "allow"  # the hazard the ask entries closed
     assert decide(perms, "npm publish") == "ask"
     assert decide(perms, "npm install") == "allow"  # the allow entry still serves the rest of npm
+    # now: the permission layer allows it, and the Bash rules, which run in every mode, refuse it
+    assert decide(_perms(), "npm publish") == "allow" and _bash_rules_refuse("npm publish")
+    assert _bash_rules_refuse("npm install") == ""
 
 
 def test_both_spellings_of_each_verb_are_needed():
     """Measured: with a `*` before it, a trailing ` *` no longer matches the bare verb."""
-    perms = _perms()
+    perms = _then()
     only_args = dict(perms, ask=[e for e in perms["ask"] if e != "Bash(n*pm publish)"])
     assert decide(only_args, "npm publish") == "allow"
     assert decide(perms, "npm publish") == "ask"
@@ -273,9 +307,7 @@ def test_no_allow_entry_covers_kubectl_apply_or_create():
     allow = _bash(_perms()["allow"])
     for cmd in [c for c in DRY_RUNS + REAL_RUNS if c.startswith("kubectl")]:
         assert [r for r in allow if rule_covers(r, cmd)] == [], cmd
-    perms = _perms()
-    assert decide(dict(perms, ask=[e for e in perms["ask"] if e not in ASK_ENTRIES]),
-                  "kubectl apply -f k8s/deploy.yaml") == "prompt"
+    assert decide(_perms(), "kubectl apply -f k8s/deploy.yaml") == "prompt"
 
 
 def test_the_decision_model():
@@ -295,19 +327,24 @@ def test_the_decision_model():
 
 
 # ------------------------------------------------------------------ readers of a non-empty ask
-def test_the_settings_load_accepts_the_non_empty_ask_list():
+def test_the_settings_load_accepts_the_non_empty_ask_list(tmp_path):
     import importlib.util
     spec = importlib.util.spec_from_file_location("claude_home", REPO / "hooks" / "lib" / "claude_home.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     settings, problem = mod.load_settings(SETTINGS)
-    assert problem is None and settings["permissions"]["ask"] == _perms()["ask"]
+    assert problem is None and "ask" not in settings["permissions"]
+    old = tmp_path / "settings.json"
+    old.write_text(json.dumps(dict(json.loads(SETTINGS.read_text()), permissions=_then())), encoding="utf-8")
+    settings, problem = mod.load_settings(old)
+    assert problem is None and settings["permissions"]["ask"] == OLD_ASK
 
 
 def test_apply_permissions_keeps_the_ask_entries_when_it_merges(tmp_path):
     target = tmp_path / ".claude" / "settings.json"
     target.parent.mkdir()
-    target.write_text(SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+    # a project's settings that hold ask entries (the harness's own of that time): the merge keeps them
+    target.write_text(json.dumps(dict(json.loads(SETTINGS.read_text()), permissions=_then())), encoding="utf-8")
     perms = tmp_path / "perms.json"
     perms.write_text(json.dumps([
         {"pattern": "Bash(n*pm publish *)", "section": "ask"},  # already there: not doubled
@@ -319,5 +356,5 @@ def test_apply_permissions_keeps_the_ask_entries_when_it_merges(tmp_path):
                           cwd=str(tmp_path), env=env, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     after = _perms(target)
-    assert after["ask"] == _perms()["ask"] + ["Bash(scripts/purge-cache.sh:*)"]
+    assert after["ask"] == OLD_ASK + ["Bash(scripts/purge-cache.sh:*)"]
     assert after["deny"] == _perms()["deny"] and after["allow"] == _perms()["allow"]

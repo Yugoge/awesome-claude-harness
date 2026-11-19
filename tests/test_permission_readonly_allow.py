@@ -46,6 +46,15 @@ in an empty project dir, and gh/git/make/pytest/rg shims first on PATH that only
 command ran (allow) or its tool_result said it needs approval (ask: "requires approval" when no rule allowed
 it, "haven't granted it yet" when an ask rule matched) or was denied ("has been denied"). The CLI's built-in
 read-only set (not configurable, not modelled here) allows a few forms with no entry; MEASURED records them.
+
+Since 2026-11-19 no ask rule remains (docs/how-it-works.md, "Permission prompts"): the 19 guard asks only
+narrowed these allow entries, and bypassPermissions mode, the harness's mode, does not read allow entries at
+all, so there they prompted a person for calls the hooks already decide. They are removed. Everything measured
+above stays as history, checked against `_then()`: today's allow and deny (unchanged) with the ask list of
+tests/fixtures/permissions-ask-until-20261119.json. The "now" tests check the shipped settings: the read-only
+commands still run; a command no allow entry covers still does not run unasked, and in default mode the
+PermissionRequest hook refuses it; the guarded forms (NOW_UNGUARDED) are let through by the allow entries in
+default mode and decided by the PreToolUse hooks alone, as every call is in bypassPermissions mode.
 """
 from __future__ import annotations
 
@@ -55,6 +64,9 @@ import re
 from pathlib import Path
 
 import pytest
+
+from tests.test_permission_ask_dry_run import OLD_ASK
+from tests.test_no_permission_prompt import _payload, _run
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -175,8 +187,13 @@ HOME_FORMS = {"git -C ~ log": ("ask", "allow", "allow"), "git -C ~/src log": ("a
 
 
 # ------------------------------------------------------------------ the model
-def _perms() -> dict:
+def _now() -> dict:
     return json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+
+
+def _perms() -> dict:
+    """The permissions the tables were measured under: today's allow and deny with the ask list of that time."""
+    return dict(_now(), ask=OLD_ASK)
 
 
 def _bash(entries: list[str]) -> list[str]:
@@ -253,7 +270,8 @@ def test_each_read_only_allow_entry_is_present(entry):
 
 @pytest.mark.parametrize("entry", NEW_ASK)
 def test_each_guarding_ask_entry_is_present(entry):
-    assert entry in _perms()["ask"]
+    assert entry in OLD_ASK  # history
+    assert not _now().get("ask") and entry not in _now()["deny"]  # now: removed, not turned into a refusal
 
 
 def test_no_entry_the_lane_forbids():
@@ -406,3 +424,30 @@ def test_rule_matching_is_case_sensitive():
 def test_every_example_is_measured():
     assert set(MUST_PASS + ALSO_PASS + MUST_REFUSE + WILDCARD_ATTACKS) <= set(MEASURED) | set(HOME_FORMS)
     assert not set(GLOB_ATTACKS) & set(MUST_PASS + ALSO_PASS)
+
+
+# ------------------------------------------------------------------ now (no ask rule)
+# No allow entry covers these two (`make -n:*` needs `-n` as its own word): still no run unasked.
+NOW_UNCOVERED = ["make -nE'all: ; +touch X'", "make -nf /dev/stdin"]
+NOW_UNGUARDED = sorted((set(ASK_GUARDED) | {c for c, v in GLOB_ATTACKS.items() if v[2] == "ask"}
+                        | set(ANCHORED_STILL_ASK)) - set(NOW_UNCOVERED))
+
+
+@pytest.mark.parametrize("cmd", MUST_PASS + ALSO_PASS)
+def test_now_read_only_command_runs(cmd):
+    assert decide(_now(), cmd) == "allow"
+
+
+@pytest.mark.parametrize("cmd", MUST_REFUSE + NOW_UNCOVERED)
+def test_now_an_uncovered_command_is_refused_in_default_mode(cmd):
+    """No allow entry covers it: the CLI would ask, and the PermissionRequest hook refuses instead."""
+    assert decide(_now(), cmd) == "ask"
+    assert _run(_payload("Bash", {"command": cmd}, mode="default"))["behavior"] == "deny"
+
+
+@pytest.mark.parametrize("cmd", NOW_UNGUARDED)
+def test_now_the_guarded_forms_are_left_to_the_hooks(cmd):
+    """Pinned: with the guard asks gone, the allow entries pass these in default mode; the PreToolUse hooks
+    decide them (git pushes and resets: hooks/pretool-git-privilege-guard.py), as in bypassPermissions mode."""
+    assert decide(_now(), cmd) == "allow"
+    assert decide(_perms(), cmd) == "ask"
