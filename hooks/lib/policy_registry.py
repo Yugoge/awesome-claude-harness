@@ -272,10 +272,10 @@ def _path_in_prefixes(target: Optional[str], prefixes: list) -> bool:
     return False
 
 
-def _check_tool_lists(role_pol: dict, tool_name: str) -> Optional[Tuple[bool, str]]:
+def _check_tool_lists(role_pol: dict, tool_name: str, own: bool = False) -> Optional[Tuple[bool, str]]:
     if _tool_in_list(tool_name, role_pol.get("denied_tools", [])):
         return (False, f"tool {tool_name} explicitly denied")
-    allowed = role_pol.get("allowed_tools", [])
+    allowed = role_pol.get("allowed_tools", []) + (role_pol.get("declared_artifact_tools", []) if own else [])
     if allowed and not _tool_in_list(tool_name, allowed):
         return (False, f"tool {tool_name} not in allowed_tools")
     return None

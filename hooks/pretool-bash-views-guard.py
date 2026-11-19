@@ -4,8 +4,8 @@
 Parallels pretool-bash-safety.sh but focuses on views/cp-state write bypass.
 
 Blocks Bash commands that write (a redirect, or a writer such as tee, cp, mv, sed -i) a path
-under a spec root -- a `.claude/specs/`, `docs/dev/specs/` or `dot-claude/specs/` directory --
-that is one of:
+under a spec root -- a `.claude/specs/` or `docs/dev/specs/` directory, or the `specs/` of the
+harness home wherever it is (lib/locations.spec_rest) -- that is one of:
   - a `*.lock.json` or `*manifest.json.lock` file anywhere under the root
   - `<root>/<id>/views/*.md` (views are read-only)
   - `<root>/<id>/views/manifest.json` (Write tool only)
@@ -35,6 +35,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib import locations  # noqa: E402
 try:
     from lib import shell_parse as _sp
     from lib.bash_write_targets import extract_bash_write_targets_with_modes as _write_targets
@@ -47,9 +48,6 @@ except Exception:  # the library is missing or broken: the textual scan below st
 # actually exists for the invoking user instead of an author-absolute literal.
 SPEC_CHECK = Path(__file__).resolve().parent.parent / "scripts" / "spec-check.py"
 
-
-# The spec roots, as path components (compared casefolded).
-SPEC_ROOTS = ((".claude", "specs"), ("docs", "dev", "specs"), ("dot-claude", "specs"))
 
 # Matched against the part of a path below its spec root ("<id>/...").
 BLOCK_PATTERNS = [
@@ -94,13 +92,7 @@ def _is_whitelisted(command):
 
 def _below_spec_root(path):
     """The text of ``path`` below its first spec root ("<id>/..."), or None."""
-    parts = [p for p in path.replace("\\", "/").split("/") if p]
-    folded = [p.casefold() for p in parts]
-    for i in range(len(parts)):
-        for root in SPEC_ROOTS:
-            if tuple(folded[i:i + len(root)]) == root and len(parts) > i + len(root):
-                return "/".join(folded[i + len(root):])
-    return None
+    return locations.spec_rest(path)
 
 
 def _blocked_path(path):

@@ -63,6 +63,11 @@ try:
     from lib import shell_parse
 except ImportError:  # run as a script: hooks/lib is on sys.path
     import shell_parse
+try:
+    from . import locations
+except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import locations
 
 # One table each, in the parser.
 GIT_GLOBAL_FLAGS = shell_parse.GIT_GLOBAL_FLAGS
@@ -446,16 +451,17 @@ _INERT_COMMANDS = frozenset({
 _INERT_TEXT_OWNERS = frozenset({'grep', 'rg'})
 # Where a written here-document may land as data. The rule is closed: a path
 # with a hidden component (`.git/`, `.bashrc`, `.claude/`, `.vscode/`,
-# `.config/`, and `..`, which leaves the tree), one under the home directory
-# (`~`), one with a `hooks` component (`core.hooksPath`), an absolute one
-# outside /tmp and /var/tmp, and one of these names (any case, files a tool
-# runs by name) is code. Names a tool runs that need no dot:
+# `.config/`, and `..`, which leaves the tree), one with a `hooks` component
+# (`core.hooksPath`), an absolute or home (`~`) one outside the project and
+# the temp roots (lib/locations.data_parts: the project wherever it is checked
+# out; its managed scratch `.claude/scratch/` counts from below that folder),
+# and one of these names (any case, files a tool runs by name) is code. Names
+# a tool runs that need no dot:
 _CODE_FILES = frozenset({'makefile', 'gnumakefile', 'gitconfig'})
 _CODE_DIRS = frozenset({'hooks'})
-_DATA_ROOTS = ('/tmp/', '/var/tmp/')
 # Commands that copy their input to a file a word of theirs names.
 _FILE_COPIERS = frozenset({'cp', 'mv', 'ln', 'install', 'truncate', 'dd'})
-_NULL_FILES = frozenset({'/dev/null', '/dev/stdout', '/dev/stderr'})
+_NULL_FILES = locations.STD_SINKS
 
 
 def _writes_file(redir):
@@ -500,9 +506,10 @@ def _written_paths(cmds, k, end):
 
 def _is_code_file(path):
     """True iff a here-document written to path may be run or read as code by a tool (see _CODE_FILES)."""
-    if path.startswith('~') or (path.startswith('/') and not path.startswith(_DATA_ROOTS)):
+    rel = locations.data_parts(path)
+    if rel is None:
         return True
-    parts = [part.lower() for part in path.split('/') if part and part != '.']
+    parts = [part.lower() for part in rel]
     return (not parts or parts[-1] in _CODE_FILES
             or any(p.startswith('.') or p in _CODE_DIRS for p in parts))
 
@@ -522,7 +529,7 @@ def _is_inert(cmd, written):
     for r in cmd.redirs:
         target = None if r.target is None else _value(r.target)[0]
         if r.op in shell_parse.WRITE_REDIRECT_OPS:
-            if target != '/dev/null':
+            if target != locations.NULL_DEVICE:
                 return False
         elif r.op == '>&' and not (target is not None and (target.isdigit() or target == '-')):
             return False
@@ -1098,7 +1105,7 @@ _INTERPRETERS = (
     (re.compile(r'Rscript\Z'), _Interpreter('e', '', '', (), (), (), False, False)),
 )
 # Paths that name standard input as a program or script.
-_STDIN_PATHS = frozenset({'-', '/dev/stdin', '/dev/fd/0', '/proc/self/fd/0'})
+_STDIN_PATHS = frozenset(('-',) + locations.STDIN_DEVICES)
 _MAX_CODE_DEPTH = 64
 
 

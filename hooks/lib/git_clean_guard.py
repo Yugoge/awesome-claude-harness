@@ -70,6 +70,11 @@ try:
     from lib.shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
     from shell_parse import CWD_BUILTINS, GIT_GLOBAL_VALUE_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
+try:
+    from . import locations
+except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import locations
 
 # git globals that point the invocation at a DIFFERENT repository / work tree.
 _REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
@@ -595,14 +600,14 @@ def _writes_a_file(command) -> bool:
             continue  # input, here-document, fd duplication or close
         if target is None or target.dynamic:
             return True
-        if target.text == "/dev/null":
+        if target.text == locations.NULL_DEVICE:
             continue
         return True
     words = command["words"]
     i = _data_head(words)
     if i < len(words) and words[i].text in _FILE_WRITING_DATA_COMMANDS:
         operands = [w for w in words[i + 1:] if not w.text.startswith("-")]
-        if any(w.text != "/dev/null" for w in operands):
+        if any(w.text != locations.NULL_DEVICE for w in operands):
             return True
     return False
 

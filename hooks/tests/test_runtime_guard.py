@@ -4422,9 +4422,13 @@ class TestDestinationDirectoryEntry:
 
     def test_entry_that_lands_on_the_data_file_or_an_ancestor_blocks(self, home_datafile):
         for cmd in ("mv protected-runtime.json ~/.config/claude", "cp x/protected-runtime.json ~/.config/claude/",
-                    "cp -r claude ~/.config", "mv claude/ ~/.config", "mv -T f ~", "cp -T f ~/.config",
+                    "cp -r claude ~/.config", "mv claude/ ~/.config", "cp -T f ~/.config",
                     "mv ~/.config /tmp/x", "mv f ~/.config/claude/protected-runtime.json"):
             assert ev_nested(cmd, home_datafile) == "BLOCK", cmd
+        # The home directory itself is no guarded ancestor, for any user: it is a broad root as the
+        # superuser's home always was (hooks/lib/locations.py is_broad_root), so replacing its entry
+        # decides as it did there. Before, this was BLOCK for every home but two fixed ones.
+        assert ev_nested("mv -T f ~", home_datafile) == "ALLOW"
 
 
 class TestServiceUnitFamily:
