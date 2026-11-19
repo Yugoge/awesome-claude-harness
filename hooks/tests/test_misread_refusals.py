@@ -323,3 +323,38 @@ PROTECTED_RUNS = [
 def test_a_run_that_reaches_a_protected_workspace_is_still_refused(sandbox, command):
     r = bash_safety(sandbox, command.replace("{M}", sandbox["mono"]))
     assert r.returncode == 2 and RUNTIME_GUARD in r.stderr, (command, r.stderr)
+
+
+# ── A fresh temp directory is not the state directory ────────────────────────
+# 1 recorded refusal: `X=$(mktemp -d <state dir>/name.XXXXXX)` and then `tar -x -C "$X"`. mktemp makes a new name
+# below the template's directory, so the archive lands in a child of the state directory, never beside the flag.
+CONSENT = "do-consent-flag-write"
+
+
+def test_an_archive_extracted_into_a_fresh_temp_directory_passes(sandbox):
+    command = ('X=$(mktemp -d {S}/probe-tracked.XXXXXX); C=$(mktemp -d {S}/probe-cache.XXXXXX)\n'
+               'git -C /srv/work archive HEAD | tar -x -C "$X"\n'
+               'echo "tracked-only copy: $(find "$X" -type f | wc -l) files"\n'
+               'ls -la "$C"/*/ 2>&1 | head -12').replace("{S}", sandbox["state"])
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 0, r.stderr
+
+
+CONSENT_WRITES = [
+    "git -C /srv/work archive HEAD | tar -x -C {S}",
+    'X=$(mktemp -d {S}/probe.XXXXXX); git -C /srv/work archive HEAD | tar -x -C "$X/.."',
+    'X=$(mktemp -d {S}/probe.XXXXXX; echo {S}); tar -x -C "$X" < a.tar',
+    'X=$(mktemp -d {S}/probe.XXXXXX | xargs dirname); tar -x -C "$X" < a.tar',
+    'X=$(mktemp -d {S}/probe.XXXXXX); X={S}; tar -x -C "$X" < a.tar',
+    'X=$(mktemp -d -p {S}); tar -x -C "$X" < a.tar',           # a form whose path is not the template's: as before
+    'X=$(mktemp -d {S}/probe.XXXXXX); touch "$X/../claude-orchestrator-consent-abc.flag"',
+    'X=$(mktemp -d {S}/probe.XXXXXX); cp -r src/. "$X/.."',
+    "touch {S}/claude-orchestrator-consent-abc.flag",
+    "echo 1 > {S}/claude-orchestrator-consent-abc.flag",
+]
+
+
+@pytest.mark.parametrize("command", CONSENT_WRITES)
+def test_a_write_into_the_state_directory_or_of_the_flag_is_still_refused(sandbox, command):
+    r = bash_safety(sandbox, command.replace("{S}", sandbox["state"]))
+    assert r.returncode == 2 and CONSENT in r.stderr, (command, r.stderr)

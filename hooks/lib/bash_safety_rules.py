@@ -1705,6 +1705,14 @@ class _ConsentView:
         else:
             self.defs.setdefault(name, []).append(("text", a.word.text))
 
+    def made(self, p):
+        """The path `$(mktemp [-d] TEMPLATE)` prints, written as its template: mktemp makes that name new, below the
+        template's directory, so it is never the state directory itself. None for any other substitution."""
+        cmds = list(self.sp.walk(p.body)) if p.body is not None and p.body.error is None else []
+        vals = [w.value() for w in cmds[0].cmd.words] if len(cmds) == 1 and not cmds[0].cmd.redirects else [None]
+        ops = [v for v in vals[1:] if v not in ("-d", "-q", "--directory", "--quiet")]
+        return ops[0] if vals[0] == "mktemp" and None not in vals and len(ops) == 1 and ops[0][:1] != "-" else None
+
     def marks_state(self, text):
         """Does computed source text (a substitution's body, a read's input) point at the state directory?"""
         text = text or ""
@@ -1834,6 +1842,8 @@ class _ConsentView:
                         out.append((("*",), "state"))
                 else:
                     out.append((("*",), "unk"))
+            elif p.kind in ("cmdsub", "backtick") and self.made(p):
+                out.extend((("c", ch), "lit") for ch in self.made(p))
             elif p.kind in ("cmdsub", "backtick", "procsub_in", "procsub_out") and self.marks_state(p.text):
                 out.extend((("c", ch), "state") for ch in self.state)
             else:
