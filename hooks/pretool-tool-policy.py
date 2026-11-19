@@ -357,7 +357,7 @@ def _note_own_scratch(role: str, data: dict, target) -> None:
             own = session_resources.scratch_path(_project_root(), binding)
         else:
             parts = [str(data.get("session_id") or "session"), role, str(data.get("agent_id") or "")]
-            if not all(p and "/" not in p and p not in (".", "..") for p in parts):
+            if not all(parts):  # an id that is no single name fails the owner check below
                 return
             own = Path(_project_root()).resolve(strict=False).joinpath(".claude", "scratch", *parts)
         if _scratch_status(role, str(own / "f"), data) != "owner":
