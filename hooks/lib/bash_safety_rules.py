@@ -1550,7 +1550,7 @@ def commit_artifact_rules(command, state):
 # The flag's name has one definition, next to its reader (lib/allowlist.has_do_consent); hooks/prompt-workflow.py
 # writes it. The stem is that prefix without its leading `claude-` and trailing `-`.
 from lib.allowlist import DO_CONSENT_FLAG_PREFIX as CONSENT_PREFIX, DO_CONSENT_FLAG_SUFFIX as CONSENT_SUFFIX  # noqa: E402
-from lib.shell_parse import INTO_DIR_VERBS  # noqa: E402 -- the copy, move and link verbs
+from lib.shell_parse import INTO_DIR_VERBS, MAN_PROGRAM_OPTS  # noqa: E402 -- the copy and link verbs, man's
 from lib.shell_parse import (  # noqa: E402  (the shell facts these rules read)
     BOTH_STREAMS_OPS, CD_TARGET_BUILTINS, COMMAND_PREFIX_WORDS, COMMON_SHELLS, CWD_BUILTINS,
     DECLARATION_BUILTINS, DEFINER_KINDS, GIT_RESTORE_SOURCE_OPTS, LOOP_VAR_KINDS, OPTION_ENDS, OPTION_SIGNS,
@@ -2028,25 +2028,13 @@ _CONSENT_SPEC_TEXT = {
     "sed": ("-n -E -r -s -u -z -i --quiet --silent --debug --follow-symlinks --posix --regexp-extended --separate "
             "--sandbox --unbuffered --null-data --in-place --help --version",
             "-e -f -l --expression --file --line-length"),
-    "cp": ("-a -b -d -f -i -H -l -L -n -P -p -R -r -s -T -u -v -x -Z --archive --attributes-only --backup "
-           "--copy-contents --force --interactive --link --dereference --no-clobber --no-dereference --preserve "
-           "--parents --recursive --reflink --remove-destination --strip-trailing-slashes --symbolic-link "
-           "--no-target-directory --update --verbose --one-file-system --context --debug --keep-directory-symlink "
-           "--help --version",
-           "-S -t --suffix --target-directory --no-preserve --sparse"),
-    "mv": ("-b -f -i -n -T -u -v -Z --backup --force --interactive --no-clobber --no-target-directory "
-           "--strip-trailing-slashes --update --verbose --context --no-copy --exchange --debug --help --version",
-           "-S -t --suffix --target-directory"),
-    "ln": ("-b -d -F -f -i -L -n -P -r -s -T -v --backup --directory --force --interactive --logical "
-           "--no-dereference --physical --relative --symbolic --no-target-directory --verbose --help --version",
-           "-S -t --suffix --target-directory"),
-    "install": ("-b -c -C -d -D -p -s -T -v -Z --backup --compare --directory --preserve-timestamps --strip "
-                "--no-target-directory --verbose --preserve-context --context --debug --help --version",
-                "-g -m -o -S -t --group --mode --owner --strip-program --suffix --target-directory"),
 }
 
 
 def _consent_spec(name):
+    if name in ("cp", "mv", "ln", "install"):  # the copy verbs' getopt tables are the parser's
+        from lib import shell_parse as sp
+        return sp.VERBS[name][0]
     if name not in _CONSENT_SPECS and name in _CONSENT_SPEC_TEXT:
         from lib import shell_parse as sp
         bools, vals = _CONSENT_SPEC_TEXT[name]
@@ -5138,8 +5126,7 @@ _DG_REFUSED_OPTS = {
     "fd": (("-x", "-X", "--exec", "--exec-batch"), "etE"),          # run a command per match
     "date": (("-s", "--set", "-f", "--file"), "Idr"),               # set the clock; read dates from a file
     "hostname": (("-F", "--file", "-b", "--boot"), ""),             # set the host name
-    "man": (("-P", "--pager", "-H", "--html", "-B", "--browser", "-C", "--config-file", "-X", "--gxditview",
-             "-l", "--local-file"), "MLmSsepErRT"),                 # name a program or format a file it is given
+    "man": (MAN_PROGRAM_OPTS + ("-C", "--config-file", "-X", "--gxditview", "-l", "--local-file"), "MLmSsepErRT"),                 # name a program or format a file it is given
     # Key-binding files (a lesskey `#env LESSOPEN=|cmd` runs a command), log files it writes, tags files it follows.
     "less": (("-k", "--lesskey-file", "--lesskey", "--lesskey-src", "--lesskey-content", "-o", "-O", "--log-file",
               "--LOG-FILE", "-t", "--tag", "-T", "--tag-file"), "", True),

@@ -3263,25 +3263,27 @@ VERBS = {
                   "--no-dereference", "-p", "-R", "-r", "--recursive", "-s", "--symbolic-link",
                   "-T", "--no-target-directory", "-u", "--update", "-v", "--verbose", "-x",
                   "--one-file-system", "--parents", "--remove-destination", "--strip-trailing-slashes",
-                  "--attributes-only", "--debug", "-Z"),
-                 ("-t", "--target-directory", "-S", "--suffix", "--backup", "--preserve",
-                  "--no-preserve", "--reflink", "--sparse", "--context")), "last", COPY_DEST),
+                  "--attributes-only", "--debug", "-Z", "--backup", "--preserve", "--reflink", "--context",
+                  "--copy-contents", "--keep-directory-symlink", "--help", "--version"),
+                 ("-t", "--target-directory", "-S", "--suffix", "--no-preserve", "--sparse")), "last", COPY_DEST),
     "mv": (_spec(("-b", "-f", "--force", "-i", "--interactive", "-n", "--no-clobber", "-T",
                   "--no-target-directory", "-u", "--update", "-v", "--verbose", "-Z",
-                  "--strip-trailing-slashes", "--debug", "--exchange", "--no-copy"),
-                 ("-t", "--target-directory", "-S", "--suffix", "--backup", "--context")),
+                  "--strip-trailing-slashes", "--debug", "--exchange", "--no-copy", "--backup", "--context",
+                  "--help", "--version"),
+                 ("-t", "--target-directory", "-S", "--suffix")),
            "last", MOVE_DEST),
     "install": (_spec(("-b", "-C", "--compare", "-c", "-d", "--directory", "-D", "-p",
                        "--preserve-timestamps", "-s", "--strip", "-v", "--verbose", "-T",
-                       "--no-target-directory", "-Z"),
+                       "--no-target-directory", "-Z", "--backup", "--context", "--debug", "--preserve-context",
+                       "--help", "--version"),
                       ("-g", "--group", "-m", "--mode", "-o", "--owner", "-S", "--suffix",
-                       "-t", "--target-directory", "--strip-program", "--backup", "--context")),
+                       "-t", "--target-directory", "--strip-program")),
                 "last", COPY_DEST),
     "ln": (_spec(("-b", "-d", "-F", "--directory", "-f", "--force", "-i", "--interactive",
                   "-L", "--logical", "-n", "--no-dereference", "-P", "--physical", "-r",
                   "--relative", "-s", "--symbolic", "-T", "--no-target-directory", "-v",
-                  "--verbose"),
-                 ("-t", "--target-directory", "-S", "--suffix", "--backup")), "last", LINK),
+                  "--verbose", "--backup", "--help", "--version"),
+                 ("-t", "--target-directory", "-S", "--suffix")), "last", LINK),
     "rsync": (_spec(("-a", "--archive", "-v", "--verbose", "-z", "--compress", "-r",
                      "--recursive", "-u", "--update", "-n", "--dry-run", "-q", "--quiet",
                      "-P", "-h", "--human-readable", "-c", "--checksum", "-l", "--links",
@@ -3297,7 +3299,12 @@ VERBS = {
                      "--chmod", "--chown", "-B", "--block-size", "--log-file", "--bwlimit",
                      "--suffix", "--backup-dir", "--timeout", "--port", "--password-file",
                      "--compare-dest", "--copy-dest", "--link-dest", "--max-size",
-                     "--min-size", "--partial-dir")), "last", COPY_DEST),
+                     "--min-size", "--partial-dir", "-M", "--remote-option", "--address", "--checksum-choice",
+                     "--checksum-seed", "--compress-choice", "--compress-level", "--contimeout", "--copy-as",
+                     "--debug", "--early-input", "--groupmap", "--iconv", "--info", "--log-file-format",
+                     "--max-alloc", "--max-delete", "--modify-window", "--only-write-batch", "--out-format",
+                     "--outbuf", "--protocol", "--read-batch", "--skip-compress", "--sockopts", "--stderr",
+                     "--stop-after", "--stop-at", "--usermap", "--write-batch")), "last", COPY_DEST),
     "truncate": (_spec(("-c", "--no-create", "-o", "--io-blocks"),
                        ("-s", "--size", "-r", "--reference")), "all", TRUNCATE),
     "unlink": (_spec(), "all", DELETE),
@@ -3372,6 +3379,22 @@ RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
 GREP_PATTERN_OPTS = ("-e", "--regexp")
 GREP_PATTERN_FILE_OPTS = ("-f", "--file")
 GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
+# Environment variables an assignment to which cannot change what a command runs (locale, terminal,
+# identity, colour); the directory ones among them (DIR_ENV_VARS) do move where a command reads or writes.
+INERT_ENV_VARS = frozenset({
+    "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_COLLATE", "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "TZ", "TERM",
+    "COLUMNS", "LINES", "PWD", "OLDPWD", "USER", "LOGNAME", "HOSTNAME", "TMPDIR", "DISPLAY", "NO_COLOR",
+    "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"})
+DIR_ENV_VARS = frozenset({"PWD", "OLDPWD", "TMPDIR"})
+# man's options whose value names a program it runs (man-db 2.12: the pager, the HTML browser).
+MAN_PROGRAM_OPTS = ("-P", "--pager", "-H", "--html", "-B", "--browser")
+# grep's options that take a value (GNU grep 3.11 --help; --color[=WHEN] takes one only after `=`): those
+# every grep-like search shares, then GNU grep's own.
+GREP_CORE_VALUE_OPTS = GREP_PATTERN_OPTS + GREP_PATTERN_FILE_OPTS + (
+    "-m", "--max-count", "-A", "--after-context", "-B", "--before-context", "-C", "--context")
+GREP_VALUE_OPTS = GREP_CORE_VALUE_OPTS + ("-d", "--directories", "-D", "--devices", "--binary-files", "--include",
+                                          "--exclude", "--exclude-dir", "--exclude-from", "--label",
+                                          "--group-separator")
 RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip", "--pre-glob")
 # ripgrep's options that take a value: the short letters and the long names.
 RG_VALUE_SHORT = frozenset("efgtTmABCMjrEd")
