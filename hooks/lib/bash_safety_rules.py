@@ -4189,6 +4189,7 @@ class ServiceView:
 # npx, nsenter, git -c alias.x='!..', git rebase --exec, PAGER=..) loses no refusal the rules had before.
 _PLAIN_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "ls", "echo",
                             "printf", "wc"})
+_KILL_PROBE_OPTS = ("-0", "-l", "-L")  # kill -0 probes a pid, -l / -L list the signals: nothing is sent
 _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "wc"})
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
@@ -4302,7 +4303,7 @@ def _plain_simple(cmd, sv, piped):
     if piped and name not in _PLAIN_FILTERS:
         return False
     if name == "kill":  # a probe or a listing of literal words, or `kill -0 "$PID"` alone
-        return bool(vals) and vals[0] in ("-0", "-l", "-L") and _plain_kill_args(args[1:]) \
+        return bool(vals) and vals[0] in _KILL_PROBE_OPTS and _plain_kill_args(args[1:]) \
             and _plain_redirects(cmd, sv, reads_ok=False)
     if name == "dd":
         return _plain_dd(vals, sv) and _plain_redirects(cmd, sv, reads_ok=False)
@@ -4553,7 +4554,7 @@ def _kill_protected_family(sv, family):
 
 def _kill_signal(sv):
     """kill with an option other than the exact -0 (probe), -l or -L (list): -09 is SIGKILL."""
-    return any(v is not None and v.startswith("-") and v not in ("-0", "-l", "-L")
+    return any(v is not None and v.startswith("-") and v not in _KILL_PROBE_OPTS
                for _n, args, _s, _r in sv.named("kill") for v in (w.value() for w in args))
 
 
