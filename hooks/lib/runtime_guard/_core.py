@@ -66,6 +66,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
+        PKG_LINK_WORDS,
         PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
@@ -88,6 +89,7 @@ except ImportError:  # executed as a top-level script (no package context)
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
+        PKG_LINK_WORDS,
         PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
@@ -2987,7 +2989,7 @@ def _p7_globalbin(simple_cmds: list, cfg: dict) -> Optional[Verdict]:
         _, head, rest = cw[0]
         if head in PKG_MANAGERS:
             is_global = _pm_global_args([_strip_quotes(t) for t in rest], pm=head)
-            is_link = any(t in ("link", "unlink") for t in rest)
+            is_link = any(t in PKG_LINK_WORDS for t in rest)
             if is_global or is_link:
                 return _block("P7", "global package install/link")
         # writes to protected global bin paths (any mutation head)
@@ -4704,7 +4706,7 @@ def _anchor_globalbin_hits(sc: str, tokens: list, exec_toks: list,
         # is matched (mirrors P7 reading the pm's `rest`).
         own = [_strip_quotes(t) for t in tokens[pm_pos + 1:]]
         is_global = _pm_global_args(own, pm=os.path.basename(_strip_quotes(tokens[pm_pos])))
-        is_link = any(t in ("link", "unlink") for t in own)
+        is_link = any(t in PKG_LINK_WORDS for t in own)
         if is_global or is_link:
             return True
     # write to a protected global-bin path via a mutation verb / redirect.

@@ -9,6 +9,8 @@ ZERO project identifiers.
 
 # ── Generic verb / keyword vocabularies (no project names) ───────────────────
 PKG_MANAGERS = frozenset({"yarn", "npm", "pnpm", "bun"})
+# The package-manager words that link or unlink a package into the global bin (P7).
+PKG_LINK_WORDS = ("link", "unlink")
 # Generic command wrappers that prefix the real command. After consuming a
 # wrapper (and its own operands) the real command word follows. Includes
 # process-handoff wrappers (setsid/systemd-run/daemonize) so a launch through
