@@ -44,27 +44,6 @@ PHASE="${1:-}"
 # ---- the harness switch: inert while /harness off holds (hooks/lib/harness_switch.sh) ----
 [ -e "${CLAUDE_HOME:-$HOME/.claude}/.harness-switch/off" ] && exit 0
 
-# ---- blessed-token exemption (sanctioned harness wrappers) ----------------
-# CLAUDE_GIT_BLESSED_TOKEN must match the single-operation grant file that the
-# minting wrapper wrote. Absent/mismatched => not exempt. The overnight launch
-# env never sets this token, so the overnight actor can never be exempt.
-_blessed_ok() {
-  local tok="${CLAUDE_GIT_BLESSED_TOKEN:-}"
-  [ -n "$tok" ] || return 1
-  local grant_dir="${CLAUDE_GIT_BLESSED_GRANT_DIR:-${TMPDIR:-/tmp}/claude-git-blessed}"
-  local grant="$grant_dir/${tok}.grant"
-  [ -f "$grant" ] || return 1
-  # Expiry: grant file first line is an epoch-seconds expiry; reject if passed.
-  local exp
-  exp="$(head -n1 "$grant" 2>/dev/null)"
-  case "$exp" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-  [ "$(date +%s)" -le "$exp" ] || return 1
-  return 0
-}
-if _blessed_ok; then exit 0; fi
-
 # ---- only protect the MAIN worktree --------------------------------------
 # A registered worktree (incl. the overnight worktree itself) has its own HEAD;
 # git invokes the hook with that worktree's GIT_DIR. We protect the COMMON
@@ -123,13 +102,10 @@ fi
 _OBP_RESOLVED=0        # memo guard: resolve at most ONCE per hook invocation
 _OBP_SET=""            # newline-delimited protected names
 
-# State subdirectories to scan. `.claude` is the default; an explicit override
-# is scanned IN ADDITION (union), never instead of.
+# State subdirectory to scan: `.claude`, the one place scripts/create-overnight-state.sh
+# writes a record and hooks/lib/overnight.py state_path() reads it.
 _obp_subdirs() {
   printf '%s\n' '.claude'
-  if [ -n "${OVERNIGHT_STATE_SUBDIR:-}" ] && [ "${OVERNIGHT_STATE_SUBDIR}" != ".claude" ]; then
-    printf '%s\n' "${OVERNIGHT_STATE_SUBDIR}"
-  fi
 }
 
 # Each record is read by its one function, hooks/lib/overnight.py, run as a
