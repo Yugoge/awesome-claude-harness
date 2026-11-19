@@ -410,9 +410,11 @@ def _body_mentions_protected_branch(body: str) -> bool:
 
 
 def _is_path_exempt(file_path: str) -> bool:
-    """Check if path is exempt from overnight worktree restrictions: the null device, a temp
-    directory the session's own files go to, the hook state root (lib/locations: both sides resolved)."""
-    if os.path.realpath(os.path.abspath(file_path)) == locations.NULL_DEVICE:
+    """Check if path is exempt from overnight worktree restrictions: the null device, a sink no file
+    lies behind (by name: /dev/stderr is a link to this process's own descriptor), a temp directory the
+    session's own files go to, the hook state root (lib/locations: both sides resolved)."""
+    named = os.path.abspath(file_path)
+    if os.path.realpath(named) == locations.NULL_DEVICE or locations.is_sink(named):
         return True
     roots = locations.session_temp_roots() + (locations.state_root(),)
     return any(root != os.sep and locations.is_inside(file_path, root) for root in roots)
@@ -463,11 +465,15 @@ def _block_global_worktree(tool_name: str, target: str, worktree_paths: list[str
     )
 
 
+def _edit_target(tool_name: str, tool_input: dict) -> str:
+    """The file a file-writing tool names ('' for any other): command_span.EDIT_TOOLS holds each tool's path key."""
+    key = command_span.EDIT_TOOLS.get(tool_name)
+    return str(tool_input.get(key) or '') if key else ''
+
+
 def _enforce_write_edit_all_sessions(tool_name: str, tool_input: dict, worktree_paths: list[str]) -> None:
     """Block Write/Edit outside active overnight worktrees for all sessions (self_repair-grant aware)."""
-    if tool_name not in ('Write', 'Edit', 'MultiEdit'):
-        return
-    fp = tool_input.get('file_path', '')
+    fp = _edit_target(tool_name, tool_input)
     if not fp or _is_path_allowed_during_overnight(fp, worktree_paths) or _grant_skips_block(fp):
         return
     _block_global_worktree(tool_name, fp, worktree_paths)
@@ -759,8 +765,8 @@ def _check_write_edit_security(tool_name: str, file_path: str) -> None:
 def apply_global_security_checks(tool_name: str, tool_input: dict) -> None:
     """Block hooks/commands/state modifications for ALL sessions during any overnight. A Bash write
     to .claude/hooks/ or .claude/commands/ is pretool-claude-config-guard.py's refusal."""
-    if tool_name in ('Write', 'Edit', 'MultiEdit'):
-        _check_write_edit_security(tool_name, tool_input.get('file_path', ''))
+    if tool_name in command_span.EDIT_TOOLS:
+        _check_write_edit_security(tool_name, _edit_target(tool_name, tool_input))
     if tool_name == 'Bash' and check_bash_targets_state(tool_input.get('command', '')):
         _block('\nOVERNIGHT STATE PROTECTION: Modifying or deleting '
                'overnight-state-*.json via Bash is blocked.\n')
@@ -791,7 +797,7 @@ def _block_worktree_string_violation(tool_name: str, path: str) -> None:
 
 def _check_write_edit_string(tool_name: str, tool_input: dict, worktree_path: str) -> None:
     """Block a Write/Edit outside the session worktree (self_repair-grant aware)."""
-    file_path = tool_input.get('file_path', '')
+    file_path = _edit_target(tool_name, tool_input)
     if not file_path or _is_path_exempt(file_path) or _is_harness_state_exempt(file_path) or _grant_skips_block(file_path):
         return
     if is_outside_worktree(file_path, worktree_path):
@@ -809,7 +815,7 @@ def _check_bash_string(tool_input: dict, worktree_path: str) -> None:
 
 def apply_worktree_string_check(tool_name: str, tool_input: dict, worktree_path: str) -> None:
     """Block when an overnight session writes outside its worktree_path."""
-    if tool_name in ('Write', 'Edit', 'MultiEdit'):
+    if tool_name in command_span.EDIT_TOOLS:
         _check_write_edit_string(tool_name, tool_input, worktree_path)
     if tool_name == 'Bash':
         _check_bash_string(tool_input, worktree_path)
@@ -1997,7 +2003,7 @@ def main():
             # block, so any git / interpreter command is refused; any other command is
             # left to the worktree-boundary enforcement below.
             _fail_closed_worktree_context(command)
-    target = str(tool_input.get('file_path') or '') if tool_name in ('Write', 'Edit', 'MultiEdit') else ''
+    target = _edit_target(tool_name, tool_input)
     if classification in ('overnight_owner', 'overnight_child', 'worktree_context') and gov_state is not None \
             and target and _targets_git_config(target):
         _block_git_config(tool_name, target)

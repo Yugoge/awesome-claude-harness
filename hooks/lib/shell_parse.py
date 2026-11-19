@@ -463,6 +463,8 @@ COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
 SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
+PRINTERS = ("echo", "printf")  # print their arguments and run nothing
+MOVE_MECHANISMS = ("mv", "git-mv")  # WriteTarget mechanisms of a move: its sources follow as <mechanism>-source
 NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
 RUNUSER_USER_OPTS = ("-u", "--user")  # runuser: the option naming the user COMMAND runs as
 # Package runners (pnpx is `pnpm dlx`) and the package-manager subcommands that run another
@@ -2221,7 +2223,7 @@ def _stage_output(cmd):
                 return red.target.value()
         return None
     vals = [w.value() for w in res.args]
-    if res.name not in ("echo", "printf") or any(v is None for v in vals):
+    if res.name not in PRINTERS or any(v is None for v in vals):
         return None
     while res.name == "echo" and vals and vals[0] in ("-n", "-e", "-E", "-ne", "-en"):
         vals = vals[1:]
@@ -2887,6 +2889,7 @@ def resolve(cmd, depth=None):
 _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
 FIND_SYMLINK_OPTS = ("-H", "-L", "-P")  # find's symlink options, before the start paths
 FIND_EXEC_ENDS = (";", "+")  # the words that end the command of a find -exec/-ok (every reader reads this one)
+_FIND_FILE = ("-fprint", "-fprint0", "-fprintf", "-fls")  # the next word names a file the action writes
 
 
 def _resolve_find(r, head, words, cmd, depth):
@@ -3765,6 +3768,9 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None, raw=None, reached=Non
             if name == "git":
                 out.extend(_git_write_targets(res, env, site.context))
                 continue
+            if name == "find":
+                out.extend(_find_write_targets(res.args, env, site.context))
+                continue
             verb = VERBS.get(name)
             if verb is None:
                 continue
@@ -4050,6 +4056,23 @@ def _verb_targets(name, verb, args, env, context):
             for s in sources:
                 sp, sdec = _project(s, env)
                 out.append(WriteTarget(sp, DELETE, name + "-source", None, sdec, s, None, context))
+    return out
+
+
+def _find_write_targets(args, env, context):
+    """The file each -fprint, -fprint0, -fprintf and -fls of one find writes. An -exec's words up to `;` or `+` are
+    another command's (walk reads them); -delete removes the matches, names the command does not hold: no target."""
+    out, k = [], 0
+    while k < len(args):
+        v = args[k].value()
+        if v in _FIND_EXEC:
+            while k < len(args) and args[k].value() not in FIND_EXEC_ENDS:
+                k += 1
+        elif v in _FIND_FILE and k + 1 < len(args):
+            k += 1
+            path, dec = _project(args[k], env)
+            out.append(WriteTarget(path, TRUNCATE, "find" + v, None, dec, args[k], None, context))
+        k += 1
     return out
 
 
