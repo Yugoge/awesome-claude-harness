@@ -54,24 +54,11 @@ sys.path.pop(0)
 SENTINEL_NAME = '.hook-refactor-allow'
 BLOCK_LITERAL = 'BLOCKED: claude config guard'
 
-_HOOK_PATTERNS = [
-    r'(?:echo|printf)\s+.*>\s*\S*\.claude/hooks/',
-    r'cat\s+.*>\s*\S*\.claude/hooks/',
-    r'cp\s+.*\.claude/hooks/',
-    r'mv\s+.*\.claude/hooks/',
-    r'tee\s+.*\.claude/hooks/',
-    r'>\s*\S*\.claude/hooks/',
-    r'>>\s*\S*\.claude/hooks/',
-]
-_CMD_PATTERNS = [
-    r'(?:echo|printf)\s+.*>\s*\S*\.claude/commands/',
-    r'cat\s+.*>\s*\S*\.claude/commands/',
-    r'cp\s+.*\.claude/commands/',
-    r'mv\s+.*\.claude/commands/',
-    r'tee\s+.*\.claude/commands/',
-    r'>\s*\S*\.claude/commands/',
-    r'>>\s*\S*\.claude/commands/',
-]
+# The Bash write shapes the base reading counts as a write into a protected folder, written once for both.
+_WRITE_SHAPES = (r'(?:echo|printf)\s+.*>\s*\S*{}', r'cat\s+.*>\s*\S*{}', r'cp\s+.*{}', r'mv\s+.*{}', r'tee\s+.*{}',
+                 r'>\s*\S*{}', r'>>\s*\S*{}')
+_HOOK_PATTERNS = [shape.format(r'\.claude/hooks/') for shape in _WRITE_SHAPES]
+_CMD_PATTERNS = [shape.format(r'\.claude/commands/') for shape in _WRITE_SHAPES]
 
 
 def _project_dir() -> Path:
