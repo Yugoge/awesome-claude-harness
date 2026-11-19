@@ -4056,6 +4056,9 @@ def sensitive_redirect(command):
             network = name in _NETWORK_CLIENTS
             writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
                                               if network else (False, False, {}))
+            if not network and all(r.target.value() == "/dev/null" for r in outputs) \
+                    and any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs):
+                outputs = []  # standard output thrown away and no other file opened: what it reads lands in no file
             if not outputs and network and writes:
                 # A client writing its own output file reads a `file:` URL into it (curl file:///.env -o /tmp/y).
                 if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
@@ -4084,9 +4087,6 @@ def sensitive_redirect(command):
 
             if any(sensitive(i, w) for i, w in words) \
                     or any(_word_sensitive(r.target) for r in redirs if not r.writes()):
-            if not network and all(r.target.value() == "/dev/null" for r in outputs) \
-                    and any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs):
-                outputs = []  # standard output thrown away and no other file opened: what it reads lands in no file
                 return "redirect"
         return None
     except Exception:  # noqa: BLE001
@@ -4191,7 +4191,8 @@ class ServiceView:
         for _n, _a, site, r in self.named(name) if not self.raw and len(view) == len(self.command) else ():
             words = site.cmd.words
             if tuple(site.context) == ("top",) and not (site.cmd.assignments or r.wrappers or r.payload is not None
-                                                        or r.unresolved) and whole(site.cmd, self):
+                                                        or r.unresolved) and whole(site.cmd, self) \
+                    and _plain_redirects(site.cmd, self, reads_ok=False):
                 out[words[0].span[0]:words[-1].span[1]] = " " * (words[-1].span[1] - words[0].span[0])
         return "".join(out)
 
@@ -4351,9 +4352,9 @@ def _plain_kill_args(words):
 
 
 def _dd_whole(cmd, sv):
-    """dd whose every word is one of its own operands as written (`if=$F` too): _destructive_disk judged each of=
-    and each file its redirections open, and no word can hide another of=."""
-    return all((w.value() or w.text).startswith(_DD_OPERANDS) for w in cmd.words[1:])
+    """dd that only reads: every word is one of its own operands as written (`if=$F` too) and none is of=, so its
+    output goes to standard output alone (a pipe, or the plain redirection `without` asks for)."""
+    return all(t.startswith(_DD_OPERANDS) and not t.startswith("of=") for t in (w.value() or w.text for w in cmd.words[1:]))
 
 
 def _kill_probe(cmd, sv):

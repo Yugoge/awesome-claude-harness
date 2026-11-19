@@ -135,6 +135,7 @@ SIGNALS = [
     ("pid=4242; if kill -0 $pid 4343; then echo alive; fi", KILL_SIG),
     ("pid=-9; if kill -0 $pid 4242; then echo alive; fi", KILL_SIG),
     ("x=$(kill -0 4242 && kill -9 4242)", KILL_SIG),
+    ("if kill -0 4242 > /etc/hosts; then echo alive; fi", KILL_SIG),   # no plain redirection: read as before
     ("uv run kill -0 4242; npx kill -9 4242", KILL_SIG),
 ]
 
@@ -243,6 +244,10 @@ DD_WRITES = [
     "F=/var/log/app.log\ndd if=$F status=none | sudo dd of=/dev/sda",
     "dd if=/var/log/app.log status=none | head -c 10; mkfs.ext4 /dev/sdb1",
     "exec 3>/dev/sda; dd if=/dev/zero of=/dev/fd/3 status=none | cat",
+    # a dd that writes a file is not the reading dd: the whole-command reading refuses it as before
+    "F=/var/log/app.log\ndd if=$F of=/etc/hosts bs=1M count=1",
+    "F=/var/log/app.log\ndd if=$F bs=1M count=1 status=none > /etc/hosts",
+    "F=/var/log/app.log\ndd if=$F of=/srv/work/copy.bin bs=1M count=1",
 ]
 
 
