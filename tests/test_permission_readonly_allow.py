@@ -486,6 +486,21 @@ def test_now_the_ordinary_forms_run(cmd):
     assert _bash_rules_refuse(cmd) == ""
 
 
+# A program-valued key set to a value that names no program (git_facts.git_config_value_names_no_program): runs.
+# core.fsmonitor=true runs: it starts git's own built-in daemon, no program the command names.
+@pytest.mark.parametrize("cmd", ["git -c core.fsmonitor=false status", "git -C x -c core.fsmonitor= log",
+                                 "git -c core.pager= log", "git -c core.pager=cat log", "git -c pager.log=false log",
+                                 "git -c diff.external= diff", "git -c core.fsmonitor=true status"])
+def test_now_a_value_that_names_no_program_runs(cmd):
+    assert _bash_rules_refuse(cmd) == ""
+
+
+@pytest.mark.parametrize("cmd", ["git -c core.fsmonitor=/tmp/x status", "git -c core.pager=sh log",
+                                 "git -c pager.log=sh log", "git -c diff.external=/tmp/x diff"])
+def test_now_a_value_that_names_a_program_is_refused(cmd):
+    assert "makes it run a program" in _bash_rules_refuse(cmd)
+
+
 @pytest.mark.parametrize("cmd", sorted(NOW_UNDECIDED))
 def test_now_the_undecided_forms_are_pinned(cmd):
     """Pinned so a rule that closes one shows up here (move it to NOW_REFUSED then)."""
