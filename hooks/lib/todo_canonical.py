@@ -25,6 +25,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+# The status values a checklist step may hold.
+TODO_STATUSES = frozenset({'pending', 'in_progress', 'completed'})
+
 
 def _find_todo_script(cmd_name):
     """The harness's canonical todo script (None when it has none) and the

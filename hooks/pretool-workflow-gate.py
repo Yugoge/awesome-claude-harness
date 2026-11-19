@@ -50,6 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import COMPAT_RUNTIME_ENV as CODEX_RUNTIME_ENV, is_subagent  # noqa: E402
+from lib.todo_canonical import TODO_STATUSES  # noqa: E402
 
 CODEX_PLAN_TOOLS = {'update_plan', 'UpdatePlan', 'functions.update_plan'}
 # Tools that only read, which the checklist-not-started lock lets through (OB-L39).
@@ -247,7 +248,7 @@ def codex_plan_matches_canonical(plan: list, canonical: list) -> bool:
         if not isinstance(item, dict):
             return False
         status = item.get('status', 'pending')
-        if status not in {'pending', 'in_progress', 'completed'}:
+        if status not in TODO_STATUSES:
             return False
         step_text = item.get('step') or item.get('content') or item.get('title') or ''
         actual = normalize_step_text(str(step_text))
@@ -283,7 +284,7 @@ def codex_plan_to_todos(plan: list, canonical: list, last: list | None = None) -
             violations.append(f'Step {idx}: plan item is not an object')
             continue
         status = item.get('status', 'pending')
-        if status not in {'pending', 'in_progress', 'completed'}:
+        if status not in TODO_STATUSES:
             violations.append(f'Step {idx}: invalid status "{status}"')
         step_text = item.get('step') or item.get('content') or item.get('title') or ''
         actual = normalize_step_text(str(step_text))
