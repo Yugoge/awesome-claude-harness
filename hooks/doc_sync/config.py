@@ -13,6 +13,21 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path, PurePath
 
+# The names doc-sync leaves out, defined once for every doc-sync module and for
+# hooks/userprompt-doc-sync-check.py, which loads this file by its path (it must not import the
+# doc_sync package, whose __init__ loads every module): so this file imports only the stdlib.
+#
+# File names that are never an entry of a folder document: the folder documents themselves,
+# package markers, and gitignored runtime telemetry (listing it in a tracked INDEX or README
+# would leak it again on the next regeneration).
+SKIP_FILES = frozenset({
+    'INDEX.md', 'README.md', '__init__.py', '.DS_Store',
+    # Runtime telemetry, gitignored (spec-20260518-225715 Cycle 2 P2.3).
+    'agent-scores.json', 'agent-scores.json.lock',
+    # The rating log logs/lifecycle.jsonl (gitignored, untracked) and its lock file.
+    'lifecycle.jsonl', 'lifecycle.jsonl.lock',
+})
+
 # While a PostToolUse event regenerates, a file not yet in the index but not gitignored counts
 # as published: `git add -A` would stage it, so the text written now is the text the tree-wide
 # --check (scripts/regen-folder-docs.py) renders once the change is committed, however many new

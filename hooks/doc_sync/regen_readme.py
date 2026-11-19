@@ -13,7 +13,7 @@ from pathlib import Path
 # the one class object defined in regions, never a second copy.
 try:
     from .extract import extract_description
-    from .config import tracked_names, is_github_reserved_subtree
+    from .config import SKIP_FILES as SKIP_NAMES, tracked_names, is_github_reserved_subtree
     from .folder_doc import write_folder_doc
     from .regions import (
         README_MARKER_ID, RegenStatus, classify_region, marker_close, marker_line_numbers,
@@ -31,6 +31,7 @@ except ImportError:
     _regions = _importlib.import_module("hooks.doc_sync.regions")
     write_folder_doc = _importlib.import_module("hooks.doc_sync.folder_doc").write_folder_doc  # type: ignore[no-redef]
     extract_description = _extract.extract_description  # type: ignore[no-redef]
+    SKIP_NAMES = _config.SKIP_FILES  # type: ignore[no-redef]
     tracked_names = _config.tracked_names  # type: ignore[no-redef]
     is_github_reserved_subtree = _config.is_github_reserved_subtree  # type: ignore[no-redef]
     README_MARKER_ID = _regions.README_MARKER_ID  # type: ignore[no-redef]
@@ -42,14 +43,6 @@ except ImportError:
     marker_close = _regions.marker_close  # type: ignore[no-redef]
 
 
-SKIP_NAMES = {
-    'INDEX.md', 'README.md', '__init__.py', '.DS_Store',
-    # Runtime telemetry — gitignored per spec-20260518-225715 Cycle 2 P2.3;
-    # excluding from the README listing prevents re-leakage on regen.
-    'agent-scores.json', 'agent-scores.json.lock',
-    # The rating log logs/lifecycle.jsonl (gitignored, untracked) and its lock file.
-    'lifecycle.jsonl', 'lifecycle.jsonl.lock',
-}
 SKIP_DIRS = {'__pycache__', '.git', 'node_modules'}
 # Prefix-aware suppression (spec-20260518-225715 Cycle 3 Debt 7 / AC-07):
 # cp-state-*.json and spec-2026*-* artifacts are runtime telemetry / spec

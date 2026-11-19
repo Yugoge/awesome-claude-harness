@@ -9,6 +9,7 @@ from pathlib import Path
 # Debt 7 / AC-07 test).
 try:
     from .extract import extract_description
+    from .config import SKIP_FILES
 except ImportError:
     import importlib as _importlib
     import os as _os
@@ -18,15 +19,8 @@ except ImportError:
         _sys.path.insert(0, _pkg_root)
     _extract = _importlib.import_module("hooks.doc_sync.extract")
     extract_description = _extract.extract_description  # type: ignore[no-redef]
+    SKIP_FILES = _importlib.import_module("hooks.doc_sync.config").SKIP_FILES  # type: ignore[no-redef]
 
-SKIP_FILES = {
-    'INDEX.md', 'README.md', '__init__.py', '.DS_Store',
-    # Runtime telemetry — gitignored per spec-20260518-225715 Cycle 2 P2.3;
-    # excluding from the rendered tree prevents re-leakage on regen.
-    'agent-scores.json', 'agent-scores.json.lock',
-    # The rating log logs/lifecycle.jsonl (gitignored, untracked) and its lock file.
-    'lifecycle.jsonl', 'lifecycle.jsonl.lock',
-}
 IGNORE_DIRS = {
     'node_modules', '.git', '__pycache__', '.venv', 'venv',
     'dist', 'build', '.next', '.cache', 'coverage',

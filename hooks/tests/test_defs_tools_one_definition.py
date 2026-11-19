@@ -145,3 +145,34 @@ def test_one_list_of_spawned_agent_environment_names(name, monkeypatch, tmp_path
                          capture_output=True, text=True, env=dict(os.environ))
     assert run.returncode == 1 and f"{name} is set" in run.stderr, run.stderr
     assert not (tmp_path / "override").exists()
+
+
+# ---------------------------------------------------------------- docsync-skip-files
+def _doc_sync(name: str):
+    sys.path.insert(0, str(ROOT))
+    try:
+        return __import__(f"hooks.doc_sync.{name}", fromlist=["_"])
+    finally:
+        sys.path.pop(0)
+
+
+def test_every_doc_sync_listing_leaves_out_the_same_files(tmp_path, monkeypatch):
+    """The audit's input: a watched folder that holds lifecycle.jsonl. The INDEX statistics
+    (regen_index._build_stats) and the inventory line (patch._count_entries, _build_file_list)
+    counted it; the rendered tree and the README listing left it out."""
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    folder = tmp_path / "hooks"
+    folder.mkdir()
+    for name in ("a.md", "lifecycle.jsonl", "agent-scores.json", "INDEX.md"):
+        (folder / name).write_text("# a\n")
+    entries = 1  # a.md
+    assert _doc_sync("regen_index")._build_stats(folder)["total"] == entries
+    patch = _doc_sync("patch")
+    assert patch._count_entries(folder, False) == entries
+    assert f"({entries} entries)" in patch._build_file_list(folder)
+    assert len(_doc_sync("tree").build_tree(folder)) == entries
+    readme = _doc_sync("regen_readme")
+    assert [n for n in ("a.md", "lifecycle.jsonl", "agent-scores.json") if not readme._is_skipped(n)] == ["a.md"]
+    relay = _hook("userprompt-doc-sync-check.py")
+    assert relay.get_dir_snapshot(folder) == {"a.md"}
+    assert {"lifecycle.jsonl", "agent-scores.json"} <= set(_doc_sync("main").SKIP_FILES)

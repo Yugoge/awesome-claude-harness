@@ -2,6 +2,7 @@
 """Patch CLAUDE.md dynamic sections using AUTO markers."""
 
 from pathlib import Path
+from .config import SKIP_FILES
 from .docker import build_docker_table
 from .regions import (
     ArtifactKind, RegenRecord, RegenStatus, RegionShape, classify_region, replace_region,
@@ -25,7 +26,7 @@ def _replace_section(content: str, marker_id: str, new_body: str) -> str:
 def _count_entries(subdir_path: Path, is_skills: bool) -> int:
     if is_skills:
         return len([dd for dd in subdir_path.iterdir() if dd.is_dir() and not dd.name.startswith('.')])
-    return len([f for f in subdir_path.iterdir() if f.is_file() and f.name not in ('INDEX.md', 'README.md', '__init__.py', '.DS_Store')])
+    return len([f for f in subdir_path.iterdir() if f.is_file() and f.name not in SKIP_FILES])
 
 
 def _format_inventory_line(subdir: str, count: int) -> str:
@@ -53,7 +54,7 @@ def _build_file_list(dir_path: Path) -> str:
         return ''
     files = [
         f for f in dir_path.iterdir()
-        if f.is_file() and f.name not in ('INDEX.md', 'README.md', '__init__.py', '.DS_Store')
+        if f.is_file() and f.name not in SKIP_FILES
     ]
     rel = dir_path.name
     return f'See `.claude/{rel}/INDEX.md` ({len(files)} entries)'

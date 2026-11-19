@@ -8,7 +8,7 @@ from pathlib import Path
 from .regen_index import regen_index
 from .regen_readme import regen_readme
 from .patch import patch_claude_md
-from .config import counting_untracked, work_tree_root
+from .config import SKIP_FILES, counting_untracked, work_tree_root
 from .notice import emit_post_tool_notice
 from .regions import (
     INDEX_MARKER_ID, README_MARKER_ID, ArtifactKind, RegenRecord, RegenStatus, RegionShape,
@@ -31,7 +31,6 @@ IGNORE_DIRS = {
     'node_modules', '.git', '__pycache__', '.venv', 'venv',
     'dist', 'build', '.next', '.cache', 'coverage',
 }
-SKIP_FILES = {'INDEX.md', 'README.md', '__init__.py', '.DS_Store'}
 EXCLUDED_PATTERNS = (
     '.claude/commands/scripts/',
     '.claude/worktrees/',
