@@ -452,6 +452,7 @@ SUBST_OPENERS = ("$(", "<(", ">(")  # open a command or process substitution (so
 # operand as shell text in this or a new shell.
 COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
 SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
+DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 # Environment variables whose VALUE is executed by the command that follows
 # them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
 # a fixture-pinned safe row -- but these named vectors are documented command
@@ -3263,8 +3264,7 @@ _PKG_MANAGERS = frozenset({
 })
 
 
-def write_targets(script, *, into=("cmdsub", "backtick", "procsub", "heredoc_shell",
-                                   "pipe_shell", "shell_c", "eval", "exec_argv"), env=None):
+def write_targets(script, *, into=_DEFAULT_INTO, env=None):
     """Every path ``script`` writes, from redirections and from the VERBS table.
 
     An assignment earlier in the same list (`X=/p; ... > $X`) projects into a

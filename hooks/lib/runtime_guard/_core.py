@@ -2909,7 +2909,7 @@ def _pm_global_args(args: list, depth: int = 0, pm: Optional[str] = None) -> boo
     return False
 
 
-_PM_ENV_SETTERS = frozenset({"export", "declare", "typeset", "local", "readonly"})
+_PM_ENV_SETTERS = _sp.DECLARATION_BUILTINS
 
 
 def _p7_global_env(command: str) -> Optional[Verdict]:

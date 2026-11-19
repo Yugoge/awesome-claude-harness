@@ -1653,7 +1653,7 @@ class _ConsentView:
             for a in cmd.assignments:
                 self._define(a.name, a)
             r = sp.resolve(cmd)
-            if r.name in ("export", "declare", "typeset", "local", "readonly"):
+            if r.name in sp.DECLARATION_BUILTINS:
                 for w in r.args:
                     m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?\+?=", w.raw.text)
                     if m:
@@ -6852,13 +6852,13 @@ def _sd_glob_hit(word, env=None):
 
 def _sd_env(sites):
     """name -> the literal values the command assigns it anywhere (plain assignments and export/declare/local)."""
-    from lib.shell_parse import Assignment, resolve
+    from lib.shell_parse import DECLARATION_BUILTINS, Assignment, resolve
     env = {}
     for site in sites:
         found = list(site.cmd.assignments)
         try:
             res = resolve(site.cmd)
-            if res.name in ("export", "declare", "typeset", "local", "readonly"):
+            if res.name in DECLARATION_BUILTINS:
                 found += [Assignment(w) for w in res.args if "=" in w.text]
         except Exception:  # noqa: BLE001
             pass
@@ -7229,7 +7229,7 @@ def _sd_output_safety(script, traced=False):
 
 def _sd_redefines(site):
     """True when this command can change which program a later search or commit call runs, or what it reads."""
-    from lib.shell_parse import resolve
+    from lib.shell_parse import DECLARATION_BUILTINS, resolve
     cmd = site.cmd
     try:
         res = resolve(cmd)
@@ -7239,7 +7239,7 @@ def _sd_redefines(site):
     if any(n in _SD_DEFINERS for n in names):
         return True
     texts = [a.word.text for a in cmd.assignments] + [a.word.text for a in res.assignments]
-    if res.name in ("export", "declare", "typeset", "readonly", "local", "set", "env"):
+    if res.name in DECLARATION_BUILTINS + ("set", "env"):
         texts += [w.value() or w.text for w in res.args]
     return any(_SD_VARIABLE.match(t.lstrip("'\"")) for t in texts)
 

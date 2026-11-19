@@ -91,6 +91,8 @@ CASES = [
     ("exec-env-variables", "PAGER='{}' man ls", ("gp", "bs", "ui")),
     ("shell-state-builtins", "trap '{}' EXIT", ("gp", "bs", "tp")),
     ("shell-state-builtins", "function f { {}; }; f", ("gp", "bs", "tp")),
+    # write_targets walks into an alias's body as walk does
+    ("shell-state-builtins", "alias g='{}'; g", ("gp", "bs", "tp")),
 ]
 
 

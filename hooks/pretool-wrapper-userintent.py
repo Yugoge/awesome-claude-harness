@@ -590,8 +590,7 @@ class _Scan:
                 continue
             if v.startswith('PATH=') or v.startswith('PATH+='):
                 self.path_assigned = True
-            if (v.startswith('CDPATH=') and v != 'CDPATH=') and res.name in (
-                    'export', 'declare', 'typeset', 'local', 'readonly'):
+            if (v.startswith('CDPATH=') and v != 'CDPATH=') and res.name in _sp.DECLARATION_BUILTINS:
                 self.cdpath = True
             if not reader:
                 self.others.append((w, v))
@@ -1692,7 +1691,7 @@ class _Scan:
             if a.name == 'RIPGREP_CONFIG_PATH':
                 self.rgconf.append(a.value)
             self._pager_assign(a)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+        if res.name in _sp.DECLARATION_BUILTINS:
             for w in res.args:
                 if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''):
                     a = _sp.Assignment(w)
@@ -1721,7 +1720,7 @@ class _Scan:
         cmd = site.cmd
         res = self.res[id(site)]
         assigns = list(cmd.assignments) + list(res.assignments)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+        if res.name in _sp.DECLARATION_BUILTINS:
             assigns.extend(_sp.Assignment(w) for w in res.args
                            if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''))
         for a in assigns:
@@ -2216,7 +2215,7 @@ class _Scan:
         for site in self.sites:
             cmd, res = site.cmd, self.res[id(site)]
             assigns = list(cmd.assignments) + list(res.assignments)
-            if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+            if res.name in _sp.DECLARATION_BUILTINS:
                 assigns.extend(_sp.Assignment(w) for w in res.args
                                if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''))
             for a in assigns:
@@ -3189,7 +3188,7 @@ class _Scan:
         res = self.res[id(site)]
         inert = self._inert(cmd)
         assigns = list(cmd.assignments) + list(res.assignments)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly', 'env'):
+        if res.name in _sp.DECLARATION_BUILTINS + ('env',):
             for w in res.args:
                 if _sp._ASSIGN_PARTS_RE.match(w.raw.text):
                     assigns.append(_sp.Assignment(w))
