@@ -707,7 +707,13 @@ _PROOF_WRITERS = frozenset({'cp', 'mv', 'install', 'tee', 'rm', 'rmdir', 'unlink
 _PROOF_WRAPPERS = frozenset({'env', 'timeout', 'nice', 'command', 'exec', 'setsid'})
 # Variables a prefix assignment (`LC_ALL=C cp ...`) may set: none of them moves a directory, names a
 # program to run, or changes where a command is looked up.
-_SAFE_VARS = re.compile(r'(?:LC_[A-Z]+|LANG|LANGUAGE|TZ|TERM|COLUMNS|LINES|NO_COLOR)\Z')
+
+
+def _safe_var(sp, name: str) -> bool:
+    """shell_parse's inert variables but the directory ones (PWD, OLDPWD, TMPDIR), and any locale LC_*."""
+    return name in sp.INERT_ENV_VARS - sp.DIR_ENV_VARS or bool(re.fullmatch(r'LC_[A-Z]+', name))
+
+
 _FIND_ACTIONS = frozenset({'-exec', '-execdir', '-ok', '-okdir', '-delete', '-fprint', '-fprint0',
                            '-fprintf', '-fls'})
 _UNSAFE_TARGET_CHARS = re.compile(r'[$`*?\[\]{}!]')
@@ -1011,7 +1017,7 @@ def _proven_harmless(command: str, start: str) -> bool:
         if assigns and res.head is None:
             return False  # a variable set for the rest of the command
         for a in assigns:
-            if not _SAFE_VARS.match(a.name or '') or a.static_value() is None:
+            if not _safe_var(sp, a.name or '') or a.static_value() is None:
                 return False
         for wname, opts in res.wrappers:
             if wname not in _PROOF_WRAPPERS or (wname == 'env' and any(
