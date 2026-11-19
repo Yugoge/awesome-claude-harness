@@ -2682,6 +2682,13 @@ def resolve(cmd, depth=None):
             return r
         if name == "find":
             return _resolve_find(r, head, words, cmd, depth)
+        if name == "runuser" and not _has_c(words):
+            # runuser -u USER [--] COMMAND [ARG...] runs COMMAND as USER, with no shell
+            opts, rest, err = split_options(words, PEEL["runuser"][0], 1)
+            if rest and any(o in ("-u", "--user") for o, _v in opts):
+                r.wrappers.append((name, opts))
+                words = rest
+                continue
         if name in ("su", "runuser", "sg") and not _has_c(words):
             r.head = head
             r.args = tuple(words[1:])
