@@ -2465,6 +2465,21 @@ class TestFanoutCollectionCheck:
         assert (f"| reached by: dispatching again the dev dispatch that declared "
                 f"docs/dev/dev-report-{BARE_TID}-l1.json (lane l1)") in result.stderr
 
+    @pytest.mark.parametrize("wrong", ["l1", "l2"])
+    def test_lanes_whose_heads_differ_refuse_qa_naming_both_lanes_and_the_reason(self, project_dir, tmp_path, wrong):
+        # W1: which of two differing reports is wrong no lane can know; the main agent decides, told both lanes.
+        dev_dir = project_dir / "docs" / "dev"
+        for lane in ("l1", "l2"):
+            self._lane(dev_dir, BARE_TID, lane, ["l1", "l2"])
+        path = dev_dir / f"dev-report-{BARE_TID}-{wrong}.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "baseline_head_sha": "f" * 40}))
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l2", "block")
+        assert result.returncode == 2
+        heads = ("f" * 40, "abc123def456") if wrong == "l2" else ("abc123def456", "f" * 40)
+        assert (f"is missing; its producer, scripts/aggregate-dev-report.py, refuses: shard 'l2': baseline_head_sha "
+                f"'{heads[0]}' != first shard '{heads[1]}' (lanes l1 and l2 differ; dispatch again the one that is "
+                "wrong)") in result.stderr
+
     def test_canonical_that_misses_a_lane_is_stale(self, project_dir, tmp_path):
         dev_dir = project_dir / "docs" / "dev"
         for lane in ("l1", "l2", "l3"):

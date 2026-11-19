@@ -288,9 +288,8 @@ def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
                 refused = g3.own_refusal(every, label)
                 if code == "canonical_missing" and (refused or not every and newest):
                     findings.append({"path": report_rel, "reason": code, "errors": [
-                        f"{os.path.relpath(path, project_dir)} is missing: its producer, scripts/aggregate-dev-report.py, "
-                        f"refuses this report: {'; '.join(refused)}. Correct that in this report with Edit, which "
-                        "runs the producer again, then stop again." if refused else
+                        f"{os.path.relpath(path, project_dir)} is missing: scripts/aggregate-dev-report.py refuses this report: "
+                        f"{'; '.join(refused)}. Correct that with Edit, which runs it again, then stop again." if refused else
                         f"{os.path.relpath(path, project_dir)}: {problem}. Its producer, hooks/posttool-lane-completeness-watch.py, "
                         "runs on a lane report's Write or Edit, and this report, the fan-out's newest, reached disk another "
                         "way: Read it, save it again with Edit (its timestamp), then stop again."]})
