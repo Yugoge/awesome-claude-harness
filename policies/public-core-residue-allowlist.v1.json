@@ -44,7 +44,7 @@
     },
     {
       "path": "docs/ENFORCEMENT-LEDGER.md",
-      "fingerprint": "7c973392b7f18a07",
+      "fingerprint": "217c937abda8dfdc",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "H-027 ledger row quoting, verbatim, the synthetic local-file-URL commands the bash-safety sensitive-name tests feed the hook; prose, never read as a path at runtime."
