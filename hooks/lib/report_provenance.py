@@ -360,8 +360,9 @@ def _previous_main_call_writes(reading: dict, call, root: str, rel: str) -> bool
         return False
     name, tool_input, _ts = reading["calls"][order[-1]]
     want = os.path.normpath(os.path.join(root, rel))
+    from lib.spec_path import EDIT_TOOLS  # the tools that name their target in file_path
     targets = []
-    if name in ("Write", "Edit", "MultiEdit"):
+    if name in EDIT_TOOLS:
         targets = [tool_input.get("file_path")]
     elif name == "NotebookEdit":
         targets = [tool_input.get("notebook_path")]

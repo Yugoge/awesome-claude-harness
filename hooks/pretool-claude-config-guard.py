@@ -50,6 +50,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib import bash_read_only  # noqa: E402 -- the one list of the programs that only read
 from lib import locations  # noqa: E402
+from lib.harness_vocabulary import WRITE_TOOLS  # noqa: E402
 
 
 SENTINEL_NAME = '.hook-refactor-allow'
@@ -1238,7 +1239,7 @@ def _evaluate_bash(tool_input: dict, data: dict) -> None:
 
 def _evaluate(tool_name: str, tool_input: dict, data: dict) -> None:
     """Dispatch evaluation by tool_name."""
-    if tool_name in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
+    if tool_name in WRITE_TOOLS:
         _evaluate_write_edit(tool_name, tool_input, data)
     elif tool_name == 'Bash':
         _evaluate_bash(tool_input, data)

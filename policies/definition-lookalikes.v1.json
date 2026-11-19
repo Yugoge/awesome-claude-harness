@@ -2922,6 +2922,27 @@
      }
     ]
    ]
+  },
+  {
+   "id": "write-tools-vs-file-path-tools",
+   "source": "defs-tools lane, check group on integration edc54b6e7",
+   "reason": "harness_vocabulary.WRITE_TOOLS asks which tools write a file (the write gate's rules, tool-policy's role rows, the cp-state, config and switch guards), NotebookEdit included; spec_path.EDIT_TOOLS asks which tool calls name their target in tool_input.file_path: spec_path reads it to find the last write of a spec monolith (a markdown file, which NotebookEdit cannot write), report_provenance to find the main agent's previous file write, with NotebookEdit's notebook_path on a branch of its own. Different questions: adding NotebookEdit to EDIT_TOOLS would read file_path from a call that does not send it.",
+   "sides": [
+    [
+     {
+      "name": "<module>.WRITE_TOOLS",
+      "fingerprint": "95d7e6945ed2d49b",
+      "at": "hooks/lib/harness_vocabulary.py:18"
+     }
+    ],
+    [
+     {
+      "name": "<module>.EDIT_TOOLS",
+      "fingerprint": "d8533eb90bdb17ea",
+      "at": "hooks/lib/spec_path.py:21"
+     }
+    ]
+   ]
   }
  ]
 }
