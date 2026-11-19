@@ -1717,7 +1717,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
         if head in RUNTIMES:
             return _block("STEP1", "indeterminate policy: runtime launch")
         # package runners
-        if head in ("npx", "bunx"):
+        if head in _PM_EXEC_RUNNERS:
             return _block("STEP1", "indeterminate policy: package runner")
         # ── HEAD-AGNOSTIC fail-closed tail scan ──────────────────────────────
         # Behind a novel exec front-end (an undocumented process/exec wrapper) the
@@ -1756,7 +1756,7 @@ def _step1_indeterminate(simple_cmds: list) -> Verdict:
                 return _block("STEP1", "indeterminate policy: build tool (tail)")
             if any(b in RUNTIMES for b in exec_bases):
                 return _block("STEP1", "indeterminate policy: runtime launch (tail)")
-            if any(b in ("npx", "bunx") for b in exec_bases):
+            if any(b in _PM_EXEC_RUNNERS for b in exec_bases):
                 return _block("STEP1", "indeterminate policy: package runner (tail)")
     return ALLOW
 
@@ -2132,7 +2132,7 @@ def _package_runner_invocation(head: str, rest: list):
     (not 'typescript'). Returns (None, []) if not a runner form / no target.
     """
     toks = None
-    if head in ("npx", "bunx"):
+    if head in _PM_EXEC_RUNNERS:
         toks = rest
     elif head in PKG_MANAGERS:
         i = 0
@@ -3148,7 +3148,7 @@ def _p8_explicit_protected_path(simple_cmds: list, cfg: dict, cwd_base: Optional
 def _tokens_after_runner_target(head: str, rest: list) -> list:
     """Tokens following the package-runner's target command word (e.g. after
     `tsc` in `pnpm exec tsc -p <path>`)."""
-    if head in ("npx", "bunx"):
+    if head in _PM_EXEC_RUNNERS:
         toks = rest
     elif head in PKG_MANAGERS:
         toks = None
@@ -3766,7 +3766,7 @@ def _runner_call_payloads(simple_cmds: list, cfg: Optional[dict] = None,
         _, head, rest = cw[0]
         # locate the runner argv (after npx/bunx, or after exec/dlx/x for a PM)
         runner_args = None
-        if head in ("npx", "bunx"):
+        if head in _PM_EXEC_RUNNERS:
             runner_args = rest
         elif head in PKG_MANAGERS:
             for i, t in enumerate(rest):
@@ -4722,7 +4722,7 @@ def _anchor_build_hits_protected(tokens: list, exec_toks: list, cfg: dict,
     bases = [os.path.basename(st) for _i, st in exec_toks]
     pm_present = any(b in PKG_MANAGERS for b in bases)
     buildtool_present = any(b in BUILD_TOOL_BASENAMES for b in bases)
-    runner_present = any(b in ("npx", "bunx") for b in bases)
+    runner_present = any(b in _PM_EXEC_RUNNERS for b in bases)
     has_build_verb = any(st == "build" for _i, st in exec_toks)
     # A build is indicated by: a bare build tool, OR a pm/runner with a 'build'
     # verb, OR a package-runner invoking a build tool.
