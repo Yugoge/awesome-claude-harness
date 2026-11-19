@@ -20,8 +20,7 @@ and ``None`` issue none.
 
 A passing check is NOT proof of ownership. A failing check is NOT a report of
 a clash with another claimant. The vocabulary below is provably disjoint from
-the ownership namespace, and ``gate_vocabulary()`` derives that vocabulary by
-introspection so the disjointness test cannot drift from the implementation.
+the ownership namespace.
 
 THE WITNESS ADMISSIBILITY RULE (the reason this file exists)
 ------------------------------------------------------------

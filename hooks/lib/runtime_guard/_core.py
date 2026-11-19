@@ -1650,8 +1650,8 @@ def _step0_self_protection(ctx: "Context") -> Optional[Verdict]:
         # config path — so `<any-wrapper> cp|mv|tee|truncate|dd|install|rsync|ln|
         # sed -i|perl -i|chmod|chown <datafile>` BLOCKS even though the leading head
         # is the wrapper, not the mutation verb. (The bare-head form is the
-        # position-0 special case of the same scan; the legacy head-keyed
-        # CONFIG_MUTATION_HEADS check is subsumed by this and removed.)
+        # position-0 special case of the same scan, which subsumes the former
+        # head-keyed check.)
         if _step0_mutation_anchor_hits(ctx, idx, sc, tokens):
             return _block("STEP0", "config self-protection: mutation of data file")
     return None
