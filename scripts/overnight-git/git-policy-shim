@@ -355,20 +355,6 @@ _obp_operand_names() {
   done
 }
 
-# True iff any argv token denotes a branch in the RESOLVED protected set.
-_mentions_protected() {
-  local a name
-  for a in "$@"; do
-    while IFS= read -r name; do
-      [ -n "$name" ] || continue
-      _obp_is_protected "$name" && return 0
-    done <<EOF
-$(_obp_operand_names "$a")
-EOF
-  done
-  return 1
-}
-
 # The single branch-protection decision seam. Emits the structured denial and
 # exits; returns normally when the operand set carries no protected name.
 # Fail-closed (M4): an unresolvable protected set blocks the ref-affecting op

@@ -45,7 +45,6 @@ DOUBLE = "double"
 ANSI_C = "ansi_c"
 LOCALE = "locale"
 ESCAPED = "escaped"
-QUOTES = (BARE, SINGLE, DOUBLE, ANSI_C, LOCALE, ESCAPED)
 
 MAX_DEPTH = 24
 MAX_LEN = 262_144
@@ -433,7 +432,6 @@ class Redir:
 # ---------------------------------------------------------------------------
 
 _OP_CHARS = ";&|()"
-_WORD_BREAK = " \t\n" + _OP_CHARS + "<>"
 _OPS = (";;&", ";;", ";&", "&&", "||", "|&", ";", "&", "|", "(", ")")
 _REDIR_OPS = ("<<-", "<<<", "<<", ">>", "<>", ">&", "<&", ">|", ">", "<")
 BOTH_STREAMS_OPS = ("&>>", "&>")  # redirect stdout and stderr together (they take no fd)
@@ -2556,13 +2554,6 @@ SHELLS = frozenset({"bash", "sh", "zsh", "dash", "ksh", "ksh93", "mksh", "ash", 
 # A command shaped like a shell (`*sh`, `*sh93`) that SHELLS does not name, given
 # a -c option, is read as a shell, and its reading is unresolved.
 _SHELL_LIKE_RE = re.compile(r"[a-z]*sh[0-9.]*")
-SHELL_SPEC = _spec(("-e", "-x", "-u", "-v", "-n", "-f", "-h", "-k", "-m", "-p", "-t",
-                    "-a", "-b", "-B", "-C", "-E", "-H", "-P", "-T", "-i", "-l", "-r", "-s",
-                    "+e", "+x", "+u", "+v", "+f", "+h", "+m", "+B", "+H", "+o", "+O",
-                    "--login", "--noprofile", "--norc", "--posix", "--restricted",
-                    "--noediting", "--verbose", "--debugger", "--dump-strings",
-                    "--dump-po-strings", "--help", "--version", "-c"),
-                   ("-o", "-O", "--rcfile", "--init-file"))
 # su and runuser (util-linux --help): runuser adds -u/--user; -c, --command and
 # --session-command pass the command to the shell.
 SU_COMMAND_OPTS = COMMAND_OPTS + ("--session-command",)

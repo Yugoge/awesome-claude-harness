@@ -754,11 +754,6 @@ def _effective_cwd_after(simple_cmds: list, upto_index: int, cwd_base: Optional[
     return cwd, determinate
 
 
-CONFIG_MUTATION_HEADS = frozenset({
-    "cp", "mv", "rm", "tee", "truncate", "dd", "install", "ln", "chmod",
-    "chown", "chgrp", "rename", "rsync", "shred", "unlink",
-})
-
 
 # Config-self-protection mutation-verb basenames recognized in EXECUTABLE
 # position behind ANY wrapper. The SAME filesystem-mutation family the W6/W7

@@ -687,16 +687,6 @@ def verdict(session_id: str, project_dir, rel: str, session_transcript=None, age
     return None
 
 
-def held_by_main(session_id: str, project_dir, rel: str, session_transcript=None) -> bool:
-    """verdict() == "main"; an untrustworthy ledger counts as the main agent's."""
-    try:
-        return verdict(session_id, project_dir, rel, session_transcript) == MAIN
-    except LedgerError:
-        return True
-    except Exception:
-        return False
-
-
 def own_write(transcript_path, project_dir, rel: str) -> bool:
     """The agent's own transcript shows a Write of ``rel`` with an ok result whose content is
     the report's current content: the agent authored exactly these bytes. A Bash command,
