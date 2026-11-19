@@ -87,11 +87,13 @@ def test_git_readonly_subcmds():
 # ── dict tables: type + shape ────────────────────────────────────────────────
 
 def test_wrapper_opts_with_arg_is_dict():
-    assert isinstance(constants._WRAPPER_OPTS_WITH_ARG, dict)
+    # The table is read from shell_parse's wrapper specs by _core (one definition).
+    from lib.runtime_guard import _core
+    assert isinstance(_core._WRAPPER_OPTS_WITH_ARG, dict)
     # timeout consumes `-s`/`--signal`/`-k`/`--kill-after` as value options.
-    assert "timeout" in constants._WRAPPER_OPTS_WITH_ARG
-    assert isinstance(constants._WRAPPER_OPTS_WITH_ARG["timeout"], frozenset)
-    assert "--signal" in constants._WRAPPER_OPTS_WITH_ARG["timeout"]
+    assert "timeout" in _core._WRAPPER_OPTS_WITH_ARG
+    assert isinstance(_core._WRAPPER_OPTS_WITH_ARG["timeout"], frozenset)
+    assert "--signal" in _core._WRAPPER_OPTS_WITH_ARG["timeout"]
 
 
 def test_exec_frontend_profiles_shape():

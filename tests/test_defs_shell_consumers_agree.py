@@ -97,6 +97,10 @@ CASES = [
     ("exec-wrappers", "cpulimit -l 5 {}", ("gp", "bs", "tp")),
     ("exec-wrappers", "tsp {}", ("gp", "bs", "tp")),
     ("exec-wrappers", "ssh-agent {}", ("gp", "bs", "tp")),
+    # one option spec per wrapper (shell_parse), read by the runtime guard too
+    ("wrapper-option-specs", "systemd-run --on-startup V {}", ("gp", "bs", "tp")),
+    ("wrapper-option-specs", "systemd-run -H V {}", ("gp", "bs", "tp")),
+    ("wrapper-option-specs", "sudo -U V {}", ("gp", "bs", "tp")),
     ("exec-env-variables", "GIT_PAGER='{}' git -p log", ("gp", "bs", "ui")),
     ("exec-env-variables", "PAGER='{}' man ls", ("gp", "bs", "ui")),
     ("shell-state-builtins", "trap '{}' EXIT", ("gp", "bs", "tp")),

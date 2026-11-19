@@ -18,31 +18,6 @@ ENV_WRAPPERS = frozenset({
     "stdbuf", "nice", "ionice", "setsid", "systemd-run", "daemonize",
     "chrt", "taskset", "setarch", "eatmydata", "exec",
 })
-# `exec [-cl] [-a name] command` — only -a consumes an operand; -c/-l do not.
-_EXEC_OPTS_WITH_ARG = frozenset({"-a"})
-# Wrapper -> set of options that consume ONE following operand (value).
-_WRAPPER_OPTS_WITH_ARG = {
-    "timeout": frozenset({"-s", "--signal", "-k", "--kill-after"}),
-    "nice": frozenset({"-n", "--adjustment"}),
-    "ionice": frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid"}),
-    "stdbuf": frozenset({"-i", "-o", "-e"}),
-    "systemd-run": frozenset({
-        "--unit", "-u", "--property", "-p", "--slice", "--description",
-        "--on-active", "--on-calendar", "--uid", "--gid", "--setenv", "-E",
-        "--working-directory", "--service-type", "--nice", "-H", "--host",
-        "-M", "--machine", "--on-boot", "--on-startup", "--on-unit-active",
-        "--on-unit-inactive", "--timer-property",
-        # NOTE: -d/--scope/-G/--pty/-t/--quiet are NO-ARG (must NOT consume an
-        # operand); they are intentionally absent here.
-    }),
-    "chrt": frozenset({"-p"}),
-    "taskset": frozenset({"-p", "-c", "--cpu-list"}),
-    "setarch": frozenset(),
-    "env": frozenset({"-C", "--chdir", "-u", "--unset", "-S", "--split-string"}),
-    "doas": frozenset({"-u", "-C"}),
-    "sudo": frozenset({"-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-p", "--prompt", "-U", "--other-user", "-r", "--role", "-t", "--type"}),
-    "exec": _EXEC_OPTS_WITH_ARG,
-}
 # Wrappers that take ONE leading positional operand before the real command
 # word: timeout DURATION; chrt PRIORITY; taskset MASK; setarch ARCH. For
 # chrt/taskset the operand may instead be supplied via a value option

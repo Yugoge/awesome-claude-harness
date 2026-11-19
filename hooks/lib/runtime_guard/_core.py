@@ -70,11 +70,9 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
         SERVICE_VERBS,
-        _EXEC_OPTS_WITH_ARG,
         _GIT_READONLY_SUBCMDS,
         _RUNTIME_SUBCOMMANDS,
         _WRAPPER_LEADING_POSITIONAL,
-        _WRAPPER_OPTS_WITH_ARG,
         _WRAPPER_POSITIONAL_OPTIONAL,
     )
 except ImportError:  # executed as a top-level script (no package context)
@@ -91,11 +89,9 @@ except ImportError:  # executed as a top-level script (no package context)
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
         SERVICE_VERBS,
-        _EXEC_OPTS_WITH_ARG,
         _GIT_READONLY_SUBCMDS,
         _RUNTIME_SUBCOMMANDS,
         _WRAPPER_LEADING_POSITIONAL,
-        _WRAPPER_OPTS_WITH_ARG,
         _WRAPPER_POSITIONAL_OPTIONAL,
     )
 
@@ -2620,6 +2616,10 @@ def _pm_global_setting(name: str, value: Optional[str]) -> bool:
     return False
 
 
+# Wrapper -> the options that take the next word as their value: read from the
+# shared parser's option specs (shell_parse.WRAPPERS / PEEL), one per wrapper.
+_WRAPPER_OPTS_WITH_ARG = {name: frozenset((_sp.WRAPPERS.get(name) or _sp.PEEL[name])[0]["val"])
+                          for name in ENV_WRAPPERS}
 # Runtime flags that consume one following value (so the script positional is
 # not mistaken for the value, and a value is not mistaken for the script): node's
 # (shell_parse.NODE_VALUE_OPTIONS and the short -r, -C) and tsx's --tsconfig.
