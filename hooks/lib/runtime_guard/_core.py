@@ -797,23 +797,8 @@ def _is_inplace_editor_args(head: str, args: list) -> bool:
 # by the bareword `startswith("-")` filter), so only the SEPARATED forms need the
 # next-token skip. This is the GENERAL fix for the flag-value-collision class: a
 # trailing `cp SRC <protected-dest> -S .bak` must not let `.bak` become the dest.
-_VALUE_OPTS = {
-    "cp": {"-S", "--suffix", "-t", "--target-directory", "--preserve",
-           "-Z", "--context", "--sparse", "--reflink"},
-    "mv": {"-S", "--suffix", "-t", "--target-directory"},
-    "rename": {"-S", "--suffix", "-t", "--target-directory"},
-    "install": {"-S", "--suffix", "-t", "--target-directory", "-m", "--mode",
-                "-o", "--owner", "-g", "--group", "-Z", "--context",
-                "--strip-program", "-D"},
-    "ln": {"-S", "--suffix", "-t", "--target-directory"},
-    "rsync": {"-e", "--rsh", "--files-from", "--include", "--exclude",
-              "--include-from", "--exclude-from", "--filter", "--log-file",
-              "--password-file", "--backup-dir", "--temp-dir", "--partial-dir",
-              "--compare-dest", "--copy-dest", "--link-dest", "--rsync-path",
-              "--chmod", "--out-format", "--bwlimit", "--timeout",
-              "--modify-window", "--max-size", "--min-size", "--block-size",
-              "--sockopts", "--protocol", "--checksum-choice", "--info", "--debug"},
-}
+_VALUE_OPTS = {name: frozenset(_sp.VERBS[name][0]["val"]) for name in ("cp", "mv", "install", "ln", "rsync")}
+_VALUE_OPTS["rename"] = _VALUE_OPTS["mv"]  # read with mv's options (tdir_verbs)
 
 
 def _operands_and_tdir(head: str, args: list):

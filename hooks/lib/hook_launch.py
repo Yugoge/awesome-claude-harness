@@ -84,17 +84,9 @@ HOOKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_TIMEOUT = 60.0          # the CLI's default hook timeout, seconds
 RECORD_ENV = "CLAUDE_HOOK_LAUNCH_RECORD_FD"
 MARK_ENV = "CLAUDE_HOOK_LAUNCH_MARKS"  # a traced replay's marker directory (tests/replay/trace.py)
-TOOL_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"})
+from lib.hook_launch_fallback import TOOL_EVENTS  # noqa: E402 -- the stdlib-only fallback holds the one list
 PLAIN_CONTEXT_EVENTS = frozenset({"UserPromptSubmit", "SessionStart"})
 TIMEOUT = "timeout"             # a hook's status when it ran past its timeout
-# Standard-library modules imported once before the forks, so each fork does not import them again:
-# pkgutil is the runner's own (runpy.run_path imports it for every file); pathlib (most hooks, through
-# their libraries), datetime and shlex are what the hooks import most. Their import runs only their own
-# definitions (no file, environment, working directory, signal or other module of the process changes),
-# and the one-after-another run already gave every hook after the first that imports one the module
-# loaded, so a fork that finds one loaded decides and prints as the hook did alone. Never a harness
-# module (hooks/, scripts/): a hook's library must load in the hook's own fork.
-WARM = ("pkgutil", "pathlib", "datetime", "shlex")
 
 
 @dataclass(frozen=True)
@@ -309,7 +301,7 @@ class Dispatch:
             from lib import rule_fork
             if not rule_fork.can_fork():
                 return False
-            for name in WARM:
+            for name in rule_fork.WARM:
                 __import__(name)
             index = {r.name: i for i, r in enumerate(self.rules)}
             jobs = [rule_fork.Job(r.file, self.raw, r.timeout,
@@ -352,6 +344,7 @@ class Dispatch:
         self.record()
         _write(self.real[0], out)
         _write(self.real[1], err)
+        refused(self.event, done, self.raw, code)
         from lib.rule_runner import _REAL_OS_EXIT
         _REAL_OS_EXIT(code)
 
@@ -388,6 +381,19 @@ def _write(fd, text: str) -> None:
         data = data[n:]
 
 
+def refused(event: str, results, raw: bytes, code) -> None:
+    """A report to the refusal record (lib/refusal_record.py) when the answer is a refusal: each refusing hook
+    with its own reason, as ``combine`` reads that hook alone. Nothing here changes the answer."""
+    if code != 2:
+        return
+    try:
+        from . import refusal_record
+        rules = [(r.rule.file, alone[2]) for r in results for alone in [combine(event, [r])] if alone[0] == 2]
+        refusal_record.report(raw, rules, os.path.join(HOOKS, os.path.basename(sys.argv[0])))
+    except Exception:
+        pass
+
+
 def record_fd():
     """The descriptor the replay runner asked the results on, taken out of the environment."""
     value = os.environ.pop(RECORD_ENV, "")
@@ -417,4 +423,5 @@ def main(event: str, rules, raw: bytes | None = None) -> int:
     d.record()
     _write(1, out)
     _write(2, err)
+    refused(event, d.results, raw, code)
     return code

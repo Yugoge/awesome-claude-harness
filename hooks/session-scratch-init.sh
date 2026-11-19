@@ -42,13 +42,11 @@ if [ -z "$SID" ]; then
 fi
 
 # Charset guard: SID becomes a literal path component below and must never
-# carry a path separator or traversal sequence.
-case "$SID" in
-  */*|*..*)
-    echo "session-scratch-init: unsafe session id '$SID' — skipping" >&3
-    exit 0
-    ;;
-esac
+# carry a path separator or traversal sequence: the one rule of hooks/lib/scratch_owner.py.
+if ! python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/scratch_owner.py" --safe-sid "$SID" 2>/dev/null; then
+  echo "session-scratch-init: unsafe session id '$SID' — skipping" >&3
+  exit 0
+fi
 
 mkdir -p "$ROOT" 2>/dev/null || { echo "session-scratch-init: cannot create root $ROOT" >&3; exit 0; }
 chmod 1777 "$ROOT" 2>/dev/null || true
@@ -89,6 +87,13 @@ with open(sys.argv[6], 'w') as fh:
 else
   echo "session-scratch-init: failed to write .owner for $SID" >&3
   rm -f "$TMP_OWNER" 2>/dev/null || true
+fi
+
+# The session's programs keep their temp files here, the main agent's own scratch (pytest's
+# basetemp root included): the CLI runs each Bash command after sourcing CLAUDE_ENV_FILE.
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+  printf 'export TMPDIR=%q\n' "$SESSION_DIR" >> "$CLAUDE_ENV_FILE" \
+    || echo "session-scratch-init: cannot set TMPDIR in $CLAUDE_ENV_FILE" >&3
 fi
 
 exit 0

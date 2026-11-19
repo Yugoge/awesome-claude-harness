@@ -13,13 +13,38 @@ boundary in a command ends in exactly one of:
     UNRESOLVED           the analyzer could not PROVE which of the above holds
 
 Precedence: FORBIDDEN_REMOVAL > UNRESOLVED > PROVEN_SAFE_REMOVAL > PROVEN_INERT.
-The command is authorized by the removal policy only when every boundary is
+This module reports a command ``allowed`` only when every boundary is
 terminal-safe.  There is deliberately NO code path from "no adapter matched",
-"parser gave up", "unsupported syntax", or "analyzer crashed" to *allow* — that
-inversion is the whole point.  The analyzer enumerates what is PROVABLY SAFE
-and denies on silence; it never enumerates what is FORBIDDEN and allows on
-silence.  Consequently every lookup table below may only ever move a
-boundary toward SAFE: absence from a table falls to UNRESOLVED, never to allow.
+"parser gave up", "unsupported syntax", or "analyzer crashed" to *allowed* —
+that inversion is the whole point.  The analyzer enumerates what is PROVABLY
+SAFE and answers UNRESOLVED on silence; it never enumerates what is FORBIDDEN
+and allows on silence.  Consequently every lookup table below may only ever
+move a boundary toward SAFE: absence from a table falls to UNRESOLVED, never to
+allowed.
+
+WHAT THE POLICY DOES WITH UNRESOLVED (owner's rule, 2026-11-19).  The reader of
+this verdict, lib/bash_safety_rules.py::removal_policy, no longer refuses on
+that silence alone.  A command this module leaves UNRESOLVED, like one for
+which it gives no verdict at all, is refused when its raw text holds a removal
+word (lib/pol_degraded_removal_reference.ere) and otherwise runs, handed to the
+record as let through unproven, after a snapshot (lib/checkpoint-core.sh) of the
+repository holding the call's cwd, named in the record.  The snapshot holds that
+repository's tracked and untracked files, not ignored ones, not the classes the
+snapshot code leaves out, not another repository, not files outside any.  With no
+snapshot (also for a while after one ran past its time limit) the command still
+runs and the record says why.  FORBIDDEN_REMOVAL is
+refused whatever the text holds.  So a proof here now decides whether a command that NAMES a removal may
+run, and a FORBIDDEN_REMOVAL finding still refuses a removal the text does not
+name (``r''m x``).
+
+THE FILES A REMOVAL NAMES.  When the only unsafe boundaries of a command are
+``rm`` or ``unlink`` run as a command's own head with every operand written out
+(no variable, substitution, pattern or ``~``), the result carries
+``removal_targets``: those operands, and the absolute directories a written-out
+``cd`` may leave the removal in (None when some ``cd`` cannot be followed).  The
+verdict stays FORBIDDEN_REMOVAL.  The policy alone decides whose the files are:
+it lets the command run when each lies in the calling actor's own scratch
+directory.
 
 Two failure classes are distinguished so the deny surface stays proportionate:
 
@@ -62,7 +87,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
-    AWK_NAMES, AWK_SOURCE_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
+    AWK_NAMES, AWK_SOURCE_OPTS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
     OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
     _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
@@ -311,13 +336,8 @@ _RELOCATE_WHY = "file relocation/copy: argv words are source and destination pat
 _DATA_VAL_WHY = ("declared data value: read as a regex, a pattern file, a "
                  "count, a glob or a label; never as a program name")
 
-_GREP_CORE_DATA = ("-e", "--regexp", "-f", "--file", "-m", "--max-count",
-                   "-A", "--after-context", "-B", "--before-context",
-                   "-C", "--context")
-_GREP_DATA = _GREP_CORE_DATA + ("-d", "--directories", "--binary-files",
-                                "--include", "--exclude", "--exclude-dir",
-                                "--exclude-from", "--label",
-                                "--group-separator")
+_GREP_CORE_DATA = GREP_CORE_VALUE_OPTS  # shell_parse's grep value options
+_GREP_DATA = GREP_VALUE_OPTS
 
 # Long options of a non-removal git subcommand whose value git reads as DATA:
 # a regex, an author name, a message, a date. None of them names a program.
@@ -368,7 +388,7 @@ INERT_ARGV_CONSUMERS = {
                       "--ascii", "--global-apropos", "--no-hyphenation",
                       "--no-justification", "--names-only", "--regex", "--wildcard",
                       "--ignore-case", "--match-case", "--no-subpages"),
-               exec_=("-P", "--pager", "-H", "--html", "-B", "--browser")),
+               exec_=MAN_PROGRAM_OPTS),
     "whatis": _ic(_LOOKUP_WHY, bool_=("-d", "-v", "-a", "-l", "-w", "-r", "-e"),
                   exec_=("-P", "--pager")),
     "apropos": _ic(_LOOKUP_WHY, bool_=("-d", "-v", "-a", "-l", "-w", "-r", "-e"),
@@ -1467,6 +1487,9 @@ class Analyzer:
         # A non-forced git rm's run-time obligations (git options, pathspecs), the
         # directories a `cd` may leave a later one in, and why they cannot be known.
         self.git_rm, self.git_rm_cwds, self.git_rm_unresolved = [], [], ""
+        # Per filesystem removal, the files it names when every one is written out (else None), and
+        # whether some `cd` leaves the directory of what follows unknown (see _removal_targets).
+        self.removals, self.cwd_unknown = [], False
         self._head, self.direct = None, False
         # Whether the code being walked is read by a shell that has `[[ ]]`
         # (see walk). Set per analyze_code call; a call that does not say so
@@ -2183,6 +2206,7 @@ class Analyzer:
             if len(ops) == 1 and ops[0] and ops[0].startswith("/"):
                 self.git_rm_cwds.append(ops[0])
                 return
+            self.cwd_unknown = True
         elif base == "set":  # allexport, keyword and posix let an assignment reach git
             if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in OPTION_SIGNS and x != "--" and ("a" in x or "k" in x) for x in lits):
                 return
@@ -2233,6 +2257,7 @@ class Analyzer:
         if base in REMOVAL_EXES:
             self.cover(head)  # accounted for: it IS the removal we denied
             self.add(FORBIDDEN_REMOVAL, "filesystem_removal", name)
+            self.removals.append(self._removal_targets(base, args) if self.direct else None)
             return
 
         if base == ".":
@@ -2270,6 +2295,22 @@ class Analyzer:
         # arguments alone leaves that entire shape authorized.
         self._terminal_inert("named_program_no_removal_reference", name, words,
                              data_opts=SELECTOR_DATA_OPTIONS.get(basename(name), ()))
+
+    @staticmethod
+    def _removal_targets(base, args):
+        """The files a `rm` or `unlink` run as the command's own head names, when every one is
+        written out in the command; None when any word is computed, a pattern or `~`-led, when it
+        names none, or for a program whose operands are not read here (shred, srm). Neither
+        program has an option that takes a separate value, so a word is an operand unless it is an
+        option before `--`."""
+        if base != "rm" and base != "unlink":
+            return None
+        lits = [a.literal() for a in args]
+        if None in lits:
+            return None
+        end = lits.index("--") if "--" in lits else len(lits)
+        targets = [x for x in lits[:end] if x == "-" or not x.startswith("-")] + lits[end + 1:]
+        return targets if targets and not any(not x or x.startswith("~") for x in targets) else None
 
     # -- declared-inert argv consumers: POSITION, not membership -------------
 
@@ -3787,6 +3828,13 @@ def analyze(raw):
     result["removal_positional_shape"] = result["removal_positional_shapes"][0]
     if result["allowed"] and az.git_rm:
         result["git_rm_proof"] = {"cwds": az.git_rm_cwds, "removals": az.git_rm}
+    # A command whose only unsafe boundaries are removals that name every file they remove: the
+    # verdict stays FORBIDDEN_REMOVAL, and the files go to the policy, which alone knows whose they are.
+    if verdict == FORBIDDEN_REMOVAL and not az.overflow and not az.git_rm and None not in az.removals \
+            and all(b["verdict"] in _TERMINAL_SAFE or b["reason"] == "filesystem_removal" for b in az.boundaries) \
+            and sum(b["reason"] == "filesystem_removal" for b in az.boundaries) == len(az.removals):
+        result["removal_targets"] = {"targets": [t for ts in az.removals for t in ts],
+                                     "cwds": None if az.cwd_unknown else az.git_rm_cwds}
     return result
 
 

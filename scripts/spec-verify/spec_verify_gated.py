@@ -33,15 +33,9 @@ import os
 import re
 
 from spec_verify_mandate import is_strict_guide_mode
-from spec_verify_parsers import parse_front_matter
+from spec_verify_parsers import SKIP_FILES as _VIEW_SKIP_FILES, parse_front_matter
 from spec_verify_summary import CheckResult
 
-
-# Files that are never required-consumer views.
-_VIEW_SKIP_FILES = {
-    "orchestrator.md", "manifest.json", "INDEX.md",
-    "README.md", "checkpoints.json",
-}
 
 # AMBIGUOUS marker grammar -- mirrors the WHITELIST_PATTERNS regex in
 # spec-verify.py + spec_verify_mandate.py. Re-defining locally avoids

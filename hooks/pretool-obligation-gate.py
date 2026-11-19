@@ -78,6 +78,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib import agent_returns, command_span, requirement_round, schema_registry, stop_contract  # noqa: E402
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 from lib.obligation import (  # noqa: E402
     OBLIGATION_OPEN_TOKEN,
     NoBlock,
@@ -177,7 +178,7 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
         return returns[0].line(call)
 
     earlier = []
-    for call in span.iter_calls("Agent", "Task", before=data.get("tool_use_id") or None):
+    for call in span.iter_calls(*DISPATCH_TOOLS, before=data.get("tool_use_id") or None):
         parsed = parse_obligation(call.input.get("prompt"), known_schema_ids=known)
         if isinstance(parsed, ParsedObligation):
             earlier.append((call, parsed.obligation.get("role"), _declared(parsed.obligation)))

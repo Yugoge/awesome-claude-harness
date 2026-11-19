@@ -60,6 +60,10 @@ from graphify_lib import (
 # Edge-signature confidence whitelist for the semantic proof-gate (verdict P, codex round-2).
 VALID_CONFIDENCES = {"EXTRACTED", "INFERRED", "AMBIGUOUS"}
 
+# The API-key variables whose presence lets graphify pick a keyed semantic backend itself.
+SEMANTIC_BACKEND_KEY_VARS = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "MOONSHOT_API_KEY",
+                             "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY")
+
 
 def _canonicalize(value) -> object:
     """Canonicalize a link field so a 7-tuple signature stays hashable (codex #5).
@@ -343,8 +347,7 @@ def _select_semantic_backend() -> tuple[str, str | None, str]:
         if forced.lower() in ("none", "null", ""):
             return "none", None, ""
         return "forced", forced, f"semantic:{forced}"
-    for env_key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "MOONSHOT_API_KEY",
-                    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY"):
+    for env_key in SEMANTIC_BACKEND_KEY_VARS:
         if os.environ.get(env_key):
             # Keyed: let graphify auto-detect; do NOT pass --backend (codex #6).
             return "keyed", None, "semantic:auto"

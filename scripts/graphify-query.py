@@ -125,16 +125,14 @@ def _resolve_anchors_in_graph(mentions: list[str], graph: dict) -> dict[str, str
     return resolved
 
 
-# Coupling relations that constitute real structural signal — aligned with
-# scripts/graphify-enrich.py R1 REVERSE_DEPENDENT_RELATIONS. The pre-BA excerpt
+# Coupling relations that constitute real structural signal (graphify_lib.COUPLING_RELATIONS,
+# graphify-enrich's REVERSE_DEPENDENT_RELATIONS). The pre-BA excerpt
 # PRIORITISES these so inert `contains` (file->symbol skeleton, ~80% of links on
 # doc/config-heavy repos) and bare `references` (mostly return-type-annotation noise)
 # do NOT dominate the [:20] cap. Mirrors the Step-7.5/9 focused-subgraph emphasis so both
 # touchpoints surface coupling first; non-coupling edges only fill leftover slots (so the
 # excerpt is never empty on a coupling-poor graph — it just shows skeleton as last resort).
-COUPLING_RELATIONS = frozenset(
-    {"imports", "imports_from", "calls", "inherits", "uses", "re_exports"}
-)
+from graphify_lib import COUPLING_RELATIONS  # noqa: E402
 
 
 def _build_import_excerpt(graph: dict, anchor_labels: set[str]) -> list[str]:

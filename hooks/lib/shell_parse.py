@@ -48,7 +48,10 @@ ESCAPED = "escaped"
 MAX_DEPTH = 24
 MAX_LEN = 262_144
 
-_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+# A subscript runs to its ], quoted text and escapes in it included (`m["a]b"]=1`).
+_SUBSCRIPT = r"""\[(?:[^\]'"\\]|\\.|'[^']*'|"(?:[^"\\]|\\.)*")*\]"""
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:%s)?\+?=" % _SUBSCRIPT, re.S)
+_SUBSCRIPT_START_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\[")
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _FD_VAR_RE = re.compile(r"^\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
@@ -458,6 +461,9 @@ COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
 SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
+PRINTERS = ("echo", "printf")  # print their arguments and run nothing
+FIND_EXEC_IN_MATCH_DIR = ("-execdir", "-okdir")  # find actions that run in each match's directory
+MOVE_MECHANISMS = ("mv", "git-mv")  # WriteTarget mechanisms of a move: its sources follow as <mechanism>-source
 NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
 RUNUSER_USER_OPTS = ("-u", "--user")  # runuser: the option naming the user COMMAND runs as
 # Package runners (pnpx is `pnpm dlx`) and the package-manager subcommands that run another
@@ -721,7 +727,34 @@ def _span(src, a, b):
     return (src.off(a), src.off(b - 1) + 1 if b > a else src.off(a))
 
 
-def _lex_word(src, i, depth=0):
+def _open_subscript(raw):
+    """True when ``raw`` is NAME[ followed by an unclosed subscript (quotes and $( ) skipped)."""
+    m = _SUBSCRIPT_START_RE.match(raw)
+    if not m:
+        return False
+    level, j = 1, m.end()
+    while j < len(raw):
+        c = raw[j]
+        if c == "\\":
+            j += 1
+        elif c in QUOTE_CHARS:
+            k = raw.find(c, j + 1)
+            j = len(raw) if k < 0 else k
+        elif raw.startswith("$(", j):
+            k = _match_pair(raw, j + 1, "(", ")")
+            j = len(raw) if k < 0 else k - 1
+        elif c == "[":
+            level += 1
+        elif c == "]":
+            level -= 1
+        j += 1
+    return level > 0
+
+
+def _lex_word(src, i, depth=0, assign=False):
+    """One word from ``src`` at ``i``. ``assign``: the word stands where an assignment may
+    (before a command's name), so a NAME[ subscript runs to its ] across blanks and
+    operators, as bash reads `m[a b]=c`."""
     t = src.text
     n = len(t)
     start = i
@@ -769,6 +802,10 @@ def _lex_word(src, i, depth=0):
     while i < n:
         c = t[i]
         if c in " \t\n" or c in _OP_CHARS:
+            if assign and _open_subscript(t[start:i]):
+                keep(i)
+                i += 1
+                continue
             if c == "(" and lit_chars and _ASSIGN_RE.match("".join(lit_chars)):
                 # NAME=( ... ) array assignment: the parens belong to the word.
                 end = _match_pair(t, i, "(", ")")
@@ -910,7 +947,7 @@ def _lex_word(src, i, depth=0):
             continue
         if c == "[":
             j = t.find("]", i + 1)
-            if j > 0 and not any(x in " \t\n" + _OP_CHARS + "$`" for x in t[i:j]):
+            if j > 0 and not any(x in " \t\n" + _OP_CHARS + "$`'\"" for x in t[i:j]):
                 flush()
                 segs.append(("glob", src.slice(i, j + 1), src.off(i)))
                 parts.append(Part("glob", t[i:j + 1], BARE, _span(src, i, j + 1)))
@@ -936,6 +973,8 @@ def _lex_word(src, i, depth=0):
         keep(i)
         i += 1
 
+    if assign and _open_subscript(t[start:i]):
+        raise LexError("unterminated_subscript", src.off(start))  # bash: looking for matching `]'
     flush()
     return Word(segs, src.off(start), src.slice(start, i), parts), i
 
@@ -1139,7 +1178,7 @@ def _lex_into(src, toks, depth=0, comments=None):
                 r.end = r.target.raw.end_off()
             toks.append(("R", r))
             continue
-        w, i = _lex_word(src, i, depth)
+        w, i = _lex_word(src, i, depth, _assignment_position(toks))
         if not w.segs and not w.parts:
             i += 1
             continue
@@ -1149,6 +1188,19 @@ def _lex_into(src, toks, depth=0, comments=None):
     if pending_heredocs:
         raise LexError("unterminated_heredoc", pending_heredocs[0][0].off)
     return toks
+
+
+def _assignment_position(toks):
+    """True when a word lexed after ``toks`` stands where bash accepts an assignment: first in
+    a command (after an operator, a reserved prefix word or an assignment; redirections aside)."""
+    for tok in reversed(toks):
+        if tok[0] == "R":
+            continue
+        if tok[0] == "OP":
+            return True
+        text = tok[1].raw.text
+        return bool(_ASSIGN_RE.match(text)) or text in COMMAND_PREFIX_WORDS
+    return True
 
 
 def _expansion_word(body, depth=0):
@@ -1466,7 +1518,7 @@ class Assignment:
         return "Assignment(%s=%r)" % (self.name, self.value.text if self.value else self.array)
 
 
-_ASSIGN_PARTS_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(\[[^\]]*\])?(\+?)=")
+_ASSIGN_PARTS_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(%s)?(\+?)=" % _SUBSCRIPT, re.S)
 
 
 class SimpleCommand:
@@ -2170,7 +2222,7 @@ def _stage_output(cmd):
                 return red.target.value()
         return None
     vals = [w.value() for w in res.args]
-    if res.name not in ("echo", "printf") or any(v is None for v in vals):
+    if res.name not in PRINTERS or any(v is None for v in vals):
         return None
     while res.name == "echo" and vals and vals[0] in ("-n", "-e", "-E", "-ne", "-en"):
         vals = vals[1:]
@@ -2829,6 +2881,7 @@ def resolve(cmd, depth=None):
 _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
 FIND_SYMLINK_OPTS = ("-H", "-L", "-P")  # find's symlink options, before the start paths
 FIND_EXEC_ENDS = (";", "+")  # the words that end the command of a find -exec/-ok (every reader reads this one)
+_FIND_FILE = ("-fprint", "-fprint0", "-fprintf", "-fls")  # the next word names a file the action writes
 
 
 def _resolve_find(r, head, words, cmd, depth):
@@ -3213,13 +3266,16 @@ class WriteTarget:
     word: the Word it was read from; mode: truncate, append, create, link,
     copy-dest, move-dest, delete, in-place; mechanism: what writes it
     (redirect, tee, cp, mv, ...); fd: the redirected fd; source: the source
-    path of a copy, move or link; context: the walk context.
+    path of a copy, move or link; context: the walk context; dirs: the directories its
+    command may run in (CdScopes: '' the call's own, '?' unknown), set when
+    write_targets is given the raw command.
     """
 
-    __slots__ = ("path", "mode", "mechanism", "fd", "decidable", "word", "source", "context")
+    __slots__ = ("path", "mode", "mechanism", "fd", "decidable", "word", "source", "context", "dirs")
 
     def __init__(self, path, mode, mechanism, fd=None, decidable=True, word=None, source=None,
                  context=("top",)):
+        self.dirs = None
         self.path = path
         self.mode = mode
         self.mechanism = mechanism
@@ -3232,6 +3288,16 @@ class WriteTarget:
     def as_dict(self):
         return {"path": self.path, "mode": self.mode, "mechanism": self.mechanism, "fd": self.fd,
                 "decidable": self.decidable, "source": self.source, "context": list(self.context)}
+
+    def placed(self, path=None):
+        """``path`` (default: the static path) where the write lands, once per directory in ``dirs``: as written
+        when it is absolute or computed or its command runs in the call's own directory, joined to the directory
+        a `cd` moved to, and `$(pwd)/path` where that directory is unknown, so a caller sees it is unresolved."""
+        path = self.path if path is None else path
+        if not path or not self.dirs or path.startswith(("/", "~", "$", "`")):
+            return [path] if path else []
+        return [path if d == "" else os.path.expanduser(os.path.join("$(pwd)" if d == "?" else d, path))
+                for d in sorted(self.dirs)]
 
     def __repr__(self):
         return "WriteTarget(%r, %s, %s)" % (self.path, self.mode, self.mechanism)
@@ -3254,25 +3320,27 @@ VERBS = {
                   "--no-dereference", "-p", "-R", "-r", "--recursive", "-s", "--symbolic-link",
                   "-T", "--no-target-directory", "-u", "--update", "-v", "--verbose", "-x",
                   "--one-file-system", "--parents", "--remove-destination", "--strip-trailing-slashes",
-                  "--attributes-only", "--debug", "-Z"),
-                 ("-t", "--target-directory", "-S", "--suffix", "--backup", "--preserve",
-                  "--no-preserve", "--reflink", "--sparse", "--context")), "last", COPY_DEST),
+                  "--attributes-only", "--debug", "-Z", "--backup", "--preserve", "--reflink", "--context",
+                  "--copy-contents", "--keep-directory-symlink", "--help", "--version"),
+                 ("-t", "--target-directory", "-S", "--suffix", "--no-preserve", "--sparse")), "last", COPY_DEST),
     "mv": (_spec(("-b", "-f", "--force", "-i", "--interactive", "-n", "--no-clobber", "-T",
                   "--no-target-directory", "-u", "--update", "-v", "--verbose", "-Z",
-                  "--strip-trailing-slashes", "--debug", "--exchange", "--no-copy"),
-                 ("-t", "--target-directory", "-S", "--suffix", "--backup", "--context")),
+                  "--strip-trailing-slashes", "--debug", "--exchange", "--no-copy", "--backup", "--context",
+                  "--help", "--version"),
+                 ("-t", "--target-directory", "-S", "--suffix")),
            "last", MOVE_DEST),
     "install": (_spec(("-b", "-C", "--compare", "-c", "-d", "--directory", "-D", "-p",
                        "--preserve-timestamps", "-s", "--strip", "-v", "--verbose", "-T",
-                       "--no-target-directory", "-Z"),
+                       "--no-target-directory", "-Z", "--backup", "--context", "--debug", "--preserve-context",
+                       "--help", "--version"),
                       ("-g", "--group", "-m", "--mode", "-o", "--owner", "-S", "--suffix",
-                       "-t", "--target-directory", "--strip-program", "--backup", "--context")),
+                       "-t", "--target-directory", "--strip-program")),
                 "last", COPY_DEST),
     "ln": (_spec(("-b", "-d", "-F", "--directory", "-f", "--force", "-i", "--interactive",
                   "-L", "--logical", "-n", "--no-dereference", "-P", "--physical", "-r",
                   "--relative", "-s", "--symbolic", "-T", "--no-target-directory", "-v",
-                  "--verbose"),
-                 ("-t", "--target-directory", "-S", "--suffix", "--backup")), "last", LINK),
+                  "--verbose", "--backup", "--help", "--version"),
+                 ("-t", "--target-directory", "-S", "--suffix")), "last", LINK),
     "rsync": (_spec(("-a", "--archive", "-v", "--verbose", "-z", "--compress", "-r",
                      "--recursive", "-u", "--update", "-n", "--dry-run", "-q", "--quiet",
                      "-P", "-h", "--human-readable", "-c", "--checksum", "-l", "--links",
@@ -3288,7 +3356,12 @@ VERBS = {
                      "--chmod", "--chown", "-B", "--block-size", "--log-file", "--bwlimit",
                      "--suffix", "--backup-dir", "--timeout", "--port", "--password-file",
                      "--compare-dest", "--copy-dest", "--link-dest", "--max-size",
-                     "--min-size", "--partial-dir")), "last", COPY_DEST),
+                     "--min-size", "--partial-dir", "-M", "--remote-option", "--address", "--checksum-choice",
+                     "--checksum-seed", "--compress-choice", "--compress-level", "--contimeout", "--copy-as",
+                     "--debug", "--early-input", "--groupmap", "--iconv", "--info", "--log-file-format",
+                     "--max-alloc", "--max-delete", "--modify-window", "--only-write-batch", "--out-format",
+                     "--outbuf", "--protocol", "--read-batch", "--skip-compress", "--sockopts", "--stderr",
+                     "--stop-after", "--stop-at", "--usermap", "--write-batch")), "last", COPY_DEST),
     "truncate": (_spec(("-c", "--no-create", "-o", "--io-blocks"),
                        ("-s", "--size", "-r", "--reference")), "all", TRUNCATE),
     "unlink": (_spec(), "all", DELETE),
@@ -3363,6 +3436,22 @@ RG_PROGRAM_OPTS = ("--pre", "--hostname-bin")
 GREP_PATTERN_OPTS = ("-e", "--regexp")
 GREP_PATTERN_FILE_OPTS = ("-f", "--file")
 GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
+# Environment variables an assignment to which cannot change what a command runs (locale, terminal,
+# identity, colour); the directory ones among them (DIR_ENV_VARS) do move where a command reads or writes.
+INERT_ENV_VARS = frozenset({
+    "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "LC_COLLATE", "LC_MESSAGES", "LC_NUMERIC", "LC_TIME", "TZ", "TERM",
+    "COLUMNS", "LINES", "PWD", "OLDPWD", "USER", "LOGNAME", "HOSTNAME", "TMPDIR", "DISPLAY", "NO_COLOR",
+    "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"})
+DIR_ENV_VARS = frozenset({"PWD", "OLDPWD", "TMPDIR"})
+# man's options whose value names a program it runs (man-db 2.12: the pager, the HTML browser).
+MAN_PROGRAM_OPTS = ("-P", "--pager", "-H", "--html", "-B", "--browser")
+# grep's options that take a value (GNU grep 3.11 --help; --color[=WHEN] takes one only after `=`): those
+# every grep-like search shares, then GNU grep's own.
+GREP_CORE_VALUE_OPTS = GREP_PATTERN_OPTS + GREP_PATTERN_FILE_OPTS + (
+    "-m", "--max-count", "-A", "--after-context", "-B", "--before-context", "-C", "--context")
+GREP_VALUE_OPTS = GREP_CORE_VALUE_OPTS + ("-d", "--directories", "-D", "--devices", "--binary-files", "--include",
+                                          "--exclude", "--exclude-dir", "--exclude-from", "--label",
+                                          "--group-separator")
 RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip", "--pre-glob")
 # ripgrep's options that take a value: the short letters and the long names.
 RG_VALUE_SHORT = frozenset("efgtTmABCMjrEd")
@@ -3425,6 +3514,172 @@ def _attr_operands(name, args):
 
 
 
+class CdScopes:
+    """Where each part of the command runs: the possible (cwd, OLDPWD) pairs at each simple command,
+    a `cd` applied only to what follows it in its own shell (not past a closing subshell, a pipeline
+    stage or a background job, replaced by a later cd, `&&` and `||` followed), relative to the
+    starting directory ''. A cd that cannot be followed exactly (`cd -` with no known OLDPWD, a
+    computed target, CDPATH, popd, a function body, more than LIMIT possibilities) leaves the unknown directory '?'.
+    ``spell(word)`` is a cd operand's text (default: its static value, else as written, quotes removed);
+    ``reached(dir)`` says a directory is there now, so one `cd` to it cannot fail (default: any cd may fail)."""
+
+    UNKNOWN = ('?', '?')
+    LIMIT = 64
+
+    def __init__(self, raw: str, spell=None, reached=None):
+        self.raw, self.spans, self.visited, self.unfollowed = raw, [], set(), []
+        self.cdpath = 'CDPATH' in raw
+        self.functions = False  # a function or coprocess defined anywhere it walked
+        self.spell = spell or (lambda w: w.text.replace('"', '').replace("'", '') if w.value() is None else w.value())
+        self.reached = reached or (lambda d: False)
+
+    def _target(self, cwd: str, word) -> str:
+        arg = self.spell(word) if word is not None else '~'
+        if any(c in arg for c in '$`*?[') or (self.cdpath and not arg.startswith(('/', '~', './', '../'))):
+            return '?'
+        if arg.startswith(('/', '~')):
+            return os.path.normpath(arg)
+        if cwd == '?':
+            return '?'
+        target = os.path.normpath(os.path.join(cwd, arg)) if cwd else os.path.normpath(arg)
+        return '' if target == '.' else target
+
+    def _cd(self, name: str, args, states) -> tuple:
+        """(the states after the cd, the states it may have failed in: all but those whose one operand is reached)."""
+        if name == 'popd':
+            return {self.UNKNOWN}, set(states)
+        ops, k = [], 0
+        while k < len(args):
+            v = args[k].value()
+            if v == '--':
+                ops += args[k + 1:]
+                break
+            if v is None or v == '-' or not v.startswith('-') or v[1:2].isdigit() or v[1:2] == '+':
+                ops.append(args[k])
+            k += 1
+        new, failed = set(), set(states)
+        for cwd, old in states:
+            if ops and ops[0].value() == '-' or (name == 'pushd' and not ops):
+                new.add((old, cwd) if old != '?' else ('?', cwd))
+            elif ops and (ops[0].value() or '').startswith(OPTION_SIGNS):
+                new.add(self.UNKNOWN)  # a pushd/cd stack index
+            else:
+                new.add((self._target(cwd, ops[0] if ops else None), cwd))
+                if len(ops) == 1 and self.reached(self._target(cwd, ops[0])):
+                    failed.discard((cwd, old))
+        return new, failed
+
+    def _record(self, span, states):
+        self.spans.append((span[0], span[1], frozenset(states)))
+
+    def run_cmd(self, cmd, states):
+        if isinstance(cmd, SimpleCommand):
+            self.visited.add(cmd.span)
+            res = resolve(cmd)
+            here = set(states)
+            for wname, opts in res.wrappers:
+                for opt, val in opts:
+                    if wname == 'env' and opt in ('-C', '--chdir') and val is not None:
+                        here = {(self._target(cwd, val), cwd) for cwd, _old in here}
+            self._record(cmd.span, here | set(states))  # its redirections open where the shell is
+            for r in cmd.redirects:
+                if r.hd is not None:  # an unquoted body's substitutions run where its command does
+                    self._record(r.hd.body_span, set(states))
+            if res.name in CWD_BUILTINS and res.payload is None:
+                return self._cd(res.name, res.args, states)
+            if res.payload is not None:
+                if res.payload_kind == 'eval':
+                    return self.run_script(res.payload, states)
+                self.run_script(res.payload, {self.UNKNOWN} if _runs_elsewhere(res) else here)
+            return set(states), set(states)
+        if isinstance(cmd, Compound):
+            self.visited.add(cmd.span)  # its own redirections (`(...) > f`) run where it starts
+            self._record(cmd.span, states)
+            scripts = [s for s in tuple(cmd.header) + tuple(cmd.body) if isinstance(s, Script)]
+            self.functions = self.functions or cmd.kind in DEFINER_KINDS
+            if cmd.kind in ('subshell', 'coproc'):
+                for s in scripts:
+                    self.run_script(s, states)
+                return set(states), set(states)
+            if cmd.kind == 'group':
+                succ, fail = set(states), set(states)
+                for s in scripts:
+                    succ, fail = self.run_script(s, succ)
+                return succ, fail
+            if cmd.kind == 'function':
+                for s in scripts:
+                    self._record(s.span, {self.UNKNOWN})
+                    self.run_script(s, {self.UNKNOWN})
+                return set(states), set(states)
+            acc = set(states)
+            for s in scripts:
+                succ, fail = self.run_script(s, acc)
+                acc |= succ | fail
+            return acc, acc
+        return set(states), set(states)
+
+    def run_pipeline(self, pl, states):
+        if len(pl.stages) == 1:
+            succ, fail = self.run_cmd(pl.stages[0], states)
+        else:
+            for stage in pl.stages:
+                self.run_cmd(stage, states)  # each stage runs in a subshell
+            succ, fail = set(states), set(states)
+        return (fail, succ) if pl.negated else (succ, fail)
+
+    def run_script(self, script, states):
+        succ, fail, prev = set(states), set(states), None
+        for pl, sep in script.items:
+            if prev == '&&':
+                enter = succ
+            elif prev == '||':
+                enter = fail
+            elif prev is None:
+                enter = set(states)
+            else:
+                enter = succ | fail
+            if len(enter) > self.LIMIT:
+                enter = {self.UNKNOWN}
+            if sep == '&':
+                self.run_pipeline(pl, enter)  # a background job: its cd stays in it
+                s, f = set(enter), set(enter)
+            else:
+                s, f = self.run_pipeline(pl, enter)
+            if prev == '&&':
+                succ, fail = s, f | fail
+            elif prev == '||':
+                succ, fail = s | succ, f
+            else:
+                succ, fail = s, f
+            prev = sep
+        return succ, fail
+
+    def run(self, script, start=''):
+        """Follow ``script`` from ``start``; a `cd` it did not follow (in a substitution, a re-parsed payload) makes
+        the directory of everything written after it unknown."""
+        self.run_script(script, {(start, '?')})
+        self.unfollowed = [s.cmd.span[0] if self.raw[slice(*s.cmd.span)].startswith(s.cmd.words[0].text) else 0
+                           for s in walk(script) if s.cmd.words and s.cmd.span not in self.visited
+                           and resolve(s.cmd).name in CWD_BUILTINS]
+        return self
+
+    def of(self, word) -> set:
+        """The possible directories of the command ``word`` is written in; '?' when the word is not its own text
+        in the command (an alias, a re-read payload) or follows an unfollowed cd."""
+        if word is None or self.raw[slice(*word.span)] != word.text:
+            return {'?'}
+        return self.at(word.span[0]) | ({'?'} if any(word.span[0] > u for u in self.unfollowed) else set())
+
+    def at(self, offset: int):
+        """The possible directories at raw ``offset``: the innermost recorded command around it."""
+        best = None
+        for a, b, states in self.spans:
+            if a <= offset < b and (best is None or b - a < best[1] - best[0]):
+                best = (a, b, states)
+        return {cwd for cwd, _old in best[2]} if best else {'?'}
+
+
+
 _PKG_MANAGERS = frozenset({
     "pip", "pip3", "npm", "pnpm", "yarn", "apt", "apt-get", "aptitude", "yum",
     "dnf", "apk", "zypper", "pacman", "brew", "cargo", "gem", "go", "poetry",
@@ -3432,8 +3687,12 @@ _PKG_MANAGERS = frozenset({
 })
 
 
-def write_targets(script, *, into=_DEFAULT_INTO, env=None):
+def write_targets(script, *, into=_DEFAULT_INTO, env=None, raw=None, reached=None):
     """Every path ``script`` writes, from redirections and from the VERBS table.
+
+    Given the raw command (``raw``, or ``script`` as text), each target carries the
+    directories its command may run in (``dirs``, by CdScopes; ``reached`` as there, never
+    trusted in a command that removes or moves something).
 
     An assignment earlier in the same list (`X=/p; ... > $X`) projects into a
     later `$X` / `${X}` target when its value is static or projects itself.
@@ -3446,16 +3705,19 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None):
     The redirections of a compound command come from walk's redirect-only Site.
     """
     if isinstance(script, str):
-        script = parse(script)
+        raw, script = script, parse(script)
     out = []
     seed = dict(env or {})
     envs, exported, prefix = {}, set(), {}
     scope = _AssignScope(script)
+    carriers, carrier = {}, None   # target -> the raw command whose payload it was read from
     for site in walk(script, into=into):
         first = len(out)
         env = None
         try:
             cmd = site.cmd
+            if raw is not None:
+                carrier = _payload_carrier(site, raw, carrier)
             # A shell started with -c or fed code sees the caller's variables, the ones exported before
             # it and its own command's prefix assignments; a templated payload's expansions are the
             # outer shell's.
@@ -3505,6 +3767,9 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None):
             if name == "git":
                 out.extend(_git_write_targets(res, env, site.context))
                 continue
+            if name == "find":
+                out.extend(_find_write_targets(res.args, env, site.context))
+                continue
             verb = VERBS.get(name)
             if verb is None:
                 continue
@@ -3528,7 +3793,38 @@ def write_targets(script, *, into=_DEFAULT_INTO, env=None):
         finally:
             for t in out[first:] if env is not None else ():
                 _carry_word(t, env)
+            for t in out[first:] if raw is not None else ():
+                carriers[id(t)] = carrier
+    if raw is not None and out:
+        gone = any(t.mode in (DELETE, MOVE_DEST) for t in out)
+        scopes = CdScopes(raw, lambda w: _project(w, seed)[0] or w.text, None if gone else reached).run(script)
+        for t in out:
+            t.dirs = scopes.of(t.word)
+            word = carriers.get(id(t))
+            if t.dirs == {'?'} and word is not None and t.word is not None \
+                    and raw[slice(*t.word.span)] != t.word.text:
+                t.dirs = scopes.of(word)
     return out
+
+
+def _payload_carrier(site, raw, carrier):
+    """The first word of the raw command whose re-read payload (eval, env -S, a here-string or alias
+    a shell reads, find -exec ...) ``site`` belongs to, as long as that code runs in the directory
+    that command runs in; None once it may not: ssh runs it on another host, find -execdir or
+    -okdir in each match's directory, and a cd, pushd or popd read from the payload moves it."""
+    words = site.cmd.words
+    if words and raw[slice(*words[0].span)] == words[0].text:
+        return None if _runs_elsewhere(resolve(site.cmd)) else words[0]
+    if words and resolve(site.cmd).name in CWD_BUILTINS + ("ssh",):
+        return None
+    return carrier
+
+
+def _runs_elsewhere(res):
+    """True when the code ``res`` hands on runs in another directory than its own command: ssh on
+    another host, find's -execdir and -okdir in each match's directory."""
+    return res.name == "ssh" or (res.name == "find" and any(w.value() in FIND_EXEC_IN_MATCH_DIR
+                                                            for w in res.args))
 
 
 _COPY_MOVE_WORD_RE = re.compile(r"(?:%s)(?!\w)" % "|".join(CP_MV))
@@ -3785,6 +4081,23 @@ def _verb_targets(name, verb, args, env, context):
             for s in sources:
                 sp, sdec = _project(s, env)
                 out.append(WriteTarget(sp, DELETE, name + "-source", None, sdec, s, None, context))
+    return out
+
+
+def _find_write_targets(args, env, context):
+    """The file each -fprint, -fprint0, -fprintf and -fls of one find writes. An -exec's words up to `;` or `+` are
+    another command's (walk reads them); -delete removes the matches, names the command does not hold: no target."""
+    out, k = [], 0
+    while k < len(args):
+        v = args[k].value()
+        if v in _FIND_EXEC:
+            while k < len(args) and args[k].value() not in FIND_EXEC_ENDS:
+                k += 1
+        elif v in _FIND_FILE and k + 1 < len(args):
+            k += 1
+            path, dec = _project(args[k], env)
+            out.append(WriteTarget(path, TRUNCATE, "find" + v, None, dec, args[k], None, context))
+        k += 1
     return out
 
 

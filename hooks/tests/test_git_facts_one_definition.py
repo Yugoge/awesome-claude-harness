@@ -120,7 +120,7 @@ class TestGitCommandParsing:
         assert ui._GIT_GLOBAL_VALUE == sp.GIT_GLOBAL_VALUE_OPTS
         assert sp.GIT_INERT_FLAGS <= sp.GIT_GLOBAL_FLAGS and sp.GIT_LOCATION_OPTS <= sp.GIT_GLOBAL_VALUE_OPTS
         assert bsr._SD_GIT_GLOBAL_FLAGS == sp.GIT_INERT_FLAGS | {"-p", "--paginate"}
-        assert bsr._DG_GIT_GLOBAL_OK == sp.GIT_INERT_FLAGS | {"--version", "--help"}
+        # (The removal policy's degraded proof read this table too; the owner's rule of 2026-11-19 removed that proof.)
 
 
 # audit f05 part 2: reads of the harness-switch rule's settings file it refused, and the stash it passed.
@@ -256,9 +256,10 @@ class TestGitRunOrWriteOptions:
         assert is_read_only(cmd) and cg._git_settled(res, cmd) and bsr._plain_git(list(res.args))
 
     def test_disk_guard_set_is_the_argv_subset(self):
-        from lib import bash_safety_rules as bsr, git_facts
-        assert set(bsr._DG_GIT_ALL) == git_facts.GIT_ARGV_RUN_OR_WRITE_OPTIONS < git_facts.GIT_RUN_OR_WRITE_OPTIONS
-        assert bsr._dg_git_runs(["git", "diff", "--output=o"]) and not bsr._dg_git_runs(["git", "log", "--textconv"])
+        # The disk guard (the removal policy's degraded proof in lib/bash_safety_rules.py, which read this subset as
+        # _DG_GIT_ALL) was removed with the owner's rule of 2026-11-19; the subset relation is what remains to hold.
+        from lib import git_facts
+        assert git_facts.GIT_ARGV_RUN_OR_WRITE_OPTIONS < git_facts.GIT_RUN_OR_WRITE_OPTIONS
 
 
 class TestGitRemoteReadFlags:
@@ -269,18 +270,14 @@ class TestGitRemoteReadFlags:
     @pytest.mark.parametrize("cmd", ["git remote -v", "git remote --verbose", "git remote get-url --all origin",
                                      "git remote get-url --push origin"])
     def test_both_read(self, cmd):
+        # One reader since the owner's rule of 2026-11-19 removed the disk guard (the removal policy's degraded proof).
         from lib.bash_read_only import is_read_only
-        from lib import bash_safety_rules as bsr
-        words = cmd.split()
         assert is_read_only(cmd)
-        assert bsr._dg_git(None, words)
 
     @pytest.mark.parametrize("cmd", ["git remote add x y", "git remote set-url origin y", "git remote -v rm x"])
     def test_both_refuse(self, cmd):
         from lib.bash_read_only import is_read_only
-        from lib import bash_safety_rules as bsr
         assert not is_read_only(cmd)
-        assert not bsr._dg_git(None, cmd.split())
 
 
 def test_git_rm_options_one_definition():

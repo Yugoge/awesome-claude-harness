@@ -26,7 +26,7 @@ import sys
 # is_strict_guide_mode gate (reused by T6). T6: utility / ambiguous /
 # meta-rule checks gated on the same R3.0 strict-guide criterion.
 from spec_verify_parsers import (  # noqa: F401 -- re-exports
-    HEADING_REGEX, CONSUMERS_REGEX, CONSUMERS_INLINE_REGEX,
+    HEADING_REGEX, CONSUMERS_REGEX, CONSUMERS_INLINE_REGEX, SKIP_FILES,
     parse_front_matter, parse_role_headings,
     parse_consumers_tags, lookup_role_block,
     role_annotated_agents, lines_every_view_carries,
@@ -194,9 +194,6 @@ def print_show_uncovered(uncovered):
     for ln, text in uncovered:
         print(f"  L{ln}: {text[:80]}")
     print(f"--- end ({len(uncovered)} uncovered lines) ---")
-
-
-SKIP_FILES = {"orchestrator.md", "manifest.json", "INDEX.md", "README.md", "checkpoints.json"}
 
 
 def _check_view_file(name, path, annotated):
