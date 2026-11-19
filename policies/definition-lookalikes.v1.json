@@ -3224,6 +3224,34 @@
      }
     ]
    ]
+  },
+  {
+   "id": "pm-builtin-subcommands",
+   "source": "defs-shell lane, audit f199dfb1e family pm-builtin-subcommands (undecided)",
+   "reason": "constants.DEP_BUILTINS is the dependency-management subcommands common to npm, yarn, pnpm and bun (install, add, remove ...), the guard's P9 dependency-op rule; _core._PM_SUBCMDS is npm's full builtin list with its typo aliases (install-test, isntall, ...), read to find npm's subcommand word past its options, and holds words (build, test, start) that yarn and pnpm run as package scripts; DEP_SHORTHAND_NPM is npm's four lifecycle shorthands (start, stop, restart, test) that RUN a script. Three questions.",
+   "sides": [
+    [
+     {
+      "name": "<module>.DEP_BUILTINS",
+      "fingerprint": "e92f930970d8b9a2",
+      "at": "hooks/lib/runtime_guard/constants.py:63"
+     }
+    ],
+    [
+     {
+      "name": "<module>._PM_SUBCMDS",
+      "fingerprint": "861138375a3cc5e4",
+      "at": "hooks/lib/runtime_guard/_core.py:2632"
+     }
+    ],
+    [
+     {
+      "name": "<module>.DEP_SHORTHAND_NPM",
+      "fingerprint": "c6d77fed157003a5",
+      "at": "hooks/lib/runtime_guard/constants.py:84"
+     }
+    ]
+   ]
   }
  ]
 }
