@@ -1412,7 +1412,7 @@ class _Scan:
             if p in ('-exec', '-execdir', '-ok', '-okdir'):
                 k = j + 1
                 argv = []
-                while k < len(vals) and vals[k] not in (';', '+'):
+                while k < len(vals) and vals[k] not in _sp.FIND_EXEC_ENDS:
                     argv.append(vals[k])
                     k += 1
                 blocks.append((p, argv))

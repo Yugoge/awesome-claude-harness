@@ -2667,6 +2667,7 @@ def resolve(cmd, depth=None):
 
 
 _FIND_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
+FIND_EXEC_ENDS = (";", "+")  # the words that end the command of a find -exec/-ok (every reader reads this one)
 
 
 def _resolve_find(r, head, words, cmd, depth):
@@ -2678,7 +2679,7 @@ def _resolve_find(r, head, words, cmd, depth):
     while k < len(words):
         if words[k].value() in _FIND_EXEC:
             j = k + 1
-            while j < len(words) and words[j].value() not in (";", "+"):
+            while j < len(words) and words[j].value() not in FIND_EXEC_ENDS:
                 j += 1
             argv_words = words[k + 1:j]
             if argv_words:

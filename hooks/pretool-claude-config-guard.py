@@ -510,7 +510,7 @@ def _site_writes(sp, raw: str, res) -> list:
         for k, v in enumerate(vals):
             if v in ('-fprint', '-fprint0', '-fprintf', '-fls') and k + 1 < len(args):
                 out.append((args[k + 1].value() or args[k + 1].text, args[k + 1]))
-        runs = [vals[k + 1:k + 1 + next((j for j, x in enumerate(vals[k + 1:]) if x in (';', '+')), len(vals))]
+        runs = [vals[k + 1:k + 1 + next((j for j, x in enumerate(vals[k + 1:]) if x in sp.FIND_EXEC_ENDS), len(vals))]
                 for k, v in enumerate(vals) if v in _FIND_RUN and k + 1 < len(vals)]
         if '-delete' in vals or any(not bash_read_only.reads_only(os.path.basename(r[0]), r[1:], pagers=True)
                                     for r in runs):
