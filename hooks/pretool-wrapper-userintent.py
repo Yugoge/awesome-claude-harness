@@ -103,9 +103,8 @@ _FALLBACK_PATTERNS = {
 
 try:
     from lib import shell_parse as _sp
-    from lib.runtime_guard.constants import NODE_NAMES
 except Exception:  # pragma: no cover - fail-soft when lib missing
-    _sp = NODE_NAMES = None
+    _sp = None
 
 # Directory holding the user-intent sentinels (overridable for sandbox tests).
 _SENTINEL_DIR = os.environ.get('CLAUDE_USERINTENT_SENTINEL_DIR', harness_state_dir())
@@ -664,7 +663,7 @@ class _Scan:
                                        list(res.args), self._lead_checker(cmd, res, res.args))
         if _PYTHON_RE.match(name):
             return self._py_reader(cmd, vals)
-        if name in NODE_NAMES:
+        if name in _sp.NODE_NAMES:
             return self._code_opt(vals, ('-e', '--eval', '-p', '--print'), _node_inert, ())
         if name in _AWK_NAMES:
             return self._awk_reader(vals)

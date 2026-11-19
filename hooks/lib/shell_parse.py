@@ -454,6 +454,7 @@ COMMON_SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
 SCRIPT_RUNNERS = COMMON_SHELLS + ("source", ".")
 DECLARATION_BUILTINS = ("export", "declare", "typeset", "local", "readonly")  # assign their NAME=value words
 LOOKUP_BUILTINS = ("command", "builtin")  # run the next word as a builtin or a program, skipping functions
+NODE_NAMES = ("node", "nodejs")  # the names node is installed under (Debian: nodejs)
 # Environment variables whose VALUE is executed by the command that follows
 # them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
 # a fixture-pinned safe row -- but these named vectors are documented command

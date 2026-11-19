@@ -66,7 +66,6 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
-        NODE_NAMES,
         PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
@@ -89,7 +88,6 @@ except ImportError:  # executed as a top-level script (no package context)
         EXEC_RUNNER_TOKENS,
         KILL_VERBS,
         MUTATION_VERBS,
-        NODE_NAMES,
         PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
         RUNTIMES,
@@ -1986,7 +1984,7 @@ def _p1_launch(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None,
             # `node --run <script>` (Node script runner) routes to the package
             # script of the effective cwd — treat as a bare script-run via P9/P8.
             nrun = _node_run_script(rest)
-            if nrun is not None and head in NODE_NAMES:
+            if nrun is not None and head in _sp.NODE_NAMES:
                 if _cwd_in_protected_build_scope(cwd, cwd_det, cfg) or cwd is None or not cwd_det:
                     return _block("P1", "node --run in a protected/indeterminate cwd")
         # direct path execution (./...mjs) — the head IS the path
@@ -2957,7 +2955,7 @@ def _p7_global_env(command: str) -> Optional[Verdict]:
             lead = None
             if _pm_word(name)[0]:
                 lead = [name] + [a or "" for a in args]
-            elif name in NODE_NAMES:
+            elif name in _sp.NODE_NAMES:
                 k = next((j for j, a in enumerate(args) if a and not a.startswith("-")), None)
                 if k is not None and _pm_word(args[k])[0]:
                     lead = [a or "" for a in args[k:]]
