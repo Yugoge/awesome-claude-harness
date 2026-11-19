@@ -3731,7 +3731,8 @@ def _dry_run_only(name, args):
 
 def outward_rule(command):
     """What acts beyond this machine with no undo: a real `npm publish`, `kubectl apply` or `kubectl create` (their
-    dry runs run), and code fetched by curl or wget piped into a shell (`curl -s URL | bash`). Read through the
+    dry runs run), and code fetched by an HTTP client (HTTP_CLIENTS: curl, wget, ...) piped into a shell
+    (`curl -s URL | bash`). Read through the
     parser (lib/shell_parse.walk, resolve), so wrappers, `bash -c` and substitutions are seen; a shell fed by a
     heredoc, a file or another program's output, and `bash script.sh`, are not refused here."""
     from lib.shell_parse import SHELLS, SimpleCommand, _stdin_redirect, parse, resolve, walk
@@ -3752,10 +3753,11 @@ def outward_rule(command):
                 res = resolve(stage) if isinstance(stage, SimpleCommand) else None
                 if fetched and res is not None and res.name in SHELLS and res.payload_kind != "shell_c" \
                         and res.stdin_shell and _stdin_redirect(stage.redirects) is None:
-                    refuse("BLOCKED: code fetched by curl or wget is piped into a shell.", f"Command: {command}",
+                    refuse("BLOCKED: code fetched by curl, wget or another HTTP client is piped into a shell.",
+                           f"Command: {command}",
                            "REASON: the code that would run is not in the command, so no rule can read it first. "
                            "Download it to a file, read it, then run the file (bash <file>).", released_line())
-                fetched = fetched or (res is not None and res.name in ("curl", "wget"))
+                fetched = fetched or (res is not None and res.name in HTTP_CLIENTS)
 
 
 def hard_ban_rule(command):

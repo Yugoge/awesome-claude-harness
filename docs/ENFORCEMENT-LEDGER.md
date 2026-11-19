@@ -845,7 +845,7 @@ no per-rule budget exists.
   compound split across lines, or a read command it does not list, is not reported. Prose only:
   nothing stops an agent from writing the compound, and the CLI then asks.
 - **S-022** — a download piped into a shell. Since 2026-11-19 the Bash rules refuse it:
-  `lib/bash_safety_rules.py` `outward_rule` refuses a pipeline in which a stage run by curl or wget feeds a later
+  `lib/bash_safety_rules.py` `outward_rule` refuses a pipeline in which a stage run by an HTTP client (`HTTP_CLIENTS`: curl, wget, nc, ...) feeds a later
   shell that reads its program from stdin, in every form and wrapper listed below and every former KNOWN_GAP
   (`| bash -euo pipefail`, `| bash /dev/fd/0`, `| X=1 bash`, `| sh`, `| zsh`); a shell fed by a heredoc, a
   here-string, a file or a local program (`cat x | bash`, `printf ... | bash`) and `bash <script>` run. The 18 ask
