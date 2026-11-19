@@ -4707,6 +4707,7 @@ def removal_policy(payload_text, command):
     if decision == "ALLOW":
         return None
     unproven = not decision or decision.startswith("DENY UNRESOLVED ")
+    named = True  # a removal the analyzer found is refused whatever the text holds
     if unproven:
         ere_file = os.path.join(LIB, "pol_degraded_removal_reference.ere")
         try:
@@ -4717,20 +4718,21 @@ def removal_policy(payload_text, command):
         if not rmref:
             refuse(f"BLOCKED: removal-policy FAIL-CLOSED — the degraded removal-reference predicate at {ere_file} is "
                        f"missing or empty. Denied conservatively.", f"Command: {command}")
-        if not grep(rmref, command):
-            return {"rule": "removal-policy", "kind": "let_through_unproven", "path": "primary" if decision else "degraded",
-                    "reason": decision[5:] or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
-    if decision:
+        named = grep(rmref, command)
+    if decision and named:
         refuse(f"BLOCKED: removal-policy — {decision[5:]}", f"Command: {command}",
                    "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. "
                    "git rm --cached, docker container rm) or a recoverable git rm (no -f, outside the harness home, no "
                    "submodule); this command has a boundary that is none of these."
                    + (" It could not be proven, and its text holds a removal word (an unproven command that holds none "
                       "runs)." if unproven else ""), released_line())
-    refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
-               "usable verdict, and this command's text holds a removal word. Denied conservatively.",
-               f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; an unproven command "
-               f"runs only when its text holds no removal word (lib/pol_degraded_removal_reference.ere).")
+    if named:
+        refuse("BLOCKED: removal-policy FAIL-CLOSED — the execution-boundary analyzer is unavailable or returned no "
+                   "usable verdict, and this command's text holds a removal word. Denied conservatively.",
+                   f"Command: {command}", f"REASON: repair the analyzer deployment at {analyzer}; an unproven command "
+                   f"runs only when its text holds no removal word (lib/pol_degraded_removal_reference.ere).")
+    return {"rule": "removal-policy", "kind": "let_through_unproven", "path": "primary" if decision else "degraded",
+            "reason": decision[5:] or "NO_VERDICT analyzer unavailable or gave no usable verdict"}
 
 
 def kill_pid_rule(command, view, sv=None):
