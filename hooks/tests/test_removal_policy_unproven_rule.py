@@ -110,7 +110,7 @@ FORBIDDEN_REMOVALS = [
     "python3 -c 'import shutil; shutil.rmtree(\"build\")'", "python3 -c 'import os; getattr(os, \"remove\")(\"x\")'",
 ]
 
-# Proven by the analyzer although the text holds a removal word (hooks/tests/fixtures/pol_primary_laxity_ledger.json).
+# Proven by the analyzer although the text holds a removal word.
 PROVEN_WITH_REMOVAL_WORD = ["man rm", "grep -rn rm README.md", "git rm --cached x", "echo \"$(printf %s rm)\""]
 PROVEN_PLAIN = ["ls -la", "git status --short", "m=0; m=$((m+1)); echo $m"]
 

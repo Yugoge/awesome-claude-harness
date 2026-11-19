@@ -83,7 +83,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     AWK_NAMES, AWK_SOURCE_OPTS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    CD_TARGET_BUILTINS, COMMAND_OPTS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
+    CD_TARGET_BUILTINS, COMMAND_OPTS, DECLARATION_BUILTINS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
     OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
     _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
@@ -253,17 +253,17 @@ def _python_removal_calls(text):
         f = node.func
         name = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
         if isinstance(f, ast.Subscript) and const(f.slice) in removal_names | {"remove"}:
-            removals.append(seg(node))
+            removals.append(seg(node.func))
         elif name in _PY_REMOVAL_CALLS or isinstance(f, ast.Name) and name in removal_names \
                 or name == "remove" and isinstance(f, ast.Attribute) and (
                     isinstance(f.value, ast.Name) and f.value.id in os_names or _py_dynamic(f.value)):
-            removals.append(seg(node))
+            removals.append(seg(node.func))
         elif name == "getattr" and len(node.args) > 1:
             attr = const(node.args[1])
             if attr is None:
                 unknown.append(seg(node))
             elif attr in _PY_REMOVAL_CALLS or attr == "remove":
-                removals.append(seg(node))
+                removals.append(seg(node.func))
         elif name in ("eval", "exec") and isinstance(f, ast.Name) and node.args:
             code = const(node.args[0])
             inner = _python_removal_calls(code) if code is not None else None
@@ -295,15 +295,13 @@ def _python_removal_calls(text):
             if not words:
                 unknown.append(seg(node))
             elif os.path.basename(words[0]) in REMOVAL_EXES:
-                removals.append(seg(node))
+                removals.append(seg(node.func))
             else:
                 command(shlex.join(words), seg(node))
     return removals, unknown
 
 
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
-# Builtins whose `NAME=value` operands assign as a leading assignment does.
-_ASSIGNING_BUILTINS = frozenset(("export", "declare", "typeset", "local", "readonly"))
 
 
 def _is_assignment(w):
@@ -427,9 +425,8 @@ def _ic(why, bool_=(), exec_=(), val=(), first_operand_ends_options=False):
             "first_operand_ends_options": first_operand_ends_options}
 
 
-# The PROOF KIND a member's operand position yields. It is carried into the
-# boundary reason code so the laxity ledger can be keyed on an
-# admissible proof kind instead of on a blanket "the head was in a table".
+# The PROOF KIND a member's operand position yields, carried into the boundary
+# reason code instead of a blanket "the head was in a table".
 _KIND_LOOKUP = "operand_of_documentation_or_query_consumer"
 _KIND_SEARCH = "search_pattern_operand"
 _KIND_OUTPUT = "literal_output_text"
@@ -1453,92 +1450,6 @@ _IC_OPAQUE_VALUE = "opaque_option_value"
 _IC_UNRESOLVABLE = "unresolvable_option_word"
 _IC_MISSING_VALUE = "missing_option_value"
 
-# The CLOSED positional-shape vocabulary. Each token names WHERE the parse
-# placed the word carrying a removal name. The ledger is keyed on
-# (reason_code, positional_shape) because a reason code alone would let an
-# element inherit a justification reading "it sits in OPERAND position" when
-# it was not in operand position.
-#
-# `unclassified` is the reserved TOTALITY fallback and is inadmissible as a
-# ledger key: a parse that cannot place the word must fail the criterion rather
-# than borrow a neighbouring entry's proof.
-SHAPE_OPERAND = "operand"
-SHAPE_POST_DOUBLE_DASH = "post_double_dash_operand"
-SHAPE_BOOL_OPTION_WORD = "declared_bool_option_word"
-SHAPE_DATA_OPTION_VALUE = "declared_data_option_value"
-SHAPE_EXEC_OPTION_VALUE = "declared_exec_option_value"
-SHAPE_UNDECLARED_SEPARATED = "undeclared_option_value_separated"
-SHAPE_UNDECLARED_ATTACHED = "undeclared_option_value_attached"
-SHAPE_SUBCOMMAND_RESOURCE = "subcommand_resource_operand"
-SHAPE_OUTPUT_SINK_LITERAL = "interpreter_string_literal_in_output_sink"
-SHAPE_PARSE_ONLY_PAYLOAD = "parse_only_payload"
-SHAPE_SCRIPT_FILE_OPERAND = "script_file_data_operand"
-SHAPE_BUILTIN_LOOKUP = "builtin_lookup_operand"
-# Heredoc bodies and assignment prefixes are positions the walk reaches and
-# covers; naming them keeps such a boundary from reporting the inadmissible
-# `unclassified` with an empty shape list.
-SHAPE_HEREDOC_BODY = "heredoc_or_herestring_body"
-SHAPE_ASSIGNMENT_PREFIX = "assignment_prefix_binding"
-SHAPE_UNCLASSIFIED = "unclassified"
-
-POSITIONAL_SHAPES = (
-    SHAPE_OPERAND, SHAPE_POST_DOUBLE_DASH, SHAPE_BOOL_OPTION_WORD,
-    SHAPE_DATA_OPTION_VALUE, SHAPE_EXEC_OPTION_VALUE,
-    SHAPE_UNDECLARED_SEPARATED, SHAPE_UNDECLARED_ATTACHED,
-    SHAPE_SUBCOMMAND_RESOURCE, SHAPE_OUTPUT_SINK_LITERAL,
-    SHAPE_PARSE_ONLY_PAYLOAD, SHAPE_SCRIPT_FILE_OPERAND,
-    SHAPE_BUILTIN_LOOKUP, SHAPE_HEREDOC_BODY, SHAPE_ASSIGNMENT_PREFIX,
-    SHAPE_UNCLASSIFIED,
-)
-
-_IC_SHAPES = {
-    _IC_OPERAND: SHAPE_OPERAND,
-    _IC_POST_DASH_OPERAND: SHAPE_POST_DOUBLE_DASH,
-    _IC_BOOL: SHAPE_BOOL_OPTION_WORD,
-    _IC_EXEC_VALUE: SHAPE_EXEC_OPTION_VALUE,
-    _IC_DATA_VALUE: SHAPE_DATA_OPTION_VALUE,
-    _IC_OPAQUE_VALUE: SHAPE_UNDECLARED_SEPARATED,
-    _IC_UNRESOLVABLE: SHAPE_UNDECLARED_ATTACHED,
-    _IC_MISSING_VALUE: SHAPE_UNDECLARED_SEPARATED,
-}
-
-_REMOVAL_MENTION_SPLIT = re.compile(r"[^A-Za-z0-9_]+")
-
-# Names the SHAPE ATTRIBUTION must recognise. Deliberately WIDER than
-# REMOVAL_EXES and matching the degraded predicate's vocabulary, because the
-# shape function has to be TOTAL over the DEGRADED-restricted domain: `man
-# rmdir` and `man remove-shell` are in that domain, and the parse must still be
-# able to say that `rmdir` sat in operand position. This list decides NO
-# verdict — widening it can only move an element from `unclassified` to a named
-# position, never from deny to allow.
-REMOVAL_NAME_MENTIONS = frozenset(REMOVAL_EXES) | frozenset((
-    "rmdir", "rmtree", "rimraf", "unlinkSync", "rmSync", "rmdirSync",
-    "removeSync", "remove", "removedirs", "remove_tree", "rm_rf", "rm_r",
-    "delete", "deleteIfExists"))
-
-
-def text_mentions_removal_name(text):
-    """Does this text CONTAIN a removal front end's name anywhere?
-
-    Deliberately weaker than recognition, and it decides NO verdict. Its only
-    job is to pick WHICH covered word the element's positional shape describes,
-    so the shape function is TOTAL over the restricted domain: `cat -- rm.txt`
-    is in that domain because the degraded predicate is a character regex, and
-    the shape must still say where `rm.txt` sat.
-    """
-    if not text:
-        return False
-    for token in _REMOVAL_MENTION_SPLIT.split(text):
-        if not token:
-            continue
-        if token in REMOVAL_NAME_MENTIONS:
-            return True
-        for piece in token.split("."):
-            if piece in REMOVAL_NAME_MENTIONS or basename(piece) in REMOVAL_EXES:
-                return True
-    return False
-
-
 def _text_is_nested_command_line(text):
     """Would this text have to be RE-PARSED as a command line to be judged?
 
@@ -1609,13 +1520,6 @@ class Analyzer:
         self.raw = raw
         self.boundaries = []
         self.discharged = set()
-        self.removal_shape = None
-        self.removal_shapes = []
-        # Shapes noted since the last boundary was recorded. They belong to the
-        # boundary about to be recorded, which is how a shape stays bound to
-        # the walk that produced the verdict instead of to whatever word
-        # happened to mention a removal name first.
-        self._pending_shapes = []
         self.depth = 0
         self.overflow = False
         # A non-forced git rm's run-time obligations (git options, pathspecs), the
@@ -1641,41 +1545,6 @@ class Analyzer:
         # sets it, so the walk of a command line itself never changes.
         self.data_reading = False
 
-    def note_removal_position(self, shape, text):
-        """Record EVERY parse-derived position a removal NAME was placed in.
-
-        Called BY THE WALK, at the moment the walk places a word — never
-        re-derived afterwards from the reason-code string, which would just be
-        the reason code wearing a second name.
-
-        FIRST PLACEMENT DOES NOT WIN. Recording only the first word that
-        merely MENTIONS a removal name would let one benign leading operand
-        capture the shape of the whole command: `cat rm.txt --opt='<payload>'
-        f` would report `operand` and borrow that entry's written proof, while
-        the same command without `rm.txt` reports
-        `undeclared_option_value_attached`.
-
-        Recording the SET means an element is covered only when every position
-        that carries a removal name is ledgered, so no position can borrow a
-        neighbour's justification.
-
-        Keying the laxity ledger on the boundary reason code alone would make
-        new laxity invisible: any command the analyzer maps onto a ledgered
-        code would inherit that entry's written positional justification even
-        when the justification does not describe it.
-        """
-        if text and text_mentions_removal_name(text):
-            if shape not in self._pending_shapes:
-                self._pending_shapes.append(shape)
-            if shape not in self.removal_shapes:
-                self.removal_shapes.append(shape)
-            if self.removal_shape is None:
-                self.removal_shape = shape
-
-    def note_removal_word(self, shape, w):
-        if w is not None:
-            self.note_removal_position(shape, w.raw.text)
-
     # -- verdict recording ---------------------------------------------------
 
     def add(self, verdict, reason, detail="", scope=None):
@@ -1684,15 +1553,7 @@ class Analyzer:
             return
         if verdict == UNRESOLVED:
             scope = "" if reason in NOT_RESIDUE else self._scope_text() if scope is None else scope
-        # EVERY position this boundary's own walk placed a removal name in.
-        # Attaching the set here is what binds the positional shape to the walk
-        # that produced the verdict: `echo "$(command -v rm)"` has an operand
-        # AND a builtin-lookup operand, but they belong to two DIFFERENT
-        # boundaries, and only the deciding one's shapes may key the ledger.
-        shapes, self._pending_shapes = self._pending_shapes, []
-        self.boundaries.append({"verdict": verdict, "reason": reason,
-                                "detail": detail[:160],
-                                "positional_shapes": shapes})
+        self.boundaries.append({"verdict": verdict, "reason": reason, "detail": detail[:160]})
         if verdict == UNRESOLVED:
             self.boundaries[-1]["scope"] = scope
 
@@ -1706,10 +1567,7 @@ class Analyzer:
         bound. It is an OBSERVABILITY channel only: ``analyze`` seeds the
         verdict from the flags themselves, never from what lands here.
         """
-        shapes, self._pending_shapes = self._pending_shapes, []
-        self.boundaries.append({"verdict": verdict, "reason": reason,
-                                "detail": detail[:160],
-                                "positional_shapes": shapes, "scope": scope})
+        self.boundaries.append({"verdict": verdict, "reason": reason, "detail": detail[:160], "scope": scope})
 
     def structural(self, reason, detail="", scope=None):
         """Unconditionally UNRESOLVED: the boundary could not be identified."""
@@ -1814,25 +1672,13 @@ class Analyzer:
             self.cover_src(w.raw)
 
     def cover_redir(self, r):
-        """Discharge a redirection, and REPORT the position it discharged.
-
-        The stdin payload of a `<<`/`<<-` heredoc and the target of a `<<<`
-        here-string are delivered to the receiving command's STDIN; they are
-        not words of its argv. The walk already reached both — the body as the
-        redirection's own (delim, quoted, body) triple, the here-string as its
-        target word — and this records SHAPE_HEREDOC_BODY for both, so neither
-        reports `unclassified` from an empty shape list. An ordinary `>`/`<`
-        target is NOT this position and stays unreported.
-        """
+        """Discharge a redirection: its target word and a here-document's body."""
         if r is None:
             return
         if r.target is not None:
             self.cover(r.target)
-            if r.op == "<<<":
-                self.note_removal_word(SHAPE_HEREDOC_BODY, r.target)
         if r.heredoc is not None and len(r.heredoc) > 2:
             self.cover_src(r.heredoc[2])
-            self.note_removal_position(SHAPE_HEREDOC_BODY, r.heredoc[2].text)
 
     # -- affirmative inertness ------------------------------------------------
 
@@ -2075,13 +1921,8 @@ class Analyzer:
                     optname, attached = lit[:2], lit[2:]
                     eq = bool(attached)
                 if optname in data_opts:
-                    if eq or attached:
-                        self.note_removal_position(SHAPE_DATA_OPTION_VALUE,
-                                                   attached)
-                    elif idx + 1 < len(residual):
+                    if not (eq or attached) and idx + 1 < len(residual):
                         skip = idx + 1
-                        self.note_removal_word(SHAPE_DATA_OPTION_VALUE,
-                                               residual[idx + 1])
                     continue
             if self.word_is_removal_reference(w):
                 self.structural(
@@ -2279,7 +2120,7 @@ class Analyzer:
         while k < len(words) and _is_assignment(words[k]):
             k += 1
         self._assigned += words[:k] + [w for w in words[k + 1:] if _is_assignment(w)
-                                       and words[k].literal() in _ASSIGNING_BUILTINS]
+                                       and words[k].literal() in DECLARATION_BUILTINS]
         if k < len(words) and words[k].literal() == "printf" and any(w.literal() == "-v" for w in words[k + 1:]):
             self._values += [self._word_text(w) for w in words[k + 1:]]  # printf -v NAME assigns its output
         try:
@@ -2338,7 +2179,6 @@ class Analyzer:
                 # Guarded by `k < len(words)` so a prefix with no following
                 # command records nothing — there is no boundary to attach to
                 # and the note would drain into an unrelated later one.
-                self.note_removal_word(SHAPE_ASSIGNMENT_PREFIX, w)
         if k:  # a variable (GIT_DIR, HOME, PATH, ...) a later git may run with
             self.git_rm_unresolved = self.git_rm_unresolved or "variable assignment"
         for w in words[:k]:
@@ -2564,7 +2404,6 @@ class Analyzer:
         """
         model = INERT_ARGV_CONSUMERS[base]
         for kind, opt, value, words in self._ic_canonicalize(args, model):
-            post_dash = kind is _IC_POST_DASH_OPERAND
             if kind is _IC_UNRESOLVABLE:
                 # This word's option/value split is unreadable, but that is a
                 # reason to ask the ONE predicate about every split — not a
@@ -2593,16 +2432,8 @@ class Analyzer:
                         "option_value_removal_reference",
                         "%s:%s" % (name, (opt + "=" + value.describe())[:60]))
                     return
-            shape = _IC_SHAPES[kind]
-            if kind is _IC_OPAQUE_VALUE and value is not None:
-                shape = (SHAPE_UNDECLARED_ATTACHED if value.text is not None
-                         else SHAPE_UNDECLARED_SEPARATED)
-            if value is not None:
-                self.note_removal_position(shape, value.describe())
             for w in words:
                 self.cover(w)
-                self.note_removal_word(
-                    SHAPE_POST_DOUBLE_DASH if post_dash else shape, w)
         for r in (redirs or ()):
             self.cover_redir(r)
         self.add(PROVEN_INERT,
@@ -2813,7 +2644,6 @@ class Analyzer:
             # -v/-V resolve a NAME and print it; they never run it.
             for w in args:
                 self.cover(w)
-            self.note_removal_position(SHAPE_BUILTIN_LOOKUP, self.raw)
             self.add(PROVEN_INERT, "command_lookup_only", "command -v")
             return
         payload = args[i:]
@@ -2914,7 +2744,6 @@ class Analyzer:
                 env.hashed[alias] = target
         for w in args:  # hash records a NAME in the lookup table; it runs nothing
             self.cover(w)
-        self.note_removal_position(SHAPE_BUILTIN_LOOKUP, self.raw)
         self.add(PROVEN_INERT, "hash_builtin", "hash")
 
     def _h_alias(self, name, args, redirs, env, piped):
@@ -3333,7 +3162,6 @@ class Analyzer:
                 self.cover(w)
             for r in (redirs or ()):
                 self.cover_redir(r)
-            self.note_removal_position(SHAPE_PARSE_ONLY_PAYLOAD, self.raw)
             self.add(PROVEN_INERT, "shell_parse_only", name)
             return
         if code_word is not None:
@@ -3452,7 +3280,6 @@ class Analyzer:
                     return
             for w in args:  # script file + its data operands
                 self.cover(w)
-            self.note_removal_position(SHAPE_SCRIPT_FILE_OPERAND, self.raw)
             self.add(PROVEN_INERT, "interpreter_script_file", base)
             return
         if code.literal() is None:
@@ -3483,14 +3310,10 @@ class Analyzer:
         """
         text, why = _program_with_placeholders(code, base, self.raw)
         mark = len(self.boundaries)
-        saved = (list(self._pending_shapes), list(self.removal_shapes),
-                 self.removal_shape)
         self._classify_inline_code(base, text)
         if any(b["verdict"] != PROVEN_INERT for b in self.boundaries[mark:]):
             return
         del self.boundaries[mark:]
-        self._pending_shapes, self.removal_shapes, self.removal_shape = (
-            saved[0], saved[1], saved[2])
         if why:
             self.structural("interpreter_expansion_changes_program",
                             "%s:%s" % (base, why))
@@ -3502,6 +3325,8 @@ class Analyzer:
         # and only CALLS count (_python_removal_calls). Code that is not Python keeps the scans below.
         if re.match(r"python[0-9.]*$", base):
             found = _python_removal_calls(text)
+            if found is None and text.startswith("-c"):  # the attached form: `-c"<program>"`
+                found = _python_removal_calls(text[2:])
             if found is not None:
                 removals, unknown = found
                 if removals:
@@ -3546,7 +3371,6 @@ class Analyzer:
                 self.scoped("interpreter_removal_token_not_proven_inert",
                             "%s:%s" % (base, sink or "<none>"))
                 return
-        self.note_removal_position(SHAPE_OUTPUT_SINK_LITERAL, self.raw)
         self.add(PROVEN_INERT, "interpreter_removal_token_in_output_sink", base)
 
     # -- git -----------------------------------------------------------------
@@ -3647,7 +3471,6 @@ class Analyzer:
             # messages) — but `git submodule foreach '<removal>'` and
             # `git bisect run '<removal>'` hand a command line onward, so the
             # residual is proved rather than assumed.
-            self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
             self._terminal_inert(
                 "git_non_removal_subcommand", "git " + sub, rest,
                 data_opts=() if sub in GIT_PAYLOAD_FORWARDING_SUBCOMMANDS
@@ -3701,13 +3524,11 @@ class Analyzer:
             loc = None
         if cached:
             # --cached removes from the index only; the working tree is untouched.
-            self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
             self.add(PROVEN_SAFE_REMOVAL, "git_rm_cached_index_only", "git rm --cached")
         elif unproven or not direct or loc is None or any(x is None or "~" in x for x in loc + paths):
             self.add(FORBIDDEN_REMOVAL, "git_rm_worktree", "git rm")
         else:
             # Recoverable; prove_git_rm checks the repository at run time.
-            self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
             self.git_rm.append({"git": loc, "paths": paths})
             self.add(PROVEN_SAFE_REMOVAL, "git_rm_recoverable", "git rm")
 
@@ -3750,7 +3571,6 @@ class Analyzer:
             # Removing a container / image / volume / network is a Docker
             # resource operation; it does not delete host filesystem paths.
             self.cover(args[i])  # this `rm` was resolved as a Docker resource op
-            self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
             self.add(PROVEN_SAFE_REMOVAL, "docker_resource_removal",
                      "%s %s" % (name, sub))
             return
@@ -4073,37 +3893,6 @@ def analyze(raw):
         # text the removal policy asks its word list of. An empty scope is not residue.
         result["unresolved_scopes"] = [b["scope"] for b in az.boundaries
                                        if b["verdict"] == UNRESOLVED and b["scope"]]
-    # The parse-derived positional shape(s) in which a removal reference was
-    # COVERED. The ledger is keyed on (reason_code, positional_shape);
-    # "none" means no inert-consumer argv walk authorized a removal reference,
-    # so the proof rests entirely on the reason code's own site.
-    # EVERY position placed by EVERY boundary that CARRIES THE FINAL VERDICT —
-    # not just the first mention, and not the first co-winning boundary.
-    #
-    # Picking the first MENTION would let a benign leading operand supply the
-    # proof for laxity sitting in an option value (`cat rm.txt --opt='<payload>'
-    # f` would report `operand`, while the same command without `rm.txt`
-    # reports `undeclared_option_value_attached`).
-    #
-    # Picking the first co-winning BOUNDARY is the same defect one level up:
-    # `ack rm.txt --pager rm.txt T` would report ['operand'] while a second
-    # PROVEN_INERT boundary recorded `declared_exec_option_value`. The union
-    # can only ever report MORE positions, so it can only ever make coverage
-    # harder, and it keeps such commands from reporting `unclassified`.
-    #
-    # Boundaries that do NOT carry the final verdict are still excluded: a
-    # position belonging to a losing boundary is not a position the winning
-    # proof is responsible for. Walk order is preserved so the ledger's
-    # "counted once, under the shape the walk reached first" stays well defined.
-    shapes = []
-    for b in az.boundaries:
-        if b["verdict"] != verdict:
-            continue
-        for shape in b["positional_shapes"]:
-            if shape not in shapes:
-                shapes.append(shape)
-    result["removal_positional_shapes"] = shapes or [SHAPE_UNCLASSIFIED]
-    result["removal_positional_shape"] = result["removal_positional_shapes"][0]
     if result["allowed"] and az.git_rm:
         result["git_rm_proof"] = {"cwds": az.git_rm_cwds, "removals": az.git_rm}
     # A command whose only unsafe boundaries are removals that name every file they remove: the
