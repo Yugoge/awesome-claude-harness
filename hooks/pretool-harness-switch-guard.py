@@ -60,15 +60,13 @@ import re  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
 import shell_parse  # noqa: E402 -- the one reading of a Bash command
+import bash_read_only  # noqa: E402 -- the one list of the programs that only read
 sys.path.pop(0)
 
 HOME = harness_switch.harness_home()
 STATE_DIR = os.path.join(HOME, harness_switch.DIR_NAME)
 SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json")
 SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
-READ_ONLY = {"cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "wc", "ls", "stat",
-             "file", "jq", "diff", "cmp", "md5sum", "sha256sum", "test", "[", "echo", "printf", "realpath",
-             "readlink", "basename", "dirname", "find"}
 GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "check-attr", "cat-file",
                  "grep", "rev-parse", "stash"}
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
@@ -172,7 +170,12 @@ def _commands(command: str, bodies: str, every_word: bool = False, depth: int = 
         yield words, [m.group(1) or nxt for w, nxt in zip(words, words[1:] + [""]) for m in [FALLBACK_REDIRECT.match(w)] if m]
 
 
+REDIRECT_OP = re.compile(r"(?:\d*|&|\{\w+\})[<>][<>&|-]*\Z")  # an operator _commands appends with its target
+
+
 def _read_only(words: list) -> bool:
+    """The command writes no file a word of it names: a reader of hooks/lib/bash_read_only.py
+    (its pagers included) whose arguments pass that program's check, or a reading git call."""
     words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
     if not words:
         return True
@@ -180,7 +183,13 @@ def _read_only(words: list) -> bool:
     if head == "git":
         sub = next((w for w in words[1:] if not w.startswith("-")), "")
         return sub in GIT_READ_ONLY and "-delete" not in words
-    return head in READ_ONLY and "-delete" not in words and "-exec" not in words
+    args, it = [], iter(words[1:])
+    for w in it:
+        if REDIRECT_OP.match(w):
+            next(it, None)  # a redirection's target is a written path of its own (write_targets)
+        else:
+            args.append(w)
+    return bash_read_only.reads_only(head, args, pagers=True)
 
 
 def _written_words(words: list, written: list, everything=None) -> list:

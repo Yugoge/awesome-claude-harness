@@ -47,6 +47,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib import bash_read_only  # noqa: E402 -- the one list of the programs that only read
+sys.path.pop(0)
 
 SENTINEL_NAME = '.hook-refactor-allow'
 BLOCK_LITERAL = 'BLOCKED: claude config guard'
@@ -178,16 +181,12 @@ _FED = frozenset({'pipe', 'heredoc', 'herestring'})
 _CODE_CHARS = re.compile(r'[\s;|&<>`]|\$\(')
 
 # Commands that write nothing a word of theirs names, whatever the words say (a message, a pattern,
-# a file read): a protected folder named by one of them is not written.
-_READERS = frozenset({
-    'echo', 'printf', 'cat', 'grep', 'egrep', 'fgrep', 'head', 'tail', 'wc', 'ls', 'stat', 'file',
-    'du', 'diff', 'cmp', 'realpath', 'readlink', 'basename', 'dirname', 'test', '[', 'true', 'false',
-    ':', 'pwd', 'md5sum', 'sha1sum', 'sha256sum', 'sha512sum', 'cksum', 'b2sum', 'nl', 'cut', 'tr',
-    'od', 'hexdump', 'strings', 'tac', 'comm', 'which', 'type',
-})
+# a file read), are hooks/lib/bash_read_only.py's readers (reads_only, pagers included): a protected
+# folder named by one of them is not written.
 # Commands that read their standard input as data, never as code: fed a protected folder's name or
 # text, they write nothing through it (a write verb's targets come from the parser).
-_STDIN_DATA = _READERS | {'tee', 'sed', 'sort', 'uniq', 'jq', 'xxd', 'less', 'more'}
+_STDIN_DATA = (bash_read_only.ANY_ARGS | frozenset(bash_read_only.PAGERS)
+               | {'printf', 'test', '[', 'file', 'tee', 'sed', 'sort', 'uniq', 'xxd'})
 # Commands whose path operands the guard reads (the parser's write verbs and the item-4 readers
 # below): a protected folder they name as a plain path is read or is a write target the parser or
 # _site_writes finds; one named inside code-looking text (`rsync -e 'cp x ...'`) is not settled.
@@ -281,7 +280,7 @@ def _site_settled(sp, raw: str, site, res, names_any: bool) -> bool:
     name = res.name
     if name is None or site.dynamic:
         return False
-    if name in _READERS:
+    if name != 'git' and bash_read_only.reads_only(name, [w.value() for w in res.args], pagers=True):
         return True
     if name == 'git':
         return _git_settled(res, raw)
@@ -566,8 +565,10 @@ def _site_writes(sp, raw: str, res) -> list:
         for k, v in enumerate(vals):
             if v in ('-fprint', '-fprint0', '-fprintf', '-fls') and k + 1 < len(args):
                 out.append((args[k + 1].value() or args[k + 1].text, args[k + 1]))
-        runs = [vals[k + 1] for k, v in enumerate(vals) if v in _FIND_RUN and k + 1 < len(vals)]
-        if '-delete' in vals or any(os.path.basename(r) not in _READERS for r in runs):
+        runs = [vals[k + 1:k + 1 + next((j for j, x in enumerate(vals[k + 1:]) if x in (';', '+')), len(vals))]
+                for k, v in enumerate(vals) if v in _FIND_RUN and k + 1 < len(vals)]
+        if '-delete' in vals or any(not bash_read_only.reads_only(os.path.basename(r[0]), r[1:], pagers=True)
+                                    for r in runs):
             # what find removes, or hands to a command that may write it: every start path
             out += [(w.value() or w.text, w) for w in starts]
     return [(text, word) for text, word in out if text]
@@ -795,7 +796,7 @@ def _parsed_kind(command: str) -> tuple:
 
 # The proof that lets a command the base reading refuses go through (_proven_harmless).
 # Commands that write nothing and run nothing, whatever their words say.
-_PURE_READERS = (_READERS - {'printf', 'file'}) | {'exit', 'sleep', 'wait'}
+_PURE_READERS = bash_read_only.ANY_ARGS | {'test', '[', 'exit', 'sleep', 'wait'}
 # Write verbs whose every written path the shared parser reads (with sed -i and touch read here).
 _PROOF_WRITERS = frozenset({'cp', 'mv', 'install', 'tee', 'rm', 'rmdir', 'unlink', 'truncate', 'touch', 'sed'})
 _PROOF_WRAPPERS = frozenset({'env', 'timeout', 'nice', 'command', 'exec', 'setsid'})
