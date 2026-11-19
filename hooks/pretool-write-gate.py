@@ -106,7 +106,7 @@ def _runs(rules, raw: bytes, tool=None) -> list:
 
 
 def _recorded(raw: bytes, results, combine):
-    """The gate's answer, after one line in the refusal record (lib/refusal_record.py) when it refuses: each
+    """The gate's answer, after a report to the refusal record (lib/refusal_record.py) when it refuses: each
     refusing rule with its own reason, as ``combine`` reads that rule alone. Nothing here changes the answer."""
     answer = combine(results)
     if answer.code == 2:
@@ -114,7 +114,7 @@ def _recorded(raw: bytes, results, combine):
             from lib import refusal_record
             rules = [(rule.file, alone.stderr) for rule, run in results
                      for alone in [combine([(rule, run)])] if alone.code == 2]
-            refusal_record.write(raw, rules, __file__)
+            refusal_record.report(raw, rules, __file__)
         except Exception:
             pass
     return answer

@@ -7,7 +7,9 @@
   launcher's other rules, the shell hook of the same call; a hook's own report replaces what its
   parent said of it. A retry is a line of its own. A let-through (UNPROVEN) is its own kind.
 - Recording never decides: where the record cannot be written (no home, no space, a held lock, an
-  unreadable payload) write() returns False, raises nothing, and a launcher answers as it did.
+  unreadable payload) write() returns False, raises nothing, and a launcher answers as it did. A hook
+  reports through report(), which runs the writer as a process of its own: a writer that is missing,
+  fails or hangs changes nothing for the hook, and a payload that names no event starts no process.
 - The directory is private, the days past KEEP_DAYS go, a day's file stops at MAX_DAY_BYTES, and
   writers running at once lose no line.
 - Writer and reader resolve one directory in each layout: ~/.claude itself; a home elsewhere reached
@@ -270,6 +272,41 @@ def test_a_held_lock_is_waited_for_a_bounded_time_then_given_up(monkeypatch):
         assert time.process_time() - started < 1.0                          # CPU seconds: it sleeps, it does not spin
     assert R.write(payload(call="toolu_02"), *REPORTS[0]) is True
     assert len(lines()) == 2
+
+
+def test_a_hook_reports_through_a_writer_process_of_its_own(monkeypatch):
+    R.report(json.dumps(payload()).encode(), [(str(HOOKS / "pretool-tool-policy.py"), "BLOCKED by x: no\n"),
+                                              ("hooks/lib/write_gate/overwrite.py", "")], str(HOOKS / "pretool-write-gate.py"))
+    R.report(payload(call="toolu_02"), [("hooks/lib/bash_safety_rules.py", "BLOCKED: removal-policy \u2014 UNRESOLVED x:y")],
+             "hooks/lib/bash_safety_rules.py", R.UNPROVEN)
+    first, second = lines()
+    assert [(r["hook"], r["id"], r["by"]) for r in first["rules"]] == [      # one report: the rules in its order
+        ("hooks/pretool-tool-policy.py", "blocked-by-x-no", "hooks/pretool-write-gate.py"),
+        ("hooks/lib/write_gate/overwrite.py", "", "hooks/pretool-write-gate.py")]
+    assert (first["kind"], second["kind"], second["tool_use_id"]) == ("refusal", "unproven", "toolu_02")
+    assert second["rules"][0]["id"] == "blocked-removal-policy-unresolved-x"
+    R.report(payload(call="toolu_03"), [("hooks/x.py", "no")], "hooks/x.py", "another kind")    # no such kind: no line
+
+
+def test_a_report_never_raises_and_starts_nothing_for_a_payload_without_an_event(monkeypatch):
+    def never(*_a, **_k):
+        raise AssertionError("a writer process was started")
+    monkeypatch.setattr(R.subprocess, "run", never)
+    for p, rules in ((payload(event=None), [("hooks/x.py", "no")]), (payload(event="SessionStart"), [("hooks/x.py", "no")]),
+                     (b"not json", [("hooks/x.py", "no")]), (payload(), [])):
+        assert R.report(p, rules, "hooks/x.py") is None
+    monkeypatch.undo()
+    monkeypatch.setattr(R.sys, "executable", "/nonexistent/python")           # the writer cannot start
+    assert R.report(payload(), [("hooks/x.py", "no")], "hooks/x.py") is None
+    monkeypatch.setattr(R.sys, "executable", "/bin/false")                    # the writer fails
+    assert R.report(payload(), [("hooks/x.py", "no")], "hooks/x.py") is None
+    monkeypatch.setattr(R, "REPORT_WAIT", 0.2)
+    monkeypatch.setattr(R.sys, "executable", "/bin/sleep")                    # the writer hangs: sleep <path> ... fails at once,
+    monkeypatch.setattr(R.os.path, "abspath", lambda _p: "30")                # so it is told to sleep 30 s instead
+    started = time.monotonic()
+    assert R.report(payload(), [], "hooks/x.py") is None and R.report(payload(), [("1", "1")], "1", "1") is None
+    assert time.monotonic() - started < 20
+    assert lines() == []
 
 
 LAUNCHER = """

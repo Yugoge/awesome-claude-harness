@@ -7,12 +7,13 @@ it lives; scripts/refusals reads it (totals, counts, loops, the reconcile with t
 
 Who reports. The process that sees a hook refuse, naming the refusing hook file and the text it gave
 the agent: a launcher (lib/hook_launch.py) its rules, a gate (hooks/pretool-write-gate.py,
-lib/gate_runner.py) the rules of its table, lib/bash_safety_rules.py itself; hooks/stop-launch.py
-(the Stop coordinator's block, or its own) and a shell hook (at its exit 2) through this file's
-command line, a process of its own. The reports of one call merge into one line (``same``,
-``merge``): a hook that reported its own rules replaces what its parent said of it. A payload that
-names no refusing event (a canary's probe, a unit test's input) is no call of the CLI and is not
-recorded.
+lib/gate_runner.py) the rules of its table, lib/bash_safety_rules.py itself, hooks/stop-launch.py
+the Stop coordinator's block or its own, a shell hook its exit 2 (lib/refusal_record.sh). Each
+reports through this file's command line (``report``): the writer runs as a process of its own, so
+one program writes the record and nothing it does reaches the hook that reported. The reports of
+one call merge into one line (``same``, ``merge``): a hook that reported its own rules replaces what
+its parent said of it. A payload that names no refusing event (a canary's probe, a unit test's
+input) is no call of the CLI: nothing is started and nothing recorded.
 
 Where. ``directory()``: <user's home>/.local/state/claude-harness/<harness home's name>-<crc32 of
 its real path>/refusals/refusals-<UTC day>.jsonl. The harness home is the one lib/harness_switch.py
@@ -22,7 +23,8 @@ tmpfs, private to the user (directory 0700, files 0600). A day's file stops grow
 and the days older than KEEP_DAYS go when a new day's file starts.
 
 Recording never decides: ``write`` returns False where it cannot write (no space, no permission, the
-day file's lock not free within LOCK_WAIT seconds) and never raises; no caller reads what it returns.
+day file's lock not free within LOCK_WAIT seconds) and never raises; ``report`` waits at most
+REPORT_WAIT seconds for the writer and reads nothing back from it.
 
 Kinds. REFUSAL; UNPROVEN, a command the removal policy could not prove safe and let through: the
 same fields, counted apart by the reader and left out of its reconcile.
@@ -33,6 +35,7 @@ import fcntl
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import zlib
@@ -50,7 +53,8 @@ REFUSAL, UNPROVEN = "refusal", "unproven"
 # The events at which a hook's exit 2 refuses something: a call before or after it ran, a prompt, a stop.
 EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "SubagentStop")
 KEEP_DAYS, MAX_DAY_BYTES = 90, 16 << 20
-LOCK_WAIT, SAME_CALL = 2.0, 30          # seconds
+LOCK_WAIT, SAME_CALL, REPORT_WAIT = 2.0, 30, 10   # seconds
+TEXT_MAX = 4000                         # characters of a rule's text handed to the writer
 TAIL = 1 << 18                          # bytes of the day file searched for an earlier report of the call
 REFUSED_MAX, MESSAGE_MAX, RULES_MAX, WORDS = 400, 800, 12, 8
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_.'+-]*$")
@@ -177,6 +181,20 @@ def merge(old: dict, new: dict) -> dict:
     return dict(old, rules=rules[:RULES_MAX], message=message[:MESSAGE_MAX], tool="|".join(tools) or None)
 
 
+def report(payload, rules, by, kind=REFUSAL) -> None:
+    """A hook's report of one call it refused (or, kind=UNPROVEN, let through unproven): ``write``, run as a
+    process of its own through this file's command line. A payload that names no refusing event starts
+    nothing. Never raises; whatever the writer does, the hook goes on."""
+    try:
+        p, rules = _payload(payload), [(str(h), str(t)[:TEXT_MAX].replace("\0", " ")) for h, t in rules]
+        if p.get("hook_event_name") in EVENTS and rules:
+            raw = payload if isinstance(payload, bytes) else json.dumps(p).encode("utf-8", "replace")
+            subprocess.run([sys.executable, os.path.abspath(__file__), kind, str(by), *(x for rule in rules for x in rule)],
+                           input=raw, capture_output=True, timeout=REPORT_WAIT)
+    except Exception:  # noqa: BLE001 - a report that cannot be made changes nothing
+        pass
+
+
 def write(payload, rules, by, kind=REFUSAL) -> bool:
     """Record one call that hooks refused (or, kind=UNPROVEN, let through unproven).
 
@@ -184,20 +202,23 @@ def write(payload, rules, by, kind=REFUSAL) -> bool:
     pairs, one per refusing rule; by: the hook file that reports them. True when the record holds the
     report (a new line, or merged into the call's line). Never raises."""
     try:
-        return _write(payload, list(rules), by, kind)
+        return _write(_payload(payload), list(rules), by, kind)
     except Exception:  # noqa: BLE001 - a record that cannot be written changes nothing
         return False
 
 
-def _write(payload, rules, by, kind) -> bool:
+def _payload(payload) -> dict:
     if isinstance(payload, (bytes, str)):
         try:
             payload = json.loads(payload)
         except ValueError:
             payload = None
-    p = payload if isinstance(payload, dict) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write(p: dict, rules, by, kind) -> bool:
     event = p.get("hook_event_name")
-    if event not in EVENTS or not rules:
+    if event not in EVENTS or not rules or kind not in (REFUSAL, UNPROVEN):
         return False
     tool_input = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
     refused = next((tool_input[k] for k in ("command", "file_path", "notebook_path")
@@ -278,5 +299,5 @@ def _append(record: dict, now: float) -> bool:
         os.close(fd)
 
 
-if __name__ == "__main__":  # a shell hook's report: <reporting hook> <refusing hook> [its text], the payload on stdin
-    write(sys.stdin.buffer.read(), [(sys.argv[2], " ".join(sys.argv[3:]))], sys.argv[1])
+if __name__ == "__main__":  # a report: <kind> <reporting hook> then <refusing hook> <its text> per rule; the payload on stdin
+    write(sys.stdin.buffer.read(), list(zip(sys.argv[3::2], sys.argv[4::2])), sys.argv[2], sys.argv[1])

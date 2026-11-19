@@ -37,11 +37,11 @@ def refuse(*lines):
 
 
 def record(text, kind="refusal"):
-    """One line for this call in the refusal record (lib/refusal_record.py): a refusal, or kind "unproven" for a
+    """A report of this call to the refusal record (lib/refusal_record.py): a refusal, or kind "unproven" for a
     command the removal policy lets through unproven. It never changes the verdict."""
     try:
         import refusal_record
-        refusal_record.write(PAYLOAD, [(__file__, text)], __file__, kind)
+        refusal_record.report(PAYLOAD, [(__file__, text)], __file__, kind)
     except Exception:  # noqa: BLE001
         pass
 

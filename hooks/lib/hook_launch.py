@@ -390,14 +390,14 @@ def _write(fd, text: str) -> None:
 
 
 def refused(event: str, results, raw: bytes, code) -> None:
-    """One line in the refusal record (lib/refusal_record.py) when the answer is a refusal: each refusing hook
+    """A report to the refusal record (lib/refusal_record.py) when the answer is a refusal: each refusing hook
     with its own reason, as ``combine`` reads that hook alone. Nothing here changes the answer."""
     if code != 2:
         return
     try:
         from . import refusal_record
         rules = [(r.rule.file, alone[2]) for r in results for alone in [combine(event, [r])] if alone[0] == 2]
-        refusal_record.write(raw, rules, os.path.join(HOOKS, os.path.basename(sys.argv[0])))
+        refusal_record.report(raw, rules, os.path.join(HOOKS, os.path.basename(sys.argv[0])))
     except Exception:
         pass
 
