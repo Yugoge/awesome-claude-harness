@@ -71,6 +71,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import locations  # noqa: E402
 
 ABSENT = "absent"            # file does not exist (pre of a create / post of a delete)
 OVERSIZE = "oversize"        # too large to blob; hash not recorded
@@ -155,8 +156,8 @@ def extract_targets(tool_name: str, tool_input: dict, cwd: str) -> List[str]:
         if not r or "$" in r:                            # unresolved vars
             continue
         p = resolve_target(r, cwd)
-        # device sinks (/dev/null, /dev/stderr, ...) -- but /dev/shm is a real tmpfs tree
-        if p.startswith("/dev/") and not p.startswith("/dev/shm/"):
+        # device sinks (/dev/null, /dev/stderr, ...) -- a tmpfs tree mounted there is real files
+        if locations.is_device(p):
             continue
         if p not in seen:
             seen.add(p)

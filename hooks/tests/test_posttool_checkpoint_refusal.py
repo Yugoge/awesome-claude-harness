@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -99,6 +100,9 @@ def _machine_form(home: Path, env: dict) -> None:
     (home / "settings.json").write_bytes(rendered)
 
 
+LEFT_OUT = "left out 1 file(s) holding a private literal: leak.txt"
+
+
 @pytest.mark.parametrize("case, rule", [("literal", LITERAL_RULE), ("settings", SETTINGS_CHECK)])
 @pytest.mark.parametrize("silent", ["0", "1"])
 def test_refused_threshold_snapshot_prints_its_notice_as_the_whole_stdout(
@@ -117,7 +121,12 @@ def test_refused_threshold_snapshot_prints_its_notice_as_the_whole_stdout(
     proc = _post_tool_use(home, env, written)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    notice = f"Checkpoint snapshot refused by {rule}: nothing written, see logs/checkpoint.log"
+    head = f"refused by {rule}: nothing written" if case == "settings" else LEFT_OUT
+    notice = json.loads(proc.stdout)["systemMessage"]
+    assert re.fullmatch(re.escape(f"Checkpoint snapshot {head}, see logs/checkpoint.log;")
+                        + r" no complete snapshot of refs/checkpoints/main since \S+ \S+ \(1 in a row\)",
+                        notice), notice
+    log = (Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / "checkpoint.log").read_text()
     assert json.loads(proc.stdout) == {
         "systemMessage": notice,
         "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": notice},
@@ -126,8 +135,8 @@ def test_refused_threshold_snapshot_prints_its_notice_as_the_whole_stdout(
     assert "Checkpoint failed" not in proc.stdout + proc.stderr
     assert STANDIN not in proc.stdout + proc.stderr
     assert _git(env, home, "for-each-ref", "refs/checkpoints") == ""
-    log = (Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / "checkpoint.log").read_text()
-    assert f"snapshot refused by {rule}: nothing written" in log and STANDIN not in log
+    assert (f"snapshot refused by {rule}: nothing written" if case == "settings" else LEFT_OUT) in log
+    assert STANDIN not in log
 
 
 def test_ordinary_threshold_snapshot_says_nothing(harness) -> None:

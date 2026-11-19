@@ -20,7 +20,8 @@
 #   1. read-tree parent tree (or --empty for bootstrap)
 #   2. git add -A into a TEMP index (GIT_INDEX_FILE); return 3 when the settings clean filter refuses
 #   2b. hard-exclude known PII file classes from the temp index (independent of .gitignore)
-#   2c. return 3, writing nothing, when the pre-commit hook's own checks refuse the temp index
+#   2c. leave out (at HEAD's version) each file the private-literal rule names, then return 3,
+#       writing nothing, when the pre-commit hook's own checks still refuse the temp index
 #   3. git write-tree  -> TREE_SHA
 #   4. if TREE_SHA == PARENT_TREE_SHA -> return 0 (idempotent)
 #   5. git commit-tree TREE_SHA [-p PARENT_SHA] -m "<msg>"  -> NEW_SHA
@@ -98,9 +99,10 @@ CHECKPOINT_PII_PATH_COMPONENTS="${CHECKPOINT_PII_PATH_COMPONENTS:-backups sessio
 _checkpoint_pii_pattern='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|sk-[A-Za-z0-9]{20}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+'
 CHECKPOINT_PII_SIGNATURE_PATTERN="${CHECKPOINT_PII_SIGNATURE_PATTERN:-$_checkpoint_pii_pattern}"
 
-# Consecutive-failure alerting (2026-04-16): the 3rd back-to-back write_checkpoint failure prints
-# one stderr alert; any success resets the counter, and a refusal (rc 3) leaves it alone.
-CHECKPOINT_FAIL_COUNT_FILE="${CHECKPOINT_FAIL_COUNT_FILE:-${CHECKPOINT_LOG_DIR}/.checkpoint-fail-count}"
+# Consecutive incomplete (failed, refused, left a file out) snapshots of one ref of one repository:
+# "<count> <since>" in <git dir>/checkpoint-fail-count.<ref name> unless this names a file. The 3rd
+# alerts on stderr; only a complete snapshot of that ref resets it (never another project's).
+CHECKPOINT_FAIL_COUNT_FILE="${CHECKPOINT_FAIL_COUNT_FILE:-}"
 CHECKPOINT_FAIL_ALERT_THRESHOLD="${CHECKPOINT_FAIL_ALERT_THRESHOLD:-3}"
 
 # Internal: timestamped log line to checkpoint.log
@@ -123,28 +125,36 @@ _checkpoint_push_log() {
     printf '[%s] [%s] %s\n' "$ts" "$level" "$*" >> "$CHECKPOINT_PUSH_LOG_FILE" 2>/dev/null || true
 }
 
-# Internal: atomically (temp-file rename, safe against racing hooks) increment the consecutive-
-# failure counter, and emit one stderr CHECKPOINT ALERT when the threshold is reached.
+# Internal: atomically (temp-file rename, safe against racing hooks) count one more incomplete
+# snapshot, set checkpoint_streak, and emit one stderr CHECKPOINT ALERT at the threshold.
 _checkpoint_record_failure() {
+    local file="${count_file:-${CHECKPOINT_FAIL_COUNT_FILE:-$CHECKPOINT_LOG_DIR/.checkpoint-fail-count}}" current="" since=""
     mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null
-    local current=0
-    if [ -f "$CHECKPOINT_FAIL_COUNT_FILE" ]; then
-        current=$(cat "$CHECKPOINT_FAIL_COUNT_FILE" 2>/dev/null | tr -dc '0-9')
-        current=${current:-0}
-    fi
-    local next=$((current + 1))
-    local tmp="${CHECKPOINT_FAIL_COUNT_FILE}.$$"
-    printf '%s\n' "$next" > "$tmp" 2>/dev/null && mv -f "$tmp" "$CHECKPOINT_FAIL_COUNT_FILE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    [ -f "$file" ] && read -r current since < "$file" 2>/dev/null
+    current=${current//[^0-9]/} since=${since:-$(date '+%Y-%m-%d %H:%M:%S')}
+    local next=$((${current:-0} + 1)) tmp="${file}.$$"
+    printf '%s %s\n' "$next" "$since" > "$tmp" 2>/dev/null && mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    checkpoint_streak="no complete snapshot of ${ref:-this repository} since ${since} (${next} in a row)"
     if [ "$next" -ge "$CHECKPOINT_FAIL_ALERT_THRESHOLD" ]; then
-        echo "[CHECKPOINT ALERT] ${next} consecutive write failures — check ${CHECKPOINT_LOG_FILE}" >&2
+        echo "[CHECKPOINT ALERT] ${checkpoint_streak} — check ${CHECKPOINT_LOG_FILE}" >&2
     fi
 }
 
-# Internal: reset the consecutive-failure counter on a successful write.
+# Internal: reset the counter on a complete snapshot; one written without a file counts instead.
 _checkpoint_record_success() {
-    if [ -f "$CHECKPOINT_FAIL_COUNT_FILE" ]; then
-        printf '0\n' > "$CHECKPOINT_FAIL_COUNT_FILE" 2>/dev/null || true
+    if [ -n "$checkpoint_left_out" ]; then
+        _checkpoint_record_failure
+        checkpoint_notice="Checkpoint snapshot left out ${checkpoint_left_out}, see logs/checkpoint.log; ${checkpoint_streak}"
+    elif [ -f "$count_file" ]; then
+        printf '0\n' > "$count_file" 2>/dev/null || true
     fi
+}
+
+# Internal: log and count a snapshot refused by $checkpoint_refused_by, and set its one-line notice.
+_checkpoint_refused() {
+    _checkpoint_log ERROR "snapshot refused by ${checkpoint_refused_by}: nothing written (ref=${ref})"
+    _checkpoint_record_failure
+    checkpoint_notice="Checkpoint snapshot refused by ${checkpoint_refused_by}: nothing written, see logs/checkpoint.log; ${checkpoint_streak}"
 }
 
 # Internal: compute git dir (.git) for the repo at <work_dir>
@@ -454,10 +464,14 @@ ${CLAUDE_CHECKPOINT_EXTRA_TRAILER}}"
 #   1  build/CAS failure after retries
 #   2  not a git repo
 #   3  refused at step 2 or 2c: nothing written; checkpoint_refused_by names the rule(s), no value
+# checkpoint_notice: the one line for the session when the snapshot was refused or left a file out
+# (checkpoint_left_out names them, never a value); checkpoint_streak: the run it extends, if any.
 write_checkpoint() {
     local work_dir="${1:-}"
     local trigger="${2:-unknown}"
     local custom_message="${3:-}"
+    local count_file="" ref=""
+    checkpoint_notice="" checkpoint_streak="" checkpoint_left_out=""
 
     # /harness off: no snapshot is written, by any writer (hooks/lib/harness_switch.sh)
     if . "${BASH_SOURCE[0]%/*}/harness_switch.sh" 2>/dev/null && harness_switch_off; then
@@ -491,7 +505,7 @@ write_checkpoint() {
     _checkpoint_sweep_stale_indexes "$abs_git_dir"
 
     # Determine branch name & ref
-    local branch sanitized ref
+    local branch sanitized
     branch=$($git_cmd branch --show-current 2>/dev/null)
     if [ -z "$branch" ]; then
         # Detached HEAD fallback: refs/checkpoints/detached-<short-sha>
@@ -507,6 +521,7 @@ write_checkpoint() {
         sanitized=$(printf '%s' "$branch" | tr '/' '-')
     fi
     ref="refs/checkpoints/${sanitized}"
+    count_file="${CHECKPOINT_FAIL_COUNT_FILE:-${abs_git_dir}/checkpoint-fail-count.${sanitized}}"
 
     # Temp index (isolated from .git/index); PID + nanoseconds keep sibling runs apart.
     local ns
@@ -559,7 +574,7 @@ write_checkpoint() {
         if [ "$top" = "$h" ] && [ -f "$h/settings.json" ] && $git_cmd config filter.claude-settings.clean >/dev/null \
             && { python3 "$h/scripts/install/render-settings" clean <"$h/settings.json" >/dev/null 2>&1; [ "$?" = 1 ]; }; then
             checkpoint_refused_by="the settings filter (render-settings clean)"
-            _checkpoint_log ERROR "snapshot refused by ${checkpoint_refused_by}: nothing written (ref=${ref})"
+            _checkpoint_refused
             return 3
         fi
         _checkpoint_log ERROR "add -A failed (ref=${ref})"
@@ -607,18 +622,31 @@ write_checkpoint() {
     # Refuse what the pre-commit hook refuses, by its own engines on the temp index (they print no
     # literal or value): the private-literal rule when its list is not empty, and in this harness
     # home the settings check when settings.json differs from HEAD. Callers get only rule names.
-    if [ -s "${common%/*}/private-literals.txt" ] && ! report="$(cd "$top" \
-        && GIT_INDEX_FILE="$TMP_INDEX" bash "$h/scripts/check-public-core.sh" --private-literals 2>&1)"; then
-        checkpoint_refused_by="the private-literal rule"
-        _checkpoint_log ERROR "${checkpoint_refused_by}: ${report//$'\n'/ | }"
+    # A file the rule names is left out (HEAD's version, if any, stays): the rule scanned every other
+    # added line clean, so the snapshot is refused only when a named file still differs from HEAD.
+    local hits="${TMP_INDEX}.hits"
+    if [ -s "${common%/*}/private-literals.txt" ] && ! report="$(cd "$top" && GIT_INDEX_FILE="$TMP_INDEX" \
+        PRIVATE_LITERAL_HITS="$hits" bash "$h/scripts/check-public-core.sh" --private-literals 2>&1)"; then
+        _checkpoint_log ERROR "the private-literal rule: ${report//$'\n'/ | }"
+        checkpoint_left_out=$(printf '%s\n' "$report" | sed -n 's/^FAIL: private literal (.*) -> \(.*\)\(:[0-9]*\| (path name)\)$/\1/p' | sort -u)
+        checkpoint_left_out="$(sort -u "$hits" 2>/dev/null | wc -l | tr -d ' ') file(s) holding a private literal: ${checkpoint_left_out//$'\n'/, }"
+        if [ -s "$hits" ] && GIT_LITERAL_PATHSPECS=1 GIT_INDEX_FILE="$TMP_INDEX" $git_cmd reset -q --pathspec-from-file="$hits" \
+            2>>"$CHECKPOINT_LOG_FILE" && report=$(GIT_INDEX_FILE="$TMP_INDEX" $git_cmd -c core.quotePath=off diff-index \
+            --cached --no-renames --name-only "${seed_parent_tree:-$($git_cmd hash-object -t tree /dev/null)}") \
+            && ! printf '%s\n' "$report" | grep -qxFf "$hits"; then
+            _checkpoint_log WARN "left out ${checkpoint_left_out} (ref=${ref})"
+        else
+            checkpoint_refused_by="the private-literal rule" checkpoint_left_out=""
+        fi
     fi
+    rm -f "$hits"
     if [ "$top" = "$h" ] \
         && ! GIT_INDEX_FILE="$TMP_INDEX" $git_cmd diff-index --cached --quiet HEAD -- settings.json 2>/dev/null \
         && ! GIT_INDEX_FILE="$TMP_INDEX" python3 "$h/scripts/install/render-settings" check --staged 2>>"$CHECKPOINT_LOG_FILE"; then
         checkpoint_refused_by+="${checkpoint_refused_by:+ and }the settings check (render-settings check --staged)"
     fi
     if [ -n "$checkpoint_refused_by" ]; then
-        _checkpoint_log ERROR "snapshot refused by ${checkpoint_refused_by}: nothing written (ref=${ref})"
+        _checkpoint_refused
         rm -f "$TMP_INDEX"
         return 3
     fi

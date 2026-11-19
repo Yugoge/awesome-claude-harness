@@ -59,8 +59,9 @@ stop_run() {
 
 # Private-literal rule (R7b). The list is private-literals.txt in the MAIN working tree (no
 # override): one literal per line, trimmed, blank and #-lines ignored, fixed-string match.
-# Scopes: index = all tracked content as committed; staged = lines and path names the staged
-# change adds; archive = every file under $2. A hit names file:line and its list line only.
+# Scopes: index = all tracked content as committed; staged = lines and path names the staged change
+# adds; archive = every file under $2. A hit names file:line and its list line only; its path, as git
+# quotes it, also goes to the file $PRIVATE_LITERAL_HITS names, when set (checkpoint-core.sh).
 private_literal_rule() {
   local list l n=0 base; local -a lits=()
   list="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$ROOT/.git")")/private-literals.txt"
@@ -79,8 +80,8 @@ private_literal_rule() {
     git -c core.quotePath=off diff-index --cached --no-renames --name-only --diff-filter=d "$base" && echo &&
       git -c core.quotePath=off diff-index --cached --no-renames -p -U0 --text --no-prefix "$base"
   fi | LC_ALL=C awk 'BEGIN { for (m = 1; m < ARGC; m++) { c = index(ARGV[m], ":")   # ARGV: "<list line>:<literal>"
-        N[m] = substr(ARGV[m], 1, c - 1); L[m] = substr(ARGV[m], c + 1) }; ARGC = 1 }
-    function scan(s, path, at,   k, j) { for (k = 1; k < m; k++) if (index(s, L[k])) {
+        N[m] = substr(ARGV[m], 1, c - 1); L[m] = substr(ARGV[m], c + 1) }; ARGC = 1; H = ENVIRON["PRIVATE_LITERAL_HITS"] }
+    function scan(s, path, at,   k, j) { for (k = 1; k < m; k++) if (index(s, L[k])) { if (H != "") print path > H
         for (j = 1; j < m; j++) if (index(path, L[j])) path = "<path with private-literals.txt line " N[j] ">"
         print "FAIL: private literal (private-literals.txt line " N[k] ") -> " path at; bad = 1 } }
     !body { if ($0 == "") body = 1; else scan($0, $0, " (path name)"); next }
