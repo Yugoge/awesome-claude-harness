@@ -22,8 +22,10 @@ or a views-shaped path outside every spec root (`/tmp/deps.lock.json`, a test fi
 Every `>`/`>>` in the raw text is read as a redirect target too (as the base guard read it),
 so a command the shell parser cannot read is still checked.
 
-Whitelist: commands invoking `.claude/scripts/spec-check.py` (or its quoted CLAUDE_HOME
-channel spelling) are allowed even if they appear to touch these paths (these ARE the legal writers).
+Whitelist: a command that runs `.claude/scripts/spec-check.py` (or its quoted CLAUDE_HOME channel
+spelling), by name or as python's first argument, is the legal writer: its own words and
+redirections are not read (an --action text may hold `-> <view>`). Every other command of the
+same line is read as it is alone; the script's name in a comment or an argument exempts nothing.
 
 Fail-open on a payload that is not JSON. Exit 0 = allow, exit 2 = block.
 """
@@ -64,7 +66,7 @@ BLOCK_PATTERNS = [
 _RAW_REDIRECT = re.compile(r"(?:>|>>)\s*([^\s;&|<>()]+)")
 _MAX_DIRS = 64
 
-# Whitelisted invocations (bypass all views/cp-state write checks)
+# The spellings of spec-check.py a command may run it by (_checker_spans)
 WHITELIST_PATTERNS = [
     re.compile(r"\.claude/scripts/spec-check\.py"),
     re.compile(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/spec-check\.py"'),  # the quoted CLAUDE_HOME channel
@@ -88,8 +90,19 @@ def _extract_command(data):
     return tool_input.get("command") or ""
 
 
-def _is_whitelisted(command):
-    return any(p.search(command) for p in WHITELIST_PATTERNS)
+def _checker_spans(script):
+    """(context, span) of each simple command that runs spec-check.py, the cp-state writer: the
+    script is the command's own name or python's first argument, spelled as WHITELIST_PATTERNS."""
+    out = []
+    for site in _sp.walk(script):
+        res = _sp.resolve(site.cmd)
+        python = res.args and re.fullmatch(r"python[\d.]*", res.name or "")
+        for word in ([res.head] if res.head is not None else []) + ([res.args[0]] if python else []):
+            raw = word.raw.text
+            if raw.rstrip("'\"").endswith("spec-check.py") and any(p.search(raw) for p in WHITELIST_PATTERNS):
+                out.append((site.context, site.cmd.span))
+                break
+    return out
 
 
 def _below_spec_root(path):
@@ -234,10 +247,12 @@ def _touch_texts(script):
     return out
 
 
-def _target_texts(command, script):
-    """The path text of every non-delete write target the parser finds."""
+def _target_texts(command, checker=()):
+    """The path text of every non-delete write target the parser finds, the checker's own aside."""
     out = []
     for t in _write_targets(command):
+        if t.word is not None and any(c == t.context and a <= t.word.span[0] < b for c, (a, b) in checker):
+            continue
         if t.path is not None:
             out.append(t.path)
         elif t.word is not None:
@@ -249,12 +264,14 @@ def _matches_block(command, call_dir):
     # Every `>` / `>>` in the raw text names a target, as the base guard read it (a quoted
     # `-> docs/dev/specs/<id>/views/x.md` included); the parser adds the targets of tee, cp,
     # mv, nested shells and the directories of `cd` chains.
-    texts = [m.group(1).strip("'\"") for m in _RAW_REDIRECT.finditer(command)]
+    texts, checker = [], []
     dirs = [call_dir]
     if _sp is not None and _write_targets is not None:
         try:
             script = _sp.parse(command)
-            texts += _target_texts(command, script)
+            spans = _checker_spans(script) if script.error is None else []
+            texts += _target_texts(command, spans)
+            checker = spans  # the raw text is read around the checker only once the parser's targets are in
             dirs = _cd_dirs(script, call_dir)
         except Exception:
             pass
@@ -263,6 +280,8 @@ def _matches_block(command, call_dir):
                 texts += extra()
             except Exception:
                 pass
+    texts[:0] = [m.group(1).strip("'\"") for m in _RAW_REDIRECT.finditer(command)
+                 if not any(a <= m.start(1) < b for _c, (a, b) in checker)]
     for text in dict.fromkeys(texts):
         if not text:
             continue
@@ -291,8 +310,6 @@ def main():
         sys.exit(0)
     command = _extract_command(data)
     if not command:
-        sys.exit(0)
-    if _is_whitelisted(command):
         sys.exit(0)
     hit = _matches_block(command, _call_dir(data))
     if hit:
