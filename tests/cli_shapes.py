@@ -285,35 +285,44 @@ def notification(task_id: str, tool_use_id: str, status: str = "completed", resu
 REQUEST_COPIES = FIXTURES.parent / "cli-request-copies" / "transcript-2.1.322.jsonl"
 
 
-def with_request_copies(records: list) -> list:
-    """``records`` (one transcript's, in order) with the api-request-blob records the CLI writes among them:
-    after each user record that a model request follows (the next message is the model's), a copy of
-    each message before it not yet copied, the assistant records in a row as one message (the recorded
-    copy, its values filled). The user record itself is copied at the next request, as the recording's
-    tool result is; the messages of a turn no request followed (an agent's last), after the next prompt."""
+def request_copies(messages: list) -> list:
+    """The api-request-blob records of a request for ``messages`` (user and assistant records, in order):
+    one per message, the assistant records in a row as one message (the recorded copy, its values filled)."""
     import hashlib
 
     blob = next(r for r in map(json.loads, REQUEST_COPIES.read_text().splitlines()) if r["type"] == "api-request-blob")
+    merged = []
+    for rec in messages:
+        content = _content(rec) if isinstance(_content(rec), list) else [{"type": "text", "text": _content(rec)}]
+        if merged and merged[-1][0] == rec["type"] == "assistant":
+            merged[-1][1].extend(content)
+        else:
+            merged.append((rec["type"], list(content), rec))
+    out = []
+    for role, blocks, first in merged:
+        message = dict(blob["message"], role=role, content=blocks)
+        copy = dict(blob, sessionId=first.get("sessionId"), message=message,
+                    hash=hashlib.sha256(json.dumps(message, sort_keys=True).encode()).hexdigest())
+        out.append(dict(copy, agentId=first["agentId"]) if "agentId" in first else copy)
+    return out
+
+
+def with_request_copies(records: list) -> list:
+    """``records`` (one transcript's, in order) with the api-request-blob records the CLI writes among them:
+    after each user record that a model request follows (the next message is the model's), the copies of
+    the messages before it not yet copied (request_copies). The user record itself is copied at the next
+    request, as the recording's tool result is; the messages of a turn no request followed (an agent's
+    last), after the next prompt."""
     said = [k for k, rec in enumerate(records) if rec.get("type") in ("user", "assistant") and _content(rec) is not None]
     out, pending = [], []
     for k, rec in enumerate(records):
         out.append(rec)
         if k not in said:
             continue
-        content = _content(rec) if isinstance(_content(rec), list) else [{"type": "text", "text": _content(rec)}]
-        if pending and pending[-1][0] == rec["type"] == "assistant":
-            pending[-1][1].extend(content)
-        else:
-            pending.append((rec["type"], list(content), rec))
-        after = [records[j]["type"] for j in said if j > k][:1]
-        if rec["type"] != "user" or after != ["assistant"]:
-            continue
-        for role, blocks, first in pending[:-1]:
-            message = dict(blob["message"], role=role, content=blocks)
-            copy = dict(blob, sessionId=first.get("sessionId"), message=message,
-                        hash=hashlib.sha256(json.dumps(message, sort_keys=True).encode()).hexdigest())
-            out.append(dict(copy, agentId=first["agentId"]) if "agentId" in first else copy)
-        pending = pending[-1:]
+        pending.append(rec)
+        if rec["type"] == "user" and [records[j]["type"] for j in said if j > k][:1] == ["assistant"]:
+            out += request_copies(pending[:-1])
+            pending = pending[-1:]
     return out
 
 
