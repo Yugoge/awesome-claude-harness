@@ -17,6 +17,7 @@ from pathlib import Path
 SCHEMA = Path(__file__).resolve().parents[2] / "schemas" / "requirement-round.v1.json"
 # command_span.COMMANDS_DIR's own expression: a path the artifact check resolves to the harness's commands/
 COMMANDS_DIR = Path(__file__).resolve().parent.parent.parent / "commands"
+QUESTION_MARKS = ("?", "？")  # a sentence that ends in either asks a question (ASCII or full-width)
 SOURCE_RE = re.compile(r"^(requirement-round|producer-question):([A-Za-z0-9][A-Za-z0-9_-]{2,80}):(r[1-9][0-9]*|[a-z][a-z0-9-]*)$")
 ROUND = "docs/dev/requirement-round-{task}-r{n}.json"
 PANEL = "docs/dev/ba-panel-{task}-r1.json"
@@ -366,7 +367,7 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
 def ends_with_question(text) -> bool:
     """R7: the last non-empty line of the turn's last main-agent text ends with "?" or a full-width one."""
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
-    return bool(lines) and lines[-1].endswith(("?", "？"))
+    return bool(lines) and lines[-1].endswith(QUESTION_MARKS)
 
 
 # The first word of a clause that asks: a label before ": " that starts with one asks a question of its own.
@@ -385,7 +386,7 @@ def line_questions(text) -> list | None:
     found = []
     for sentence in _SENTENCE_END.split(lines[-1]) if lines else ():
         sentence = sentence.strip()
-        if not sentence.endswith(("?", "？")):
+        if not sentence.endswith(QUESTION_MARKS):
             continue
         if not re.search(r"\w", sentence):
             return None
