@@ -4084,6 +4084,9 @@ def sensitive_redirect(command):
 
             if any(sensitive(i, w) for i, w in words) \
                     or any(_word_sensitive(r.target) for r in redirs if not r.writes()):
+            if not network and all(r.target.value() == "/dev/null" for r in outputs) \
+                    and any(r.fd == 1 or r.op in ("&>", "&>>") for r in outputs):
+                outputs = []  # standard output thrown away and no other file opened: what it reads lands in no file
                 return "redirect"
         return None
     except Exception:  # noqa: BLE001

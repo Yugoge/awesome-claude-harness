@@ -250,3 +250,34 @@ DD_WRITES = [
 def test_a_destructive_dd_is_still_refused_in_the_same_shape(sandbox, command):
     r = bash_safety(sandbox, command)
     assert r.returncode == 2 and DISK in r.stderr, (command, r.stderr)
+
+
+# ── A sensitive name whose reader writes no file ─────────────────────────────
+# 1 of 2 recorded refusals: `ls <dir>/.env >/dev/null 2>&1 && echo exists`. Standard output thrown into /dev/null,
+# with no other file opened, puts what the command reads in no file.
+SENSITIVE_READ = "Attempting to redirect from/to sensitive file via Bash"
+SENSITIVE_WRITE = "Attempting to write to sensitive file via Bash"
+
+
+@pytest.mark.parametrize("command", [
+    "hostname -I 2>&1 | head -2; ls /srv/app/.env >/dev/null 2>&1 && echo env-exists",
+    "test -f .env > /dev/null && echo yes",
+])
+def test_a_command_whose_output_is_thrown_away_names_a_secret_file_freely(sandbox, command):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+@pytest.mark.parametrize("command,label", [
+    ("cat /srv/app/.env > /srv/work/copy.txt 2>&1 && echo copied", SENSITIVE_READ),
+    ("cat /srv/app/.env > /dev/null 2> /srv/work/err.txt", SENSITIVE_READ),
+    ("cat /srv/app/.env > /dev/null 3> /srv/work/copy.txt", SENSITIVE_READ),
+    ("cp /srv/app/.env /srv/work/copy.txt >/dev/null 2>&1 && echo copied", SENSITIVE_READ),
+    ("wget -q https://x/.env > /dev/null", SENSITIVE_READ),     # wget names its own output file .env
+    ("ls /srv/app >/dev/null 2>&1 && echo KEY=1 > /srv/app/.env", SENSITIVE_WRITE),
+    ("echo KEY=1 > /srv/app/.env 2>/dev/null", SENSITIVE_WRITE),
+    ("tee /srv/app/.env < x.txt > /dev/null", SENSITIVE_WRITE),
+])
+def test_a_write_or_a_kept_read_of_a_secret_file_is_still_refused(sandbox, command, label):
+    r = bash_safety(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
