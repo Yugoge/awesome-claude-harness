@@ -67,6 +67,7 @@ try:  # noqa: F401  — names re-exported for backward compatibility
         KILL_VERBS,
         MUTATION_VERBS,
         INPLACE_EDITORS,
+        LOOPBACK_HOSTS,
         PKG_LINK_WORDS,
         PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
@@ -91,6 +92,7 @@ except ImportError:  # executed as a top-level script (no package context)
         KILL_VERBS,
         MUTATION_VERBS,
         INPLACE_EDITORS,
+        LOOPBACK_HOSTS,
         PKG_LINK_WORDS,
         PKG_MANAGERS,
         READ_INSPECT_EDIT_ALLOWLIST,
@@ -2279,7 +2281,7 @@ def _p4_statefile(simple_cmds: list, cfg: dict, cwd_base: Optional[str] = None) 
 
 # ── P5 ENDPOINT_GUARD ────────────────────────────────────────────────────────
 
-LOOPBACK_RE = re.compile(r"(127\.0\.0\.1|localhost|\[::1\]|::1)", re.IGNORECASE)
+LOOPBACK_RE = re.compile("(%s)" % "|".join(map(re.escape, LOOPBACK_HOSTS)), re.IGNORECASE)
 # Raw byte-stream clients: the request line (incl. the control path) is supplied
 # on STDIN, so the path legitimately arrives from an UPSTREAM pipeline segment.
 RAW_SOCKET_HEADS = frozenset({"nc", "ncat", "netcat", "socat", "telnet"})

@@ -511,7 +511,10 @@ def daemon_restart(command, payload, prefix):
 
 from lib import bash_read_only as _bash_read_only  # noqa: E402 -- the programs that only read
 
-HTTP_STOP_URL = r"(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):[0-9]+/stop(?![A-Za-z0-9])"
+from lib.runtime_guard.constants import LOOPBACK_HOSTS  # noqa: E402 -- the host names that are this machine
+
+LOOPBACK = "|".join(map(re.escape, LOOPBACK_HOSTS))
+HTTP_STOP_URL = r"(?:%s):[0-9]+/stop(?![A-Za-z0-9])" % LOOPBACK
 """A localhost port's stop endpoint: `/stop`, `/stop?x`, `/stop/now`, `/stop-now`, `/stop_server`; never `/stops`
 or `/stopwords`."""
 HTTP_STOP_BARE_URL = r"(?:^|(?<=[\s'\"=])):[0-9]+/stop(?![A-Za-z0-9])"
@@ -647,7 +650,7 @@ def _http_reader_ok(site, r):
                 operands.append(a)
         if not scripts and operands:
             scripts.append(operands[0])
-        stripped = re.sub(r"(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)?" + HTTP_STOP_ANY, "", " ".join(scripts))
+        stripped = re.sub(r"(%s)?" % LOOPBACK + HTTP_STOP_ANY, "", " ".join(scripts))
         return quiet and not take and not re.search(r"[ewW]", stripped)
     return True
 
@@ -721,7 +724,7 @@ for _alias in ("https", "httpie", "xh", "xhs"):
 HTTP_LIFT_CLIENTS = frozenset(HTTP_LIFT_OPTIONS)
 """The clients whose request URL is their literal argument, those HTTP_LIFT_OPTIONS reads; a raw socket client (nc,
 socat, telnet) is not one."""
-HTTP_LIFT_URL = re.compile(r"(?:https?://)?(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0):[0-9]{1,5}"
+HTTP_LIFT_URL = re.compile(r"(?:https?://)?(?:%s):[0-9]{1,5}" % LOOPBACK +
                            r"(?:/[A-Za-z0-9._~/-]*)?(?:\?[A-Za-z0-9._~=&+,-]*)?")
 """The only URL shape (b) lifts: an http(s) URL on a localhost host with a port, a path and an optional query of
 plain characters; no userinfo, fragment (`#`), percent-escape, backslash, glob or whitespace."""
