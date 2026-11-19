@@ -2429,6 +2429,24 @@ PEEL = {
                     ("-w", "--wait", "--timeout", "-E", "--conflict-exit-code", "-c",
                      "--command")), 1),
     "command": (_spec(("-p",)), 0),
+    # programs that only run the command after their options (each one's --help / manual)
+    "watch": (_spec(("-b", "--beep", "-c", "--color", "-C", "--no-color", "-d", "--differences",
+                     "-e", "--errexit", "-g", "--chgexit", "-t", "--no-title", "-x", "--exec",
+                     "-p", "--precise", "-w", "--no-wrap", "-r", "--no-rerun"),
+                    ("-n", "--interval", "-q", "--equexit")), 0),
+    "faketime": (_spec(("-m", "-f", "--exclude-monotonic", "--disable-shm"),
+                       ("--date-prog", "-p")), 1),
+    "pkexec": (_spec(("--keep-cwd", "--disable-internal-agent"), ("--user",)), 0),
+    "proxychains": (_spec(("-q",), ("-f",)), 0),
+    "proxychains4": (_spec(("-q",), ("-f",)), 0),
+    "torsocks": (_spec(("-d", "--debug", "-i", "--isolate", "-q", "--quiet", "-6"),
+                       ("-u", "--user", "-p", "--pass", "-a", "--address", "-P", "--port")), 0),
+    "trickle": (_spec(("-h", "-v", "-V", "-s"), ("-d", "-u", "-w", "-t", "-l", "-n")), 0),
+    "cpulimit": (_spec(("-z", "--lazy", "-i", "--include-children", "-k", "--kill", "-r",
+                        "--restore", "-v", "--verbose", "-q", "--quiet"),
+                       ("-l", "--limit", "-c", "--cpu")), 0),
+    "tsp": (_spec(("-n", "-f", "-d", "-B", "-E", "-g"), ("-L", "-D", "-W", "-N")), 0),
+    "ssh-agent": (_spec(("-c", "-s", "-D", "-d"), ("-a", "-E", "-O", "-P", "-t")), 0),
     "runuser": (_spec(("-l", "--login", "-m", "-p", "--preserve-environment", "-P", "--pty"),
                       ("-u", "--user", "-g", "--group", "-G", "--supp-group", "-s", "--shell",
                        "-w", "--whitelist-environment", "-c", "--command")), 0),
@@ -2711,7 +2729,7 @@ def resolve(cmd, depth=None):
         if entry is None or name in ("command",):
             entry = PEEL.get(name)
         if entry is not None and name not in ("git", "find", "docker", "podman", "kubectl",
-                                              "watch", "parallel", "su", "sg", "script",
+                                              "parallel", "su", "sg", "script",
                                               "bwrap", "ssh", "machinectl", "start-stop-daemon",
                                               "coproc", "runuser"):
             spec, fixed = entry

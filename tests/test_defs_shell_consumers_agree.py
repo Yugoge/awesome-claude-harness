@@ -87,6 +87,16 @@ CASES = [
     # one XARGS_SPEC: --replace and --max-lines take a value only when attached
     ("xargs-value-options", "xargs --replace {} < /dev/null", ("gp", "bs", "tp")),
     ("xargs-value-options", "xargs --max-lines {} < /dev/null", ("gp", "bs", "tp")),
+    # shell_parse.PEEL names the programs that only run the command after their options
+    ("exec-wrappers", "watch {}", ("gp", "bs", "tp")),
+    ("exec-wrappers", "faketime now {}", ("gp", "bs", "tp")),
+    ("exec-wrappers", "pkexec {}", ("gp", "bs", "tp")),
+    ("exec-wrappers", "proxychains {}", ("gp", "bs", "tp")),
+    ("exec-wrappers", "torsocks {}", ("gp", "bs", "tp")),
+    ("exec-wrappers", "trickle {}", ("gp", "bs", "tp")),
+    ("exec-wrappers", "cpulimit -l 5 {}", ("gp", "bs", "tp")),
+    ("exec-wrappers", "tsp {}", ("gp", "bs", "tp")),
+    ("exec-wrappers", "ssh-agent {}", ("gp", "bs", "tp")),
     ("exec-env-variables", "GIT_PAGER='{}' git -p log", ("gp", "bs", "ui")),
     ("exec-env-variables", "PAGER='{}' man ls", ("gp", "bs", "ui")),
     ("shell-state-builtins", "trap '{}' EXIT", ("gp", "bs", "tp")),
