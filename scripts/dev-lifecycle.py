@@ -615,8 +615,7 @@ class Progress:
 
 
 def _default_project_dir() -> str:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hooks" / "lib"))
-    import locations  # noqa: E402 -- the one project-root resolution
+    from hooks.lib import locations  # as hooks.lib.obligation above: this script runs in its harness
     return str(locations.project_root(bash=True))
 
 
