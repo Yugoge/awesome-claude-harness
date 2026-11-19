@@ -379,7 +379,7 @@ def _note_own_scratch(role: str, data: dict, target) -> None:
             own = Path(_project_root()).resolve(strict=False).joinpath(".claude", "scratch", *parts)
         if _scratch_status(role, os.path.join(own, "f"), data) != "owner":
             return
-        sys.stderr.write(f"tool-policy.v1 note: your own scratch directory is {own}/ (mkdir -p {own} first; "
+        sys.stderr.write(f"tool-policy.v1 scratch: your own scratch directory is {own}/ (mkdir -p {own} first; "
                          f"a program that writes under $TMPDIR: TMPDIR={own} <command>)\n")
     except Exception:
         pass
@@ -1857,19 +1857,19 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             allowed, reason = is_allowed(role, check_tool, target, carveouts)
         if not allowed:
             _emit_block(role, check_tool, target, reason)
-            if check_tool in WRITE_TOOLS:
-                _note_own_scratch(role, data, target)
             if tool_name == "Bash":
                 _note_bash_write_target(data, target)
+            if check_tool in WRITE_TOOLS:
+                _note_own_scratch(role, data, target)
             _note_inflight_token_route(role, tool_name, target)
             sys.exit(2)
         if check_tool in WRITE_TOOLS:
             allowed, reason = _check_scratch_actor_exactness(role, target, data)
             if not allowed:
                 _emit_block(role, check_tool, target, reason)
-                _note_own_scratch(role, data, target)
                 if tool_name == "Bash":
                     _note_bash_write_target(data, target)
+                _note_own_scratch(role, data, target)
                 sys.exit(2)
 
 
