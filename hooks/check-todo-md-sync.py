@@ -34,7 +34,7 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from harness_vocabulary import FOLDER_DOCUMENTS  # noqa: E402
+from command_span import FOLDER_DOCUMENTS  # noqa: E402
 
 def _harness_home() -> Path:
     """The harness this file belongs to (lib/claude_home), not whatever ~/.claude holds."""
