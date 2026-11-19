@@ -1580,9 +1580,9 @@
    "sides": [
     [
      {
-      "name": "_Scan._GIT_BOOL",
+      "name": "<module>.GIT_BOOLEAN_VALUES",
       "fingerprint": "82fa80b746bf501b",
-      "at": "hooks/pretool-wrapper-userintent.py:2791"
+      "at": "hooks/lib/git_facts.py:71"
      }
     ],
     [
