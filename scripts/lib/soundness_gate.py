@@ -298,46 +298,6 @@ class NullDiscovery:
         return None
 
 
-class StaticDiscovery(NullDiscovery):
-    """A discovery adapter whose answers are supplied rather than scanned.
-
-    Used by offline exercises and by any caller that has already performed its
-    own tracked-set enumeration. It records the method it was told, so the
-    record still says how the answers were obtained.
-    """
-
-    def __init__(self, method="static-discovery: answers supplied by caller",
-                 role=ROLE_UNKNOWN, callers=(), json_role=JSON_ROLE_UNKNOWN,
-                 json_role_evidence="supplied", bound_schema=None,
-                 required_anchors=None, anchor_scheme=None):
-        self.method = method
-        self._role = role
-        self._callers = list(callers)
-        self._json_role = json_role
-        self._json_role_evidence = json_role_evidence
-        self._bound_schema = bound_schema
-        self._required_anchors = required_anchors
-        self._anchor_scheme = anchor_scheme
-
-    def invocation_role(self, normalized_path):
-        return self._role
-
-    def callers(self, normalized_path):
-        return list(self._callers)
-
-    def json_role(self, normalized_path):
-        return self._json_role, self._json_role_evidence
-
-    def bound_schema(self, normalized_path):
-        return self._bound_schema
-
-    def required_anchors(self, normalized_path):
-        return self._required_anchors
-
-    def anchor_resolution_scheme(self, normalized_path):
-        return self._anchor_scheme
-
-
 class TrackedSetDiscovery(NullDiscovery):
     """Discovery through ``git ls-files``, never through the shell's grep view.
 
@@ -2364,35 +2324,6 @@ def _finish(record, ctx):
             for check in MANDATORY_CHECKS]
     record["unasserted_checks"].sort(key=lambda e: (e["check"], e["reason"]))
     return record
-
-
-# ===========================================================================
-# Identity binding (R10) -- comparison against the OBJECT, never a re-read
-# ===========================================================================
-
-def verify_identity(record, landing_object):
-    """Compare the identity of the EXACT object being handed to landing with
-    the identity the verdict was issued for.
-
-    A re-read of the mutable path is not an acceptable comparison input: that
-    is the time-of-check/time-of-use gap this comparison exists to close, and
-    no lock around repository operations closes it.
-    """
-    issued = (record or {}).get("identity")
-    if issued is None:
-        return REASON_IDENTITY_MISMATCH
-    data = _attr(landing_object, "bytes")
-    if data is None:
-        return REASON_IDENTITY_MISMATCH
-    actual = {
-        "normalized_path": normalize_path(_attr(landing_object, "path")),
-        "content_sha256": hashlib.sha256(bytes(data)).hexdigest(),
-        "git_mode": _attr(landing_object, "mode"),
-    }
-    for field, value in actual.items():
-        if issued.get(field) != value:
-            return REASON_IDENTITY_MISMATCH
-    return None
 
 
 # ===========================================================================
