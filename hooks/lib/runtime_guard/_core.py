@@ -3716,7 +3716,11 @@ def _resolve_bare_script(script_tok: Optional[str], cwd: Optional[str], cwd_det:
         return _block("P9", "script-run with indeterminate cwd (fail-closed)")
     man_dir, is_protected, scripts, det = _effective_manifest_for_cwd(cwd, cfg)
     if not det:
-        return _block("P9", "script-run with unresolvable effective manifest (fail-closed)")
+        if not os.path.isabs(cwd) or _path_under_any(cwd, cfg.get("protected_script_paths", [])):
+            return _block("P9", "script-run with unresolvable effective manifest (fail-closed)")
+        # An absolute cwd with no package.json and no protected root from it up to /: no manifest whose script could
+        # reach a protected workspace. Read on as a manifest of no scripts outside the protected monorepo.
+        is_protected, scripts = False, set()
     if is_protected:
         if script_tok is not None and script_tok in safe_allow:
             return ALLOW

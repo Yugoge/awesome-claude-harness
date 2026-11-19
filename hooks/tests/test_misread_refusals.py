@@ -281,3 +281,40 @@ def test_a_command_whose_output_is_thrown_away_names_a_secret_file_freely(sandbo
 def test_a_write_or_a_kept_read_of_a_secret_file_is_still_refused(sandbox, command, label):
     r = bash_safety(sandbox, command)
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# ── A package-manager command where no manifest can reach a protected workspace ──
+# 3 recorded refusals: `npm view <pkg> version` and `npm init -y` in a directory with no package.json from it up
+# to /, read as a script-run whose manifest could not be resolved.
+NO_MANIFEST = [
+    "timeout 25 npm view @scope/tool version 2>&1 | tail -2",
+    "echo '--- npm latest'; timeout 25 npm view @scope/tool version 2>&1 | tail -1; echo '--- install dir'; ls /usr/lib",
+    "ls {R}/node_modules | wc -l; mkdir -p {R}/pwlibs && cd {R}/pwlibs && npm init -y >/dev/null 2>&1; "
+    "npm install @playwright/test 2>&1 | tail -2; ls node_modules/@playwright",
+]
+
+
+@pytest.mark.parametrize("command", NO_MANIFEST)
+def test_a_package_manager_command_with_no_manifest_above_it_passes(sandbox, command):
+    r = bash_safety(sandbox, command.replace("{R}", sandbox["repo"]))
+    assert r.returncode == 0, (command, r.stderr)
+
+
+PROTECTED_RUNS = [
+    "cd {M} && npm view @scope/tool version",                 # under the protected root: still a script-run there
+    "cd {M} && yarn build",
+    "cd {M}/packages/svc-cli && npm run build",
+    "mkdir -p {M}/fresh && cd {M}/fresh && npm init -y",      # no manifest of its own, the protected root above it
+    "yarn --cwd packages/svc-cli dev",                        # a protected script path with no manifest yet
+    'cd "$DIR" && npm run build',                             # a cwd the text does not give
+    "yarn svc daemon start",                                  # the protected command, by name
+    "timeout 25 npm exec svc -- daemon start",
+    "npm install -g svc-coder",                               # a real global install
+    "timeout 25 npm view @scope/tool version; npm i -g svc-coder",
+]
+
+
+@pytest.mark.parametrize("command", PROTECTED_RUNS)
+def test_a_run_that_reaches_a_protected_workspace_is_still_refused(sandbox, command):
+    r = bash_safety(sandbox, command.replace("{M}", sandbox["mono"]))
+    assert r.returncode == 2 and RUNTIME_GUARD in r.stderr, (command, r.stderr)
