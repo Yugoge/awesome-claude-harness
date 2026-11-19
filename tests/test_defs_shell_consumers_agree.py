@@ -87,6 +87,8 @@ CASES = [
     # one XARGS_SPEC: --replace and --max-lines take a value only when attached
     ("xargs-value-options", "xargs --replace {} < /dev/null", ("gp", "bs", "tp")),
     ("xargs-value-options", "xargs --max-lines {} < /dev/null", ("gp", "bs", "tp")),
+    ("exec-env-variables", "GIT_PAGER='{}' git -p log", ("gp", "bs", "ui")),
+    ("exec-env-variables", "PAGER='{}' man ls", ("gp", "bs", "ui")),
     ("shell-state-builtins", "trap '{}' EXIT", ("gp", "bs", "tp")),
     ("shell-state-builtins", "function f { {}; }; f", ("gp", "bs", "tp")),
 ]

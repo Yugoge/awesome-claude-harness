@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    CD_TARGET_BUILTINS, COMMAND_OPTS, ENV_SPLIT_OPTS, OPTION_SIGNS, PIPE_OPS, XARGS_SPEC,
+    CD_TARGET_BUILTINS, COMMAND_OPTS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS, OPTION_SIGNS, PIPE_OPS, XARGS_SPEC,
     _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
 
 SCHEMA = "bash-execution-boundary.v1"
@@ -161,20 +161,6 @@ _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # is reached from static call sites; the analyzer is a single-shot CLI.
 _PAYLOAD_NESTING = [0]
 
-# Environment variables whose VALUE is executed by the command that follows
-# them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
-# a fixture-pinned safe row -- but these named vectors are documented command
-# hooks, so `GIT_EXTERNAL_DIFF=/bin/rm git diff` runs the removal.
-EXEC_ASSIGNMENT_VARS = {
-    "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_SSH", "GIT_SSH_COMMAND",
-    "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_ASKPASS", "GIT_MERGE_TOOL",
-    "GIT_DIFF_TOOL", "GIT_TEXTCONV", "GIT_PROXY_COMMAND", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "PAGER", "MANPAGER", "LESSOPEN", "LESSCLOSE", "LESSEDIT", "EDITOR",
-    "VISUAL", "FCEDIT", "BROWSER", "SSH_ASKPASS", "SUDO_EDITOR", "SUDO_ASKPASS",
-    "DIFFPROG", "MERGE", "PERL5OPT", "PYTHONSTARTUP", "BASH_ENV", "ENV",
-    "SHELL", "RSYNC_RSH", "CVS_RSH", "SVN_SSH", "HGEDITOR", "P4EDITOR",
-    "SYSTEMD_PAGER", "SYSTEMD_EDITOR", "DEBUGINFOD_URLS", "LD_PRELOAD",
-}
 
 
 def _static_prefix(w):

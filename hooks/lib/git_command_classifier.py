@@ -1902,7 +1902,14 @@ def _parser_invocations(command_text):
     """GitInvocation for each git invocation shell_parse.git_invocations reads in command_text
     that names a subcommand (a git alias whose value is computed reads as git with none)."""
     try:
-        found = shell_parse.git_invocations(command_text)
+        script = shell_parse.parse(command_text)
+        found = shell_parse.git_invocations(script)
+        # a variable whose value the command it prefixes runs (`GIT_PAGER='...' git -p log`)
+        for site in shell_parse.walk(script):
+            for a in site.cmd.assignments + shell_parse.resolve(site.cmd).assignments:
+                value = a.static_value() if a.name in shell_parse.EXEC_ASSIGNMENT_VARS else None
+                if value:
+                    found.extend(shell_parse.git_invocations(value))
     except Exception:  # never let the second reading cost the first its verdict
         return []
     return [GitInvocation(inv.word.raw.text, inv.path_qualified, inv.subcommand,

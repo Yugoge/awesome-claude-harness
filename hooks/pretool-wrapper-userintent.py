@@ -183,6 +183,8 @@ _CODE_RUNNERS = frozenset(('perl', 'ruby', 'node', 'nodejs', 'php', 'lua', 'tcls
 _STDIN_RUNNERS = frozenset(('at', 'batch', 'crontab'))
 _OTHER_SHELLS = frozenset(('fish', 'tcsh', 'csh', 'elvish', 'nu', 'xonsh', 'rc', 'es'))
 _PY_RUNNERS = frozenset(('pytest', 'py.test', 'coverage', 'ipython', 'ipython3', 'pdb', 'pdb3'))
+# less runs these over each file it opens.
+_LESS_HOOK_VARS = ('LESSOPEN', 'LESSCLOSE')
 # Variables whose value is a command or a file some program runs.
 _CMD_VAR_RE = re.compile(
     r'^(?:BASH_ENV|ENV|PYTHONSTARTUP|PROMPT_COMMAND|PS[0-4]|SHELL|LESSOPEN|LESSCLOSE|'
@@ -1676,12 +1678,12 @@ class _Scan:
         cmd = site.cmd
         res = self.res[id(site)]
         for a in tuple(cmd.assignments) + tuple(res.assignments):
-            if a.name in ('LESSOPEN', 'LESSCLOSE'):
+            if a.name in _LESS_HOOK_VARS:
                 self.lessopen = True
         for w in cmd.words:
             t = w.value()
             t = w.text if t is None else t
-            if re.match(r'''^["']?(?:LESSOPEN|LESSCLOSE)\+?=''', t or ''):
+            if re.match(r'''^["']?(?:%s)\+?=''' % '|'.join(_LESS_HOOK_VARS), t or ''):
                 self.lessopen = True
         # RIPGREP_CONFIG_PATH the command sets (prefix, env, export/declare/typeset/readonly)
         for a in tuple(cmd.assignments) + tuple(res.assignments):

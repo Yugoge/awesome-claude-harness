@@ -431,6 +431,21 @@ DEFINER_KINDS = ("function", "coproc")  # Compound kinds whose body runs later o
 QUOTE_CHARS = ("'", '"')  # the characters that open a quoted string
 COMMAND_OPTS = ("-c", "--command")  # su, runuser, flock, script: the option whose value is shell code
 ENV_SPLIT_OPTS = ("-S", "--split-string")  # env: the option whose value env splits into the command line
+# Environment variables whose VALUE is executed by the command that follows
+# them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
+# a fixture-pinned safe row -- but these named vectors are documented command
+# hooks, so `GIT_EXTERNAL_DIFF=/bin/rm git diff` runs the removal. Read by the
+# removal analyzer and the git classifier.
+EXEC_ASSIGNMENT_VARS = frozenset({
+    "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_SSH", "GIT_SSH_COMMAND",
+    "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_ASKPASS", "GIT_MERGE_TOOL",
+    "GIT_DIFF_TOOL", "GIT_TEXTCONV", "GIT_PROXY_COMMAND", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "PAGER", "MANPAGER", "LESSOPEN", "LESSCLOSE", "LESSEDIT", "EDITOR",
+    "VISUAL", "FCEDIT", "BROWSER", "SSH_ASKPASS", "SUDO_EDITOR", "SUDO_ASKPASS",
+    "DIFFPROG", "MERGE", "PERL5OPT", "PYTHONSTARTUP", "BASH_ENV", "ENV",
+    "SHELL", "RSYNC_RSH", "CVS_RSH", "SVN_SSH", "HGEDITOR", "P4EDITOR",
+    "SYSTEMD_PAGER", "SYSTEMD_EDITOR", "DEBUGINFOD_URLS", "LD_PRELOAD",
+})
 
 
 def _match_pair(t, i, opener, closer):
