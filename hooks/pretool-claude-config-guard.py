@@ -154,7 +154,7 @@ def _legacy_kind(command: str) -> str:
 
 # A protected folder named in a path: `.claude/hooks` or `.claude/commands`, as the folder itself or
 # anything below it (`cp -t .claude/hooks x`, `--target-directory=.claude/commands`).
-_PROTECTED = re.compile(r'\.claude/(hooks|commands)(?![A-Za-z0-9_.-])')
+_PROTECTED = re.compile(r'\.claude/(' + '|'.join(locations.CONFIG_FOLDERS) + r')(?![A-Za-z0-9_.-])')
 _DOT_SEGMENTS = re.compile(r'/(?:\.?/)+')
 _FED = frozenset({'pipe', 'heredoc', 'herestring'})
 # Text in a word that makes it code or a command line rather than a path (`rsync -e 'cp x ...'`).
@@ -275,10 +275,10 @@ def _site_settled(sp, raw: str, site, res, names_any: bool) -> bool:
 
 def _sed_scripts(args) -> list:
     """The script words of a sed call: each -e/--expression value, else the first operand."""
-    scripts, operands, k = [], [], 0
+    sp, scripts, operands, k = _shell_parse(), [], [], 0
     while k < len(args):
         v = args[k].value() or ''
-        if v in ('-e', '--expression', '-f', '--file') and k + 1 < len(args):
+        if v in sp.SED_SCRIPT_OPTS and k + 1 < len(args):
             if v in ('-e', '--expression'):
                 scripts.append(args[k + 1])
             k += 2
@@ -311,14 +311,14 @@ def _sed_long_in_place(args, vals) -> list:
     edit; the parser reads only the full spelling."""
     if not any(v.startswith('--') and _long_prefix(v, '--in-place', 3) for v in vals):
         return []
-    script, ops, k = False, [], 0
+    sp, script, ops, k = _shell_parse(), False, [], 0
     while k < len(args):
         v = vals[k]
-        if v in ('-e', '--expression', '-f', '--file', '-l', '--line-length'):
-            script = script or v in ('-e', '--expression', '-f', '--file')
+        if v in sp.SED_SCRIPT_OPTS + ('-l', '--line-length'):
+            script = script or v in sp.SED_SCRIPT_OPTS
             k += 2
             continue
-        if v.startswith(('--expression=', '--file=')) or (v.startswith('-e') and len(v) > 2):
+        if v.startswith(sp.SED_SCRIPT_ATTACHED) or (v.startswith('-e') and len(v) > 2):
             script = True
         elif not v.startswith('-') or v == '-':
             ops.append(args[k])
@@ -464,11 +464,11 @@ def _site_writes(sp, raw: str, res) -> list:
     elif name == 'find':
         starts = []
         for w in args:
-            if (w.value() or '-').startswith(('-', '(', '!')):
+            if (w.value() or '-').startswith(sp.FIND_EXPRESSION_LEADS):
                 break
             starts.append(w)
         for k, v in enumerate(vals):
-            if v in ('-fprint', '-fprint0', '-fprintf', '-fls') and k + 1 < len(args):
+            if v in sp._FIND_FILE and k + 1 < len(args):
                 out.append((args[k + 1].value() or args[k + 1].text, args[k + 1]))
         runs = [vals[k + 1:k + 1 + next((j for j, x in enumerate(vals[k + 1:]) if x in sp.FIND_EXEC_ENDS), len(vals))]
                 for k, v in enumerate(vals) if v in _FIND_RUN and k + 1 < len(vals)]
@@ -493,7 +493,7 @@ def _cd_dirs(sp, sites) -> list:
         if not ops:
             continue
         arg = _home_spelled_out(ops[0].text)
-        if arg.startswith(('/', '~')):
+        if arg.startswith(sp.ROOTED):
             new = [arg]
         else:
             new = [os.path.join(d, arg) if d else arg for d in dirs]

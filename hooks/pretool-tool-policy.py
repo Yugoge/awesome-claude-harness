@@ -1248,9 +1248,10 @@ def _find_runs_hook(args: list, texts: list, dirs: list) -> str | None:
             runs = True
     if not runs:
         return None
+    from lib import shell_parse as sp
     roots = []
     for w in words:
-        if w.startswith(("-", "(", "!")):
+        if w.startswith(sp.FIND_EXPRESSION_LEADS):
             break
         roots.append(w)
     for i, w in enumerate(words[:-1]):
