@@ -180,8 +180,9 @@ def cases():
             command = commands[(event, hook)]
             if event not in refusal_record.EVENTS:
                 elsewhere.add(event)
-            elif site.file != command:
-                out.setdefault(command, {}).setdefault((event, site.file), (matcher, site.role in ("main", "rule")))
+            elif site.file != command:  # a rule of the command: the registered hook itself, or a file of that hook's table
+                runs = site.file == hook or site.file in {r.file for r in enumerated.rules.get(hook) or ()}
+                out.setdefault(command, {}).setdefault((event, site.file), (matcher, runs and site.role in ("main", "rule")))
             else:  # the registered file's own site: through each file it runs
                 own.setdefault(command, {}).setdefault((event, matcher), set()).add(int(site.line))
                 children = enumerated.children.get(command, [])
