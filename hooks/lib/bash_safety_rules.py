@@ -3689,15 +3689,15 @@ def hard_ban_mask(t):
 
 
 def _hb_only_reads(command):
-    """True when lib/bash_read_only.py proves the whole command read-only, a command word written under /bin, /usr/bin
-    or /usr/local/bin read as its bare name: it runs nothing of its choosing, so a name in it is searched or printed."""
+    """True when lib/bash_read_only.py proves the whole command read-only, a command word in a system program directory
+    (lib/locations.SYSTEM_BIN_DIRS) read as its bare name: it runs nothing it chooses, so a name in it is only read."""
     try:
         from lib.bash_read_only import is_read_only
         from lib.shell_parse import parse, walk
         out = list(command)
         for w in filter(None, (site.cmd.head() for site in walk(parse(command), into=()))):
-            if re.fullmatch(r"(/usr/local|/usr)?/bin/[^/]+", w.text):
-                out[w.span[0]:w.span[1]] = w.text.rsplit("/", 1)[1].rjust(len(w.text))
+            if (name := w.text.rpartition("/"))[0] in locations.SYSTEM_BIN_DIRS and name[2]:
+                out[w.span[0]:w.span[1]] = name[2].rjust(len(w.text))
         return is_read_only("".join(out))
     except Exception:  # noqa: BLE001
         return False
