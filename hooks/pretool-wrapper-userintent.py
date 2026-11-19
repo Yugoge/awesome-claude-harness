@@ -1628,15 +1628,6 @@ class _Scan:
                 self.unsure = True
 
     # -- runs built at run time, rg --pre, sed e, LESSOPEN, loops -----------------
-    _RG_VALUE_SHORT = 'efgtTmABCMjrEd'
-    _RG_VALUE_LONG = frozenset((
-        '--regexp', '--file', '--glob', '--iglob', '--type', '--type-not', '--max-count',
-        '--after-context', '--before-context', '--context', '--max-columns', '--threads',
-        '--pre', '--pre-glob', '--type-add', '--type-clear', '--replace', '--colors',
-        '--encoding', '--sort', '--sortr', '--max-depth', '--maxdepth', '--max-filesize',
-        '--path-separator', '--ignore-file', '--dfa-size-limit', '--regex-size-limit',
-        '--context-separator', '--field-match-separator', '--field-context-separator',
-        '--engine', '--hostname-bin', '--hyperlink-format', '--color', '--generate'))
 
     @staticmethod
     def _built(word) -> bool:
@@ -1808,7 +1799,7 @@ class _Scan:
                 break
             if v.startswith('--'):
                 name, eq, val = v.partition('=')
-                takes = name in self._RG_VALUE_LONG
+                takes = name in _sp.RG_VALUE_LONG
                 vw = None if eq else (args[k + 1] if takes and k + 1 < len(args) else None)
                 if name in _sp.RG_PROGRAM_OPTS:
                     progs.append(vw if not eq else val)
@@ -1818,7 +1809,7 @@ class _Scan:
                 continue
             if v.startswith('-') and len(v) > 1:
                 for j, ch in enumerate(v[1:], 1):
-                    if ch in self._RG_VALUE_SHORT:
+                    if ch in _sp.RG_VALUE_SHORT:
                         if ch in 'ef':
                             given = True
                         k += 1 if v[j + 1:] else 2

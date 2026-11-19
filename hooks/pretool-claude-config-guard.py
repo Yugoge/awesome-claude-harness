@@ -832,7 +832,7 @@ _PROOF_GIT_READS = _GIT_READS - {'commit', 'add', 'status'}
 # rg options the proof takes: the ones that search, filter and format. Nothing that runs a program
 # (--pre, --pre-glob, --hostname-bin, --search-zip/-z, --hyperlink-format) and nothing unknown.
 _RG_SHORT_FLAGS = frozenset('abcFHhiILlNnoPpqSsUuVvwx0.')
-_RG_SHORT_VALUES = frozenset('ABCdEefgjMmrTt')
+_RG_SHORT_VALUES = _shell_parse().RG_VALUE_SHORT
 _RG_LONG_FLAGS = frozenset({
     '--line-number', '--no-line-number', '--ignore-case', '--smart-case', '--case-sensitive',
     '--files-with-matches', '--files-without-match', '--count', '--count-matches', '--word-regexp',
@@ -848,13 +848,10 @@ _RG_LONG_FLAGS = frozenset({
     '--max-columns-preview', '--no-require-git', '--sort-files', '--version', '--help',
     '--no-search-zip', '--no-pre',
 })
-_RG_LONG_VALUES = frozenset({
-    '--regexp', '--file', '--glob', '--iglob', '--type', '--type-not', '--type-add', '--type-clear',
-    '--after-context', '--before-context', '--context', '--max-count', '--max-depth', '--max-columns',
-    '--max-filesize', '--color', '--colors', '--sort', '--sortr', '--encoding', '--threads',
-    '--replace', '--context-separator', '--field-match-separator', '--field-context-separator',
-    '--path-separator', '--engine', '--ignore-file', '--dfa-size-limit', '--regex-size-limit',
-})
+# the value options of shell_parse's table the proof takes: not the ones that run a program or name
+# one (--pre, --pre-glob, --hostname-bin, --hyperlink-format) nor --generate, which prints no search
+_RG_LONG_VALUES = _shell_parse().RG_VALUE_LONG - {'--pre', '--pre-glob', '--hostname-bin', '--hyperlink-format',
+                                                  '--generate'}
 
 
 def _rg_proof(vals) -> bool:

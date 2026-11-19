@@ -3203,6 +3203,15 @@ GREP_PATTERN_OPTS = ("-e", "--regexp")
 GREP_PATTERN_FILE_OPTS = ("-f", "--file")
 GREP_PATTERN_LONG = (GREP_PATTERN_OPTS[1], GREP_PATTERN_FILE_OPTS[1])
 RG_RUN_OPTS = RG_PROGRAM_OPTS + ("--search-zip",)
+# ripgrep's options that take a value: the short letters and the long names.
+RG_VALUE_SHORT = frozenset("efgtTmABCMjrEd")
+RG_VALUE_LONG = frozenset((
+    "--regexp", "--file", "--glob", "--iglob", "--type", "--type-not", "--max-count", "--after-context",
+    "--before-context", "--context", "--max-columns", "--threads", "--pre", "--pre-glob", "--type-add",
+    "--type-clear", "--replace", "--colors", "--encoding", "--sort", "--sortr", "--max-depth", "--maxdepth",
+    "--max-filesize", "--path-separator", "--ignore-file", "--dfa-size-limit", "--regex-size-limit",
+    "--context-separator", "--field-match-separator", "--field-context-separator", "--engine", "--hostname-bin",
+    "--hyperlink-format", "--color", "--generate"))
 VERBS["awk"] = VERBS["gawk"]  # where awk is gawk, `awk -i inplace` edits in place
 
 # The commands that change a file's mode, owner, attributes or ACL: the file
