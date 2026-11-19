@@ -320,9 +320,11 @@ or IDE session has one Claude Code process in its ancestry and switches as befor
 A prompt an agent's tool delivers is refused where it is sent. The guard reads every tool's input,
 whatever the tool is called (`CronCreate`, `ScheduleWakeup`, `SendMessage`, an MCP tool that sends
 or schedules a prompt, a tool a later CLI adds): a string in it that types `/harness` refuses the
-call. Only the CLI's own tools that deliver no prompt are named, and pass: `Read`, `Glob`, `Grep`,
-`WebFetch`, `WebSearch`, `TodoWrite`, `AskUserQuestion`, `ExitPlanMode`; an `Agent` prompt, prose
-that may quote the command, is refused only when it is the command.
+call. Only the CLI's own tools that deliver no prompt are named, and pass: the readers and
+searchers (`Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `ToolSearch`), the caller's own todo
+and task lists and background-task tools, `AskUserQuestion`, `PushNotification`, `ExitPlanMode`,
+and `Monitor`, whose command meets the Bash rule; an `Agent` or `Task` prompt, prose that may
+quote the command, is refused only when it is the command.
 
 **Known limits.** The guard sees a tool's input, in a session whose harness is on. A prompt put
 together elsewhere (a Bash command that has another program send it, a service that fires text it
