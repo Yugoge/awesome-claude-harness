@@ -299,5 +299,6 @@ def _append(record: dict, now: float) -> bool:
         os.close(fd)
 
 
-if __name__ == "__main__":  # a report: <kind> <reporting hook> then <refusing hook> <its text> per rule; the payload on stdin
+if __name__ == "__main__" and len(sys.argv) > 3:
+    # a report: <kind> <reporting hook>, then <refusing hook> <its text> for each rule; the payload on stdin
     write(sys.stdin.buffer.read(), list(zip(sys.argv[3::2], sys.argv[4::2])), sys.argv[2], sys.argv[1])

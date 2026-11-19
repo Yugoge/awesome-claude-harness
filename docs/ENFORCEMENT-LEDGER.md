@@ -900,11 +900,12 @@ no per-rule budget exists.
   `hooks/lib/refusal_record.py`, the one writer and the one definition of the place
   (`directory()`): the launchers report their rules (`hooks/lib/hook_launch.py`), the gates the
   rules of their tables (`hooks/pretool-write-gate.py`, `hooks/lib/gate_runner.py`),
-  `hooks/lib/bash_safety_rules.py` its own refusal, and `hooks/stop-launch.py` and the two shell
-  hooks (`hooks/lib/refusal_record.sh`, at their exit 2) through the writer's command line; the
-  reports of one call merge into one line. `detected`: it records and prevents nothing. `write()`
-  returns False where it cannot write and raises nothing, and no caller reads what it returns, so
-  a missing or full record changes no decision. `scripts/refusals` reads it: counts by rule, hook,
+  `hooks/lib/bash_safety_rules.py` its own refusal, `hooks/stop-launch.py` the Stop coordinator's
+  block and the two shell hooks their exit 2 (`hooks/lib/refusal_record.sh`), each by running the
+  writer as a process of its own (`report()`, the writer's command line); the reports of one call
+  merge into one line. `detected`: it records and prevents nothing. The reporter waits a bounded
+  time for the writer and reads nothing back, and the writer returns where it cannot write, so a
+  missing, failing or full record changes no decision. `scripts/refusals` reads it: counts by rule, hook,
   role, project and day, loops, and a reconcile against the session transcripts by tool-call id.
   `tests/test_refusal_record_sites.py` runs every registered command with each file the replay
   suite's enumeration (`tests/replay/sites.py`) finds a blocking site in standing in as a
