@@ -109,6 +109,16 @@ def _classify_verdict_line(line: str) -> str:
         return "unknown"
 
 
+# The decisive verdict classes, the classifier's own (hooks/lib/close-verdict.py DECISIVE_CLASSES);
+# none when it cannot load, which never trips the inconsistency check, as 'unknown' never does.
+try:
+    from importlib.machinery import SourceFileLoader as _Loader
+    _DECISIVE = _Loader("close_verdict", str(Path(__file__).parent / "lib" / "close-verdict.py")) \
+        .load_module().DECISIVE_CLASSES
+except Exception:
+    _DECISIVE = ()
+
+
 def _dispatch_obligation(prompt) -> dict:
     """This producer's own dispatch obligation as declared, read even when the
     block fails the grammar (a pre-P1 template still carries required_values),
@@ -1040,7 +1050,7 @@ def main() -> None:
                         )
                         resp_class = _classify_verdict_line(_last_nonempty_line(resp_text))
                         if (
-                            md_class in ("yes", "no") and resp_class in ("yes", "no")
+                            md_class in _DECISIVE and resp_class in _DECISIVE
                             and md_class != resp_class
                         ):
                             failures.append(
