@@ -35,7 +35,6 @@ import fcntl
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import zlib
@@ -188,6 +187,7 @@ def report(payload, rules, by, kind=REFUSAL) -> None:
     try:
         p, rules = _payload(payload), [(str(h), str(t)[:TEXT_MAX].replace("\0", " ")) for h, t in rules]
         if p.get("hook_event_name") in EVENTS and rules:
+            import subprocess  # here, not above: the writer's own process never needs it
             raw = payload if isinstance(payload, bytes) else json.dumps(p).encode("utf-8", "replace")
             subprocess.run([sys.executable, os.path.abspath(__file__), kind, str(by), *(x for rule in rules for x in rule)],
                            input=raw, capture_output=True, timeout=REPORT_WAIT)

@@ -291,7 +291,7 @@ def test_a_hook_reports_through_a_writer_process_of_its_own(monkeypatch):
 def test_a_report_never_raises_and_starts_nothing_for_a_payload_without_an_event(monkeypatch):
     def never(*_a, **_k):
         raise AssertionError("a writer process was started")
-    monkeypatch.setattr(R.subprocess, "run", never)
+    monkeypatch.setattr(subprocess, "run", never)
     for p, rules in ((payload(event=None), [("hooks/x.py", "no")]), (payload(event="SessionStart"), [("hooks/x.py", "no")]),
                      (b"not json", [("hooks/x.py", "no")]), (payload(), [])):
         assert R.report(p, rules, "hooks/x.py") is None
