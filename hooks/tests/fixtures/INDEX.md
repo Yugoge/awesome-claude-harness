@@ -1,8 +1,8 @@
 # fixtures
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T12:08:09Z*
-**Total entries**: 9
+*Last updated: 2026-11-19T12:58:00Z*
+**Total entries**: 8
 **Convention**: kebab
 
 ## Tree

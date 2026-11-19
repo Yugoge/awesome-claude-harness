@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T12:10:48Z*
-**Total entries**: 169
+*Last updated: 2026-11-19T12:58:00Z*
+**Total entries**: 166
 **Convention**: kebab
 
 ## Tree
@@ -124,7 +124,6 @@ scripts/
 ├── `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 ├── `measure-hero-fold.py` - Description: Renders the document that holds the hero, docs/status.md, LOCALLY from the
 ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
-├── `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
 ├── `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
 ├── `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 ├── `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
@@ -144,6 +143,7 @@ scripts/
 ├── `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
 ├── `readme_facts.py` - Description: One function per fact (FACTS below), one source per function, nothing the pages do not
 ├── `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
+├── `refusals` - refusals file
 ├── `regen-folder-docs.py` - doc-sync regenerates a folder's INDEX.md and README.md AUTO regions only when a live harness
 ├── `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 ├── `resolve-commit-repos.py` - The normal ``/commit`` workflow uses this helper before it writes any commit

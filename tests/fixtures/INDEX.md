@@ -1,8 +1,8 @@
 # fixtures
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T12:10:49Z*
-**Total entries**: 23
+*Last updated: 2026-11-19T12:58:00Z*
+**Total entries**: 27
 **Convention**: kebab
 
 ## Tree
@@ -21,6 +21,8 @@ fixtures/
 │   │   ├── `subagent.meta.json` - <redacted>
 │   │   └── `transcript.jsonl` - jsonl file
 │   └── `CURRENT` - CURRENT file
+├── cli-request-copies/
+│   └── `transcript-2.1.322.jsonl` - jsonl file
 ├── cli-todowrite-oldtodos/
 │   └── `stream-2.1.326.jsonl` - jsonl file
 ├── late_repair_golden/
@@ -31,7 +33,8 @@ fixtures/
 ├── `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 ├── `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
 ├── `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
-└── `post-commit-lfs-auto-push` - post-commit - Combined hook: Git LFS + Auto-Push
+├── `permissions-ask-until-20261119.json` - JSON config: _comment, ask
+└── `post-commit-lfs-auto-push` - post-commit-lfs-auto-push file
 ```
 <!-- /AUTO:index-stats -->
 

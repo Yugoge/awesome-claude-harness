@@ -1,8 +1,8 @@
 # hooks
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:34:23Z*
-**Total entries**: 483
+*Last updated: 2026-11-19T12:57:59Z*
+**Total entries**: 509
 **Convention**: kebab
 
 ## Tree
@@ -70,20 +70,25 @@ hooks/
 │   ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 │   ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 │   ├── `git_command_classifier.py` - classify_git_command(text) returns (invocations, residuals). Callers that
+│   ├── `git_facts.py` - (How a git command line parses, which word is the subcommand, lives in lib/shell_parse.py.)"""
 │   ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 │   ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 │   ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
 │   ├── `harness_switch.sh` - harness_switch.sh — the harness switch's one question for shell hooks and jobs: is this
 │   ├── `harness_temp_state.py` - Is a resolved path harness temp state, and which temp root is it in: the one definition
+│   ├── `harness_vocabulary.py` - Plain data, standard library only: a hook imports it before it reads its payload
 │   ├── `hook_launch.py` - Claude Code starts every hook registered on an event as its own process, so one
 │   ├── `hook_launch_fallback.py` - A dispatcher (hooks/<event>-launch.py) uses this when its own code cannot run:
 │   ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
 │   ├── `launch_settings.py` - A launcher (hooks/<event>-launch.py, lib/hook_launch.py) is one registration that runs an
+│   ├── `locations.py` - What is a device or system temp, where the harness's roots are, what lies in which directory
 │   ├── `merge_grant.py` - The merge-analyst writes its grant with the Write tool at
 │   ├── `obligation.py` - Rollout step S2 of the converged zero-failure design
 │   ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 │   ├── `pol_degraded_removal_reference.ere` - ere file
 │   ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+│   ├── `refusal_record.py` - The gates' advisory logs had no reader and were deleted (P1b); since then nothing could say what
+│   ├── `refusal_record.sh` - refusal_record.sh -- a shell hook's report to the refusal record (hooks/lib/refusal_record.py).
 │   ├── `report_provenance.py` - hooks/subagentstop-e2e-enforce.py judges the ``e2e_enforcement.status`` of the qa-report.v2
 │   ├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 │   ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
@@ -103,7 +108,7 @@ hooks/
 │   ├── `specialist_yield.py` - Public API:
 │   ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS, ASK_COMMANDS
 │   ├── `stop_contract.py` - is a prompt the human typed (TC-4)
-│   ├── `subagent.py` - is_subagent_context() and supporting helpers, for the hooks that import it
+│   ├── `subagent.py` - is_subagent(): whether the calling agent is a subagent, the one predicate of that fact (a
 │   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
 │   └── `todo_canonical.py` - Shared canonical todo validation utilities
 ├── tests/
@@ -138,7 +143,7 @@ hooks/
 │   ├── `test_bash_safety_consent_flag.py` - The flag is <state dir>/claude-orchestrator-consent-<session id>.flag. Its one writer is hooks/pr...
 │   ├── `test_bash_safety_context.py` - They were written for hooks/lib/bash_context_strip.py's
 │   ├── `test_bash_safety_context_rules.py` - hooks/pretool-bash-safety.sh that read the context-stripped view
-│   ├── `test_bash_safety_degraded_fallback.py` - When the execution-boundary analyzer gives no verdict (timeout, memory ceiling, crash) the fallba...
+│   ├── `test_bash_safety_degraded_fallback.py` - Until 2026-11-19 a command passed the degraded path only when it was provably plain: no removal r...
 │   ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
 │   ├── `test_bash_safety_http_stop_npm_global.py` - The HTTP /stop rule (BS-02, search-15) refuses a request to a localhost port's /stop path segment...
 │   ├── `test_bash_safety_preclean_stdin.py` - An exec'd process gets its environment and argv strings through the kernel, which refuses one str...
@@ -157,6 +162,8 @@ hooks/
 │   ├── `test_capability_gate.py` - Every test drives the real artefacts: the library, the PreToolUse gate hook as a
 │   ├── `test_checklist_lock_read_only.py` - pretool-workflow-gate.py holds every tool but TodoWrite/TodoRead while the
 │   ├── `test_checklist_record.py` - Every TodoWrite and Agent call the CLI ran is in the session transcript, so the
+│   ├── `test_checkpoint_left_out.py` - In the harness home four leftover untracked files holding a listed literal made the rule refuse
+│   ├── `test_checkpoint_left_out_callers.py` - The pre-clean guard (hooks/pretool-bash-safety.sh, a granted `git clean`): a snapshot that left a...
 │   ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
 │   ├── `test_claude_config_guard.py` - /dev-command develops project slash commands, so its dev writes the command file the cycle asks
 │   ├── `test_claude_config_guard_chain.py` - The proof (_proven_harmless) lets a Bash command the base reading refuses through when every writ...
@@ -184,6 +191,11 @@ hooks/
 │   ├── `test_cp_enforce_own_slot.py` - cp-state slot's pending checkpoints (P1c X6)
 │   ├── `test_cycle_registry.py` - hooks/prompt-workflow.py mints the task id at UserPromptSubmit and arms the
 │   ├── `test_declaring_dispatch.py` - of who owes an artifact of a task, from the task's dispatch records in every
+│   ├── `test_defs_programs_copy_options.py` - GNU getopt gives an optional-argument option (cp --preserve[=ATTR], --reflink[=WHEN], --context[=...
+│   ├── `test_defs_programs_options.py` - - ripgrep: the options whose value is a program it runs (RG_PROGRAM_OPTS: --pre, --hostname-bin) ...
+│   ├── `test_defs_programs_readers.py` - Before, the harness-switch rule kept a private list of 27 readers and refused, as a write of the
+│   ├── `test_defs_programs_writers.py` - Before, a write through sort -o, touch, uniq IN OUT, sponge, gsed -i, perl -pi or gawk -i inplace
+│   ├── `test_defs_tools_one_definition.py` - Each test below pins one fact the 2026-11-19 duplicate audit found written in several places
 │   ├── `test_dev_loop_checks.py` - - Before a dev dispatch (PreToolUse): layer escalation and bisect; after it returns (PostToolUse):
 │   ├── `test_dispatch_template.py` - A dispatch's template is the fence of its command's file that names its
 │   ├── `test_do_block_subagents.py` - During an active /do cycle the main agent could still dispatch dev-type
@@ -203,12 +215,15 @@ hooks/
 │   ├── `test_eval_ref_mutation.py` - `eval` joins its arguments and runs them as a command line, so
 │   ├── `test_extract.py` - Unit tests for hooks/doc_sync/extract.py — covers all 4 defects + known-file cases.
 │   ├── `test_fail_closed_drift.py` - WHY THIS FILE EXISTS
+│   ├── `test_find_action_write_targets.py` - The shared parser's table of find actions held the four that run a program; `-fprint`, `-fprint0`,
 │   ├── `test_g2_file_lists.py` - files Claude Code recorded the dev writing (hooks/subagentstop-artifact-
 │   ├── `test_g2_harness_syntax.py` - artifact-contract-enforce.py, _harness_syntax) parses every file of the
 │   ├── `test_g2_spec_views.py` - subagent's stop by `spec-verify.py --strict` on the views its dispatch declares
+│   ├── `test_generated_tests_policy.py` - tests/generated/ (outside the pinned directories) and the tree stays out of
 │   ├── `test_git_clean_guard_argument_data.py` - read grep / rg / echo pattern text and heredoc text as a `git clean`
 │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_COMMAND_RE (hooks/pretool-git-privilege-guard.py) and
 │   ├── `test_git_dynamic_directory.py` - `"$VIRTUAL_ENV/bin/pip" show pytest` runs pip wherever the variable points:
+│   ├── `test_git_facts_one_definition.py` - Each class is one fact. Before these merges each hook carried its own copy, the copies differed,
 │   ├── `test_git_hidden_code.py` - The classifier reads shell text, so `python3 -c 'subprocess.run(["git","push"])'`
 │   ├── `test_git_prefix_enumeration.py` - THE DEFECT
 │   ├── `test_git_residual_override.py` - Background
@@ -218,6 +233,7 @@ hooks/
 │   ├── `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
 │   ├── `test_git_word_unquoted.py` - as git receives them, quotes and backslashes removed, before any rule judges them
 │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
+│   ├── `test_gitignore_preflight_speed.py` - Dev dispatches ended the PreToolUse launcher with a RuleOverrun traceback after 60 s: each
 │   ├── `test_gitignore_preflight_write_capability.py` - pretool-gitignore-preflight.py scopes its refusal by the dispatched agent's
 │   ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
 │   ├── `test_grep_backtrack_guard.py` - Freeze safe grep shapes and the catastrophic embedded-engine control.
@@ -231,7 +247,9 @@ hooks/
 │   ├── `test_laneb_session_resources.py` - LANE-B actor scratch, receipt, and owned-process broker tests.
 │   ├── `test_laneb_stop_coordinator.py` - LANE-B non-destructive receipt writers and serialized Stop coordinator.
 │   ├── `test_laneb_stop_overnight_timelock_scoping.py` - Its time-lock and wake check are the Stop gate's step 4 (hooks/stop-command-gate.py,
+│   ├── `test_locations_relocation.py` - Each location decision is the same wherever the project and the harness home are, by every spelli...
 │   ├── `test_merge_grant_write_check.py` - Experiment E11: the privilege guard's merge-grant check sat behind
+│   ├── `test_misread_refusals.py` - Each group holds the shapes of refusals recorded in three days of sessions (paths, names and PIDs...
 │   ├── `test_monitor_command.py` - On CLI 2.1.325 (measured) a Monitor call reaches matcher-less hooks as tool_name "Monitor" with
 │   ├── `test_notification_idle_overnight.py` - (P12), and the file stays for a session that loaded an older hook list (D15)."""
 │   ├── `test_now_unreferenced_p5_p9.py` - - posttool-subagent-track.py's bookmark marker. P5 moved Gate 4 to the transcript, so
@@ -257,6 +275,7 @@ hooks/
 │   ├── `test_overnight_guard_bash_parser.py` - Each decision that changed when the guard's Bash path moved onto the parser is pinned here, with
 │   ├── `test_overnight_inplace_bubblewrap.py` - Replayed in a bwrap-less in-place toy session, every removal of the git
 │   ├── `test_overnight_keystone_hook_dir.py` - In both isolation modes neither a `chmod -x` of `<common>/keystone-hooks/reference-transaction`
+│   ├── `test_overnight_notebook_edit.py` - The guard named Write, Edit and MultiEdit at five places and read `file_path`; its write-gate row
 │   ├── `test_overnight_one_state_reader.py` - cycle contract's one writer (P1b row 13, E13)
 │   ├── `test_overnight_operand_scan_channel.py` - The commands run harness scripts as `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/x.sh"`. For an
 │   ├── `test_overnight_qa_sentinel_bind.py` - P1b E7 removed the one RW exception the boundary had under main's
@@ -293,7 +312,11 @@ hooks/
 │   ├── `test_qa_report_writes.py` - qa writes report and evidence files under the project's reports/ and tests/reports/ only
 │   ├── `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 │   ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
+│   ├── `test_refusal_record.py` - - One refused call, stop or prompt is one line holding every field of the record, each bounded;
 │   ├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
+│   ├── `test_removal_policy_own_scratch.py` - The owner, 2026-11-19: one's own temp folder may be deleted. Until then every removal the analyze...
+│   ├── `test_removal_policy_parsed_rule.py` - "Only a removal program in a position where it would be executed counts, and removal calls in Pyt...
+│   ├── `test_removal_policy_unproven_rule.py` - The rule (owner, 2026-11-19): when the guard cannot prove a command safe, it refuses if a removal...
 │   ├── `test_report_projection_contract.py` - Focused contract tests for the deterministic QA v1 report projection and the report gate.
 │   ├── `test_report_provenance_gate.py` - The orchestrator could forge ``docs/dev/qa-report-*.json`` (an ``e2e_enforcement.status`` of
 │   ├── `test_report_provenance_reads.py` - the fifth verifier's findings, through the registered PreToolUse launcher in a throwaway project,
@@ -309,6 +332,7 @@ hooks/
 │   ├── `test_score_view.py` - hooks/lib/score_log.py renders the views (dispatch view, main line) and hooks/lib/score_view.py r...
 │   ├── `test_scratch_lifecycle.py` - Covers:
 │   ├── `test_session_gitignore_propagate.py` - product repo, and the two per-session records it keeps directly in .claude/ (the workflow bookmark
+│   ├── `test_shared_lists_agree.py` - - Finding 15, devices no write changes: the overnight boundary knew /dev/null, tool-policy's rows
 │   ├── `test_shell_parse.py` - Unit tests of hooks/lib/shell_parse.py: one class per node type and view.
 │   ├── `test_skill_deny_coverage.py` - `disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>)` entry in
 │   ├── `test_span_lazy_reader.py` - what decides (P1b FX4: FX1's CS-1..3 and OB-2)
@@ -318,6 +342,7 @@ hooks/
 │   ├── `test_spec_root_anchoring.py` - hooks/pretool-bash-views-guard.py refused a Bash redirect into any `*.lock.json` anywhere
 │   ├── `test_spec_root_symlink_dotdot.py` - directory destination and `touch` (OB-L37 rework)
 │   ├── `test_spec_window_abandoned.py` - pretool-spec-block-foreground-agent.py refuses a foreground dispatch while a
+│   ├── `test_specialist_report_repair.py` - /dev-overnight Step 3 (commands/dev-overnight.md, the specialist template) dispatches architect,
 │   ├── `test_start_launchers.py` - and SubagentStart (P2-3), as rules of the one Python registration each event has (P12-L7, lib/hoo...
 │   ├── `test_state_dir_path_rule.py` - Each test pairs a state file's writer with its reader: with CLAUDE_STATE_DIR pointing
 │   ├── `test_stop_checkpoint_noop_no_ref.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
@@ -340,10 +365,13 @@ hooks/
 │   ├── `test_tool_policy_c_layer_writes.py` - hooks/pretool-tool-policy.py judges a Bash command's write targets (the protected stage for every
 │   ├── `test_tool_policy_contracts.py` - LANE-POL least-privilege role-policy regression matrix.
 │   ├── `test_tool_policy_derived_permission.py` - hooks/pretool-tool-policy.py runs it before the role rows, for every caller, the main agent
+│   ├── `test_tool_policy_dispatch_writes.py` - hooks/pretool-tool-policy.py's _check_dispatch_writes: for each file artifact (a kind whose fields
 │   ├── `test_tool_policy_docs_and_web.py` - policies/tool-policy.v1.json is default-deny per role: lib/policy_registry._check_tool_lists refu...
+│   ├── `test_tool_policy_own_scratch.py` - hooks/pretool-tool-policy.py refuses every role a write under /tmp or /var/tmp (the shipped
 │   ├── `test_tool_policy_protected_paths.py` - hooks/pretool-tool-policy.py refuses, before every other rule and for the main agent and every
 │   ├── `test_tool_policy_readonly_bookkeeping.py` - policies/tool-policy.v1.json is default-deny per role: lib/policy_registry._check_tool_lists refu...
 │   ├── `test_tool_policy_report_forgery.py` - hooks/subagentstop-e2e-enforce.py (inside hooks/subagentstop-producer-gate.py) judges the
+│   ├── `test_transcript_request_copies.py` - it as without them (C3)
 │   ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_config.py` - Imports the config sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_constants.py` - Imports the constants sibling module DIRECTLY (not via the _core facade) and
@@ -351,9 +379,11 @@ hooks/
 │   ├── `test_unit_git_cmds.py` - Imports the git_cmds sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_pathmatch.py` - Imports the pathmatch sibling module DIRECTLY (not via the _core facade) and
 │   ├── `test_unit_shell_lex.py` - The guard splits a command into pipeline groups of simple commands, tokenizes each
+│   ├── `test_unproven_presnapshot.py` - The owner's rules: a command the removal policy cannot prove safe runs and is recorded (2026-11-1...
 │   ├── `test_userprompt_bulk_commit_capability.py` - These assertions (AC-FRESH-F-14) came from the tests of an unreachable script
 │   ├── `test_userprompt_doc_sync_relay.py` - Backlog #83: the UserPromptSubmit hook resyncs a directory by running
 │   ├── `test_userprompt_usage_snapshot.py` - Covers the three cache states the hook must handle (cache hit, cache expired
+│   ├── `test_views_guard_checker_exemption.py` - names it (hardcode audit 2026-11-19, finding 12)
 │   ├── `test_workflow_allow_grant.py` - The orchestrator gate already passed a Workflow call under `/allow Workflow`, but
 │   ├── `test_workflow_bookmark_writer.py` - <project>/.claude/workflow-<sid>.json is written by prompt-workflow.py alone (a
 │   ├── `test_worktree_guard.py` - agent worktrees
@@ -363,6 +393,7 @@ hooks/
 │   ├── `test_wrapper_userintent_operand_proofs.py` - hooks/pretool-wrapper-userintent.py:
 │   ├── `test_wrapper_userintent_proof.py` - hooks/pretool-wrapper-userintent.py keeps the previous text rule as its fallback: a
 │   ├── `test_wrapper_userintent_runtime_targets.py` - hooks/pretool-wrapper-userintent.py treats as a run of the harness home's wrapper:
+│   ├── `test_wrapper_userintent_unread_names.py` - Two recorded refusals: a for loop whose script name is computed from the loop variable, every value
 │   ├── `test_write_gate.py` - - The gate sees what the guards saw: each rule's tool set is its guard's registered matcher
 │   ├── `test_write_gate_overwrite_exempt.py` - Each case runs the rule (lib/write_gate/overwrite.py) as a process on an architect subagent's Write
 │   ├── `test_write_gate_overwrite_parity.py` - The write gate runs the Python form. The shell hook is an exit-0 stub since the gate's registration
@@ -378,6 +409,8 @@ hooks/
 ├── `git-fswatch@.service` - service file
 ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
+├── `permissionrequest-answer.py` - The rules it applies, its failure behaviour and what it leaves to other hooks are stated once, in
+├── `permissionrequest-launch.py` - PermissionRequest: answer every permission request by rule (hooks/permissionrequest-answer.py).
 ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
 ├── `posttool-close-rating.py` - A question goes by its source prefix to one handler, an Agent call to the observer; no logic here

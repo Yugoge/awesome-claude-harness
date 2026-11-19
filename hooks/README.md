@@ -4,7 +4,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 126
+- **Total files**: 122
 - **Subdirectories**: 5
 - **Naming convention**: kebab
 
@@ -19,6 +19,8 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `git-fswatch@.service` - service file
 - `merge.sh` - merge.sh - wrapper for /merge slash command
 - `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
+- `permissionrequest-answer.py` - The rules it applies, its failure behaviour and what it leaves to other hooks are stated once, in
+- `permissionrequest-launch.py` - PermissionRequest: answer every permission request by rule (hooks/permissionrequest-answer.py).
 - `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 - `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
 - `posttool-close-rating.py` - A question goes by its source prefix to one handler, an Agent call to the observer; no logic here
