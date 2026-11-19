@@ -3261,17 +3261,23 @@ def test_first_declared_at_reads_the_earliest_declaring_dispatch_of_the_role(tmp
 
 
 C5_TASK = "20261002-170011"  # a /dev fan-out's id: the shard filename patterns name its lanes
+# What a lane records at dispatch: one HEAD for the fan-out and its `git status --porcelain`.
+C5_BASELINE = {"baseline_head_sha": "a" * 40, "baseline_dirty_snapshot": " M src.txt"}
 
 
-def _c5_setup(tmp_path, *, l1=True, l1_newer=False, canonical=False):
+def _c5_report(task, lane, fault=None):
+    return {**_l2_dev_report(task, lane=lane, lane_set=["l1", "l2"]), **C5_BASELINE, **(fault or {})}
+
+
+def _c5_setup(tmp_path, *, l1=True, l1_newer=False, canonical=False, own_fault=None, l1_fault=None):
     s = _l2_setup(tmp_path, lane="l2", lane_set=["l1", "l2"], base_task=C5_TASK)
     s.l1 = f"docs/dev/dev-report-{s.cycle}-l1.json"
     s.canonical = f"docs/dev/dev-report-{s.cycle}.json"
-    _l2_write(s, _l2_dev_report(s.task, lane="l2", lane_set=["l1", "l2"]))
+    _l2_write(s, _c5_report(s.task, "l2", own_fault))
     now = datetime.now(timezone.utc).timestamp()
     os.utime(s.project / s.art_path, (now, now))
     if l1:
-        _write(s.project / s.l1, _l2_dev_report(f"{s.cycle}-l1", lane="l1", lane_set=["l1", "l2"]))
+        _write(s.project / s.l1, _c5_report(f"{s.cycle}-l1", "l1", l1_fault))
         at = now + 30 if l1_newer else now - 60
         os.utime(s.project / s.l1, (at, at))
     if canonical:
@@ -3311,6 +3317,92 @@ def test_c5_advisory_stopgate_does_not_block(tmp_path):
     s = _c5_setup(tmp_path)
     proc = _run_hook(s.project, s.home, s.agent_id, session_id=s.harness, stopgate_mode="advisory")
     assert proc.returncode == 0, proc.stderr
+
+
+# P2a / W1: the canonical's producer, scripts/aggregate-dev-report.py, refuses a lane report. The lane
+# whose report it refuses is told the producer's own reason, whatever the order the lanes reported in;
+# a lane whose report it accepts is not held for a sibling's (the main agent's QA dispatch is, G3).
+_PRED = {"mode": "sequential", "derived_from": "l1"}
+_L1_CREATED = {"dev": {"status": "completed", "files_modified": ["src.txt"], "files_created": ["x.py"]}}
+C5_REFUSALS = {  # own report's fault, the sibling's fault, the reason the producer gives for this report
+    "head_empty": ({"baseline_head_sha": ""}, None, "shard 'l2': baseline_head_sha is missing or empty"),
+    "head_moved": ({"baseline_head_sha": "b" * 40}, None, f"shard 'l2': baseline_head_sha '{'b' * 40}' != first"),
+    "snapshot_prose": ({"baseline_dirty_snapshot": "see the lane write manifest (3 entries)"}, None,
+                       "shard 'l2': baseline_dirty_snapshot is neither verbatim porcelain output nor a leading-count"),
+    "snapshot_mismatch": ({"baseline_head_sha": "b" * 40, "baseline_dirty_snapshot": "?? other.txt"}, None,
+                          "shard 'l2': baseline_dirty_snapshot mismatch"),
+    "provenance_mode": ({"baseline_provenance": {"mode": "parallel"}}, None,
+                        "shard 'l2': baseline_provenance.mode 'parallel' is not supported"),
+    "provenance_no_predecessor": ({"baseline_provenance": {"mode": "sequential"}}, None,
+                                  "shard 'l2': baseline_provenance.derived_from is missing or empty"),
+    "provenance_self": ({"baseline_provenance": {**_PRED, "derived_from": "l2"}}, None,
+                        "shard 'l2': baseline_provenance.derived_from names itself"),
+    "provenance_unknown": ({"baseline_provenance": {**_PRED, "derived_from": "l9"}}, None,
+                           "shard 'l2': baseline_provenance.derived_from 'l9' is not among the shards"),
+    "provenance_not_list": ({"baseline_provenance": {**_PRED, "predecessor_files_created": "x.py"}}, None,
+                            "shard 'l2': baseline_provenance.predecessor_files_created must be a list"),
+    "provenance_claim": ({"baseline_provenance": {**_PRED, "predecessor_files_created": ["y.py"]}}, None,
+                         "shard 'l2': baseline_provenance claims predecessor 'l1' created ['y.py']"),
+    "provenance_empty_delta": ({"baseline_provenance": {**_PRED, "predecessor_files_created": []},
+                                "baseline_dirty_snapshot": "?? other.txt"}, None,
+                               "shard 'l2': baseline_provenance declares an empty delta from 'l1'"),
+    "provenance_identical": ({"baseline_provenance": {**_PRED, "predecessor_files_created": ["x.py"]}},
+                             _L1_CREATED, "shard 'l2': baseline_provenance declares 1 file(s) created by 'l1'"),
+    "provenance_uncountable": ({"baseline_provenance": {**_PRED, "predecessor_files_created": ["x.py"]},
+                                "baseline_dirty_snapshot": "see the manifest"}, _L1_CREATED,
+                               "shard 'l2': baseline_provenance cannot be corroborated because"),
+    "provenance_short": ({"baseline_provenance": {**_PRED, "predecessor_files_created": ["x.py"]},
+                          "baseline_dirty_snapshot": "?? other.txt"}, _L1_CREATED,
+                         "shard 'l2': baseline records 1 entries but predecessor 'l1' recorded 1 plus 1"),
+    "wave_mode": ({"baseline_wave": {"mode": "parallel"}}, None, "shard 'l2': baseline_wave.mode 'parallel' is not"),
+}
+
+
+def _c5_edit(s, report):
+    """The lane's own Edit of its report: the file changes and the lane-completeness watch runs on it."""
+    _l2_write(s, report)
+    payload = {"tool_name": "Edit", "tool_input": {"file_path": str(s.project / s.art_path)}}
+    subprocess.run([sys.executable, str(REPO_ROOT / "hooks" / "posttool-lane-completeness-watch.py")],
+                   input=json.dumps(payload), capture_output=True, text=True, timeout=60,
+                   env={**os.environ, "CLAUDE_PROJECT_DIR": str(s.project), "HOME": str(s.home)})
+
+
+@pytest.mark.parametrize("l1_newer", [False, True], ids=["own-newest", "sibling-newest"])
+@pytest.mark.parametrize("case", sorted(C5_REFUSALS))
+def test_c5_own_report_the_producer_refuses_is_named_with_its_reason_until_repaired(tmp_path, case, l1_newer):
+    own_fault, l1_fault, reason = C5_REFUSALS[case]
+    s = _c5_setup(tmp_path, own_fault=own_fault, l1_fault=l1_fault, l1_newer=l1_newer)
+    _c5_edit(s, _c5_report(s.task, "l2", own_fault))  # the watch runs and the producer refuses
+    assert not (s.project / s.canonical).exists()
+    first = _l2_stop(s)
+    assert first.returncode == 2, first.stderr
+    assert f"{s.art_path}: canonical_missing" in first.stderr
+    assert reason in first.stderr, first.stderr
+    assert "scripts/aggregate-dev-report.py" in first.stderr and "save it again with Edit" not in first.stderr
+    again = _l2_stop(s)  # the same stop over the same unrepaired report: the same block, every time
+    assert (again.returncode, again.stderr) == (2, first.stderr)
+    _c5_edit(s, _c5_report(s.task, "l2"))  # the lane corrects its own report
+    proc = _l2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    assert (s.project / s.canonical).is_file()
+
+
+def test_c5_the_same_unrepaired_report_is_refused_the_hundredth_stop_as_the_first(tmp_path):
+    s = _c5_setup(tmp_path, own_fault=C5_REFUSALS["snapshot_prose"][0])
+    stops = {(p.returncode, p.stderr) for p in (_l2_stop(s) for _ in range(100))}
+    assert len(stops) == 1 and next(iter(stops))[0] == 2
+
+
+@pytest.mark.parametrize("l1_newer", [False, True], ids=["own-newest", "sibling-newest"])
+@pytest.mark.parametrize("l1_fault", [C5_REFUSALS["snapshot_prose"][0], {"baseline_head_sha": ""}],
+                         ids=["snapshot_prose", "head_empty"])
+def test_c5_a_lane_the_producer_accepts_is_not_held_for_a_siblings_refused_report(tmp_path, l1_fault, l1_newer):
+    s = _c5_setup(tmp_path, l1_fault=l1_fault, l1_newer=l1_newer)
+    _c5_edit(s, _c5_report(s.task, "l2"))
+    assert not (s.project / s.canonical).exists()  # the producer refuses the sibling's report
+    proc = _l2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    assert "canonical_missing" not in proc.stderr
 
 
 if __name__ == "__main__":
