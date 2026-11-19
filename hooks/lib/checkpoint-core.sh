@@ -99,9 +99,9 @@ CHECKPOINT_PII_PATH_COMPONENTS="${CHECKPOINT_PII_PATH_COMPONENTS:-backups sessio
 _checkpoint_pii_pattern='[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|sk-[A-Za-z0-9]{20}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+'
 CHECKPOINT_PII_SIGNATURE_PATTERN="${CHECKPOINT_PII_SIGNATURE_PATTERN:-$_checkpoint_pii_pattern}"
 
-# Consecutive incomplete snapshots of one ref of one repository (failed, refused or written without
-# a file): "<count> <since>" in <git dir>/checkpoint-fail-count.<ref name> unless this names a file;
-# the 3rd prints one stderr alert, a complete snapshot of that ref resets it, another project's never.
+# Consecutive incomplete (failed, refused, left a file out) snapshots of one ref of one repository:
+# "<count> <since>" in <git dir>/checkpoint-fail-count.<ref name> unless this names a file. The 3rd
+# alerts on stderr; only a complete snapshot of that ref resets it (never another project's).
 CHECKPOINT_FAIL_COUNT_FILE="${CHECKPOINT_FAIL_COUNT_FILE:-}"
 CHECKPOINT_FAIL_ALERT_THRESHOLD="${CHECKPOINT_FAIL_ALERT_THRESHOLD:-3}"
 
@@ -131,9 +131,8 @@ _checkpoint_record_failure() {
     local file="${count_file:-${CHECKPOINT_FAIL_COUNT_FILE:-$CHECKPOINT_LOG_DIR/.checkpoint-fail-count}}" current="" since=""
     mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null
     [ -f "$file" ] && read -r current since < "$file" 2>/dev/null
-    current=${current//[^0-9]/}
+    current=${current//[^0-9]/} since=${since:-$(date '+%Y-%m-%d %H:%M:%S')}
     local next=$((${current:-0} + 1)) tmp="${file}.$$"
-    [ "$next" -gt 1 ] && [ -n "$since" ] || since=$(date '+%Y-%m-%d %H:%M:%S')
     printf '%s %s\n' "$next" "$since" > "$tmp" 2>/dev/null && mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
     checkpoint_streak="no complete snapshot of ${ref:-this repository} since ${since} (${next} in a row)"
     if [ "$next" -ge "$CHECKPOINT_FAIL_ALERT_THRESHOLD" ]; then

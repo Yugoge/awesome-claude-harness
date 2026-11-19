@@ -59,9 +59,9 @@ stop_run() {
 
 # Private-literal rule (R7b). The list is private-literals.txt in the MAIN working tree (no
 # override): one literal per line, trimmed, blank and #-lines ignored, fixed-string match.
-# Scopes: index = all tracked content as committed; staged = lines and path names the staged
-# change adds; archive = every file under $2. A hit names file:line and its list line only;
-# with PRIVATE_LITERAL_HITS=<file> each hit's path, as git quotes it, is also written there.
+# Scopes: index = all tracked content as committed; staged = lines and path names the staged change
+# adds; archive = every file under $2. A hit names file:line and its list line only; its path, as git
+# quotes it, also goes to the file $PRIVATE_LITERAL_HITS names, when set (checkpoint-core.sh).
 private_literal_rule() {
   local list l n=0 base; local -a lits=()
   list="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$ROOT/.git")")/private-literals.txt"
