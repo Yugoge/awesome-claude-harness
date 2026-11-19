@@ -1304,15 +1304,22 @@ def test_iteration3_counter_examples_deny_through_the_hook(command):
 
     The analyzer still authorizes none of them (the test above). Since the
     owner's rule of 2026-11-19 the hook refuses an unproven command only when
-    its text holds a removal word: seven of the eight do and are refused; `cat
-    -X/bin/r? qa-target` names none and runs."""
+    its text holds a removal word: six of the eight do and are refused; `cat
+    -abXrm qa-target` (the letters `rm` inside an option cluster are no word)
+    and `cat -X/bin/r? qa-target` name none and run."""
     code, _out, err = H.run_hook_command(command)
     if G.degraded_denies_removal_reference(command):
         assert code == 2, command
         assert err.strip()
     else:
-        assert command == "cat -X/bin/r? qa-target"
+        assert command in ("cat -abXrm qa-target", "cat -X/bin/r? qa-target")
         assert code == 0, (command, err)
+
+
+def test_iteration3_counter_examples_split_six_and_two():
+    named = [c for c in ITERATION3_COUNTER_EXAMPLES
+             if G.degraded_denies_removal_reference(c)]
+    assert len(named) == 6 and len(ITERATION3_COUNTER_EXAMPLES) == 8, named
 
 
 @pytest.mark.parametrize("probe_id,command", sorted(REP_PROBES.items()))
