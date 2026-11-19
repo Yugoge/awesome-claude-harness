@@ -431,6 +431,7 @@ DEFINER_KINDS = ("function", "coproc")  # Compound kinds whose body runs later o
 QUOTE_CHARS = ("'", '"')  # the characters that open a quoted string
 COMMAND_OPTS = ("-c", "--command")  # su, runuser, flock, script: the option whose value is shell code
 ENV_SPLIT_OPTS = ("-S", "--split-string")  # env: the option whose value env splits into the command line
+GIT_RESTORE_SOURCE_OPTS = ("-s", "--source")  # git restore: the tree the files are restored from
 # Environment variables whose VALUE is executed by the command that follows
 # them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
 # a fixture-pinned safe row -- but these named vectors are documented command
@@ -3650,7 +3651,7 @@ def _git_write_targets(res, env, context):
                         paths.append(args[k])
                     elif v == "--":
                         after = True
-                    elif v in ("-s", "--source"):
+                    elif v in GIT_RESTORE_SOURCE_OPTS:
                         k += 1
                     elif v is not None and v.startswith("-"):
                         pass

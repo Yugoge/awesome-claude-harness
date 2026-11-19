@@ -6112,7 +6112,8 @@ def _worktree_base_hits(command, view):
     hit["bare"] = hit["bare"] or any(not i["args"] for i in view.outer("stash"))
     hit["checkout"] = hit["checkout"] or any(_wide_path_after_dashdash(i["args"]) for i in view.outer("checkout"))
     hit["restore"] = hit["restore"] or any(
-        any(a in ("--source", "-s") or a.startswith(("--source=", "-s=")) for a in i["args"])
+        any(a in GIT_RESTORE_SOURCE_OPTS or a.startswith(tuple(o + "=" for o in GIT_RESTORE_SOURCE_OPTS))
+            for a in i["args"])
         and _wide_path_after_dashdash(i["args"]) for i in view.outer("restore"))
     return hit
 
@@ -6205,7 +6206,8 @@ _WT_PUSH_RE = re.compile(r"stash\s+(push|save|create|store|-u|--include-untracke
 _WT_PUSH_FLAGS_RE = re.compile(r"stash\s+-[ua]+\b")
 _WT_BARE_RE = re.compile(r"stash\s*($|[;&|])")
 _WT_CHECKOUT_RE = re.compile(r"checkout\s+\S+\s+--\s+(\.|\*|[^ ]+/)\s*($|[;&|])")
-_WT_SOURCE_RE = re.compile(r"(?=(--source\b|-s\b))")
+from lib.shell_parse import GIT_RESTORE_SOURCE_OPTS  # noqa: E402
+_WT_SOURCE_RE = re.compile(r"(?=(%s))" % "|".join(o + r"\b" for o in GIT_RESTORE_SOURCE_OPTS))
 _WT_WIDE_RE = re.compile(r"(?=(--\s+(\.|\*|[^ /]+/)\s*($|[;&|])))")
 
 
