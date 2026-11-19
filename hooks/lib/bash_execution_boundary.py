@@ -911,9 +911,10 @@ SHELL_LONG_VAL = set(SHELL_FILE_OPTS)
 INTERPRETERS = {
     "python": ("-c",), "python2": ("-c",), "python3": ("-c",),
     "perl": ("-e", "-E"), "ruby": ("-e",), "node": ("-e", "--eval", "-p", "--print"),
-    "nodejs": ("-e", "--eval", "-p"), "php": ("-r",), "lua": ("-e",),
+    "php": ("-r",), "lua": ("-e",),
     "lua5.1": ("-e",), "lua5.3": ("-e",), "deno": ("eval",),
 }
+INTERPRETERS["nodejs"] = INTERPRETERS["node"]  # Debian's name for node, the same program
 AWKS = set(AWK_NAMES) | {"busybox-awk"}  # and busybox's applet, as this reader names it
 
 # Calls that only render text. A removal token reaching one of these and
