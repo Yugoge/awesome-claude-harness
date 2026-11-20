@@ -2713,8 +2713,7 @@ def _tracked_at_baseline(project_root: Path, baseline_head_sha: str, rel: str) -
 
 
 def _is_completeness_diagnostic(text, owned) -> bool:
-    """The form of every diagnostic _completeness_check_file builds: "<owned_edits path>: ..."
-    (tests/test_completeness_diagnostic_form.py walks each one)."""
+    """Every diagnostic _completeness_check_file builds is "<owned_edits path>: ..." (tests/test_completeness_on_demand.py)."""
     return isinstance(text, str) and isinstance(owned, dict) and any(text.startswith(f"{rel}: ") for rel in owned)
 
 def _apply_completeness_check(
