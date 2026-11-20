@@ -1736,6 +1736,50 @@ def test_commit_ends_on_a_no_owner_line_for_an_artifact_nobody_owes(env, monkeyp
     assert (run(env)[0] == 0) is (case == "released"), case
 
 
+def test_a_session_on_the_old_text_is_told_the_exit_line_and_can_end_on_it(env):
+    """(a) The session loaded a dev.md that never mentions REFUSED (the owner's sessions of 2026-11-19): its pending
+    step's own dispatch refused by a hook, the block names the exact line; a Stop whose last text starts with that
+    line is allowed, and the step is still open after it."""
+    old = "\n".join(line for line in (REPO / "commands" / "dev.md").read_text(encoding="utf-8").splitlines()
+                    if "REFUSED" not in line)
+    assert "REFUSED" not in old
+    steps = canonical("dev")
+    env.tx.command("dev", "fix the build", body=old,
+                   context=f"DEV_SESSION_ID pre-initialized by hook: {DEV_ID}\nTask id: {FAMILY}\n")
+    k = next(i for i, s in enumerate(steps) if s["content"].startswith("Step 10:"))
+    env.tx.todos(steps, k)
+    refused_dispatch(env)
+    env.tx.say("Every dev dispatch is refused.")
+    code, text = run(env)
+    line = f"REFUSED: {steps[k]['content']}"
+    assert code == 2 and f'write the line "{line}", then the hook\'s own output; the step stays open' in text, text
+    env.tx.say(line + "\nOBLIGATION GATE ORDER (pretool-obligation-gate, R17)")
+    assert run(env) == (0, "")
+    assert command_span.active_span(env.tx.path).last_todos()[k]["status"] == "in_progress"  # still open
+
+
+@pytest.mark.parametrize("case", ["another-role", "not-a-hook", "nothing-refused"])
+def test_where_no_step_call_was_refused_the_block_text_is_unchanged(env, case):
+    """(b) Condition false: the block text is exactly _block_text's, as before."""
+    at_step(env)
+    if case != "nothing-refused":
+        refused_dispatch(env, "test-writer" if case == "another-role" else "dev", by_hook=case != "not-a-hook")
+    code, text = run(env)
+    gaps = [line[2:] for line in text.splitlines() if line.startswith("- ")]
+    assert code == 2 and text == gate._block_text("dev", gaps) and "REFUSED" not in text, (case, text)
+
+
+@pytest.mark.parametrize("command", ["dev", "redev", "dev-command", "do"])
+def test_the_exit_line_the_block_prints_is_the_one_the_gate_accepts_for_every_step(command):
+    """(c) Every step name the todo scripts give: the printed line is one STEP_REFUSED_LINE reads as that step."""
+    tc = importlib.import_module("lib.todo_canonical")
+    steps = [t["content"] for t in tc.run_todo_script(command, "fix the build") or ()]
+    assert steps, command
+    for content in steps:
+        found = gate.STEP_REFUSED_LINE.search(f"REFUSED: {content}")
+        assert found and found.group(1) == content.split(":", 1)[0], content
+
+
 def test_a_refused_step_line_releases_no_other_gated_command(env, monkeypatch):
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
     env.tx.command("close", FAMILY)
