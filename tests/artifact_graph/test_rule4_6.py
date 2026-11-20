@@ -1199,3 +1199,47 @@ def test_what_a_read_raises_is_its_io_error_and_for_decoded_text_its_decoding_er
         })
         m, vs = check(root)
         assert ("hooks/b.py" in {d.who for d in m.artifacts[REC].decisions}) is decides, how
+
+
+def test_a_gate_rule_whose_read_is_holes_alone_stands_for_nothing_a_rule_names(tmp_path):
+    """A refusing rule whose deciding read's path is holes alone (`<*>`, a path the call's own input names)
+    matches every artifact; a change of the gate's decision on a file another of its rules reads by name is
+    that rule's, not the holes rule's. With no rule naming the file, the holes rule still stands for it."""
+    settings = _registered(("PostToolUse", "Bash", "hooks/rec-writer.py"),
+                           ("PreToolUse", "*", "hooks/write-gate.py"))
+    root = make_tree(tmp_path, {
+        "hooks/lib/gates.py": GATE_LIB,
+        "hooks/write-gate.py": GATE_HEAD + (
+            'RULES = [\n'
+            '    Rule("any", str(HOOKS / "any-guard.py")),\n'
+            '    Rule("rec", str(HOOKS / "rec-guard.py")),\n'
+            ']\n'),
+        "hooks/rec-writer.py": hook('open(harness_state_dir() + "/claude-rec.json", "w").write("{}")\n'),
+        "hooks/any-guard.py": REC_GUARD,
+        "hooks/rec-guard.py": REC_GUARD,
+    }, settings)
+    st = derive(root)
+    own = [r for r in st.records if r["kind"] == "deciding" and r.get("component") == "hooks/any-guard.py"]
+    assert own
+
+    def measured(records):
+        st.records[:] = records
+        run = C.Run("fake", "shipped", "")
+        run.env = {"CLAUDE_STATE_DIR": "/sbx/state"}
+        run.events = [{"comp": "hooks/write-gate.py", "origin": "hooks/write-gate.py", "actor": "main", "op": "read",
+                       "pattern": "<state>/claude-rec.json", "event": 1, "bulk": False,
+                       "raw": "/sbx/state/claude-rec.json"}]
+        run.invocations = {1: {"seq": 1, "event": "PreToolUse", "label": "Ask", "payload": {"tool_name": "Ask"}}}
+        run.differential = {"units": [{"seq": 1, "event": "PreToolUse", "label": "Ask", "tool": "Ask",
+                                       "origin": "hooks/write-gate.py", "kind": "hook", "reproduced": True,
+                                       "runs": [{"pattern": "<state>/claude-rec.json", "raw": "/sbx/state/claude-rec.json",
+                                                 "readers": ["hooks/write-gate.py"], "changed": True, "how": "removed"}]}]}
+        m = C.derive(str(root), st, [run])
+        return {d.who for d in m.artifacts["<state>/claude-rec.json"].decisions if d.source == "differential"}
+
+    holes = [dict(r, path="<*>") if r.get("component") == "hooks/any-guard.py" and r["kind"] == "deciding" else r
+             for r in st.records]
+    assert measured(holes) == {"hooks/rec-guard.py"}
+    alone = [r for r in holes if r.get("component") != "hooks/rec-guard.py" or r["kind"] != "deciding"]
+    assert measured(alone) == {"hooks/any-guard.py"}
+    assert C._holes_only("<*>") and C._holes_only("<proj>/<*>") and not C._holes_only("<proj>/docs/x-<ts>.json")

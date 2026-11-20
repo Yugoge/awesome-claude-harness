@@ -651,9 +651,13 @@ class _Ctx:
         ran there (tests/replay/sites.py narrows the same way); one that declares none runs on every
         call. On a `file` artifact (no code tests it to be a directory), a deciding read whose site
         reads the path by directory tests alone stands for nothing (_dir_test_only)."""
-        return [f for f in self.rule_files(gate, deciding=True)
-                if self._rule_runs_on(gate, f, tool)
-                and any(not (file and self._dir_test_only(d)) for d in self._deciding_on(f, key))]
+        cands = {f: [d for d in self._deciding_on(f, key) if not (file and self._dir_test_only(d))]
+                 for f in self.rule_files(gate, deciding=True) if self._rule_runs_on(gate, f, tool)}
+        cands = {f: ds for f, ds in cands.items() if ds}
+        # a deciding read whose path is holes alone (`<*>`: a path the call's own input names) stands for the
+        # change only when no rule's deciding read names the artifact itself
+        named = [f for f, ds in cands.items() if any(not _holes_only(d["path"]) for d in ds)]
+        return sorted(named or cands)
 
     def _dir_test_only(self, d: dict) -> bool:
         """A deciding read whose own read site reads its path by directory tests alone (_DIR_TEST:
@@ -1940,6 +1944,11 @@ class Violation:
 
     def sort_key(self):
         return (self.rule, self.artifact, self.message, self.text())
+
+
+def _holes_only(pattern: str) -> bool:
+    """A path pattern with no literal part: `<*>`, `<proj>/<*>`, `<*>/<*>`."""
+    return not re.sub(r"<[^<>]*>|/", "", pattern)
 
 
 def _ev(rels, limit=4) -> list[str]:
