@@ -7,7 +7,9 @@ text of a readable literal script file, and the guard judges them:
 
   - inline code (python/python3 -c, node -e, perl -e, ruby -e): the token `git`
     then a guarded subcommand, quotes and list punctuation between them. It is
-    lexical and conservative: `python3 -c 'print("git push")'` is refused too.
+    lexical and conservative for perl, ruby and node. Python is read as code
+    (the removal analyzer's reading): only what it starts counts, so
+    `python3 -c 'print("git push")'` passes (it was refused until 2026-11-20).
   - a script file (`bash`, `sh`, `source`, `.`, `./x.sh`) that exists and is
     readable relative to the payload's cwd, read as shell text.
 
@@ -49,7 +51,6 @@ MUST_REFUSE = [
     "python3 -c 'import os; os.system(\"git push\")'",
     "python3 -c \"import subprocess; subprocess.run('git push', shell=True)\"",
     "python3 -c 'import subprocess; subprocess.run([\"git\", \"-C\", \"x\", \"commit\", \"-m\", \"m\"])'",
-    "python3 -c 'print(\"git push\")'",  # conservative: lexical
     "node -e 'require(\"child_process\").execSync(\"git push origin master\")'",
     "node -e 'require(\"child_process\").execFileSync(\"git\", [\"merge\", \"feature\"])'",
     "node --eval='require(\"child_process\").execSync(\"git rebase main\")'",
@@ -77,6 +78,7 @@ MUST_REFUSE = [
 
 MUST_PASS = [
     "python3 -c 'print(1)'",
+    "python3 -c 'print(\"git push\")'",  # Python is read as code: a string it prints starts nothing
     "python3 -c 'import subprocess; subprocess.run([\"git\",\"status\"])'",
     "node -e 'console.log(1)'",
     "ruby -e 'system(\"git branch -a\")'",

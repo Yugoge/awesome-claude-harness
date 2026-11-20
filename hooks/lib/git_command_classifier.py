@@ -60,8 +60,9 @@ import shlex
 import sys
 
 try:
-    from lib import bash_read_only, shell_parse
+    from lib import bash_execution_boundary as _beb, bash_read_only, shell_parse
 except ImportError:  # run as a script: hooks/lib is on sys.path
+    import bash_execution_boundary as _beb
     import bash_read_only
     import shell_parse
 try:
@@ -1913,8 +1914,8 @@ def classify_git_command(command_text):
 #   - inline code (python/pypy -c, perl -e/-E, ruby -e, node -e/-p/--eval/
 #     --print, php -r/-B/-R/-E, lua -e, Rscript -e): the token `git`, then words separated only by blanks, quotes,
 #     commas, `[` or backquotes, whose subcommand is in _HIDDEN_GIT_SUBCOMMANDS,
-#     read as `git <words>`. Lexical and conservative: `print("git push")` reads
-#     as a push.
+#     read as `git <words>` (lexical: `perl -e 'print "git push"'` is a push). Python (-c, or a
+#     here-document or here-string on stdin) is code to the removal analyzer: what it starts counts.
 #   - a script file named by a literal path that exists and is readable at hook
 #     time, relative to cwd, under _HIDDEN_SCRIPT_MAX bytes and not binary:
 #     `bash|sh|dash|zsh|ksh FILE`, `source FILE`, `. FILE`, and a command word
@@ -2029,6 +2030,13 @@ def _hidden_script_text(path, cwd, trusted):
     return data.decode('utf-8', 'replace')
 
 
+def _stdin_body(redir):
+    """The program a here-document (quoted, or with nothing the shell expands) or a literal here-string feeds."""
+    text = redir.hd.body_src.text if redir.hd is not None and redir.op in shell_parse.HERE_DOCUMENT_OPS else None
+    text = text if text is None or redir.hd.quoted or not set('$`\\') & set(text) else None
+    return (text if redir.op != '<<<' else redir.target and redir.target.value()) if redir.io in (None, '0') else None
+
+
 def hidden_git_texts(command_text, cwd=None, trusted=(), _depth=0):
     """Yield (origin, shell_text) for git the command runs out of the shell's sight.
 
@@ -2043,9 +2051,13 @@ def hidden_git_texts(command_text, cwd=None, trusted=(), _depth=0):
         name = resolved.name
         argv = resolved.argv()
         codes = _hidden_inline_code(name, argv)
+        python = re.match(_PYTHON_RE, name or '') and _beb
+        if python and not codes and _beb._reads_program_on_stdin(argv):
+            codes = [b for b in map(_stdin_body, site.cmd.redirects) if b is not None]
         if codes is not None:
             for code in codes:
-                for text in _hidden_code_git_texts(code):
+                started = _beb.python_started_commands(code) if python else None
+                for text in _hidden_code_git_texts(code) if started is None else filter(None, started):
                     yield '%s inline code' % name, text
             continue
         if _depth:
