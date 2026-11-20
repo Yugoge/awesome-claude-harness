@@ -39,6 +39,9 @@ that decides that means, run as the CLI runs it:
                      sibling's report, put to the write gate). If none clears it, the stopping lane
                      waits on a lane that has stopped, which only the main agent can dispatch again,
                      while the main agent waits for the stopping lane: a circular wait.
+  redeclared lane    a /dev fan-out lane whose analysis is done again (BA, BA-QA, BA again): the main
+                     agent's first move, that lane's BA-QA or its dev, put to G3's collection check and
+                     G1's order rule (redeclare_cells). If neither passes, a circular wait.
 
 A requirement with no permitted means in some situation is a contradiction; nothing is exempt.
 """
@@ -517,4 +520,68 @@ def wait_cells(hooks: Hooks, made: dict, tpls: list | None = None) -> list:
                         os.unlink(os.path.join(project, paths[lane]))
                 for left in Path(project, "docs", "dev").glob(f"dev-report-{tid}*.json"):
                     left.unlink()
+    return cells
+
+
+def redeclare_cells(hooks: Hooks, made: dict, tpls: list | None = None) -> list:
+    """A /dev fan-out whose lane l2's analysis is done again (BA, BA-QA, then BA again, each returned) while
+    lane l1's dev has reported: the main agent's first move is that lane's BA-QA (the verdict G1's order rule
+    asks of the lane's dev) or the lane's dev, each put to the Agent dispatch's gates as the CLI runs them (G3's
+    collection check, pretool-aggregate-check.py, and G1's order rule, pretool-obligation-gate.py). In two
+    states of the fan-out: l2's dev report not yet written, and every report written but l1's refused by the
+    aggregator (its baseline_dirty_snapshot in prose), so the canonical is missing. If no move passes both, the
+    main agent waits on a verdict it may not ask for: a circular wait."""
+    from tests.replay import schemagen
+    tpls, project, lanes, cells = tpls if tpls is not None else templates(), made["home"], ["l1", "l2"], []
+    of = {role: next(t for t in tpls if t.command == "dev" and t.role == role and any(
+        a.get("schema") == schema for a in t.artifacts)) for role, schema in
+        (("ba", "context.v1"), ("qa", "ba-qa-report.v1"), ("dev", "dev-report.v2"))}
+    for k, state in enumerate(("lane l2's dev report not yet written", "lane l1's report refused by the aggregator")):
+        tid = (datetime.datetime(2026, 4, 1) + datetime.timedelta(minutes=k)).strftime("%Y%m%d-%H%M%S")
+        store = Store(os.path.join(hooks.work, "stores"), project)
+        store.slash("dev")
+
+        def names(lane):  # what a later stage of the lane reads: its BA's artifacts
+            return "Read: " + ", ".join(a["path"] for a in ob("ba", lane)["artifacts"])
+
+        def ob(role, lane):
+            profile = "ba_validation" if role == "qa" else "fanout-lane"
+            return {**obligation_of(of[role], f"{tid}-{lane}"), "profile": profile, "lane": lane, "lane_set": lanes}
+
+        def produce(role, lane, extra=None):  # the dispatch, returned, and the artifacts it wrote
+            o = ob(role, lane)
+            store.dispatch(role, prompt_of(o, names(lane)))
+            for art in o["artifacts"]:
+                path = os.path.join(project, art["path"])
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as fh:
+                    if art["kind"] == "markdown":
+                        fh.write(f"# {art['identity_anchor']}\n\nDone.\n")
+                    else:
+                        json.dump(schemagen.instance(schemagen.load(REPO, art["schema"]), {
+                            **art.get("identity", {}), "request_id": f"{tid}-{lane}", **(extra or {})}, seed=lane), fh)
+            return o
+        for lane in lanes:
+            produce("ba", lane)
+            produce("qa", lane)
+        report = {"lane": None, "lane_set": lanes, "baseline_head_sha": "a" * 40, "baseline_dirty_snapshot": ""}
+        for lane in lanes if k else ["l1"]:
+            produce("dev", lane, {**report, "lane": lane, "baseline_dirty_snapshot":
+                                  "see the lane write manifest (3 entries)" if lane == "l1" and k else ""})
+        produce("ba", "l2")
+        means = {}
+        for move, role in (("dispatch lane l2's BA-QA", "qa"), ("dispatch lane l2's dev", "dev")):
+            payload = store.payload("Agent", {"description": move, "subagent_type": role,
+                                              "prompt": prompt_of(ob(role, "l2"), names("l2"))})
+            for hook, switch in (("pretool-aggregate-check.py", "CLAUDE_OBLIGATION_BARRIER"),
+                                 ("pretool-obligation-gate.py", "CLAUDE_OBLIGATION_GATE")):
+                proc = hooks.run(hook, payload, **{switch: "block"})
+                means[move] = "permitted" if proc.returncode == 0 and '"deny"' not in proc.stdout else (
+                    f"{hook}: " + next((ln.strip() for ln in proc.stderr.splitlines() if ln.strip()), proc.stdout)[:300])
+                if means[move] != "permitted":
+                    break
+        cells.append(Cell(f"W:{of['qa'].site}:qa:ba-qa-report.v1:redeclared lane", "redeclared lane", "home",
+                          "main agent", means, state))
+        for left in Path(project, "docs", "dev").glob(f"*{tid}*"):
+            left.unlink()
     return cells
