@@ -505,3 +505,24 @@ def test_now_a_value_that_names_a_program_is_refused(cmd):
 def test_now_the_undecided_forms_are_pinned(cmd):
     """Pinned so a rule that closes one shows up here (move it to NOW_REFUSED then)."""
     assert decide(_now(), cmd) == "allow" and _bash_rules_refuse(cmd) == ""
+
+
+# An exact option of the subcommand is never an abbreviation of a run-or-write one (git 2.54, `git <sub> -h`);
+# an abbreviation counts only when no exact option of that subcommand also starts with it.
+OPTION_PAIRS = [  # (command, refused)
+    ("git diff --text --stat HEAD -- docs/dev/acceptance-criteria-1.json", False), ("git diff --textconv HEAD", True),
+    ("git log --text -p -1", False), ("git log --textc -p -1", True), ("git show --text HEAD", False),
+    ("git grep --text foo", False), ("git grep --tex foo", False), ("git grep --open foo", True),
+    ("git diff-tree --text HEAD", False), ("git cat-file --text HEAD:f", True),
+    ("git cat-file --filter=blob:none --batch-all-objects", False), ("git cat-file --filters HEAD:f", True),
+    ("git log --output-indicator-new=+ -p -1", False), ("git log --output=/tmp/x -1", True),
+    ("git log --outp=/tmp/x -1", True), ("git log --no-ext-diff -p -1", False), ("git log --ext-diff -p -1", True),
+    ("git show --no-textconv HEAD", False),
+]
+
+
+@pytest.mark.parametrize("cmd,refused", OPTION_PAIRS)
+def test_an_exact_option_is_never_an_abbreviation(cmd, refused):
+    from hooks.lib import bash_read_only
+    assert bool(_bash_rules_refuse(cmd)) == refused
+    assert bash_read_only.is_read_only(cmd) == (not refused)

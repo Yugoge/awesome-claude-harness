@@ -3757,8 +3757,7 @@ def _read_made_to_run(name, args):
                 return f"{args[i]} {args[v] if v is not None else ''}".strip()
         elif args[i].startswith("--exec-path="):
             return args[i]
-    return next((a for a in args[sub + 1:] if a is not None and _long_hits(a, git_facts.GIT_RUN_OR_WRITE_OPTIONS)),
-                None)
+    return next((a for a in args[sub + 1:] if a is not None and git_facts.git_run_or_write_option(args[sub], a)), None)
 
 
 def outward_rule(command):
