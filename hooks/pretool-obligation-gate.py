@@ -78,7 +78,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib import agent_returns, command_span, requirement_round, schema_registry, stop_contract  # noqa: E402
-from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 from lib.obligation import (  # noqa: E402
     OBLIGATION_OPEN_TOKEN,
     NoBlock,
@@ -162,8 +161,8 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
     declared, the latest such dispatch's agent must have stopped; and unless
     this dispatch is a verdict itself, the latest verdict naming that
     producer's artifacts must be issued after it stopped and have stopped
-    too. A dispatch a hook refused (command_span.refused_calls) never ran: it
-    declares nothing and is no verdict. An errored dispatch has not returned,
+    too. A dispatch a hook refused never ran (Span.dispatch_calls leaves it
+    out): it declares nothing and is no verdict. An errored dispatch has not returned,
     unless its agent's own transcript records its stop; a background, resumed
     or cut dispatch returned when its agent's end came back
     (lib/agent_returns.py, the one reading of it)."""
@@ -178,9 +177,9 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
                                                  data.get("tool_use_id") or None, data["transcript_path"]))
         return returns[0].line(call)
 
-    earlier, refused = [], command_span.refused_calls(data["transcript_path"], data.get("session_id"))
-    for call in span.iter_calls(*DISPATCH_TOOLS, before=data.get("tool_use_id") or None):
-        parsed = None if call.id in refused else parse_obligation(call.input.get("prompt"), known_schema_ids=known)
+    earlier = []
+    for call in span.dispatch_calls(before=data.get("tool_use_id") or None):
+        parsed = parse_obligation(call.input.get("prompt"), known_schema_ids=known)
         if isinstance(parsed, ParsedObligation):
             earlier.append((call, parsed.obligation.get("role"), _declared(parsed.obligation)))
     own = _declared(obligation)

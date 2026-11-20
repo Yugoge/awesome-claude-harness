@@ -596,11 +596,17 @@ class Span:
                     ends.append(AgentEnd(number, fields["task-id"], fields["tool-use-id"], fields["status"], result))
         return ends
 
+    def dispatch_calls(self, before: str | None = None):
+        """The span's Agent/Task calls (iter_calls, ``before`` as there) but those a hook refused (refused_calls):
+        a call that never ran is no dispatch. Every reader of dispatches reads them here."""
+        refused = refused_calls(self.transcript_path)
+        return (c for c in self.iter_calls(*_subagent().DISPATCH_TOOLS, before=before) if c.id not in refused)
+
     def dispatches(self) -> list:
-        """(call, obligation) of each Agent/Task dispatch whose prompt parses to an obligation, in span order,
+        """(call, obligation) of each dispatch_calls() call whose prompt parses to an obligation, in span order,
         however its call came back: whether and when its agent stopped is agent_returns.Returns' reading."""
         ob = _obligation()
-        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls(*_subagent().DISPATCH_TOOLS))
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.dispatch_calls())
         return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
 
     def obligations(self) -> list:
@@ -926,6 +932,22 @@ def _refusal_record_files(now: float) -> list:
                          time.strftime("refusals-%Y-%m-%d.jsonl", time.gmtime(now - d))) for d in (86400, 0)]
 
 
+_ONCE: dict = {}
+
+
+def _read_once(path) -> bytes | None:
+    """A refusal record file's bytes, read once per process while its size and mtime stay (None when it cannot be
+    read): every reader of refused_calls in one hook run shares one read, one entry per file."""
+    try:
+        info = os.stat(path)
+        if _ONCE.get(path, (None,))[0] != (info.st_size, info.st_mtime_ns):
+            with open(path, "rb") as handle:
+                _ONCE[path] = ((info.st_size, info.st_mtime_ns), handle.read())
+        return _ONCE[path][1]
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 def refused_calls(transcript_path, session_id: str | None = None) -> frozenset:
     """The ids of the session's tool calls a PreToolUse hook refused (they never ran), from either record of the
     refusal: the CLI's tool_result whose record's permissionDecision is reject by a hook (CLI 2.1.322; a call cut
@@ -936,9 +958,10 @@ def refused_calls(transcript_path, session_id: str | None = None) -> frozenset:
     found, session = set(), session_id or (Path(str(transcript_path)).stem if transcript_path else "")
     for n, path in enumerate([transcript_path] + (_refusal_record_files(time.time()) if session else [])):
         try:
-            with open(path, "rb") as handle:
-                data = handle.read()
+            data = _read_once(path) if n else _read(path)
         except (OSError, TypeError, ValueError):
+            data = None
+        if data is None:
             continue
         for begin, end in _Lines(data).offsets((b'"source":"hook"', b'"source": "hook"') if not n else (session.encode(),)):
             r = _decode(data[begin:end]) or {}

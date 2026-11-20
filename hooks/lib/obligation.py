@@ -1035,10 +1035,11 @@ def dispatch_obligations(
     """
     try:
         calls, _results, _notifications = _read_parent_calls(Path(transcript_path))
+        refused = _lib_module("command_span").refused_calls(transcript_path)  # a call a hook refused never ran
     except Exception:
         return []
     found: list[dict] = []
-    for call in sorted(calls.values(), key=lambda c: c.get("line", 0)):
+    for call in sorted((c for c in calls.values() if c.get("tool_use_id") not in refused), key=lambda c: c.get("line", 0)):
         tool_input = call.get("input")
         prompt = tool_input.get("prompt") if isinstance(tool_input, Mapping) else None
         if not isinstance(prompt, str) or not prompt:
