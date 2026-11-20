@@ -386,28 +386,34 @@ NO_TARGET_LINE = re.compile(r"^NO_TARGET: \S", re.M)
 STEP_REFUSED_LINE = re.compile(r"^REFUSED: (Step [0-9][0-9A-Za-z.]*)\b", re.M)  # dev.md, do.md: Hook rejection
 
 
-def step_refused_end(span) -> bool:
-    """/dev, /redev, /dev-command, /do: the pending step (the first not completed) was set in progress, then a hook
-    refused its own call (command_span.refused_calls: a dispatch of its subagent_call's role with none of that role
-    after it, or, with no role, the last call but TodoWrite and AskUserQuestion), and the last text's REFUSED: line
-    names that step. The step stays open."""
+def refused_step(span) -> str | None:
+    """/dev, /redev, /dev-command, /do: the pending step (the first not completed), when it was set in progress and a
+    hook then refused its own call (command_span.refused_calls: a dispatch of its subagent_call's role with none of
+    that role after it, or, with no role, the last call but TodoWrite and AskUserQuestion); else None."""
     step = next((t for t in span.last_todos() or () if t.get("status") != "completed"), {})
-    found = STEP_REFUSED_LINE.search(span.last_text() or "")
-    if span.command not in ("dev", "redev", "dev-command", "do") or not found or \
-            str(step.get("content") or "").split(":", 1)[0] != found.group(1):
-        return False
+    if span.command not in ("dev", "redev", "dev-command", "do") or not step.get("content"):
+        return None
+    denied = command_span.refused_calls(span.transcript_path)
+    if not denied:  # no refusal on record: no walk
+        return None
     canon = next((c for c in importlib.import_module("lib.todo_canonical").run_todo_script(span.command, span.args)
                   or () if c.get("content") == step["content"]), {}).get("subagent_call") or []
     roles = {c.get("subagent_type") for c in (canon if isinstance(canon, list) else [canon])}
-    denied, started, refused = command_span.refused_calls(span.transcript_path), False, False
-    for use in span.uses():
-        if use.name == "TodoWrite":  # set in progress (again): a refusal before it no longer counts
+    last = None  # read back from the end to the TodoWrite that last set the step in progress
+    for use in span.uses(newest_first=True):
+        if use.name == "TodoWrite":
             if use.ok and any((t.get("content"), t.get("status")) == (step["content"], "in_progress")
                               for t in use.input.get("todos") or ()):
-                started, refused = True, False
-        elif started and use.name != "AskUserQuestion" and (not roles or use.input.get("subagent_type") in roles):
-            refused = use.id in denied
-    return refused
+                return str(step["content"]) if last else None
+        elif last is None and use.name != "AskUserQuestion" and (not roles or use.input.get("subagent_type") in roles):
+            last = use.id in denied
+    return None  # never set in progress
+
+
+def step_refused_end(span, step: str | None) -> bool:
+    """``step`` (refused_step) is named by the last text's REFUSED: line: the turn ends there; the step stays open."""
+    found = STEP_REFUSED_LINE.search(span.last_text() or "") if step else None
+    return bool(found) and step.split(":", 1)[0] == found.group(1)
 
 
 def _flags_refused(span) -> bool:
@@ -1290,8 +1296,10 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if not gated and not asking:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
+    refused = None
     try:
-        if gated and (no_target_end(span, root) or step_refused_end(span) or no_owner_end(span, root)):  # nothing bound, nothing run: the NO_TARGET: line ends it
+        refused = refused_step(span) if gated else None  # one walk: the release below and the block's exit line
+        if gated and (no_target_end(span, root) or step_refused_end(span, refused) or no_owner_end(span, root)):
             return 0, "", terminal
     except Exception:  # an unread record releases nothing: the gaps below decide
         pass
@@ -1308,7 +1316,9 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
         return 0, "", terminal
     if not gaps:  # (7)
         return 0, "", terminal
-    text = _block_text(span.command, gaps)
+    text = _block_text(span.command, gaps) + (f"A hook refused this step's own call. To end the turn, write the line "
+                                              f"\"REFUSED: {refused}\", then the hook's own output; the step stays "
+                                              "open and the next prompt resumes it.\n" if refused else "")
     if mode == "advisory":
         return 0, "would block\n" + text, terminal
     return 2, text, None
