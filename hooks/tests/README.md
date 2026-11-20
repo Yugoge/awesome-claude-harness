@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 288
+- **Total files**: 287
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -201,7 +201,6 @@
 - `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 - `test_push_typed_remote.py` - execute-push.py hands push.sh the resolved remote as its argument. The ahead count is taken against
 - `test_qa_report_writes.py` - qa writes report and evidence files under the project's reports/ and tests/reports/ only
-- `test_question_record.py` - hooks/posttool-close-rating.py runs requirement_round.record_landed after the producer's Write, E...
 - `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 - `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
 - `test_refusal_record.py` - - One refused call, stop or prompt is one line holding every field of the record, each bounded;

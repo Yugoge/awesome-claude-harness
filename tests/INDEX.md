@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T02:48:23Z*
-**Total entries**: 337
+*Last updated: 2026-11-20T08:17:36Z*
+**Total entries**: 339
 **Convention**: kebab
 
 ## Tree
@@ -16,6 +16,7 @@ tests/
 │   ├── `model.py` - Every scanner appends plain facts to one `Findings`; `static_half.derive` turns
 │   ├── `patterns.py` - The static half evaluates path expressions into *templates*: plain text in which
 │   ├── `pyscan.py` - For every module it evaluates path expressions (string literals, f-strings,
+│   ├── `register.py` - policies/artifact-check-accepted-reads.v1.json, tracked in the tree under test, built like the re...
 │   ├── `runtime.py` - Every driver under tests/replay/drivers/ is replayed, each variant it offers,
 │   ├── `shards.py` - One 4-CPU runner needs about 3,000 s for every traced replay and E1's differential: twice E2's
 │   ├── `shparse.py` - dependency beyond the standard library
@@ -25,6 +26,7 @@ tests/
 │   ├── `test_check.py` - Each test builds a small harness-shaped tree, derives the static half on it and
 │   ├── `test_mutations.py` - Each test copies the tree under test (this checkout) to a scratch directory,
 │   ├── `test_presence_faults.py` - CPython 3.10 and 3.12 (the CI versions): os.path.exists/isfile/isdir/lexists catch every OSError
+│   ├── `test_register.py` - A rule (6) violation on an entry's artifact whose decisions were all taken at its event and tool ...
 │   ├── `test_rule1_7.py` - declared artifact) and rule (7) (a list that repeats a declaration)
 │   ├── `test_rule2.py` - Each test builds a small harness-shaped tree, derives the static half on it and runs the check's
 │   ├── `test_rule4_6.py` - mutation), rule (5) (the chain function's output used verbatim) and rule (6) (a deciding read

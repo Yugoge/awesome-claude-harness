@@ -152,7 +152,6 @@ SWEEP_ROOT="$STATE_DIR" run_tmp "hook state >7d in $STATE_DIR" \
      -o -name 'claude-do-task-*.json' \
      -o -name 'claude-do-resv-*' \
      -o -name 'claude-commit-grant-*.json' \
-     -o -name 'claude-question-record-*.json' \
      -o -name 'claude-stop-gaps-*.txt*' \
      -o -name 'claude-pressure-warn-*' \)
 

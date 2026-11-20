@@ -78,51 +78,10 @@ def ask_view(doc: dict) -> list:
 
 def question_file(project, task: str, n: int) -> Path | None:
     """Round n's question file: BA's requirement-round file, else for round 1 a BA panel's file; None when absent."""
-    for rel in _question_rels(task, n):
+    for rel in (ROUND.format(task=task, n=n),) + ((PANEL.format(task=task),) if n == 1 else ()):
         if os.path.isfile(Path(project) / rel):  # an unreadable folder: absent, never an error
             return Path(project) / rel
     return None
-
-
-def _question_rels(task: str, n: int) -> tuple:
-    return (ROUND.format(task=task, n=n),) + ((PANEL.format(task=task),) if n == 1 else ())
-
-
-# What the last landed Write, Edit or MultiEdit of round n's question file left to ask (record_landed, its one
-# writer), per project, task and round, under the state dir: question_refusal compares an ask with it alone.
-RECORD = "claude-question-record-{project}-{task}-r{n}.json"
-
-
-def record_path(project, task: str, n: int) -> Path:
-    try:
-        from .harness_state_dir import harness_state_dir
-    except ImportError:
-        from harness_state_dir import harness_state_dir
-    key = hashlib.sha256(os.path.realpath(project).encode("utf-8", "surrogateescape")).hexdigest()[:16]
-    return Path(harness_state_dir()) / RECORD.format(project=key, task=task, n=n)
-
-
-def record_landed(payload: dict) -> None:
-    """PostToolUse of a Write, Edit or MultiEdit (the producer's own call): when it wrote a round's question file
-    (_ROUND_FILE), the round's record becomes the ask view of the file question_file now gives, or goes when that
-    file does not load. Decides nothing; a write through Bash leaves no record."""
-    tin = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
-    match = _ROUND_FILE.search(str(tin.get("file_path") or ""))
-    task = task_of(match.group(1) or match.group(3)) if match else None
-    if not task:
-        return
-    n = int(match.group(2) or match.group(4))
-    project = Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd())
-    qfile = question_file(project, task, n)
-    doc = _load(qfile) if qfile else None
-    target = record_path(project, task, n)
-    if doc is None:
-        target.unlink(missing_ok=True)
-        return
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps({"file": os.path.relpath(qfile, project), "questions": ask_view(doc)}), encoding="utf-8")
-    os.replace(tmp, target)
 
 
 def rounds(project, task: str) -> list:
@@ -431,7 +390,7 @@ CLEAN_REPORT = "docs/clean/combined-report-{request}.json"  # commands/clean.md 
 
 def question_refusal(payload: dict) -> str | None:
     """None when the AskUserQuestion call is a kept kind (KEPT) made by the main agent in the step that owns it:
-    a round whose question file's last landed write (record_landed) holds these questions exactly, a producer question whose file
+    a round whose file exists with these questions exactly (as handle records it), a producer question whose file
     exists, a close rating in a /close span holding a landed close QA of the task, a spec question in a /spec span,
     a cleanup option in a /clean span whose request's combined report exists. Else the refusal's text."""
     tin = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
@@ -454,15 +413,9 @@ def question_refusal(payload: dict) -> str | None:
         ok = span is not None and span.command == kind.partition("-")[0] and bool(_LABEL.fullmatch(rest)) and (
             kind == "spec-question" or os.path.isfile(project / CLEAN_REPORT.format(request=rest)))
     elif match and kind == "requirement-round" and match.group(3).startswith("r"):
-        task, n = task_of(match.group(2)) or "", int(match.group(3)[1:])
-        record = _load(record_path(project, task, n))
-        if record is None:
-            return (f"{source!r}: no Write, Edit or MultiEdit of {' or '.join(_question_rels(task, n))} has landed (a "
-                    f"file written through Bash leaves no record): its producer writes it with the Write tool, then "
-                    f"the round is asked. {REFUSED}")
-        if canonical(tin.get("questions")) != canonical(record.get("questions")):
-            return f"{source!r} asks otherwise than {record.get('file')} holds: ask its questions verbatim. {REFUSED}"
-        ok = True
+        qfile = question_file(project, task_of(match.group(2)) or "", int(match.group(3)[1:]))
+        doc = _load(qfile) if qfile else None
+        ok = doc is not None and canonical(tin.get("questions")) == canonical(ask_view(doc))
     elif match and kind == "producer-question" and not match.group(3).startswith("r"):
         ok = os.path.isfile(project / QUESTION.format(task=task_of(match.group(2)), role=match.group(3)))
     else:

@@ -1,0 +1,18 @@
+{
+ "schema": "artifact-check-accepted-reads.v1",
+ "about": "Positions at which the artifact check's rule (6) would report a deciding read of an artifact, accepted for the reason each entry states (tests/artifact_graph/register.py): an entry covers every 6-move and 6-recheck line on its artifact whose decisions were all taken at its event and tool. Only rule (6) can be covered; an entry that covers no current violation fails the check (register-stale).",
+ "entries": [
+  {
+   "artifact": "<proj>/docs/dev/requirement-round-<ts>-r1.json",
+   "event": "PreToolUse",
+   "tool": "AskUserQuestion",
+   "reason": "The owner's question rule (requirement_round.question_refusal, at the main agent's AskUserQuestion) compares the ask with the round file it relays: the file is the reference the question is checked against, so that only its questions, verbatim, reach the owner. It is not BA's artifact validated a second time; G1 and G2 still validate it at its producer's side."
+  },
+  {
+   "artifact": "<proj>/docs/dev/ba-panel-<ts>-r1.json",
+   "event": "PreToolUse",
+   "tool": "AskUserQuestion",
+   "reason": "The owner's question rule (requirement_round.question_refusal, at the main agent's AskUserQuestion) compares the ask with round 1's BA panel file, which the round relays when no round file exists: the file is the reference the question is checked against, so that only its questions, verbatim, reach the owner. It is not the panel's artifact validated a second time."
+  }
+ ]
+}

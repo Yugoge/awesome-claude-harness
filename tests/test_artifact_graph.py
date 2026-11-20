@@ -8,8 +8,9 @@ invalid (E1's differential), joins the static half's relations at literal code
 sites (tests/artifact_graph/static_half.py), and asserts that no violation is
 left: one producer per artifact, at least one consumer, one deciding rule,
 deciding reads only at the allowed positions, no list that repeats a
-declaration, one state root. It compares against no committed list and keeps no
-exception.
+declaration, one state root. It compares against no committed list. Its one register
+(tests/artifact_graph/register.py) accepts a rule (6) deciding read for a stated reason; every
+entry must cover a current violation, and the check counts what it covers.
 
 Run alone (a local `pytest tests/test_artifact_graph.py`) it is the whole
 check on one runner. It needs strace and a mount namespace (root, or

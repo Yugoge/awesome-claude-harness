@@ -131,9 +131,6 @@ LOCATIONS: Tuple[Location, ...] = (
              (_p("*", "doc-sync-notices-*.json"), _p("*", ".doc-sync-notices-*.tmp"),
               _p("claude-scratch", "*", "doc-sync-notices-*.json"),
               _p("claude-scratch", "*", ".doc-sync-notices-*.tmp"))),
-    # What a round's question file last landed with (hooks/lib/requirement_round.record_landed).
-    Location("question-record", CONTROL,
-             (_p("claude-question-record-*.json"), _p(".claude-question-record-*.json.*.tmp"))),
     # Harness-managed scratch.
     Location("stop-gaps", SCRATCH, (_p("claude-stop-gaps-*.txt"), _p("claude-stop-gaps-*.txt.tmp"))),
     Location("claude-scratch", SCRATCH, (_p("claude-scratch", "*"),), tree=True),

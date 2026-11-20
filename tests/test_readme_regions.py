@@ -498,7 +498,7 @@ def test_the_artifact_row_is_labelled_exactly_as_readme_facts_labels_it(status_t
     assert row[0].replace("\\", "") == arts["label"]  # nothing but escapes differs from the label
     assert row[1].startswith(f"{arts['declared_file_artifacts']} ")
     assert "artifact check (traced replays)" in row[0]  # it says it is not the total that job reports
-    assert "one producer" in row[2] and "deciding reader" in row[2] and "no exception list" in row[2]
+    assert "one producer" in row[2] and "deciding reader" in row[2] and "register of rule-6 reads" in row[2]
     assert "tests/test_artifact_graph.py" in row[2]
 
 

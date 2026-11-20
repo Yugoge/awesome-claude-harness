@@ -864,7 +864,8 @@ def render_proof() -> str:
 
     artifact = ci["artifact_check_clean"]
     artifacts_ci = ("an artifact without one producer or without a deciding reader fails the check, "
-                    f"which keeps no exception list (`{artifact['file']}`)"
+                    f"which accepts an exception only in its register of rule-6 reads, each with a reason "
+                    f"(`{artifact['file']}`, `tests/artifact_graph/register.py`)"
                     if artifact["holds"] else _not_asserted(artifact))
 
     h, t = tests["hooks_tests"], tests["tests"]
