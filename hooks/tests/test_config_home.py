@@ -45,3 +45,17 @@ def test_both_twins_give_the_layouts_answer(tmp_path, monkeypatch, which):
                            capture_output=True, text=True, env=dict(os.environ, CLAUDE_CONFIG_DIR=str(config)))
     assert shell.returncode == 0, shell.stderr
     assert shell.stdout.strip() == str(claude_home.config_home())
+
+
+def test_a_dangling_link_gives_its_targets_directory(tmp_path, monkeypatch):
+    """The one input whose answer changed with 0f8ef92ff: a settings.json linking to a file that is gone
+    gave the configuration directory (the link test failed); it now gives the directory the link names,
+    the same in both twins."""
+    config = tmp_path / "dangling"
+    config.mkdir()
+    (config / "settings.json").symlink_to(tmp_path / "gone-home" / "settings.json")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    assert str(claude_home.config_home()) == os.path.realpath(tmp_path / "gone-home")
+    shell = subprocess.run(["bash", "-c", '. "$1" && claude_config_home', "_", str(HOOKS / "lib" / "claude_home.sh")],
+                           capture_output=True, text=True, env=dict(os.environ, CLAUDE_CONFIG_DIR=str(config)))
+    assert shell.stdout.strip() == os.path.realpath(tmp_path / "gone-home")
