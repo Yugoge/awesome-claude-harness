@@ -1798,22 +1798,34 @@ def failing_probe(monkeypatch, code):
     monkeypatch.setattr(gate.tempfile, "TemporaryFile", refuse)
 
 
-@pytest.mark.parametrize("case", ["released", "claim-only", "other-code", "other-errno", "no-line"])
+@pytest.mark.parametrize("case", ["released", "claim-only", "other-code", "other-errno", "other-directory", "no-line"])
 def test_close_ends_on_the_environment_line_only_when_the_gates_own_write_fails(env, monkeypatch, case):
-    """close.md Round-open: the gate's own one-byte write to docs/dev is the fact. It fails with ENOSPC: the block
-    names the line and the Stop passes on it. The agent's line while the gate's write succeeds, a line with another
-    code, a failure the rule does not name (ENOENT), or no line: held as before."""
+    """close.md Round-open: the gate probes only to verify a claim. An ENVIRONMENT: line naming docs/dev and the
+    gate's own write there failing with that code: released. The gate's write succeeding, another code, a failure
+    the rule does not name (ENOENT), a line naming another directory: held. No line: no probe at all, and the block
+    is any /close's block."""
     close_open(env, monkeypatch)
     folder = str(env.project / "docs" / "dev")
-    if case != "claim-only":
-        failing_probe(monkeypatch, errno.ENOENT if case == "other-errno" else errno.ENOSPC)
+    probes = []
+
+    def probe(*a, **k):
+        probes.append(k.get("dir"))
+        if case == "claim-only":
+            return real(*a, **k)
+        code = errno.ENOENT if case == "other-errno" else errno.ENOSPC
+        raise OSError(code, os.strerror(code))
+    real = gate.tempfile.TemporaryFile
+    monkeypatch.setattr(gate.tempfile, "TemporaryFile", probe)
     code, text = run(env)
-    line = f"ENVIRONMENT: ENOSPC {folder}"
-    assert code == 2 and (f'write the line "{line}"' in text) is (case not in ("claim-only", "other-errno")), text
+    gaps = [line[2:] for line in text.splitlines() if line.startswith("- ")]
+    assert code == 2 and text == gate._block_text("close", gaps) and probes == [], (text, probes)
     if case != "no-line":
+        named = str(env.tmp) if case == "other-directory" else folder
         env.tx.say("No space left on the device holding docs/dev; free space, then /close again.\n"
-                   + (f"ENVIRONMENT: EROFS {folder}" if case == "other-code" else line))
+                   + f"ENVIRONMENT: {'EROFS' if case == 'other-code' else 'ENOSPC'} {named}")
     assert (run(env) == (0, "")) is (case == "released"), case
+    assert probes == ([] if case in ("no-line", "other-directory") else [folder] * len(probes)) and (
+        bool(probes) is (case not in ("no-line", "other-directory"))), probes
 
 
 def test_close_environment_exit_on_a_real_unwritable_directory(env, monkeypatch):

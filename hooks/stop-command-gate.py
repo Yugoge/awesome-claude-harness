@@ -49,8 +49,8 @@ through the one adapter `disposition`), the do-report's one reading
 dev-lifecycle's --auto target function, the merge-analyst's and push-analyst's
 grants (hooks/lib/merge_grant.py) and the push-gate token's path
 (scripts/write-push-gate-token.py). No target comes from a dispatch prompt or a
-tool result. The gate writes nothing but its own output and /close's probe of docs/dev, one byte to an
-unnamed temporary file it drops at once (environment_refusal) (stdout:
+tool result. The gate writes nothing but its own output and /close's probe of docs/dev when the agent
+claims it cannot be written, one byte to an unnamed temporary file it drops at once (environment_refusal) (stdout:
 the terminal time-lock status of an allowed Stop, see main), keeps no count
 and has no release but the work itself: the next compliant step clears each
 gap. The human's /stop opens a span that is not gated, and nothing here
@@ -584,12 +584,14 @@ ENV_LINE = re.compile(r"^ENVIRONMENT: (E[A-Z]+) (/\S+)", re.M)
 
 
 def environment_refusal(span, root) -> str | None:
-    """/close: the line "ENVIRONMENT: <code> <directory>" when the gate's own attempt at what a close round needs,
-    one byte written and synced to an unnamed temporary file in the project's docs/dev (the close report's
-    directory; tempfile.TemporaryFile, which leaves no name and is gone on close), fails with the operating system's
-    no-space, quota, read-only or permission error; else None (it succeeded, or failed otherwise)."""
+    """/close, only to verify a claim: when the last text holds an ENVIRONMENT: line naming the project's docs/dev
+    (the close report's directory), the gate's own attempt there, one byte written and synced to an unnamed
+    temporary file (tempfile.TemporaryFile, which leaves no name and is gone on close). The line
+    "ENVIRONMENT: <code> <directory>" when that attempt fails with the operating system's no-space, quota, read-only
+    or permission error; else None. With no such line nothing is attempted."""
     folder = os.path.join(root, "docs", "dev")
-    if span.command != "close":
+    claim = ENV_LINE.search(span.last_text() or "") if span.command == "close" else None
+    if not claim or os.path.realpath(claim.group(2)) != os.path.realpath(folder):
         return None
     try:
         with tempfile.TemporaryFile(dir=folder) as fh:
@@ -1392,7 +1394,7 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     refused = env = analyst = None
     try:
         refused = refused_step(span) if gated else None  # one walk: the release below and the block's exit line
-        env = environment_refusal(span, root) if gated else None  # the gate's own attempt, read once
+        env = environment_refusal(span, root) if gated else None  # the gate's own attempt, on a claim only
         analyst = analyst_refused(span) if gated else None
         if gated and (no_target_end(span, root) or step_refused_end(span, refused) or no_owner_end(span, root)
                       or environment_end(span, env) or analyst_refused_end(span, analyst)):
@@ -1412,7 +1414,7 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
         return 0, "", terminal
     if not gaps:  # (7)
         return 0, "", terminal
-    text = _block_text(span.command, gaps, _exit_hint(span, refused, env) + (
+    text = _block_text(span.command, gaps, _exit_hint(span, refused) + (
         f"A hook refused the {analyst} dispatch. To end the turn, write the line \"REFUSED: <hook> refused the "
         f"{analyst} dispatch; nothing was {'published' if span.command == 'push' else 'merged'}\", then the "
         "hook's own output.\n" if analyst else ""), payload.get("session_id"))
@@ -1443,12 +1445,10 @@ def analyst_refused_end(span, role: str | None) -> bool:
     return bool(role) and bool(re.search(rf"^REFUSED: .*\b{role}\b", span.last_text() or "", re.M))
 
 
-def _exit_hint(span, refused, env) -> str:
+def _exit_hint(span, refused) -> str:
     """What the block adds where an exit holds but its line is not yet written: the exact line, filled in."""
     hint = (f"A hook refused this step's own call. To end the turn, write the line \"REFUSED: {refused}\", then the "
             "hook's own output; the step stays open and the next prompt resumes it.\n" if refused else "")
-    hint += (f"The gate's own write to the close report's directory failed. To end the turn, write the line "
-             f"\"{env}\"; the cycle stays open and the next round follows once the cause is gone.\n" if env else "")
     try:
         unnamed = hook_refused_parents(span)[1] if span.command == "close" and "--auto" in span.args.split() else ()
     except Exception:  # an unread record adds no hint
