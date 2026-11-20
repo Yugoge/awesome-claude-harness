@@ -2370,13 +2370,9 @@ class Analyzer:
 
     @staticmethod
     def _removal_targets(base, args):
-        """The files a `rm` or `unlink` run as the command's own head names: each operand written
-        out, or, for an operand that expands a variable, its offset, which analyze() resolves to the
-        value the command gave that variable earlier (shell_parse.write_targets, the parser's one
-        assignment tracking). None when an operand is a pattern or `~`-led, may be an option, when it
-        names none, or for a program whose operands are not read here (shred, srm). Neither program
-        has an option that takes a separate value, so a word is an operand unless it is an option
-        before `--`."""
+        """The operands of a `rm` or `unlink` run as the command's own head: written out, or the offset
+        of one that expands (resolved by _known_removal_targets). None for a pattern, `~`, a possible
+        option, no operand, or shred/srm. Neither has an option taking a value."""
         if base != "rm" and base != "unlink":
             return None
         lits = [a.literal() for a in args]
@@ -3926,11 +3922,9 @@ def analyze(raw):
 
 
 def _known_removal_targets(raw, targets):
-    """Each operand offset in ``targets`` replaced by the file it names, from the parser's one
-    assignment tracking (shell_parse.write_targets): known only when the variable holds a literal
-    assigned earlier in the same command, surely run and not changed in between (a value from the
-    environment, a substitution, a branch or loop, `read`, `+=` or a pattern is not known). None
-    when any is not known."""
+    """Each operand offset replaced by the file it names by the parser's one assignment tracking
+    (shell_parse.write_targets: a literal set earlier in the command, surely run, unchanged since);
+    None when any is not known (environment, substitution, branch, loop, `read`, `+=`, pattern)."""
     if all(isinstance(t, str) for t in targets):
         return targets
     from shell_parse import write_targets
