@@ -152,14 +152,7 @@ def _reads_every_replay_of_this_file(test):
 class Catalog:
     def __init__(self, tree: str, work: str):
         self.e = sites.Enumerator(tree)
-        dropped = set()
-        for parent, kids in self.e.children.items():
-            event = self.e.event(parent)
-            for k in kids:
-                if not sites.relayed(tree, parent, k, event, os.path.join(work, os.path.basename(k))):
-                    dropped.add(k)
-        self.not_relayed = sorted(dropped)
-        self.sites = [s for s in self.e.sites() if s.file not in dropped]
+        self.sites, self.not_relayed = sites.relayed_sites(self.e, tree, work)
         self.cls = {s.id: sites.classify(self.e, s) for s in self.sites}
         self.by_id = {s.id: s for s in self.sites}
 
