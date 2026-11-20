@@ -23,7 +23,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `permissionrequest-launch.py` - PermissionRequest: answer every permission request by rule (hooks/permissionrequest-answer.py).
 - `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 - `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
-- `posttool-close-rating.py` - questions a round may ask, and the score log's dispatcher
+- `posttool-close-rating.py` - A question goes by its source prefix to one handler, an Agent call to the observer; no logic here
 - `posttool-codex-skill-ledger.py` - Fires on every PostToolUse and PostToolUseFailure for the Skill tool. When tool_input.skill == "c...
 - `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 - `posttool-dispatch-record.py` - The rules run in this order, each as its own hook would run alone

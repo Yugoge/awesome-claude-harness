@@ -82,8 +82,6 @@ CASES = [
     ("doc-sync-notices", "sid1/doc-sync-notices-main.json"),
     ("doc-sync-notices", "sid1/.doc-sync-notices-x.tmp"),
     ("doc-sync-notices", "claude-scratch/sid1/doc-sync-notices-agent-ab.json"),
-    ("question-record", "claude-question-record-0123456789abcdef-20261120-015713-r1.json"),
-    ("question-record", ".claude-question-record-0123456789abcdef-20261120-015713-r1.json.123.tmp"),
     ("claude-scratch", "claude-scratch/qa/report.json"),
     ("claude-scratch", "claude-scratch/changelog-analyst/commit-msg-1.txt"),
     ("claude-scratch", "claude-scratch/sid1/tmp.abc"),

@@ -44,17 +44,7 @@ def project(tmp_path):
                                                      "options": [{**o, "ba": "A"} for o in ROUND_Q["options"]]}]}))
     (dev / f"producer-question-{TASK}-ba.json").write_text("{}")
     (tmp_path / "t.jsonl").write_text("")
-    landed(tmp_path, f"docs/dev/requirement-round-{TASK}-r1.json")
     return tmp_path
-
-
-def landed(project: Path, rel: str) -> None:
-    """The producer's Write of ``rel`` as its PostToolUse hook sees it (the round's record, record_landed)."""
-    payload = {"tool_name": "Write", "tool_input": {"file_path": str(project / rel), "content": ""}, "cwd": str(project),
-               "session_id": "s", "agent_id": "a1", "agent_type": "ba", "tool_response": {}}
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_STATE_DIR": str(project / "state")}
-    subprocess.run([sys.executable, str(ROOT / "hooks" / "posttool-close-rating.py")], input=json.dumps(payload),
-                   capture_output=True, text=True, env=env, timeout=60, check=True)
 
 
 def test_the_kept_kinds_are_the_five_the_owner_designed():

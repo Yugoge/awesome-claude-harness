@@ -347,23 +347,7 @@ def c09(w):
     return [("CODEX_HOME set", str(rollout.resolve()), got)]
 
 
-def q01(w):
-    # writer: requirement_round.record_landed in the PostToolUse of the producer's Write (a subagent's session);
-    # reader: question_refusal in the main agent's PreToolUse; one may name the project through a link.
-    expr = "import requirement_round as r; print(r.record_path(r.Path(r.os.environ['CLAUDE_PROJECT_DIR']), 'T1', 1))"
-    pairs = []
-    for s in "abc":
-        project = w.tmp / s / "proj.q"
-        project.mkdir(parents=True, exist_ok=True)
-        link = w.tmp / s / "proj.link"
-        link.symlink_to(project)
-        pairs.append((f"{s} project via a link", py(expr, w.session(s, CLAUDE_PROJECT_DIR=str(project))),
-                      py(expr, w.session(s, "two", CLAUDE_PROJECT_DIR=str(link)) if s == "a" else
-                         w.session(s, CLAUDE_PROJECT_DIR=str(link)))))
-    return pairs
-
-
-ROWS = {"Q01": q01, "S01": s01, "P01": p01, "R1": r1, "C04": c04, "C01": c01, "T07": t07, "C13": c13, "C06": c06,
+ROWS = {"S01": s01, "P01": p01, "R1": r1, "C04": c04, "C01": c01, "T07": t07, "C13": c13, "C06": c06,
         "C05": c05, "S29": s29, "C12": c12, "R2": r2, "C03": c03, "S02": s02, "P02": p02, "T02": t02, "S34": s34,
         "C10": c10, "P04": p04, "C09": c09, "C11": c11}
 
