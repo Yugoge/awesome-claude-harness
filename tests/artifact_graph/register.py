@@ -1,11 +1,11 @@
 """The register of accepted deciding reads: rule (6) violations a stated reason accepts.
 
 policies/artifact-check-accepted-reads.v1.json, tracked in the tree under test, built like the register of
-look-alike definitions (policies/definition-lookalikes.v1.json). Each entry names a deciding read: the
-artifact (its key in the map), the reader (the component the violation names), the position (the hook event
-and the tool of the call it decides) and the mutations it decides on, and carries a reason, required. A
-6-move or 6-recheck violation is covered when an entry names its artifact, its reader and its mutation and
-every decision the violation reports was taken at the entry's event and tool. Nothing else is coverable: a
+look-alike definitions (policies/definition-lookalikes.v1.json). Each entry names a position at which an
+artifact may be read to decide: the artifact (its key in the map) and the hook event and tool of the call,
+and carries a reason, required. A 6-move or 6-recheck violation on that artifact is covered when every
+decision it reports was taken at the entry's event and tool, whichever reader the check names (a merged
+gate's change is charged to its refusing rules that read the path) and whichever mutation it measured. Nothing else is coverable: a
 violation of rules 1, 2, 4, 5, 7 or 8 is reported whatever the register holds.
 
 The register cannot go stale silently: an entry that covers no current violation is a violation of its own
@@ -19,8 +19,7 @@ import os
 
 PATH = os.path.join("policies", "artifact-check-accepted-reads.v1.json")
 COVERABLE = ("6-move", "6-recheck")
-MUTATIONS = ("removed", "invalid", "any", "unreadable")
-_KEYS = ("artifact", "reader", "event", "tool", "mutations", "reason")
+_KEYS = ("artifact", "event", "tool", "reason")
 
 
 def load(tree: str) -> tuple[list[dict], list[str]]:
@@ -40,19 +39,17 @@ def load(tree: str) -> tuple[list[dict], list[str]]:
     for i, e in enumerate(entries):
         if not isinstance(e, dict) or set(e) != set(_KEYS):
             problems.append(f"entry {i}: the keys are exactly {', '.join(_KEYS)}")
-        elif not all(isinstance(e[k], str) and e[k].strip() for k in _KEYS if k != "mutations"):
-            problems.append(f"entry {i}: artifact, reader, event, tool and reason are non-empty strings"
+        elif not all(isinstance(e[k], str) and e[k].strip() for k in _KEYS):
+            problems.append(f"entry {i}: artifact, event, tool and reason are non-empty strings"
                             + (" (an empty reason is refused)" if not str(e.get("reason") or "").strip() else ""))
-        elif not (isinstance(e["mutations"], list) and e["mutations"] and set(e["mutations"]) <= set(MUTATIONS)):
-            problems.append(f"entry {i}: mutations is a non-empty list of {', '.join(MUTATIONS)}")
         else:
             good.append(dict(e, index=i))
     return good, problems
 
 
 def covers(e: dict, v) -> bool:
-    return (v.rule in COVERABLE and v.artifact == e["artifact"] and v.reader == e["reader"]
-            and v.how in e["mutations"] and bool(v.at) and all(at == (e["event"], e["tool"]) for at in v.at))
+    return (v.rule in COVERABLE and v.artifact == e["artifact"] and bool(v.at)
+            and all(at == (e["event"], e["tool"]) for at in v.at))
 
 
 def apply(vs: list, entries: list[dict], problems: list[str], make) -> tuple[list, list]:
@@ -67,7 +64,7 @@ def apply(vs: list, entries: list[dict], problems: list[str], make) -> tuple[lis
             covered.append((v, e))
             used.add(e["index"])
     left += [make("register-invalid", PATH, p) for p in problems]
-    left += [make("register-stale", PATH, f"entry {e['index']} ({e['reader']} on {e['artifact']}, {e['event']} "
-                  f"{e['tool']}, {'/'.join(e['mutations'])}) covers no current violation: remove it")
+    left += [make("register-stale", PATH, f"entry {e['index']} ({e['artifact']} at {e['event']} {e['tool']}) "
+                  "covers no current violation: remove it")
              for e in entries if e["index"] not in used]
     return left, covered

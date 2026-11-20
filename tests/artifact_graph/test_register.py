@@ -1,8 +1,10 @@
 """The register of accepted deciding reads (tests/artifact_graph/register.py).
 
-A rule (6) violation an entry names (artifact, reader, event and tool, mutation) is not reported and is
+A rule (6) violation on an entry's artifact whose decisions were all taken at its event and tool (whichever
+reader and mutation) is not reported and is
 counted as covered; an entry needs a reason; an entry that covers no current violation fails the check
-as stale; no other rule can be covered.
+as stale; no other rule can be covered. The tree's own register (policies/) loads, every entry with a
+reason, and the mutation tests (test_mutations.py) run the check with it present.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from tests.artifact_graph import check as C
 from tests.artifact_graph import register as R
 from tests.artifact_graph.test_check import check, hook, make_tree, rules_on
 
+REPO = Path(__file__).resolve().parents[2]
 FLAG = "<state>/claude-intent.flag"
 SETTINGS = {"env": {}, "hooks": {"SessionStart": [{"matcher": "startup", "hooks": [
     {"type": "command", "command": 'python3 "$CLAUDE_HOME/hooks/ask-guard.py"'}]}]}}
@@ -25,8 +28,8 @@ DECIDER = hook('''
 
 
 def entry(**over) -> dict:
-    e = {"artifact": FLAG, "reader": "hooks/ask-guard.py", "event": "SessionStart", "tool": "startup",
-         "mutations": ["removed", "invalid", "any"], "reason": "the flag is the reference the ask is checked against"}
+    e = {"artifact": FLAG, "event": "SessionStart", "tool": "startup",
+         "reason": "the flag is the reference the ask is checked against"}
     return {**e, **over}
 
 
@@ -51,8 +54,7 @@ def test_an_entry_covers_its_read_and_the_check_counts_it(tmp_path):
     assert f"{len(m.covered)} covered by the register" in C.map_text(m, vs)
 
 
-@pytest.mark.parametrize("over", [{"reader": "hooks/other.py"}, {"tool": "resume"}, {"event": "Stop"},
-                                  {"artifact": "<state>/claude-other.flag"}, {"mutations": ["unreadable"]}])
+@pytest.mark.parametrize("over", [{"tool": "resume"}, {"event": "Stop"}, {"artifact": "<state>/claude-other.flag"}])
 def test_an_entry_covers_only_what_it_names_and_is_then_stale(tmp_path, over):
     m, vs = check(tree(tmp_path, [entry(**over)]))
     assert rules_on(vs, FLAG) & set(R.COVERABLE) and not m.covered
@@ -73,3 +75,19 @@ def test_no_rule_but_six_can_be_covered():
     assert R.apply([six], [dict(entry(), index=0)], [], C.Violation)[1]  # the same fields on rule (6): covered
     left, covered = R.apply(vs, [dict(entry(), index=0)], [], lambda r, a, msg: C.Violation(r, a, msg))
     assert not covered and {v.rule for v in left} >= {v.rule for v in vs} | {"register-stale"}
+
+
+def test_the_trees_register_loads_and_every_entry_has_a_reason():
+    entries, problems = R.load(str(REPO))
+    assert not problems and entries
+    assert all(e["reason"].strip() for e in entries)
+
+
+def test_an_entry_covers_every_reader_and_mutation_at_its_position():
+    vs = [C.Violation(rule, FLAG, f"{who} {how}", reader=who, how=how, at=(("SessionStart", "startup"),))
+          for rule in R.COVERABLE for who in ("hooks/a.py", "hooks/b.py") for how in ("removed", "invalid")]
+    left, covered = R.apply(vs, [dict(entry(), index=0)], [], C.Violation)
+    assert not left and len(covered) == len(vs)
+    mixed = C.Violation("6-move", FLAG, "x", reader="hooks/a.py", how="removed",
+                        at=(("SessionStart", "startup"), ("Stop", "")))
+    assert R.apply([mixed], [dict(entry(), index=0)], [], C.Violation)[0][0] is mixed  # a decision elsewhere too

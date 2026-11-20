@@ -89,8 +89,8 @@ Derivation rules, in the order row 19 states them:
     the tool-policy prefixes that name the file of an artifact derived here.
 (6') The register of accepted deciding reads (register.py, policies/artifact-check-accepted-reads.v1.json in
     the tree) covers a rule (6) violation, 6-move or 6-recheck, and nothing else: an entry names the
-    artifact, the reader, the position (the hook event and the tool of the call) and the mutations, with a
-    reason it must carry. A covered violation is not reported; the check counts the covered ones
+    artifact and the position (the hook event and the tool of the call), with a reason it must carry, and
+    covers every rule (6) line on that artifact whose decisions were all taken there. A covered violation is not reported; the check counts the covered ones
     (counts()["register_covered"], the map's header and the log) and an entry that covers no current
     violation is a violation itself (register-stale). Rules (1), (2), (4), (5), (7) and (8) have no register.
 (8) Every replay sets CLAUDE_STATE_DIR to a directory other than /tmp, and a
