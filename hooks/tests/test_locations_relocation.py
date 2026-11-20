@@ -730,26 +730,65 @@ def test_the_installer_loads_the_runtime_guard_config_with_pathmatch_alone(tmp_p
         proc.stdout + proc.stderr
 
 
+def _probe_decisions(base: Path, monkeypatch, home_layout, project: str) -> list:
+    """What the f1, f2 and f8 probes decide for `project`, run from `base`, with the two spelled
+    as <base> and <project> so two runs compare: (probe, exit code or answer, first stderr line)."""
+    def hook(name, payload, env):
+        proc = _hook(name, payload, env, base)
+        return proc.returncode, (proc.stderr.splitlines() or [""])[0]
+    env = _env(base, project)
+    out = []
+    session = Session(base / "store")
+    session.command("dev")
+    context = f"docs/dev/context-{TASK}.json"
+    ba, dev = session.dispatch("ba", context), session.dispatch("dev", f"docs/dev/dev-report-{TASK}.json")
+    for agent in (ba, dev, None):  # f1
+        out.append(("f1 write", agent and agent[1], *hook("pretool-tool-policy.py", session.payload(
+            project, "Write", {"file_path": os.path.join(project, context), "content": "x"}, agent), env)))
+    for command in (f"printf x > {shlex.quote(os.path.join(project, context))}", f"printf x > {context}"):
+        out.append(("f1 bash", command, *hook("pretool-tool-policy.py", session.payload(project, "Bash", {"command": command}), env)))
+    ask = {"questions": [{"question": "q?", "header": "h", "multiSelect": False, "options": [
+        {"label": "a", "description": "a"}, {"label": "b", "description": "b"}]}],
+        "metadata": {"source": f"producer-question:{TASK}:dev"}}
+    out.append(("ask", "producer-question", *hook("pretool-tool-policy.py", _payload(project, "AskUserQuestion", ask), env)))
+    home_env = _home_env(base, project, home_layout)
+    for rel in ("docs/notes.claude/hooks/readme.md", "hooks/local.py", "commands/local.md", ".claude/hooks/x.py",
+                ".claude/hooks"):  # f2
+        out.append(("f2", rel, *hook("pretool-claude-config-guard.py",
+                                     _payload(project, "Write", {"file_path": os.path.join(project, rel), "content": "x"}), home_env)))
+    out.append(("overnight hook", "ls src", *hook("pretool-overnight-hook-guard.py",
+                                                  _payload(project, "Bash", {"command": "ls src"}), env)))
+    state_real, state_link = base / "state-real", base / "state-link"  # f8
+    state_real.mkdir()
+    state_link.symlink_to(state_real)
+    for key, value in _env(base, project, TMPDIR=f"/var/tmp/{NEVER}/session tmp", CLAUDE_STATE_DIR=str(state_link)).items():
+        monkeypatch.setenv(key, value)
+    overnight = _load("pretool-overnight-hook-guard.py", "overnight_guard_unreadable_" + base.name)
+    for path in (os.path.join(project + "-wt", "src", "x.py"), os.path.join(project, "src", "x.py"),
+                 os.path.join(project, ".claude", "hooks"), state_link / "claude-grants" / "x.json", "/dev/null"):
+        out.append(("f8", str(path), overnight._is_path_allowed_during_overnight(str(path), [project + "-wt"]), ""))
+    out.append(("f2 twin", "hooks", overnight.is_hooks_path(os.path.join(project, ".claude", "hooks")), ""))
+    return [tuple(str(v).replace(project, "<project>").replace(str(base), "<base>") for v in row) for row in out]
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="the superuser reads every folder")
 def test_a_project_below_a_folder_the_user_cannot_read_is_judged_as_an_absent_one(tmp_path, monkeypatch, home_layout):
-    """Not the superuser: a project below a folder he cannot read (his view of the superuser's home). Every decision
-    is the one an absent project gets, none an error: the config guard's sentinel check, the round
-    and producer question files the tool policy looks for and the overnight state files raised
-    PermissionError, and the first two hooks then allowed the call (fail-open), the third did not decide it."""
-    locked = tmp_path / "locked"
+    """Not the superuser: a project below a folder he cannot read (his view of the superuser's home) gets,
+    probe for probe, the decision of the same project below a folder he can read where it is absent,
+    wherever the temp root lies (under /tmp the overnight guard's temp exemption covers both). Before:
+    the config guard's sentinel check, the round and producer question files the tool policy looks for
+    and the overnight state files raised PermissionError; the first two hooks then allowed (fail-open),
+    the third did not decide."""
+    readable, locked = tmp_path / "open", tmp_path / "locked"
+    readable.mkdir()
     locked.mkdir(mode=0)
-    project = str(locked / "proj")
     try:
-        test_f1_declared_report_is_its_declarers_alone_wherever_the_project_is(tmp_path, project)
-        test_f2_a_folder_that_only_ends_in_the_text_is_not_protected(tmp_path, project, home_layout)
-        test_f2_the_folder_itself_is_a_protected_target(tmp_path, monkeypatch, project)
-        test_f8_overnight_exemption_follows_the_session_temp_and_state_roots(tmp_path, monkeypatch, project)
-        proc = _hook("pretool-overnight-hook-guard.py", _payload(project, "Bash", {"command": "ls src"}),
-                     _env(tmp_path, project), tmp_path)
-        assert (proc.returncode, proc.stderr) == (0, ""), proc.stderr
-        ask = {"questions": [{"question": "q?", "header": "h", "multiSelect": False, "options": [
-            {"label": "a", "description": "a"}, {"label": "b", "description": "b"}]}],
-            "metadata": {"source": f"producer-question:{TASK}:dev"}}  # its file is not there to show
-        _denial(_hook("pretool-tool-policy.py", _payload(project, "AskUserQuestion", ask), _env(tmp_path, project), tmp_path))
+        cells = {}
+        for folder in (readable, locked):
+            base = tmp_path / ("run-" + folder.name)
+            base.mkdir()
+            cells[folder.name] = _probe_decisions(base, monkeypatch, home_layout, str(folder / "proj"))
     finally:
         locked.chmod(0o700)
+    assert ("f2", ".claude/hooks/x.py", "2") in {row[:3] for row in cells["open"]}, cells["open"]  # not idle
+    assert cells["locked"] == cells["open"]
