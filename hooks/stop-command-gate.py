@@ -19,8 +19,7 @@ payload on stdin and decides, in order:
   (5) no gated span (stop-commands.json's GATED_COMMANDS) and no /spec or /dev-family span: allow;
   (5b) a /close or /commit that bound no task and dispatched none, ending on a NO_TARGET: line (no_target_end:
       "Which task?" and refused flag combinations end with the candidates, nobody asked): allow;
-  (5c) a /dev, /redev, /dev-command or /do whose pending step's own call a hook refused, ending on a REFUSED: line
-      naming that step (step_refused_end); the step stays open for the next prompt: allow;
+  (5c) a gated step whose own call a hook refused, ending on its REFUSED: line (step_refused_end): allow;
   (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question: a last line
       ending in "?" with a question the span neither asked with an AskUserQuestion the owner answered
       nor recorded in a spec it wrote through spec-write.py; /spec has no other gap); in a gated span the todo half and the command's predicate, each held to the
@@ -384,42 +383,30 @@ def _targets(span, root, action: str) -> tuple[list[str] | None, list[str]]:
 NO_TARGET_LINE = re.compile(r"^NO_TARGET: \S", re.M)
 
 
-# A gated step a hook refuses (dev.md, do.md: "Hook rejection"): the turn ends on one REFUSED: line naming the step.
-STEP_REFUSED_LINE = re.compile(r"^REFUSED: (Step [0-9][0-9A-Za-z.]*)\b", re.M)
-STEP_EXIT_COMMANDS = ("dev", "redev", "dev-command", "do")
+STEP_REFUSED_LINE = re.compile(r"^REFUSED: (Step [0-9][0-9A-Za-z.]*)\b", re.M)  # dev.md, do.md: Hook rejection
 
 
 def step_refused_end(span) -> bool:
-    """The checklist's pending step (its first step not completed) cannot go on because a hook refused that step's
-    own call, and the turn ends on a REFUSED: line naming that step. The step's call: a dispatch of the role its
-    canonical subagent_call names, with no later dispatch of that role come back ok; for a step with no subagent
-    role, the span's last call (AskUserQuestion and TodoWrite aside). The refusal is the transcript's record of it
-    (command_span.refused_calls), made after the step was last set in progress. The step stays open: nothing marks it done."""
-    if span.command not in STEP_EXIT_COMMANDS:
-        return False
+    """/dev, /redev, /dev-command, /do: the pending step (the first not completed) was set in progress, then a hook
+    refused its own call (command_span.refused_calls: a dispatch of its subagent_call's role with none of that role
+    after it, or, with no role, the last call but TodoWrite and AskUserQuestion), and the last text's REFUSED: line
+    names that step. The step stays open."""
+    step = next((t for t in span.last_todos() or () if t.get("status") != "completed"), {})
     found = STEP_REFUSED_LINE.search(span.last_text() or "")
-    todos = span.last_todos() or []
-    step = next((t for t in todos if isinstance(t, dict) and t.get("status") != "completed"), None)
-    content = str((step or {}).get("content") or "")
-    if not found or content.split(":", 1)[0].strip() != found.group(1):
+    if span.command not in ("dev", "redev", "dev-command", "do") or not found or \
+            str(step.get("content") or "").split(":", 1)[0] != found.group(1):
         return False
-    tc = importlib.import_module("lib.todo_canonical")
-    canon = next((c for c in tc.run_todo_script(span.command, span.args) or () if c.get("content") == content), {})
-    call = canon.get("subagent_call") or []
-    roles = {str(c.get("subagent_type") or "").lower() for c in (call if isinstance(call, list) else [call])} - {""}
-    started = refused = False
-    denied = command_span.refused_calls(span.transcript_path)  # the transcript's and the record's own refusals
+    canon = next((c for c in importlib.import_module("lib.todo_canonical").run_todo_script(span.command, span.args)
+                  or () if c.get("content") == step["content"]), {}).get("subagent_call") or []
+    roles = {c.get("subagent_type") for c in (canon if isinstance(canon, list) else [canon])}
+    denied, started, refused = command_span.refused_calls(span.transcript_path), False, False
     for use in span.uses():
-        if use.name == "TodoWrite":
-            if use.ok and any(isinstance(t, dict) and t.get("content") == content and t.get("status") == "in_progress"
+        if use.name == "TodoWrite":  # set in progress (again): a refusal before it no longer counts
+            if use.ok and any((t.get("content"), t.get("status")) == (step["content"], "in_progress")
                               for t in use.input.get("todos") or ()):
-                started, refused = True, False  # set in progress (again): a refusal before it no longer counts
-            continue
-        if not started or use.name == "AskUserQuestion":
-            continue
-        if roles and str(use.input.get("subagent_type") or "").lower() not in roles:
-            continue  # another call than the step's own
-        refused = use.id in denied
+                started, refused = True, False
+        elif started and use.name != "AskUserQuestion" and (not roles or use.input.get("subagent_type") in roles):
+            refused = use.id in denied
     return refused
 
 

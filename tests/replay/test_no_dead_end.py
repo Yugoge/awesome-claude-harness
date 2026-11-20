@@ -298,6 +298,24 @@ def test_gate_is_cleared_by_the_actors_next_action(replays, catalog, case):
                 f"the stop ending in a forged ESCALATION_ACK line passed: {ev['label']}"
 
 
+# A gated step whose own call a hook refused (2026-11-20, session 9dddc7ae's /dev): its replay of its own, since
+# its block is a denial (D), which test_gate_is_cleared_by_the_actors_next_action does not admit.
+STEP_REFUSED = suite.Scenario("dead end: step-refused", "_deadend", (("case", "step-refused"),), ("do",), 60)
+
+
+@pytest.mark.replay(suite.replay_key(STEP_REFUSED, "shipped"), STEP_REFUSED.cost)
+def test_a_step_whose_own_call_a_hook_refused_ends_on_its_report(replays):
+    """The turn ends on a REFUSED: line naming the step whose own call the hook refused (the Stop passes); a Stop on
+    other text while that step is open is refused; the step then goes on and /do reaches its terminal."""
+    r = replays.get(suite.replay_key(STEP_REFUSED, "shipped"))
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    rounds = {x["label"]: x for x in (r.terminal("do") or {}).get("rounds", [])}
+    assert rounds["/do Step 2 Bash refused by a hook"]["blocked"], rounds
+    assert not rounds["/do Stop on the step's refusal"]["blocked"], rounds
+    assert rounds["/do Stop with the step open"]["blocked"], rounds
+    assert r.reached(), r.explain()
+
+
 @pytest.mark.parametrize("fault", [pytest.param(f, id=re.sub(r"\W+", "-", f),
                                                 marks=pytest.mark.replay(fault_key(f), FAULTS[f][0].cost)) for f in FAULTS])
 def test_fault_gate_is_cleared_by_its_producers_next_round(replays, catalog, fault):

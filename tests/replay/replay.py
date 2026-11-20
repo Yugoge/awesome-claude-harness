@@ -723,7 +723,7 @@ class Actor:
         if self.rp.settle(call.pre, label, step["deviation"]):
             call.blocked = True
             text = "\n".join(hookrun.refusal(b) for b in call.pre.blocks)
-            self._result(tid, f"PreToolUse:{name} hook error: {text}", error=True)
+            self._result(tid, f"PreToolUse:{name} hook error: {text}", error=True, hook=True)
             self.rp.after(step, call)
             return call
         tinput = updated_input(call.pre, tinput)
@@ -754,7 +754,8 @@ class Actor:
         self.rp.after(step, call)
         return call
 
-    def _result(self, tid: str, content, error: bool = False, resp=None, denial: str | None = None) -> None:
+    def _result(self, tid: str, content, error: bool = False, resp=None, denial: str | None = None,
+                hook: bool = False) -> None:
         block = {"type": "tool_result", "tool_use_id": tid, "content": content}
         if error:
             block["is_error"] = True
@@ -763,6 +764,9 @@ class Actor:
             rec["toolUseResult"] = resp
         if denial:
             rec["toolDenialKind"] = denial
+        if hook:  # a PreToolUse hook refused it: the decision the CLI records beside the result (2.1.322)
+            rec["permissionDecision"] = {"decision": "reject", "source": "hook", "reasonType": "hook",
+                                         "reasonCode": "hook:PreToolUse"}
         self.s.append(rec, self.aid)
 
     def bash(self, command: str, description: str = "", label: str | None = None, deviation=None,
@@ -814,7 +818,7 @@ class Actor:
         if self.rp.settle(d.pre, label, step["deviation"]):
             d.blocked = True
             text = "\n".join(hookrun.refusal(b) for b in d.pre.blocks)
-            self._result(tid, f"PreToolUse:Agent hook error: {text}", error=True)
+            self._result(tid, f"PreToolUse:Agent hook error: {text}", error=True, hook=True)
             self.rp.after(step, d)
             return d
         d.agent_id = aid = "a" + uuid.uuid4().hex[:16]

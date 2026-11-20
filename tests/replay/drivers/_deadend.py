@@ -15,6 +15,8 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
   do-report-ask   as do-report, and between the refused Stop and the Write the main agent ends twice
                   on a REFUSED: line naming Step 5 with no call a hook refused (neither releases the gate,
                   so both Stops are refused too; nobody is asked since 2026-11-19).
+  step-refused    Step 2's own call is refused by a hook: the turn ends on a REFUSED: line naming Step 2 (the
+                  Stop lets it end); a Stop on other text while the step is open is refused; the step goes on.
   do-dispatch     Step 2's work is first handed to a subagent: /do runs without subagents, so the
                   dispatch is refused; the main agent's next action does Step 2 itself.
   todo-canonical  the first TodoWrite carries the canonical list with one step's text changed: refused;
@@ -116,6 +118,7 @@ import shlex
 import subprocess
 import time
 
+from .. import hookrun
 from .do import DoTurn
 
 PIPELINE = "deadend"
@@ -176,6 +179,20 @@ class Turn(DoTurn):
                                 "hooks": [h["hook"] for h in (d.pre.blocks if d.pre else [])]})
         super().step2()
 
+    def step_refused(self) -> None:
+        """Step 2's own call refused by a hook: the turn ends on its REFUSED: line, which the Stop lets through; the
+        step stays open, and a Stop on any other text while it is open is refused. The owner's next prompt resumes
+        it (played here as the same turn going on: the replay types no prompt, which would end /do's consent)."""
+        o = self.o
+        step = o.todos[o.current()]["content"]
+        call = o.s.bash("kill -9 999999", label=self.label("Step 2 Bash refused by a hook"))
+        self.note(call)
+        output = "\n".join(hookrun.refusal(b) for b in (call.pre.blocks if call.pre else []))
+        for lab, text in (("/do Stop on the step's refusal", f"REFUSED: {step}: `kill -9 999999` was refused:\n{output}"),
+                          ("/do Stop with the step open", "Picked Step 2 up again.")):
+            ev = o.s.stop(text, label=lab)
+            self.rounds.append({"label": lab, "blocked": ev.still_blocked, "hooks": [h["hook"] for h in ev.blocks]})
+
     def run(self) -> str:
         o = self.o
         self.start()
@@ -188,6 +205,8 @@ class Turn(DoTurn):
                 bad[i + 2]["status"] = "in_progress"
                 self.note(o.s.todo(bad, label=self.label("TodoWrite Step 1 and Step 2 done at once")))
             o.advance(label=self.label(f"TodoWrite Step {n - 1} done, Step {n} in_progress"))
+            if n == 2 and self.case == "step-refused":
+                self.step_refused()
             fn()
         o.advance(label=self.label("TodoWrite Step 5 done"))
         text = f"/do {self.tid} done: toy.add rejects non-numbers; do-report {self.report_rel}. Next: /close {self.tid}"
@@ -597,6 +616,6 @@ def run(rp) -> None:
                 "qa-provenance"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
-                    "checklist-lock"):
+                    "checklist-lock", "step-refused"):
         raise ValueError(f"unknown case {case!r}")
     Turn(rp, case).run()
