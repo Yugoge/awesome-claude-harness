@@ -335,7 +335,7 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
     declared = {a.get("path") for a in ob.get("artifacts") or [] if isinstance(a, dict)}
     obligation = _lib("obligation")
     latest = {}  # (role, task) -> (call, obligation) of that producer's latest dispatch in the span
-    for call in span.calls(*_lib("subagent").DISPATCH_TOOLS):
+    for call in span.dispatch_calls():
         found = obligation.parse_obligation(call.input.get("prompt")) if call.id != current else None
         doc = getattr(found, "obligation", None)
         if isinstance(doc, dict):
