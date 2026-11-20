@@ -62,3 +62,15 @@ def test_c01_the_promote_hook_uses_the_cli_folder_name():
     got = subprocess.run(["bash", "-c", 'CWD=/srv/a.b_c; ' + line + '; printf %s "$PROJECT_NAME"'],
                          capture_output=True, text=True, timeout=30).stdout
     assert got == re.sub(r"[^A-Za-z0-9]", "-", "/srv/a.b_c")
+
+
+def test_r1_the_project_spelling_expands_only_for_a_named_project(monkeypatch):
+    """R1: command text gives the Bash tool ${CLAUDE_PROJECT_DIR:-$PWD}; a reader that takes a path out of that
+    text expands it with the call's project (claude_home.known_text, project=). Without one it stays unknown,
+    as hooks read it."""
+    sys.path.insert(0, str(REPO / "hooks" / "lib"))
+    import claude_home
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    line = "${CLAUDE_PROJECT_DIR:-$PWD}/docs/dev/specs/spec-<ts>.md"
+    assert claude_home.known_text(line, project="/srv/p") == "/srv/p/docs/dev/specs/spec-<ts>.md"
+    assert claude_home.known_text(line) is None
