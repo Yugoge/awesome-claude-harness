@@ -623,18 +623,25 @@ def test_adversarial_long_lines_are_read_in_bounded_time(monkeypatch, name):
 
 @pytest.mark.parametrize("mode", sorted(MODES))
 def test_adversarial_long_line_is_answered_through_the_hook_in_bounded_time(mode):
-    # No `find` word: the runtime guard's own find scan is slow on 100 KB of them on the base branch too.
-    quoted = "ls " + "git ssh hash kubectl " * 5000 + "-q\nr''m -rf /dev/shm/v/s"
-    named = "ls " + "git ssh hash kubectl " * 5000 + "-q\nrm -rf /dev/shm/v/s"
-    assert len(quoted) > 100_000
-    started = child_cpu()
-    code, err = run_hook(quoted, timeout=240, **MODES[mode])
-    assert code == 0 and "removal-policy" not in err, err[:300]
-    code, err = run_hook(named, timeout=240, **MODES[mode])
-    assert code == 2 and DEGRADED in err
-    # Bounded, not fast: the whole PreToolUse pipeline reads 100 KB twice here. CPU seconds, not wall time: one run
-    # took about 4.7 s of CPU idle and 4.8 s beside 8 CPU-bound processes on 4 cores (2026-11-18).
-    assert child_cpu() - started < 30.0
+    def cost(words):
+        # No `find` word: the runtime guard's own find scan is slow on 100 KB of them on the base branch too.
+        quoted = "ls " + "git ssh hash kubectl " * words + "-q\nr''m -rf /dev/shm/v/s"
+        named = "ls " + "git ssh hash kubectl " * words + "-q\nrm -rf /dev/shm/v/s"
+        started = child_cpu()
+        code, err = run_hook(quoted, timeout=240, **MODES[mode])
+        assert code == 0 and "removal-policy" not in err, err[:300]
+        code, err = run_hook(named, timeout=240, **MODES[mode])
+        assert code == 2 and DEGRADED in err
+        return child_cpu() - started, len(quoted)
+
+    (fixed, _), (half, _), (full, size) = cost(1), cost(2500), cost(5000)
+    assert size > 100_000
+    # Bounded, not fast: the whole PreToolUse pipeline reads the line twice per pair. Above the pipeline's fixed cost
+    # (every hook's own start) the cost grows with the line's length: twice the line costs about twice as much, never
+    # four times. The pairs are compared with each other, in CPU seconds, because no fixed bound holds on every
+    # runner: the 100 KB pair took about 15 s here and 31 s on the slowest CI runner (2026-11-20). Each run also
+    # ends within its own 240 s.
+    assert full - fixed < 3 * (half - fixed), (fixed, half, full)
 
 
 def test_analyzer_timeout_default_leaves_headroom_under_load():
