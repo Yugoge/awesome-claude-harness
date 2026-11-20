@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T07:17:38Z*
-**Total entries**: 1156
+*Last updated: 2026-11-20T07:22:49Z*
+**Total entries**: 1159
 **Convention**: kebab
 
 ## Tree
@@ -602,6 +602,7 @@ dot-claude/
 │   ├── `userprompt-tmpfs-pressure.sh` - userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
 │   └── `userprompt-usage-snapshot.py` - Passively injects a per-account usage snapshot (available/exhausted status,
 ├── policies/
+│   ├── `artifact-check-accepted-reads.v1.json` - JSON config: schema, about, entries
 │   ├── `definition-lookalikes.v1.json` - Definitions of hooks/ and scripts/ that look alike and are allowed to coexist because they answer different questions. Read by tests/defs_registry (python3 -m tests.defs_registry), which groups every literal definition by the sameness rule of tests/defs_registry/check.py and fails on a group the register does not split. Each entry: a reason (required) and two or more sides; the definitions of one side answer one question, so two copies on one side are still a duplicate. A definition is identified by its scope-qualified name and the fingerprint of its sorted members (sha256, 16 hex), never by file or line; `at` is where it was when registered. Seeded from the duplicate-definition audit of f199dfb1e: its 61 different-questions families (sides = the distinct member sets of the family) and its ruled-out look-alike pairs (sides = the named definitions).
 │   ├── `protected-workflow-manifest.v1.json` - Every protected workflow and activation route the host-capability handshake gates. A route inside protected_surface_prefixes but absent from routes[] is blocked fail-closed until explicitly added; a route outside every prefix is reported not_protected so the gate cannot brick tool use it was never meant to police.
 │   ├── `public-core-residue-allowlist.v1.json` - Seed exemption set for scripts/check-public-core.sh section 5 (generic author-path residue gate). Set-based, NOT an aggregate-count ratchet: the key is (path, fingerprint, ordinal), so deleting one allowlisted occurrence never creates capacity for an unrelated new one. Every entry's `class` is RE-DERIVED structurally by the gate from the live line; a hand-written label that the source structure does not support is rejected. Entries were seeded from a live full-ledger scan, never from a number quoted in a spec.
@@ -842,6 +843,7 @@ dot-claude/
 │   │   ├── `model.py` - Every scanner appends plain facts to one `Findings`; `static_half.derive` turns
 │   │   ├── `patterns.py` - The static half evaluates path expressions into *templates*: plain text in which
 │   │   ├── `pyscan.py` - For every module it evaluates path expressions (string literals, f-strings,
+│   │   ├── `register.py` - policies/artifact-check-accepted-reads.v1.json, tracked in the tree under test, built like the re...
 │   │   ├── `runtime.py` - Every driver under tests/replay/drivers/ is replayed, each variant it offers,
 │   │   ├── `shards.py` - One 4-CPU runner needs about 3,000 s for every traced replay and E1's differential: twice E2's
 │   │   ├── `shparse.py` - dependency beyond the standard library
@@ -851,6 +853,7 @@ dot-claude/
 │   │   ├── `test_check.py` - Each test builds a small harness-shaped tree, derives the static half on it and
 │   │   ├── `test_mutations.py` - Each test copies the tree under test (this checkout) to a scratch directory,
 │   │   ├── `test_presence_faults.py` - CPython 3.10 and 3.12 (the CI versions): os.path.exists/isfile/isdir/lexists catch every OSError
+│   │   ├── `test_register.py` - A rule (6) violation an entry names (artifact, reader, event and tool, mutation) is not reported ...
 │   │   ├── `test_rule1_7.py` - declared artifact) and rule (7) (a list that repeats a declaration)
 │   │   ├── `test_rule2.py` - Each test builds a small harness-shaped tree, derives the static half on it and runs the check's
 │   │   ├── `test_rule4_6.py` - mutation), rule (5) (the chain function's output used verbatim) and rule (6) (a deciding read

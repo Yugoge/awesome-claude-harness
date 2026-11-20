@@ -687,7 +687,8 @@ FAULTS_TEST = "tests/replay/test_faults.py"
 _CLAIM_COMPLIANT = "a compliant replay of each pipeline meets no gate block, no hook error, and reaches its terminal"
 _CLAIM_NO_CLASS = "no blocking site may lack a clearing class (a site of class \"-\" fails the suite)"
 _CLAIM_WEAKER = "a replay that reaches a blocking site with no class fails the suite"
-_CLAIM_ARTIFACT = "the artifact check asserts no violation and keeps no exception list"
+_CLAIM_ARTIFACT = ("the artifact check asserts no violation and keeps no exception list but its register of accepted "
+                   "deciding reads (rule 6 alone, each entry with a reason, a stale one failing the check)")
 _CLAIM_FAULTS = ("an injected fault is returned by a gate to the actor that produced the faulted artifact, which "
                  "repairs it with no human action, and the pipeline reaches its terminal")
 _CLAIM_UNIT = ("the unit suite (pytest over hooks/tests and tests) runs in the baseline job on every Python version "
