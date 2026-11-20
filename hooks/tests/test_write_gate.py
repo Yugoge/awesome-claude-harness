@@ -191,20 +191,26 @@ def test_each_rule_sees_the_tools_its_guard_was_registered_for(tmp_path):
     by_file = {Path(r.path).name: r for r in write_gate.RULES}
     assert registered.pop("pretool-write-guard.sh") == by_file.pop("overwrite.py").tools
     assert registered.pop("pretool-subagent-code-block.py") is not None  # not a rule: see below
-    # the harness switch's guard was never a registration of its own: a rule from its start
-    # (and it sees every tool but the CLI's own that deliver no prompt: a prompt that types /harness is
-    # known by the input, not the tool's name, so no MCP tool and no tool of a later CLI is skipped)
-    switch = by_file.pop("pretool-harness-switch-guard.py")
-    assert switch.tools is None and {"Read", "Grep", "Glob"} <= switch.skips
-    assert all(switch.applies(t) for t in ("Bash", "Write", "Skill", "CronCreate", "ScheduleWakeup", "SendMessage",
-                                           "Agent", "mcp__any__tool", "ALaterTool")) and not switch.applies("Read")
+    # the harness switch's guard was never a registration of its own: rules from its start, the guard on
+    # the tools whose commands, files and invoked commands it reads, its prompt rule on every other tool but
+    # the CLI's own that deliver no prompt (a prompt that types /harness is known by the input, not the
+    # tool's name, so no MCP tool and no tool of a later CLI is skipped); each tool reaches exactly one
+    switch, prompt = by_file.pop("pretool-harness-switch-guard.py"), by_file.pop("pretool-harness-switch-prompt.py")
+    assert switch.tools == write_gate.WRITE_TOOLS | {"Bash", "Skill", "SlashCommand"} and not switch.skips
+    assert prompt.tools is None and {"Read", "Grep", "Glob"} <= prompt.skips
+    for t in ("Bash", "Write", "NotebookEdit", "Skill", "CronCreate", "ScheduleWakeup", "SendMessage", "Agent",
+              "mcp__any__tool", "ALaterTool"):
+        assert [r.name for r in (switch, prompt) if r.applies(t)] == [
+            "harness-switch" if t in switch.tools else "harness-switch-prompt"], t
+    assert not switch.applies("Read") and not prompt.applies("Read")
     assert all(r.skips == frozenset() for r in by_file.values())
     # the overnight boundary's old matcher left NotebookEdit out; its rule sees every file-writing tool
     assert registered.pop("pretool-overnight-hook-guard.py") | {"NotebookEdit"} == \
         by_file.pop("pretool-overnight-hook-guard.py").tools == write_gate.WRITE_TOOLS | {"Bash", "AskUserQuestion"}
     assert {k: v for k, v in registered.items()} == {k: r.tools for k, r in by_file.items()}
     assert [r.name for r in write_gate.RULES] == ["bash-views", "overnight-boundary", "tool-policy",
-                                                  "cp-state", "overwrite", "claude-config", "harness-switch"]
+                                                  "cp-state", "overwrite", "claude-config", "harness-switch",
+                                                  "harness-switch-prompt"]
     assert all(Path(r.file).is_file() for r in write_gate.RULES)
 
 

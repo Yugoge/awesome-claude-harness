@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""PreToolUse (a rule of hooks/pretool-write-gate.py, every tool): only the owner switches the harness.
+"""PreToolUse (a rule of hooks/pretool-write-gate.py, for Bash, the file-writing tools, Skill and
+SlashCommand): only the owner switches the harness.
 
 The owner's typed /harness off|on reaches hooks/userprompt-harness-switch.sh, a UserPromptSubmit
 hook: the one event an agent cannot produce. This rule refuses, for the main agent and every
@@ -16,11 +17,8 @@ subagent, each other path by which an agent call could switch the harness or fak
                         a file under <H>/.harness-switch/; the home's settings files; any
                         settings*.json that would set disableAllHooks; a script outside a harness
                         checkout that names the switch's state
-  every other tool      a string of its input, under any key at any depth, that types /harness (a
-                        delivered or scheduled prompt reaches UserPromptSubmit as if typed), whatever
-                        the tool's name; only the CLI's own tools that deliver no prompt are named
-                        (harness_switch.NO_PROMPT: they pass); Agent / Task is refused only where a
-                        string is the command
+  every other tool      hooks/pretool-harness-switch-prompt.py's: a string of its input that types
+                        /harness (the text matching of both is hooks/lib/switch_prompt.py)
 
 A Claude Code settings file's env, hooks, disableAllHooks and permissions decide which hooks run,
 with what environment, and what is asked (an env value reaches every hook), so they are the
@@ -65,9 +63,9 @@ from claude_home import load_settings  # noqa: E402 -- the one load of a setting
 import shell_parse  # noqa: E402 -- the one reading of a Bash command
 import bash_read_only  # noqa: E402 -- the one list of the programs that only read
 import git_facts  # noqa: E402 -- what git's subcommands do to the files they name
-from subagent import DISPATCH_TOOLS  # noqa: E402 -- the tool names a subagent is dispatched under
 from harness_vocabulary import WRITE_TOOLS  # noqa: E402 -- the tools that write a file
 from bash_read_only import _git as _git_reads  # noqa: E402 -- the one proof that a git command only reads
+from switch_prompt import TYPED, refuse  # noqa: E402 -- what types /harness, and the rule's refusal
 sys.path.pop(0)
 
 HOME = harness_switch.harness_home()
@@ -76,12 +74,7 @@ SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json
 SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
 GIT_READ_ONLY = git_facts.GIT_KEEPS_NAMED_FILES  # git calls that write no file they name
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
-TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:%s)\b|\s*$|[\s\"'`)])" % "|".join(harness_switch.VERBS), re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
-TAGGED = r"<command-name>/?harness</command-name>"  # the other form scripts/harness-switch reads (parse_prompt)
-PROMPT = re.compile(TYPED.pattern + "|" + TAGGED, re.M)  # a prompt that types /harness, anywhere in it
-WHOLE = re.compile(r"\s*(?:/harness(?:\s+\S+)?|(?:<command-message>.*?</command-message>\s*)?" + TAGGED + r".*)\s*",
-                   re.S)  # a prompt that is the command, as scripts/harness-switch acts on one
 SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
 NAMES_SETTINGS = re.compile(r"(?:^|[/'\"=>])" + SETTINGS_ANY.pattern + r"(?![\w-])")  # a word that names one
 PROTECTED = ("env", "hooks", "disableAllHooks", "permissions")  # a settings file's keys that switch hooks
@@ -91,16 +84,9 @@ INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|deno|bun|ruby|perl|php|ba
 LITERAL_ECHO = re.compile(r"echo((?:\s+-[nE]+)*)\s+'([^']*)'\s*(>>?|>\|)\s*([\w./~+-]+)")
 FALLBACK_REDIRECT = re.compile(r"(?:\d*|&)>>?\|?(.*)\Z", re.S)  # a redirection in text the parser cannot read
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-OWNER_SWITCHES = ("Only the owner switches the harness, by typing /harness off or /harness on; nothing an "
-                  "agent runs, writes or schedules does")
 OWNER_SETTINGS = ("Only the owner changes them: edit the file yourself, or type /allow for this one call "
                   "(/allow <the command> for Bash; /allow Write <path>, or /allow <tool> for Edit, MultiEdit "
                   "or NotebookEdit, for the main agent's call)")
-
-
-def refuse(what: str, owner: str = OWNER_SWITCHES) -> int:
-    sys.stderr.write("BLOCKED: harness-switch: %s. %s.\n" % (what, owner))
-    return 2
 
 
 def _resolve(path: str, cwd: str) -> str:
@@ -525,17 +511,6 @@ def check_skill(tool: str, ti: dict) -> int:
     return 0
 
 
-def check_prompt(tool: str, ti: dict, typed=PROMPT.search) -> int:
-    """Refuse a tool whose input holds, under any key at any depth, a string `typed` matches."""
-    stack = [ti]
-    while stack:
-        value = stack.pop()
-        if isinstance(value, str) and typed(value):
-            return refuse("this %s carries a prompt that types /harness" % tool)
-        stack.extend(value.values() if isinstance(value, dict) else value if isinstance(value, list) else ())
-    return 0
-
-
 def main() -> int:
     try:
         data = json.loads(sys.stdin.read() or "{}")
@@ -552,9 +527,7 @@ def main() -> int:
         return check_write(tool, ti, cwd, data)
     if tool in ("Skill", "SlashCommand"):
         return check_skill(tool, ti)
-    if tool in DISPATCH_TOOLS:
-        return check_prompt(tool, ti, WHOLE.fullmatch)
-    return 0 if tool in harness_switch.NO_PROMPT else check_prompt(tool, ti)
+    return 0  # every other tool is hooks/pretool-harness-switch-prompt.py's
 
 
 if __name__ == "__main__":

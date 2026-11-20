@@ -54,6 +54,10 @@ except Exception:  # not importable this way: the rule then sees every tool and 
 
 from ..harness_vocabulary import WRITE_TOOLS  # noqa: E402
 
+# The tools the switch's guard reads (a command, a written file, the invoked command): every other tool's input
+# is its prompt rule's, which looks for a prompt that types /harness.
+_SWITCH_FILE_TOOLS = WRITE_TOOLS | {"Bash", "Skill", "SlashCommand"}
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -97,14 +101,16 @@ RULES: tuple[Rule, ...] = (
          "both", "open",
          ("the project's .claude/.hook-refactor-allow sentinel, made by hand",
           "/dev-command's dev writing the project command file its cycle develops"), 5.0),
-    # Every tool but the CLI's own that deliver no prompt: one that does is known by its input, not by a name.
-    Rule("harness-switch", "pretool-harness-switch-guard.py", None,
+    Rule("harness-switch", "pretool-harness-switch-guard.py", _SWITCH_FILE_TOOLS,
          "both", "closed",  # an overrun refuses: an agent pads a command past the budget at will
          ("reading the switch's state or settings files",
           "the project's .claude/.hook-refactor-allow sentinel, made by hand, for the home's settings files",
           "an /allow grant for the one call, for a Claude Code settings file's env, hooks or permissions "
           "(a Bash grant naming the command, any actor; a Write or tool grant, main agent)"),
-         5.0, _NO_PROMPT),
+         5.0),
+    # Every other tool but the CLI's own that deliver no prompt: one that does is known by its input, not by a name.
+    Rule("harness-switch-prompt", "pretool-harness-switch-prompt.py", None, "both", "closed",
+         ("none: only the owner switches the harness",), 5.0, _NO_PROMPT | _SWITCH_FILE_TOOLS),
 )
 
 
