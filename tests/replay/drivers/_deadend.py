@@ -15,7 +15,7 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
   do-report-ask   as do-report, and between the refused Stop and the Write the main agent ends twice
                   on a REFUSED: line naming Step 5 with no call a hook refused (neither releases the gate,
                   so both Stops are refused too; nobody is asked since 2026-11-19).
-  step-refused    Step 2's own call is refused by a hook: the turn ends on a REFUSED: line naming Step 2 (the
+  step-refused    Step 2's own call (a dispatch, which /do runs without) is refused by a hook: the turn ends on a REFUSED: line naming Step 2 (the
                   Stop lets it end); a Stop on other text while the step is open is refused; the step goes on.
   do-dispatch     Step 2's work is first handed to a subagent: /do runs without subagents, so the
                   dispatch is refused; the main agent's next action does Step 2 itself.
@@ -185,10 +185,12 @@ class Turn(DoTurn):
         it (played here as the same turn going on: the replay types no prompt, which would end /do's consent)."""
         o = self.o
         step = o.todos[o.current()]["content"]
-        call = o.s.bash("kill -9 999999", label=self.label("Step 2 Bash refused by a hook"))
-        self.note(call)
+        call = o.s.dispatch("general-purpose", "Make toy.add raise TypeError naming a non-number argument.",
+                            description="Change toy.add", label=self.label("Step 2 call refused by a hook"))
+        self.rounds.append({"label": call.label, "blocked": call.blocked,
+                            "hooks": [h["hook"] for h in (call.pre.blocks if call.pre else [])]})
         output = "\n".join(hookrun.refusal(b) for b in (call.pre.blocks if call.pre else []))
-        for lab, text in (("/do Stop on the step's refusal", f"REFUSED: {step}: `kill -9 999999` was refused:\n{output}"),
+        for lab, text in (("/do Stop on the step's refusal", f"REFUSED: {step}: the Agent call was refused:\n{output}"),
                           ("/do Stop with the step open", "Picked Step 2 up again.")):
             ev = o.s.stop(text, label=lab)
             self.rounds.append({"label": lab, "blocked": ev.still_blocked, "hooks": [h["hook"] for h in ev.blocks]})

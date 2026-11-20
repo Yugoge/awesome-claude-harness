@@ -42,7 +42,7 @@ A single `/dev` cycle may carry more than one requirement. The orchestrator fans
 
 ### Step 1: Parse Development Requirement
 
-An empty `$ARGUMENTS` ends the command: say that `/dev` was given no requirement and that `/dev <what to build or fix>` starts a cycle. Nobody is asked.
+An empty `$ARGUMENTS` ends the command with one line `NO_TARGET: /dev was given no requirement; /dev <what to build or fix> starts a cycle`. Nobody is asked; the Stop gate (`no_target_end`) lets a run that dispatched nothing end on it.
 
 **`--codex`.** If `$ARGUMENTS` contains the literal token `--codex`, strip it and set `codex_required = true`, else `false`. When true, every BA, QA and dev dispatch carries the literal line `codex_required: true` (it activates the subagent's codex consultation, `templates/prompt-includes/codex-consultation.md`); when false, omit it. `codex_consult` is the subagent's output: pre-filling it in a prompt silently suppresses the consultation, so never do.
 

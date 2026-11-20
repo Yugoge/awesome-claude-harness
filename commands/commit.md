@@ -115,7 +115,10 @@ found. Act on its JSON answer:
   (Step 6) and names a path, routed as above.
 - `null` for any other path: no dispatch or request exists to re-run. Nobody is asked: end with a
   report naming the task, the artifact and that no dispatch or request owes it, with the requests
-  the task's own artifacts state (its ticket or user-requirement file).
+  the task's own artifacts state (its ticket or user-requirement file), and one line
+  `NO_OWNER: <artifact>` per such artifact, as Step 3's GAP line names it. The Stop gate
+  (`stop-command-gate.py`, `_owed_gap`) owes that gap no more when the reader names no owner for
+  it; every other gap still holds.
 
 There is no default role. Once the dispatch returns, run again the one check that named the path;
 a gap or finding it names again is routed the same way, with no round cap.
