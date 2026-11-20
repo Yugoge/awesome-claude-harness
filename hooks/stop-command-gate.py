@@ -111,7 +111,9 @@ def disposition(root, task: str, stage: str) -> list[str]:
     the one adapter, the chain's own disposition_lines (over P3's
     `disposition(project_root, task_id, stage)`), used verbatim. Its
     instrument failure raises."""
-    return _script("scripts/resolve-dev-artifact-chain.py").disposition_lines(root, task, stage)
+    chain = _script("scripts/resolve-dev-artifact-chain.py")
+    chain.FULL_COMPLETENESS_ON_DEMAND = True  # nothing here reads the informational run unless it can decide
+    return chain.disposition_lines(root, task, stage)
 
 
 # ---------------------------------------------------------------- the text the span loaded (D15)

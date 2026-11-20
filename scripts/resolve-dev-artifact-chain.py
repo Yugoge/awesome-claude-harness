@@ -40,6 +40,8 @@ WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
 # ran and passed.  Consumers must treat this as "unevaluated here", never as a
 # pass.
 NOT_APPLICABLE = "not_applicable"
+# Set by hooks/stop-command-gate.py on its own copy of this module: the full completeness run on demand only.
+FULL_COMPLETENESS_ON_DEMAND = False
 SINGULAR_RELATIONAL_REASON = (
     "relational comparison requiring two or more independent shard artifacts; "
     "a singular chain has no second artifact to compare against, so this check "
@@ -1349,14 +1351,18 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             # call (default `same_cycle_only=False`) keeps running UNCHANGED
             # -- span accounting, the declared-boundary chain, the
             # parent_cycle claimant reader, the anti-absorption rule, all of
-            # it -- and its diagnostics are never discarded: they land in
-            # `result["ownership_completeness_informational"]` as non-
-            # blocking forensic information for a human or a later process,
-            # not as an error any gate reads.
-            completeness_gaps = aggregate._apply_completeness_check(
-                canonical, root, loaded_shards
-            )
-            result["ownership_completeness_informational"] = list(completeness_gaps)
+            # it -- its diagnostics land in `result["ownership_completeness_informational"]`.
+            # The Stop gate (FULL_COMPLETENESS_ON_DEMAND) has no reader of them but the channel
+            # check below, which only a blocking_issues entry of a diagnostic's form can trip:
+            # with none, the full run is skipped and the key is absent (not run, not "no findings").
+            owned = canonical.get("owned_edits")
+            if not FULL_COMPLETENESS_ON_DEMAND or any(aggregate._is_completeness_diagnostic(entry, owned) for entry in (
+                    canonical.get("blocking_issues") if isinstance(canonical.get("blocking_issues"), list) else ())):
+                completeness_gaps = aggregate._apply_completeness_check(canonical, root, loaded_shards)
+                result["ownership_completeness_informational"] = list(completeness_gaps)
+            else:
+                completeness_gaps = []
+                result.pop("ownership_completeness_informational", None)
             same_cycle_completeness_gaps = aggregate._apply_completeness_check(
                 canonical, root, loaded_shards, same_cycle_only=True
             )
