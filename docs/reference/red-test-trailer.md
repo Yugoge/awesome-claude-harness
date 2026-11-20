@@ -1,6 +1,6 @@
 # The `Red-test:` trailer and the red-then-green job
 
-> Last updated: 2026-11-16
+> Last updated: 2026-11-20
 
 A fix is shown by a test that fails before it and passes after it. `scripts/ci/red-green.py` runs that
 check for a base and a head; this page says what it judges and how a change names its evidence.
@@ -22,6 +22,10 @@ check for a base and a head; this page says what it judges and how a change name
 4. It prints a markdown summary with one row per test id that does not pass on both sides, and the count of
    those that do. A test id that fails or errors on red and passes on green is **red then green**. A collection
    error on red counts as red, and is listed apart from a failing assertion so the reviewer can tell them apart.
+
+5. With `--budget SECONDS` (CI passes 2400) the run is bounded and its result is not changed: once some id
+   is red then green, no run goes past the budget, and the summary names each test file or id left unrun.
+   Until some id is red then green every target runs, as without the option.
 
 Exit status: `0` when at least one id goes red then green, when the diff is exempt, or when a
 `Red-test: none: <reason>` trailer is present; `1` otherwise.

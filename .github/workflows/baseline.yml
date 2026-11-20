@@ -626,6 +626,9 @@ jobs:
     runs-on: ubuntu-latest
     # Train A (4d1b5458..87731833, 13 merges, 447 ids red then green) took 25 min on 4 CPUs; still
     # inside the replay shards' critical path (about 58 min), so it adds nothing to the run.
+    # --budget 2400 below: a pull request that changes a tests/replay file (hours when run whole,
+    # twice) never finished inside the limit. Once some id is red then green, which fixes the
+    # job's result, no run goes past minute 40 and the summary names what was left unrun.
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -657,7 +660,7 @@ jobs:
           printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
           echo "merge base: $(git merge-base "$BASE_SHA" "$HEAD_SHA")"
           python3 scripts/ci/red-green.py --base "$BASE_SHA" --head "$HEAD_SHA" \
-            --body-file "$RUNNER_TEMP/pr-body.md" --summary "$GITHUB_STEP_SUMMARY"
+            --body-file "$RUNNER_TEMP/pr-body.md" --summary "$GITHUB_STEP_SUMMARY" --budget 2400
 
   diff-mutate:
     # P15 decision (b), lane L13: diff-scoped mutation (scripts/ci/diff-mutate.py). Mutates only the
