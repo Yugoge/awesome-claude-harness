@@ -1635,6 +1635,63 @@ def test_a_parent_a_hook_refused_and_reported_is_no_longer_owed(env, monkeypatch
     assert (run(env)[0] == 0) is (released or case == "landed-again"), case
 
 
+# ---------------------------------------------------------------- a gated step a hook refuses (2026-11-20)
+HOOK_REFUSED = ('PreToolUse:Agent hook error: [python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-launch.py"]: '
+                "\nOBLIGATION GATE ORDER (pretool-obligation-gate, R17):\n  reason=verdict_not_after_producer_stop")
+
+
+HOOK_DECISION = {"permissionDecision": {"decision": "reject", "source": "hook", "reasonType": "hook",
+                                         "reasonCode": "hook:PreToolUse"}}  # the CLI's record of it (2.1.322)
+
+
+def refused_dispatch(env, role="dev", result=HOOK_REFUSED, by_hook=True):
+    env.tx.tool("Agent", {"subagent_type": role, "description": role, "prompt": "work"}, ok=False, result=result,
+                extra=HOOK_DECISION if by_hook else None)
+
+
+def at_step(env, label="Step 10"):
+    steps = dev_span(env, done=0)
+    k = next(i for i, s in enumerate(steps) if s["content"].startswith(label + ":"))
+    env.tx.todos(steps, k)
+    return steps, k
+
+
+@pytest.mark.parametrize("case", ["released", "no-line", "line-names-another-step", "another-role", "ran-later",
+                                  "not-a-hook", "before-the-step", "said-since"])
+def test_a_dev_step_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(env, case):
+    """The live 2026-11-19 shape (session 9dddc7ae, /dev Step 10): every dev dispatch refused by a hook, no question
+    allowed. The turn ends on a REFUSED: line naming the pending step, when the transcript records a hook's refusal of
+    that step's own dispatch made since it went in progress; every other unfinished case holds as before."""
+    steps, k = at_step(env, "Step 9" if case == "before-the-step" else "Step 10")
+    refused_dispatch(env, "test-writer" if case == "another-role" else "dev", by_hook=case != "not-a-hook")
+    if case == "before-the-step":
+        env.tx.todos(steps, k + 1)  # Step 10 set in progress after the refusal
+    if case == "ran-later":
+        env.tx.dispatch(FAMILY, role="dev")
+    if case != "no-line":
+        label = "Step 11" if case == "line-names-another-step" else "Step 10"
+        env.tx.say(f"REFUSED: {label}: Delegate to dev subagent: the dev dispatch (Agent dev) was refused by "
+                   "pretool-launch.py:\nOBLIGATION GATE ORDER (pretool-obligation-gate, R17)")
+    if case == "said-since":
+        env.tx.say("Still working.")
+    code, text = run(env)
+    if case == "released":
+        assert (code, text) == (0, "")
+        # the step stays open: the next prompt continues the span, and its turn holds until it ends the same way
+        env.tx.say("Picked the step up again.")
+        assert run(env)[0] == 2
+    else:
+        assert code == 2 and "todo: not completed: Step 10" in text, (case, text)
+
+
+def test_a_refused_step_line_releases_no_other_gated_command(env, monkeypatch):
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
+    env.tx.command("close", FAMILY)
+    refused_dispatch(env, "qa")
+    env.tx.say("REFUSED: Step 2: the close QA dispatch was refused by a hook")
+    assert run(env)[0] == 2
+
+
 def test_a8_no_target_names_the_gap(env, monkeypatch):
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
     env.tx.command("close")
