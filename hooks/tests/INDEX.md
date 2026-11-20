@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T02:48:22Z*
-**Total entries**: 291
+*Last updated: 2026-11-20T03:48:38Z*
+**Total entries**: 293
 **Convention**: kebab
 
 ## Tree
@@ -79,6 +79,7 @@ tests/
 ├── `test_commit_event_pointer.py` - The privilege guard spends a grant by deleting it and, in the same step, writes one
 ├── `test_commit_hook_bypass_deny.py` - Three rules, enforced for the main agent and for subagents alike and ahead of the
 ├── `test_commit_journal.py` - attribution basis
+├── `test_config_home.py` - The configuration directory as written, unless its settings.json is a link: then the directory th...
 ├── `test_context_v1_rules.py` - schemas/context.v1.json carries them for G2 at BA's stop (P1b rows 4 and 5)
 ├── `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 ├── `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
@@ -208,6 +209,7 @@ tests/
 ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 ├── `test_push_typed_remote.py` - execute-push.py hands push.sh the resolved remote as its argument. The ahead count is taken against
 ├── `test_qa_report_writes.py` - qa writes report and evidence files under the project's reports/ and tests/reports/ only
+├── `test_question_record.py` - hooks/posttool-close-rating.py runs requirement_round.record_landed after the producer's Write, E...
 ├── `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
 ├── `test_refusal_record.py` - - One refused call, stop or prompt is one line holding every field of the record, each bounded;

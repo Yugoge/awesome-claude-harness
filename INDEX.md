@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T02:48:21Z*
-**Total entries**: 1153
+*Last updated: 2026-11-20T03:48:38Z*
+**Total entries**: 1157
 **Convention**: kebab
 
 ## Tree
@@ -196,6 +196,7 @@ dot-claude/
 │   │   ├── `stop_contract.py` - is a prompt the human typed (TC-4)
 │   │   ├── `subagent.py` - is_subagent(): whether the calling agent is a subagent, the one predicate of that fact (a
 │   │   ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
+│   │   ├── `switch_prompt.py` - A delivered or scheduled prompt reaches UserPromptSubmit as if the owner had typed it, so a promp...
 │   │   └── `todo_canonical.py` - Shared canonical todo validation utilities
 │   ├── tests/
 │   │   ├── fixtures/
@@ -261,6 +262,7 @@ dot-claude/
 │   │   ├── `test_commit_event_pointer.py` - The privilege guard spends a grant by deleting it and, in the same step, writes one
 │   │   ├── `test_commit_hook_bypass_deny.py` - Three rules, enforced for the main agent and for subagents alike and ahead of the
 │   │   ├── `test_commit_journal.py` - attribution basis
+│   │   ├── `test_config_home.py` - The configuration directory as written, unless its settings.json is a link: then the directory th...
 │   │   ├── `test_context_v1_rules.py` - schemas/context.v1.json carries them for G2 at BA's stop (P1b rows 4 and 5)
 │   │   ├── `test_contract_runtime_declared_vocab.py` - schema that declares them (P1b row 19 rule 7): the QA statuses the v1
 │   │   ├── `test_contract_runtime_version_dispatch.py` - hooks/lib/contract_runtime.py (ticket 20260929-104216-a, zero-failure design
@@ -390,6 +392,7 @@ dot-claude/
 │   │   ├── `test_push_sentinel_abort.sh` - Unit test for AC1 V5: hooks/push.sh self-aborts before any real git push
 │   │   ├── `test_push_typed_remote.py` - execute-push.py hands push.sh the resolved remote as its argument. The ahead count is taken against
 │   │   ├── `test_qa_report_writes.py` - qa writes report and evidence files under the project's reports/ and tests/reports/ only
+│   │   ├── `test_question_record.py` - hooks/posttool-close-rating.py runs requirement_round.record_landed after the producer's Write, E...
 │   │   ├── `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 │   │   ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
 │   │   ├── `test_refusal_record.py` - - One refused call, stop or prompt is one line holding every field of the record, each bounded;
@@ -494,7 +497,7 @@ dot-claude/
 │   ├── `permissionrequest-launch.py` - PermissionRequest: answer every permission request by rule (hooks/permissionrequest-answer.py).
 │   ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 │   ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
-│   ├── `posttool-close-rating.py` - A question goes by its source prefix to one handler, an Agent call to the observer; no logic here
+│   ├── `posttool-close-rating.py` - questions a round may ask, and the score log's dispatcher
 │   ├── `posttool-codex-skill-ledger.py` - Fires on every PostToolUse and PostToolUseFailure for the Skill tool. When tool_input.skill == "c...
 │   ├── `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 │   ├── `posttool-dispatch-record.py` - The rules run in this order, each as its own hook would run alone
@@ -535,7 +538,8 @@ dot-claude/
 │   ├── `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 │   ├── `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
 │   ├── `pretool-grep-backtrack-guard.py` - Why
-│   ├── `pretool-harness-switch-guard.py` - The owner's typed /harness off|on reaches hooks/userprompt-harness-switch.sh, a UserPromptSubmit
+│   ├── `pretool-harness-switch-guard.py` - SlashCommand): only the owner switches the harness
+│   ├── `pretool-harness-switch-prompt.py` - Every tool but Bash, the file-writing tools, Skill and SlashCommand (hooks/pretool-harness-switch...
 │   ├── `pretool-launch.py` - Every Python hook registered on PreToolUse runs here, each as `python3 <file>` would have run it
 │   ├── `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 │   ├── `pretool-layer-match-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its

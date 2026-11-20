@@ -4,7 +4,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 122
+- **Total files**: 123
 - **Subdirectories**: 5
 - **Naming convention**: kebab
 
@@ -23,7 +23,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `permissionrequest-launch.py` - PermissionRequest: answer every permission request by rule (hooks/permissionrequest-answer.py).
 - `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 - `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
-- `posttool-close-rating.py` - A question goes by its source prefix to one handler, an Agent call to the observer; no logic here
+- `posttool-close-rating.py` - questions a round may ask, and the score log's dispatcher
 - `posttool-codex-skill-ledger.py` - Fires on every PostToolUse and PostToolUseFailure for the Skill tool. When tool_input.skill == "c...
 - `posttool-command-frontmatter-validate.py` - PostToolUse Hook: Validate .claude/commands/*.md frontmatter structure
 - `posttool-dispatch-record.py` - The rules run in this order, each as its own hook would run alone
@@ -64,7 +64,8 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `pretool-git-privilege-guard.py` - PreToolUse Hook: Agent git-privilege guard
 - `pretool-gitignore-preflight.py` - pretool-gitignore-preflight.py — PreToolUse hook (matcher: Agent)
 - `pretool-grep-backtrack-guard.py` - Why
-- `pretool-harness-switch-guard.py` - The owner's typed /harness off|on reaches hooks/userprompt-harness-switch.sh, a UserPromptSubmit
+- `pretool-harness-switch-guard.py` - SlashCommand): only the owner switches the harness
+- `pretool-harness-switch-prompt.py` - Every tool but Bash, the file-writing tools, Skill and SlashCommand (hooks/pretool-harness-switch...
 - `pretool-launch.py` - Every Python hook registered on PreToolUse runs here, each as `python3 <file>` would have run it
 - `pretool-layer-escalation-check.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its
 - `pretool-layer-match-gate.sh` - STUB: settings.json no longer registers it (P12); hooks/lib/dev_loop_checks.py advice() gives its

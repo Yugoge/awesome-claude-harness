@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 75
+- **Total files**: 76
 - **Subdirectories**: 2
 - **Naming convention**: lower
 
@@ -79,6 +79,7 @@
 - `stop_contract.py` - is a prompt the human typed (TC-4)
 - `subagent.py` - is_subagent(): whether the calling agent is a subagent, the one predicate of that fact (a
 - `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
+- `switch_prompt.py` - A delivered or scheduled prompt reaches UserPromptSubmit as if the owner had typed it, so a promp...
 - `todo_canonical.py` - Shared canonical todo validation utilities
 
 ## Subdirectories
