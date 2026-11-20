@@ -2370,19 +2370,29 @@ class Analyzer:
 
     @staticmethod
     def _removal_targets(base, args):
-        """The files a `rm` or `unlink` run as the command's own head names, when every one is
-        written out in the command; None when any word is computed, a pattern or `~`-led, when it
-        names none, or for a program whose operands are not read here (shred, srm). Neither
-        program has an option that takes a separate value, so a word is an operand unless it is an
-        option before `--`."""
+        """The files a `rm` or `unlink` run as the command's own head names: each operand written
+        out, or, for an operand that expands a variable, its offset, which analyze() resolves to the
+        value the command gave that variable earlier (shell_parse.write_targets, the parser's one
+        assignment tracking). None when an operand is a pattern or `~`-led, may be an option, when it
+        names none, or for a program whose operands are not read here (shred, srm). Neither program
+        has an option that takes a separate value, so a word is an operand unless it is an option
+        before `--`."""
         if base != "rm" and base != "unlink":
             return None
         lits = [a.literal() for a in args]
-        if None in lits:
-            return None
         end = lits.index("--") if "--" in lits else len(lits)
-        targets = [x for x in lits[:end] if x == "-" or not x.startswith("-")] + lits[end + 1:]
-        return targets if targets and not any(not x or x.startswith("~") for x in targets) else None
+        targets = []
+        for k, (a, x) in enumerate(zip(args, lits)):
+            if k == end:
+                continue
+            if x is None:
+                if k < end and _static_prefix(a).startswith("-"):
+                    return None  # may be an option
+                targets.append(a.raw.off(0))
+            elif k > end or x == "-" or not x.startswith("-"):
+                targets.append(x)
+        return targets if targets and not any(isinstance(x, str) and (not x or x.startswith("~"))
+                                              for x in targets) else None
 
     # -- declared-inert argv consumers: POSITION, not membership -------------
 
@@ -3909,9 +3919,28 @@ def analyze(raw):
     if verdict == FORBIDDEN_REMOVAL and not az.overflow and not az.git_rm and None not in az.removals \
             and all(b["verdict"] in _TERMINAL_SAFE or b["reason"] == "filesystem_removal" for b in az.boundaries) \
             and sum(b["reason"] == "filesystem_removal" for b in az.boundaries) == len(az.removals):
-        result["removal_targets"] = {"targets": [t for ts in az.removals for t in ts],
-                                     "cwds": None if az.cwd_unknown else az.git_rm_cwds}
+        targets = _known_removal_targets(raw, [t for ts in az.removals for t in ts])
+        if targets is not None:
+            result["removal_targets"] = {"targets": targets, "cwds": None if az.cwd_unknown else az.git_rm_cwds}
     return result
+
+
+def _known_removal_targets(raw, targets):
+    """Each operand offset in ``targets`` replaced by the file it names, from the parser's one
+    assignment tracking (shell_parse.write_targets): known only when the variable holds a literal
+    assigned earlier in the same command, surely run and not changed in between (a value from the
+    environment, a substitution, a branch or loop, `read`, `+=` or a pattern is not known). None
+    when any is not known."""
+    if all(isinstance(t, str) for t in targets):
+        return targets
+    from shell_parse import write_targets
+    try:
+        known = {t.word.span[0]: t.path for t in write_targets(raw) if t.mechanism in ("rm", "unlink")
+                 and t.decidable and t.path and t.word is not None}
+    except Exception:  # noqa: BLE001 - a reading that fails knows nothing
+        return None
+    out = [t if isinstance(t, str) else known.get(t) for t in targets]
+    return None if any(t is None or t.startswith("~") or any(c in t for c in "*?[") for t in out) else out
 
 
 def prove_git_rm(result, cwd, home):
