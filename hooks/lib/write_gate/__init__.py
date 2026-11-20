@@ -110,7 +110,7 @@ RULES: tuple[Rule, ...] = (
          5.0),
     # Every other tool but the CLI's own that deliver no prompt: one that does is known by its input, not by a name.
     Rule("harness-switch-prompt", "pretool-harness-switch-prompt.py", None, "both", "closed",
-         ("none: only the owner switches the harness",), 5.0, _NO_PROMPT | _SWITCH_FILE_TOOLS),
+         ("none: only the owner switches the harness",), 2.0, _NO_PROMPT | _SWITCH_FILE_TOOLS),
 )
 
 
