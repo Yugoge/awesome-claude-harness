@@ -49,7 +49,8 @@ through the one adapter `disposition`), the do-report's one reading
 dev-lifecycle's --auto target function, the merge-analyst's and push-analyst's
 grants (hooks/lib/merge_grant.py) and the push-gate token's path
 (scripts/write-push-gate-token.py). No target comes from a dispatch prompt or a
-tool result. The gate writes nothing but its own output (stdout:
+tool result. The gate writes nothing but its own output and /close's probe of docs/dev, one byte to an
+unnamed temporary file it drops at once (environment_refusal) (stdout:
 the terminal time-lock status of an allowed Stop, see main), keeps no count
 and has no release but the work itself: the next compliant step clears each
 gap. The human's /stop opens a span that is not gated, and nothing here
@@ -57,6 +58,7 @@ offers a stop.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.util
 import json
@@ -65,6 +67,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -387,11 +390,11 @@ STEP_REFUSED_LINE = re.compile(r"^REFUSED: (Step [0-9][0-9A-Za-z.]*)\b", re.M)  
 
 
 def refused_step(span) -> str | None:
-    """/dev, /redev, /dev-command, /do: the pending step (the first not completed), when it was set in progress and a
+    """/dev, /redev, /dev-command, /do, /close: the pending step (the first not completed), when it was set in progress and a
     hook then refused its own call (command_span.refused_calls: a dispatch of its subagent_call's role with none of
     that role after it, or, with no role, the last call but TodoWrite and AskUserQuestion); else None."""
     step = next((t for t in span.last_todos() or () if t.get("status") != "completed"), {})
-    if span.command not in ("dev", "redev", "dev-command", "do") or not step.get("content"):
+    if span.command not in ("dev", "redev", "dev-command", "do", "close") or not step.get("content"):
         return None
     denied = command_span.refused_calls(span.transcript_path)
     if not denied:  # no refusal on record: no walk
@@ -535,7 +538,9 @@ def p_close(span, root, payload) -> list[str]:
     asks = not _loaded_lacks(span)(re.escape(RATING_SOURCE))
     names, gaps = _cycle_names(span), []
     owed = _owed_gap(span, root)
-    for task in targets:
+    refused = hook_refused_parents(span)[0] if "--auto" in span.args.split() else set()
+    family = importlib.import_module("lib.obligation").task_family
+    for task in (t for t in targets if family(t) not in refused):  # a parent a hook refused, reported
         gaps += [g for name in _names(names, task) for g in disposition(root, name, "close") if owed(name, g)]
         if asks and close_rating.rating_required(span, task) and not close_rating.rating_asked(
                 span.transcript_path, task):
@@ -571,6 +576,37 @@ def no_owner_end(span, root) -> bool:
     owed, names = _owed_gap(span, root), _cycle_names(span)
     lines = [(name, g) for task in targets or () for name in _names(names, task) for g in disposition(root, name, span.command)]
     return not unresolved and bool(lines) and not any(owed(name, g) for name, g in lines)
+
+
+# close.md Round-open: a cause in the environment that persists. The gate's own attempt is the fact, never a line.
+ENV_ERRNOS = (errno.ENOSPC, errno.EDQUOT, errno.EROFS, errno.EACCES, errno.EPERM)
+ENV_LINE = re.compile(r"^ENVIRONMENT: (E[A-Z]+) (/\S+)", re.M)
+
+
+def environment_refusal(span, root) -> str | None:
+    """/close: the line "ENVIRONMENT: <code> <directory>" when the gate's own attempt at what a close round needs,
+    one byte written and synced to an unnamed temporary file in the project's docs/dev (the close report's
+    directory; tempfile.TemporaryFile, which leaves no name and is gone on close), fails with the operating system's
+    no-space, quota, read-only or permission error; else None (it succeeded, or failed otherwise)."""
+    folder = os.path.join(root, "docs", "dev")
+    if span.command != "close":
+        return None
+    try:
+        with tempfile.TemporaryFile(dir=folder) as fh:
+            fh.write(b"x")
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as exc:
+        return f"ENVIRONMENT: {errno.errorcode[exc.errno]} {folder}" if exc.errno in ENV_ERRNOS else None
+    return None
+
+
+def environment_end(span, line: str | None) -> bool:
+    """The last text holds the gate's own ENVIRONMENT: line (the same code and directory): the run ends there and
+    the cycle stays unfinished; the next round follows once the cause is gone."""
+    found, own = ENV_LINE.search(span.last_text() or ""), ENV_LINE.match(line or "")
+    return bool(found and own) and found.group(1) == own.group(1) and \
+        os.path.realpath(found.group(2)) == os.path.realpath(own.group(2))
 
 
 # close.md Step 0: a disposition call that exits non-zero runs once more; failing again, the run ends with one
@@ -716,6 +752,23 @@ def hook_refused_tasks(span) -> set:
     return {t for t, block in last.items() if t in named and (block or {}).get("failure_code") == "hook_blocked"}
 
 
+def hook_refused_parents(span) -> tuple:
+    """close.md --auto and commit.md Step 7, a hook rejection: (named, unnamed) parents whose last dispatch (an Agent or Task call whose
+    obligation names the parent's task) a hook refused (command_span.refused_calls), as their task families; named
+    when a REFUSED: line of the span's text names the parent (`... for task <id>`). A named parent's close is no
+    longer owed by the batch; the other parents' results stand."""
+    ob = importlib.import_module("lib.obligation")
+    denied = command_span.refused_calls(span.transcript_path)
+    last = {}
+    for call in span.iter_calls("Agent", "Task") if denied else ():
+        found = ob.parse_obligation(call.input.get("prompt"))
+        if isinstance(found, ob.ParsedObligation):
+            last[ob.task_family(ob.canonical_task_id(found.obligation.get("task_id")))] = call.id in denied
+    said = {ob.task_family(ob.canonical_task_id(t)) for t in REFUSED_LINE.findall("\n".join(span.texts()))}
+    refused = {t for t, was in last.items() if was and t}
+    return refused & said, refused - said
+
+
 def p_commit(span, root, payload) -> list[str]:
     """/commit: --stage commit per target (a Task-id commit reachable from
     HEAD in each plan repository; under its cycle's own name, _cycle_names),
@@ -737,10 +790,13 @@ def p_commit(span, root, payload) -> list[str]:
         return unresolved
     if targets is None:
         return ["commit: no target task resolved"]
-    refused = hook_refused_tasks(span)  # Step 7: reported as refused, nobody asked; the other targets still land
+    # Step 7: reported as refused, nobody asked; the other targets still land. Also a task whose own last dispatch a
+    # hook refused (no analyst ran, so no status block), named on its REFUSED: line.
+    refused = hook_refused_tasks(span) | hook_refused_parents(span)[0]
     canon, names = importlib.import_module("lib.obligation").canonical_task_id, _cycle_names(span)
     owed = _owed_gap(span, root)  # Routes: an artifact nobody owes, reported on its NO_OWNER: line
-    return [g for task in targets if canon(task) not in refused
+    family = importlib.import_module("lib.obligation").task_family
+    return [g for task in targets if not {canon(task), family(canon(task))} & refused
             for name in _names(names, task) for g in disposition(root, name, "commit") if owed(name, g)]
 
 
@@ -1258,12 +1314,59 @@ def _mode(argv) -> str:
     return "block"
 
 
-def _block_text(command: str, gaps: list[str]) -> str:
+BLOCK_BOUND = 8000  # characters; no cap was seen in the CLI's delivery (14 kB Stop, 38 kB refusals arrived whole)
+_GAP_KIND = re.compile(r"^GAP artifact=\S* problem=([A-Z_]+)\b.* lane=(\S+)$")
+
+
+def gaps_file(session) -> str:
+    """The full gap list of the session's last over-bound block (harness_temp_state: stop-gaps)."""
+    return os.path.join(importlib.import_module("lib.locations").state_root(),
+                        "claude-stop-gaps-%s.txt" % re.sub(r"[^A-Za-z0-9_.-]", "_", str(session or "unknown"))[:120])
+
+
+def _block_text(command: str, gaps: list[str], hint: str = "", session=None) -> str:
+    """Today's text when it fits BLOCK_BOUND. Else: the lines that are not GAP lines (the todo lines) and the
+    hint, then the GAP lines counted by (problem, lane) with samples while room is left, then the file that
+    holds every line (rewritten here)."""
     finish = ("Decide each open question yourself (an experiment, else the default) and record the decision."
               if command == "dev-overnight" else
               "What a rule refuses is reported as refused, with the hook's output; nobody is asked about it.")
-    return (f"COMMAND_GATE /{command}: not complete\n" + "".join(f"- {gap}\n" for gap in gaps)
-            + f"Finish the gaps above. {finish}\n")
+    head, tail = f"COMMAND_GATE /{command}: not complete\n", f"Finish the gaps above. {finish}\n"
+    listing = "".join(f"- {gap}\n" for gap in gaps)
+    if len(head) + len(listing) + len(tail) + len(hint) <= BLOCK_BOUND:
+        return head + listing + tail + hint
+    path, groups, other = gaps_file(session), {}, []
+    for gap in gaps:
+        kind = _GAP_KIND.match(gap)
+        (groups.setdefault(kind.groups(), []) if kind else other).append(gap)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".tmp", "w", encoding="utf-8") as handle:
+            handle.write(head + listing)
+        os.replace(path + ".tmp", path)
+        where = f"All {len(gaps)} lines, one per line: {path} (read it in slices of a few hundred lines).\n"
+    except OSError as exc:
+        where = f"The full list of {len(gaps)} lines could not be written to {path}: {exc}\n"
+    room = BLOCK_BOUND - len(head) - len(tail) - len(where) - 200
+    out = [head]
+    for n, line in enumerate(other):  # the non-GAP lines keep at most half the room
+        if sum(map(len, out)) + len(line) > room // 2:
+            out.append(f"- ... {len(other) - n} more lines: see the file\n")
+            break
+        out.append(f"- {line[:400]}\n")
+    out.append(hint)
+    order = sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
+    counts = [f"- {len(lines)} x problem={kind} lane={lane}\n" for (kind, lane), lines in order]
+    out.append(f"{sum(map(len, groups.values()))} GAP lines in {len(groups)} groups (problem, lane):\n")
+    room -= sum(map(len, out))
+    for count, (_key, lines) in zip(counts, order):
+        sample = f"    e.g. {lines[0][:300]}\n"
+        if room < len(count):
+            out.append(f"- ... {len(order) - counts.index(count)} more groups: see the file\n")
+            break
+        out.append(count + (sample if room >= len(count) + len(sample) else ""))
+        room -= len(out[-1])
+    return "".join(out) + where + tail
 
 
 def decide(payload: dict, mode: str = "block") -> tuple[int, str]:
@@ -1296,10 +1399,12 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if not gated and not asking:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
-    refused = None
+    refused = env = None
     try:
         refused = refused_step(span) if gated else None  # one walk: the release below and the block's exit line
-        if gated and (no_target_end(span, root) or step_refused_end(span, refused) or no_owner_end(span, root)):
+        env = environment_refusal(span, root) if gated else None  # the gate's own attempt, read once
+        if gated and (no_target_end(span, root) or step_refused_end(span, refused) or no_owner_end(span, root)
+                      or environment_end(span, env)):
             return 0, "", terminal
     except Exception:  # an unread record releases nothing: the gaps below decide
         pass
@@ -1316,12 +1421,25 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
         return 0, "", terminal
     if not gaps:  # (7)
         return 0, "", terminal
-    text = _block_text(span.command, gaps) + (f"A hook refused this step's own call. To end the turn, write the line "
-                                              f"\"REFUSED: {refused}\", then the hook's own output; the step stays "
-                                              "open and the next prompt resumes it.\n" if refused else "")
+    text = _block_text(span.command, gaps, _exit_hint(span, refused, env), payload.get("session_id"))
     if mode == "advisory":
         return 0, "would block\n" + text, terminal
     return 2, text, None
+
+
+def _exit_hint(span, refused, env) -> str:
+    """What the block adds where an exit holds but its line is not yet written: the exact line, filled in."""
+    hint = (f"A hook refused this step's own call. To end the turn, write the line \"REFUSED: {refused}\", then the "
+            "hook's own output; the step stays open and the next prompt resumes it.\n" if refused else "")
+    hint += (f"The gate's own write to the close report's directory failed. To end the turn, write the line "
+             f"\"{env}\"; the cycle stays open and the next round follows once the cause is gone.\n" if env else "")
+    try:
+        unnamed = hook_refused_parents(span)[1] if span.command == "close" and "--auto" in span.args.split() else ()
+    except Exception:  # an unread record adds no hint
+        unnamed = ()
+    return hint + "".join(f"A hook refused the last dispatch for parent {task}. To end its part of the batch, write the "
+                          f"line \"REFUSED: <hook> refused <the call> for task {task}\", then the hook's own output; the "
+                          "other parents' results stand.\n" for task in sorted(unnamed))
 
 
 def main(argv=None) -> int:

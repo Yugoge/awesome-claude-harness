@@ -578,7 +578,9 @@ own lifecycle (absent, past `expires_at`, or spent by an earlier attempt;
 hook refusing an operation. The Retryable rule above takes a fresh grant for them and asks
 nothing, and after a landing the Non-retryable rule routes them. For a hook rejection, print one
 line `REFUSED: <hook> refused <the operation> for task <TASK_ID>` and the hook's output verbatim,
-with the remedy the hook names or the `/allow` line that would let it through, and end: the commit
+with the remedy the hook names or the `/allow` line that would let it through, and end (the same
+line ends the run when a hook refused the task's own dispatch itself, so that no analyst ran;
+`hook_refused_parents` reads that refusal from the transcript): the commit
 is not retried, and the Stop gate (`stop-command-gate.py`, `hook_refused_tasks`) owes that
 task's landing no more once that line names it. The operation runs again only on
 the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses; no agent asks for one.

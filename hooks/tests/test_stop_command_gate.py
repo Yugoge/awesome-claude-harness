@@ -16,6 +16,7 @@ Run with: python3 -m pytest hooks/tests/test_stop_command_gate.py -q
 from __future__ import annotations
 
 import ast
+import errno
 import hashlib
 import importlib.util
 import json
@@ -486,9 +487,16 @@ def test_a2_no_api_error_or_interrupt_reading():
 def test_a2_no_bound_counter_release_token_or_write():
     source = (HOOKS / "stop-command-gate.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    calls = {getattr(n.func, "attr", getattr(n.func, "id", "")) for n in ast.walk(tree) if isinstance(n, ast.Call)}
-    assert not calls & {"write_text", "write_bytes", "unlink", "remove", "rename", "replace", "mkdir", "touch",
-                        "open", "makedirs", "rmtree"}
+    name = lambda n: getattr(n.func, "attr", getattr(n.func, "id", ""))  # noqa: E731
+    block = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_block_text")
+    inside = {id(n) for n in ast.walk(block)}
+    calls = {name(n) for n in ast.walk(tree) if isinstance(n, ast.Call) and id(n) not in inside}
+    writes = {"write_text", "write_bytes", "unlink", "remove", "rename", "replace", "mkdir", "touch", "open",
+              "makedirs", "rmtree"}
+    assert not calls & writes
+    # the one write: an over-bound block's full gap list, for the agent to read; nothing in the gate reads it
+    assert {name(n) for n in ast.walk(block) if isinstance(n, ast.Call)} & writes == {"open", "makedirs", "replace"}
+    assert source.count("gaps_file(") == 2  # its definition and _block_text's one call
     for word in ("stop_hook_active", "AWAITING_INPUT", "is_pause", "settings.machine", "private-literal",
                  "claude-do-task-", "terminal_status\")", "derive_state"):
         assert word not in source, word
@@ -1769,7 +1777,7 @@ def test_where_no_step_call_was_refused_the_block_text_is_unchanged(env, case):
     assert code == 2 and text == gate._block_text("dev", gaps) and "REFUSED" not in text, (case, text)
 
 
-@pytest.mark.parametrize("command", ["dev", "redev", "dev-command", "do"])
+@pytest.mark.parametrize("command", ["dev", "redev", "dev-command", "do", "close"])
 def test_the_exit_line_the_block_prints_is_the_one_the_gate_accepts_for_every_step(command):
     """(c) Every step name the todo scripts give: the printed line is one STEP_REFUSED_LINE reads as that step."""
     tc = importlib.import_module("lib.todo_canonical")
@@ -1778,6 +1786,146 @@ def test_the_exit_line_the_block_prints_is_the_one_the_gate_accepts_for_every_st
     for content in steps:
         found = gate.STEP_REFUSED_LINE.search(f"REFUSED: {content}")
         assert found and found.group(1) == content.split(":", 1)[0], content
+
+
+# ---------------------------------------------------------------- /close: the environment and --auto's refused parent
+def close_open(env, monkeypatch, args=FAMILY):
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    task_file(env)
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    env.tx.command("close", args)
+    env.tx.todos(canonical("close", args), 2)
+
+
+def failing_probe(monkeypatch, code):
+    def refuse(*a, **k):
+        raise OSError(code, os.strerror(code))
+    monkeypatch.setattr(gate.tempfile, "TemporaryFile", refuse)
+
+
+@pytest.mark.parametrize("case", ["released", "claim-only", "other-code", "other-errno", "no-line"])
+def test_close_ends_on_the_environment_line_only_when_the_gates_own_write_fails(env, monkeypatch, case):
+    """close.md Round-open: the gate's own one-byte write to docs/dev is the fact. It fails with ENOSPC: the block
+    names the line and the Stop passes on it. The agent's line while the gate's write succeeds, a line with another
+    code, a failure the rule does not name (ENOENT), or no line: held as before."""
+    close_open(env, monkeypatch)
+    folder = str(env.project / "docs" / "dev")
+    if case != "claim-only":
+        failing_probe(monkeypatch, errno.ENOENT if case == "other-errno" else errno.ENOSPC)
+    code, text = run(env)
+    line = f"ENVIRONMENT: ENOSPC {folder}"
+    assert code == 2 and (f'write the line "{line}"' in text) is (case not in ("claim-only", "other-errno")), text
+    if case != "no-line":
+        env.tx.say("No space left on the device holding docs/dev; free space, then /close again.\n"
+                   + (f"ENVIRONMENT: EROFS {folder}" if case == "other-code" else line))
+    assert (run(env) == (0, "")) is (case == "released"), case
+
+
+def test_close_environment_exit_on_a_real_unwritable_directory(env, monkeypatch):
+    """The same without a stand-in: docs/dev made unwritable for real. A non-root user: mode 0555 (EACCES). Root,
+    which mode bits do not stop: a read-only tmpfs over docs/dev, only inside a private mount namespace
+    (ns-pytest.sh), never on the host's own."""
+    folder = env.project / "docs" / "dev"
+    close_open(env, monkeypatch)  # the cycle's own files first, then the directory made unwritable
+    mounted = False
+    if os.geteuid() != 0:
+        folder.chmod(0o555)
+        want = "EACCES"
+    else:
+        if os.readlink("/proc/self/ns/mnt") == os.readlink("/proc/1/ns/mnt"):
+            pytest.skip("root outside a private mount namespace: no read-only mount is made here")
+        subprocess.run(["mount", "-t", "tmpfs", "-o", "ro,size=64k", "none", str(folder)], check=True)
+        mounted, want = True, "EROFS"
+    try:
+        assert run(env)[0] == 2
+        env.tx.say(f"ENVIRONMENT: {want} {folder}")
+        assert run(env) == (0, "")
+    finally:
+        if mounted:
+            subprocess.run(["umount", str(folder)], check=True)
+        else:
+            folder.chmod(0o755)
+
+
+def refused_parent_dispatch(env, task, role="qa"):
+    doc = {"task_id": task, "lane": None, "lane_set": None, "role": role, "pipeline": "close", "profile": "singular",
+           "dispatched_at": "2026-11-01T09:00:00Z", "artifacts": [{"kind": "json", "path": f"docs/dev/qa-report-{task}.json",
+                                                                 "schema": "qa-report.v2", "identity": {"task_id": task}}]}
+    env.tx.tool("Agent", {"subagent_type": role, "description": role,
+                          "prompt": f'<obligation v="1">{json.dumps(doc)}</obligation>\nwork'},
+                ok=False, result=HOOK_REFUSED, extra=HOOK_DECISION)
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "refused-not-named", "ran-later", "plain-close"])
+def test_close_auto_ends_when_each_parent_it_could_not_close_is_refused_and_named(env, monkeypatch, case):
+    """close.md --auto: a parent whose last dispatch a hook refused, named on a REFUSED: line, is owed no more; the
+    other parent's landing stands. A parent named with no refusal on record, refused but not named (the block names
+    the line), refused then dispatched again, or a plain /close: held."""
+    auto = case != "plain-close"
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py",
+                        types.SimpleNamespace(auto_targets=lambda root, action, cutoff: [FAMILY, OTHER]))
+    task_file(env)
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    args = "--auto" if auto else FAMILY
+    env.tx.command("close", args)
+    env.tx.todos(canonical("close", args), len(canonical("close", args)))
+    if case == "named-not-refused":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    else:
+        refused_parent_dispatch(env, FAMILY)
+    if case == "ran-later":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    env.tx.dispatch(OTHER, role="qa", pipeline="close")
+    if case != "refused-not-named":
+        env.tx.say(f"REFUSED: pretool-launch.py refused the close QA dispatch for task {FAMILY}\nOBLIGATION GATE ORDER")
+    code, text = run(env)
+    if case == "released":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and f"close-report-{FAMILY}.md" in text, (case, text)
+        hinted = f'"REFUSED: <hook> refused <the call> for task {FAMILY}"' in text
+        assert hinted is (case == "refused-not-named"), (case, text)
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "ran-later"])
+def test_a_plain_close_step_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(env, monkeypatch, case):
+    """Ruling 2026-11-20: /close gets /dev's exit. Step 2's QA dispatch refused by a hook and the step named on the
+    REFUSED: line: released, the step still open. Named with no refusal on record, or refused then run again: held."""
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    task_file(env)
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    steps = canonical("close", FAMILY)
+    env.tx.command("close", FAMILY)
+    k = next(i for i, t in enumerate(steps) if t["content"].startswith("Step 2:"))
+    env.tx.todos(steps, k)
+    if case == "named-not-refused":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    else:
+        refused_dispatch(env, "qa")
+    if case == "ran-later":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    code, text = run(env)
+    assert code == 2 and (f'"REFUSED: {steps[k]["content"]}"' in text) is (case == "released"), (case, text)
+    env.tx.say(f"REFUSED: {steps[k]['content']}: the close QA dispatch was refused\nOBLIGATION GATE ORDER")
+    assert (run(env) == (0, "")) is (case == "released"), case
+    assert command_span.active_span(env.tx.path).last_todos()[k]["status"] == "in_progress"
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "refused-not-named"])
+def test_a_commit_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(env, case):
+    """commit.md Step 7: a task whose own dispatch a hook refused (no analyst ran, so no status block), named on a
+    REFUSED: line, is owed no more; named with no refusal, or refused and not named: held."""
+    task_file(env)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    env.tx.command("commit", FAMILY)
+    if case == "named-not-refused":
+        env.tx.dispatch(FAMILY, role="changelog-analyst", pipeline="commit", profile="commit-landing")
+    else:
+        refused_parent_dispatch(env, FAMILY, role="changelog-analyst")
+    if case != "refused-not-named":
+        env.tx.say(f"REFUSED: pretool-launch.py refused the changelog-analyst dispatch for task {FAMILY}")
+    assert (run(env)[0] == 0) is (case == "released"), case
 
 
 def test_a_refused_step_line_releases_no_other_gated_command(env, monkeypatch):
