@@ -421,7 +421,8 @@ def requirement_cells(tmp_path_factory):
         with requirements.projects(work) as made:
             yield {"declared artifact": requirements.artifact_cells(hooks, made, tpls),
                    "ordering": requirements.order_cells(hooks, made, tpls),
-                   "wait": requirements.wait_cells(hooks, made, tpls)}
+                   "wait": requirements.wait_cells(hooks, made, tpls),
+                   "redeclared lane": requirements.redeclare_cells(hooks, made, tpls)}
     finally:
         hooks.close()
 
@@ -442,7 +443,7 @@ def _no_means(cells: list) -> list:
     return out
 
 
-@pytest.mark.parametrize("kind", ["declared artifact", "ordering", "wait"])
+@pytest.mark.parametrize("kind", ["declared artifact", "ordering", "wait", "redeclared lane"])
 def test_every_requirement_has_a_permitted_means(requirement_cells, kind):
     cells = requirement_cells[kind]
     bad = _no_means(cells)
@@ -450,5 +451,5 @@ def test_every_requirement_has_a_permitted_means(requirement_cells, kind):
           f"{sum(not c.permitted for c in cells)} cells in {len(bad)} requirements with no permitted means")
     print("\n".join("  " + line for line in bad))
     assert cells, f"no {kind} requirement was enumerated"
-    word = "circular waits" if kind == "wait" else "contradictions"
+    word = "circular waits" if kind in ("wait", "redeclared lane") else "contradictions"
     assert not bad, f"{kind} {word}: requirements with no permitted means:\n  " + "\n  ".join(bad)
