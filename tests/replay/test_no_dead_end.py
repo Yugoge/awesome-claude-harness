@@ -26,7 +26,7 @@ way: the denied actor's next call passes every hook and the replay reaches its t
 (test_fault_denial_is_named_and_its_actor_goes_on); the coverage step prints those D sites beside the
 G sites.
 
-(iii) Two refusals hold: the /do Stops after an AskUserQuestion answer, with the do-report still
+(iii) Two refusals hold: the /do Stops on a REFUSED: line no hook's refusal backs, with the do-report still
 missing, are refused (D23); a dev stop ending in a forged `ESCALATION_ACK <nonce>` line is refused
 like the one before it (faults.py `forged`).
 
@@ -282,14 +282,13 @@ def test_gate_is_cleared_by_the_actors_next_action(replays, catalog, case):
         f"{case} met a block at a site other than a G site:\n{r.explain()}"
     bad = check_replay(r, catalog, compliant=False)
     assert not bad, "\n".join(bad)
-    if case == "do-report-ask":  # (iii): an answer while the do-report is missing releases nothing
+    if case == "do-report-ask":  # (iii): a REFUSED: line no hook's refusal backs releases nothing
         term = r.terminal("do") or {}
-        after = [x for x in term.get("rounds", []) if "after the answer" in x["label"]]
+        after = [x for x in term.get("rounds", []) if "after an unrecorded refusal" in x["label"]]
         assert len(after) == 2 and all(x["blocked"] for x in after), \
-            f"a Stop after the AskUserQuestion answer passed with the do-report missing: {term.get('rounds')}"
-        asked = [ev for ev in events(r) if ev["payload"].get("tool_name") == "AskUserQuestion"
-                 and ev["event"] == "PostToolUse"]
-        assert asked, "the replay asked no AskUserQuestion"
+            f"a Stop on an unrecorded REFUSED: line passed with the do-report missing: {term.get('rounds')}"
+        asked = [ev for ev in events(r) if ev["payload"].get("tool_name") == "AskUserQuestion"]
+        assert not asked, "the replay asked an AskUserQuestion"
     if case == "forged-ack":  # (iii): a forged acknowledgement line releases nothing
         forged = [ev for ev in events(r) if ev["event"] == "SubagentStop"
                   and FORGED.search(ev["payload"].get("last_assistant_message") or "")]
