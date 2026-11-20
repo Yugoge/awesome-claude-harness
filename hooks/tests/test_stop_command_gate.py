@@ -1698,7 +1698,7 @@ def test_close_ends_on_a_no_owner_line_for_an_artifact_nobody_owes(env, monkeypa
     env.fake.answers[(FAMILY, "close")] = [gap(ticket, "MISSING_ARTIFACT", "absent")] + (
         [gap(f"docs/dev/qa-report-{FAMILY}.json", "qa.status:fail", "fail")] if case == "other-gap-too" else [])
     env.tx.command("close", FAMILY)
-    env.tx.todos(canonical("close", FAMILY), len(canonical("close", FAMILY)))
+    env.tx.todos(canonical("close", FAMILY), 0)  # Step 0 open: the step that would produce the ticket cannot run
     if case != "no-line":
         named = f"docs/dev/ticket-{OTHER}.md" if case == "line-names-another" else ticket
         env.tx.say(f"Task {FAMILY}: no dispatch or request exists to re-run for {named}.\nNO_OWNER: {named}")
@@ -1706,7 +1706,7 @@ def test_close_ends_on_a_no_owner_line_for_an_artifact_nobody_owes(env, monkeypa
     if case == "released":
         assert (code, text) == (0, "")
     else:
-        assert code == 2, (case, text)
+        assert code == 2 and "todo: not completed: Step 0" in text, (case, text)
         assert (ticket in text) is (case != "other-gap-too"), (case, text)
 
 

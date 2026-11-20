@@ -556,6 +556,17 @@ def _owed_gap(span, root):
     return owed
 
 
+def no_owner_end(span, root) -> bool:
+    """A /close or /commit whose every open gap is an artifact nobody owes, reported (_owed_gap), ends there: the
+    step that would produce it cannot run, so its checklist stays open and nothing marks it done."""
+    if span.command not in ("close", "commit") or not NO_OWNER_LINE.search(span.last_text() or ""):
+        return False
+    targets, unresolved = _targets(span, root, span.command)
+    owed, names = _owed_gap(span, root), _cycle_names(span)
+    lines = [(name, g) for task in targets or () for name in _names(names, task) for g in disposition(root, name, span.command)]
+    return not unresolved and bool(lines) and not any(owed(name, g) for name, g in lines)
+
+
 # close.md Step 0: a disposition call that exits non-zero runs once more; failing again, the run ends with one
 # OPERATION_STALLED: line and nothing else follows.
 STALL_CALL = ("resolve-dev-artifact-chain.py", "--disposition")
@@ -1280,7 +1291,7 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
     try:
-        if gated and (no_target_end(span, root) or step_refused_end(span)):  # nothing bound, nothing run: the NO_TARGET: line ends it
+        if gated and (no_target_end(span, root) or step_refused_end(span) or no_owner_end(span, root)):  # nothing bound, nothing run: the NO_TARGET: line ends it
             return 0, "", terminal
     except Exception:  # an unread record releases nothing: the gaps below decide
         pass
