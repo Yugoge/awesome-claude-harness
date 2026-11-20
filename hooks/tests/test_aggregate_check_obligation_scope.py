@@ -128,6 +128,29 @@ def test_an_obligation_naming_no_task_scopes_to_no_family(dev_dir, mode):
     assert (result.returncode, result.stderr) == (0, "")
 
 
+def _ba_qa(task_id, lane, lane_set):
+    """A re-declared lane's BA-QA (/dev's ba_validation QA): its verdict, a ba-qa-report.v1, precedes the lane's dev."""
+    doc = {"task_id": f"{task_id}-{lane}", "lane": lane, "lane_set": lane_set, "role": "qa", "pipeline": "dev",
+           "profile": "ba_validation", "dispatched_at": "2026-01-01T12:00:00Z",
+           "artifacts": [{"kind": "json", "path": f"docs/dev/ba-qa-report-{task_id}-{lane}.json",
+                          "schema": "ba-qa-report.v1", "identity": {"task_id": f"{task_id}-{lane}"}}]}
+    return f'<obligation v="1">{json.dumps(doc)}</obligation>\n'
+
+
+@pytest.mark.parametrize("mode", [None, "block"])
+@pytest.mark.parametrize("state", ["lane_missing", "canonical_missing"])
+def test_a_redeclared_lanes_ba_qa_is_not_collected_for_and_the_dev_qa_still_is(dev_dir, mode, state):
+    # The lane's BA was done again: its BA-QA comes before its dev, which the order gate holds for that verdict.
+    lanes = LANES if state == "canonical_missing" else LANES[:-1]
+    _fanout(dev_dir, TASK, lanes, lane_set=LANES)
+    project = dev_dir.parents[1]
+    assert _run(project, _ba_qa(TASK, LANES[-1], LANES), mode).returncode == 0
+    refused = _run(project, _obligation(f"{TASK}-{LANES[0]}", lane=LANES[0], lane_set=LANES), mode)
+    blocks = state == "canonical_missing" or mode == "block"
+    assert refused.returncode == (2 if blocks else 0), refused.stderr
+    assert (f"[{'canonical_missing' if state == 'canonical_missing' else 'lane_report_missing'}]" in refused.stderr) is blocks
+
+
 def test_without_an_obligation_the_global_scan_still_demands_the_canonical(dev_dir):
     canonical = _fanout(dev_dir, OTHER, LANES)
     result = _run(dev_dir.parents[1], "Verify the implementation.")
