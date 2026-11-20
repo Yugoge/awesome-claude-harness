@@ -426,10 +426,13 @@ def no_target_end(span, root) -> bool:
     """A /close or /commit that bound no task and dispatched none ends on its NO_TARGET: line (close.md's and
     commit.md's "Which task?" and refused flag combinations; nobody is asked): the span's last main-agent text holds
     the line, the span dispatched no task, and its flags are refused or _targets binds no task it resolves. A run
-    that worked on a task is never released by it."""
-    if span.command not in ("close", "commit") or span.session_families() \
+    that worked on a task is never released by it. Likewise a /dev or /do typed with no text at all (dev.md Step 1,
+    do.md: it ends saying how to type it)."""
+    if span.command not in ("close", "commit", "dev", "do") or span.session_families() \
             or not NO_TARGET_LINE.search(span.last_text() or ""):
         return False
+    if span.command in ("dev", "do"):
+        return not span.args.strip()
     if _flags_refused(span):
         return True
     if "--bulk" in span.args.split():  # a legal --bulk binds no task by design: its own predicate holds it
@@ -525,12 +528,43 @@ def p_close(span, root, payload) -> list[str]:
     close_rating = importlib.import_module("lib.close_rating")  # P4's
     asks = not _loaded_lacks(span)(re.escape(RATING_SOURCE))
     names, gaps = _cycle_names(span), []
+    owed = _owed_gap(span, root)
     for task in targets:
-        gaps += [g for name in _names(names, task) for g in disposition(root, name, "close")]
+        gaps += [g for name in _names(names, task) for g in disposition(root, name, "close") if owed(name, g)]
         if asks and close_rating.rating_required(span, task) and not close_rating.rating_asked(
                 span.transcript_path, task):
             gaps.append(f"close {task}: the close-rating question (AskUserQuestion) was not asked")
     return gaps
+
+
+_GAP_ARTIFACT = re.compile(r'^GAP artifact=("(?:[^"\\]|\\.)*"|\S+) ')
+NO_OWNER_LINE = re.compile(r"^NO_OWNER: (\S+)", re.M)
+
+
+def _owed_gap(span, root):
+    """close.md Routes' last bullet: a gap whose artifact no dispatch, lane, step or writer owes (the reader
+    obligation.declaring_dispatch, which Routes runs, answers None), reported on a NO_OWNER: <artifact> line of the
+    span's last text, is no longer owed by this run; nobody is asked, and the cycle stays unfinished. Every other
+    gap is owed."""
+    named = set(NO_OWNER_LINE.findall(span.last_text() or ""))
+    reader = importlib.import_module("lib.obligation").declaring_dispatch
+
+    def owed(task: str, gap: str) -> bool:
+        found = _GAP_ARTIFACT.match(gap)
+        path = found and (json.loads(found.group(1)) if found.group(1).startswith('"') else found.group(1))
+        return not (path in named and reader(task, path, root) is None)
+    return owed
+
+
+def no_owner_end(span, root) -> bool:
+    """A /close or /commit whose every open gap is an artifact nobody owes, reported (_owed_gap), ends there: the
+    step that would produce it cannot run, so its checklist stays open and nothing marks it done."""
+    if span.command not in ("close", "commit") or not NO_OWNER_LINE.search(span.last_text() or ""):
+        return False
+    targets, unresolved = _targets(span, root, span.command)
+    owed, names = _owed_gap(span, root), _cycle_names(span)
+    lines = [(name, g) for task in targets or () for name in _names(names, task) for g in disposition(root, name, span.command)]
+    return not unresolved and bool(lines) and not any(owed(name, g) for name, g in lines)
 
 
 # close.md Step 0: a disposition call that exits non-zero runs once more; failing again, the run ends with one
@@ -699,8 +733,9 @@ def p_commit(span, root, payload) -> list[str]:
         return ["commit: no target task resolved"]
     refused = hook_refused_tasks(span)  # Step 7: reported as refused, nobody asked; the other targets still land
     canon, names = importlib.import_module("lib.obligation").canonical_task_id, _cycle_names(span)
+    owed = _owed_gap(span, root)  # Routes: an artifact nobody owes, reported on its NO_OWNER: line
     return [g for task in targets if canon(task) not in refused
-            for name in _names(names, task) for g in disposition(root, name, "commit")]
+            for name in _names(names, task) for g in disposition(root, name, "commit") if owed(name, g)]
 
 
 # ---------------------------------------------------------------- git facts (merge, push)
@@ -1256,7 +1291,7 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
     try:
-        if gated and (no_target_end(span, root) or step_refused_end(span)):  # nothing bound, nothing run: the NO_TARGET: line ends it
+        if gated and (no_target_end(span, root) or step_refused_end(span) or no_owner_end(span, root)):  # nothing bound, nothing run: the NO_TARGET: line ends it
             return 0, "", terminal
     except Exception:  # an unread record releases nothing: the gaps below decide
         pass

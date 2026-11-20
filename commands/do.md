@@ -15,7 +15,7 @@ CODEX_REQUESTED = $ARGUMENTS contains literal token "--codex"
 TASK = $ARGUMENTS with "--codex" token removed (trimmed)
 ```
 
-If `TASK` is empty, end: say that `/do` was given no task and that `/do <the task>` runs one. Nobody is asked.
+If `TASK` is empty, end with one line `NO_TARGET: /do was given no task; /do <the task> runs one`. Nobody is asked; the Stop gate (`no_target_end`) lets a run that dispatched nothing end on it.
 
 ## Workflow
 

@@ -310,7 +310,7 @@ def test_a_step_whose_own_call_a_hook_refused_ends_on_its_report(replays):
     r = replays.get(suite.replay_key(STEP_REFUSED, "shipped"))
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     rounds = {x["label"]: x for x in (r.terminal("do") or {}).get("rounds", [])}
-    assert rounds["/do Step 2 Bash refused by a hook"]["blocked"], rounds
+    assert rounds["/do Step 2 call refused by a hook"]["blocked"], rounds
     assert not rounds["/do Stop on the step's refusal"]["blocked"], rounds
     assert rounds["/do Stop with the step open"]["blocked"], rounds
     assert r.reached(), r.explain()
