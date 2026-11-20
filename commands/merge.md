@@ -31,7 +31,7 @@ In_place means the main checkout, which other sessions may share: `hooks/merge.s
 **Refusals.** Where a step below refuses, nobody is asked about it. An action the refusal names that is the
 agent's own ("re-run the snapshot now", "re-run the analysis now") is taken at once, once; met again, the refusal
 ends the run. Any other action is the owner's: end with the refusal reported in the reply, its message with its
-facts and the action it names, and the refused call is not run again.
+facts and the action it names, and the refused call is not run again. When a hook refuses the merge-analyst dispatch itself, no grant is written and Step 5 cannot run: end with one line `REFUSED: <hook> refused the merge-analyst dispatch; nothing was merged` and the hook's output; the Stop gate (`analyst_refused`) lets the run end on it when the transcript records that refusal of the last merge-analyst dispatch.
 
 ### Step 0: Determine worktree shape, then resolve branch name
 

@@ -3415,6 +3415,46 @@ def test_rc2_merge_conflicts_refused_as_the_text_spells_step_5_end(env, repo, mo
         assert code == 2 and "no merge of feature into refs/heads/master" in text, text
 
 
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "ran-later", "not-named"])
+def test_a_push_whose_analyst_dispatch_a_hook_refused_ends_on_its_refused_line(env, remotes, case):
+    """push.md: a hook refused the push-analyst dispatch (its last), named on a REFUSED: line: the run ends, nothing
+    published. Named with no refusal on record, refused then dispatched again, or not named (the block names the
+    line): held."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env, "origin")
+    role = "push-analyst"
+    if case == "named-not-refused":
+        env.tx.tool("Agent", {"subagent_type": role, "description": role, "prompt": "analyse"})
+    else:
+        refused_dispatch(env, role)
+    if case == "ran-later":
+        env.tx.tool("Agent", {"subagent_type": role, "description": role, "prompt": "analyse"})
+    if case != "not-named":
+        env.tx.say(f"REFUSED: pretool-launch.py refused the {role} dispatch; nothing was published\nBLOCKED")
+    code, text = run(env)
+    if case == "released":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and f"- push: topic at {head} is not published" in text, (case, text)
+        assert (f'"REFUSED: <hook> refused the {role} dispatch; nothing was published"' in text) is (
+            case == "not-named"), (case, text)
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused"])
+def test_a_merge_whose_analyst_dispatch_a_hook_refused_ends_on_its_refused_line(env, repo, case):
+    branches(repo, "feature")
+    opener_now(env, "merge", "feature")
+    role = "merge-analyst"
+    if case == "named-not-refused":
+        env.tx.tool("Agent", {"subagent_type": role, "description": role, "prompt": "analyse"})
+    else:
+        refused_dispatch(env, role)
+    env.tx.say(f"REFUSED: pretool-launch.py refused the {role} dispatch; nothing was merged")
+    code, text = run(env)
+    assert (code == 0) is (case == "released"), (case, text)
+
+
 def test_rc2_step_5s_call_is_a_real_invocation_of_the_script():
     assert gate.step5_call(PUSH_STEP5, gate.PUSH_CALL)
     assert gate.step5_call(PUSH_STEP5 + " --auto", gate.PUSH_CALL)

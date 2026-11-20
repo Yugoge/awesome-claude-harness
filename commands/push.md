@@ -26,7 +26,7 @@ group: Ship
 
 ## Agentic dispatch protocol (pre-execution)
 
-Run these steps in order. Where one refuses, nobody is asked about it. An action the refusal names that is the agent's own ("re-run the snapshot now", "re-run the analysis now") is taken at once, once; met again, the refusal ends the run. Any other action is the owner's: end with the refusal reported in the reply, its message with its facts and the action it names, and the refused call is not run again.
+Run these steps in order. Where one refuses, nobody is asked about it. An action the refusal names that is the agent's own ("re-run the snapshot now", "re-run the analysis now") is taken at once, once; met again, the refusal ends the run. Any other action is the owner's: end with the refusal reported in the reply, its message with its facts and the action it names, and the refused call is not run again. When a hook refuses the push-analyst dispatch itself, no grant is written and Step 5 cannot run: end with one line `REFUSED: <hook> refused the push-analyst dispatch; nothing was published` and the hook's output; the Stop gate (`analyst_refused`) lets the run end on it when the transcript records that refusal of the last push-analyst dispatch.
 
 **Step 0: Parse arguments and resolve remote**
 
