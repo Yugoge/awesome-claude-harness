@@ -1768,8 +1768,7 @@ def _lcs_rows(p, q):
     """The LCS table of p and q by rows, each row built from a bit-parallel row vector (Allison-Dix:
     bit j set iff row[j + 1] - row[j] == 1) instead of cell by cell."""
     masks, one, full, rows, d = {}, b"\x00\x01", (1 << len(q)) - 1, [[0] * (len(q) + 1)], 0
-    for j, c in enumerate(q):
-        masks[c] = masks.get(c, 0) | (1 << j)
+    for j, c in enumerate(q): masks[c] = masks.get(c, 0) | (1 << j)  # noqa: E701
     for c in p:
         x = masks.get(c, 0) | d
         d = x & ((x - ((d << 1) | 1)) ^ x) & full
