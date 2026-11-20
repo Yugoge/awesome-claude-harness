@@ -28,6 +28,9 @@
 #  10. The dispatched agent type cannot write: policies/tool-policy.v1.json
 #      declares it (under "roles" or "built_in_agents") with no Write, Edit,
 #      MultiEdit or NotebookEdit tool. See E7 below.
+#  11. E8 (2026-11-20): a dev dispatch (its obligation's role) reads another task's report it cites
+#      (dev_task). E9: tests/generated/, which docs/reference/generated-tests-policy.md keeps out of
+#      git, holds no deliverable. Coverage: hooks/tests/test_gitignore_preflight_reads.py.
 #
 # Blocking condition (exits 2):
 #   Any path in dev.files_modified or dev.files_created is matched by .gitignore
@@ -404,16 +407,6 @@
 #   The dev, qa and every other role row carrying Write keep the refusal.
 #   Regression coverage: hooks/tests/test_gitignore_preflight_write_capability.py.
 #
-# 2026-11-20 — E8 and E9, two readings the live hour of 2026-11-19 refused.
-#   E8: seven lane devs citing a sibling lane's report, and the lane dev the
-#   collection check names as its remedy citing its fan-out's canonical, were
-#   refused over those reports' files. A dev dispatch (its obligation's role)
-#   ships only what its own report lists; a report of another task is read.
-#   E9: an ignored path under tests/generated/ is no deliverable (the policy
-#   keeps that tree out of git), also in a report written before agents/dev.md
-#   stopped listing them. The QA of a report listing another ignored work
-#   product, and a dev dispatch with no obligation, keep the refusal.
-#   Coverage: hooks/tests/test_gitignore_preflight_reads.py.
 # ---------------------------------------------------------------------------
 
 import glob
@@ -792,8 +785,6 @@ def gitignored_deliverables(prompt):
     # names) rewrites it, so it is no manifest of work the dispatch ships.
     doc = own_obligation(prompt)
     own = {a.get('path') for a in doc.get('artifacts') or [] if isinstance(a, dict)}
-    # E8: a dev dispatch ships what its own report lists; another task's report it cites (a sibling
-    # lane's, its fan-out's canonical) is reading material.
     dev_task = obligation.canonical_task_id(doc.get('task_id')) if doc.get('role') == 'dev' else None
 
     for match in matches:
@@ -839,8 +830,7 @@ def gitignored_deliverables(prompt):
         report_blocked = []
 
         for path in all_paths:
-            # E9: docs/reference/generated-tests-policy.md keeps generated tests out of git: no deliverable.
-            if not (isinstance(path, str) and path) or path.startswith('tests/generated/'):
+            if not (isinstance(path, str) and path) or path.startswith('tests/generated/'):  # E9
                 continue
             if not is_gitignored(path, repo_root):
                 continue
