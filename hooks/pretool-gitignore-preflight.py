@@ -651,9 +651,7 @@ def parent_task_id(src_task_id, repo_root):
     return '-'.join(segments[:-1]) if len(segments) > 1 else None
 
 
-def is_own_transcript(path, src_task_id, repo_root):
-    """E10: the /codex step's consultation transcript (lib/codex_transcript) of src_task_id, of one of its lanes
-    or of its one parent: provenance, not a work product. Another task's, or another file under docs/codex/, is not."""
+def is_own_transcript(path, src_task_id, repo_root):  # E10: lib/codex_transcript's path of the task, a lane, its parent
     task = codex_transcript.transcript_task(path)
     return bool(task) and (is_lane_of_cycle(task, src_task_id) or task == parent_task_id(src_task_id, repo_root))
 
@@ -838,9 +836,8 @@ def gitignored_deliverables(prompt):
         report_blocked = []
 
         for path in all_paths:
-            if not (isinstance(path, str) and path) or path.startswith('tests/generated/'):  # E9
-                continue
-            if is_own_transcript(path, src_task_id, repo_root):  # E10
+            if not (isinstance(path, str) and path) or path.startswith('tests/generated/') \
+                    or is_own_transcript(path, src_task_id, repo_root):  # E9, E10
                 continue
             if not is_gitignored(path, repo_root):
                 continue
