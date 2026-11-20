@@ -404,6 +404,16 @@
 #   The dev, qa and every other role row carrying Write keep the refusal.
 #   Regression coverage: hooks/tests/test_gitignore_preflight_write_capability.py.
 #
+# 2026-11-20 — E8 and E9, two readings the live hour of 2026-11-19 refused.
+#   E8: seven lane devs citing a sibling lane's report, and the lane dev the
+#   collection check names as its remedy citing its fan-out's canonical, were
+#   refused over those reports' files. A dev dispatch (its obligation's role)
+#   ships only what its own report lists; a report of another task is read.
+#   E9: an ignored path under tests/generated/ is no deliverable (the policy
+#   keeps that tree out of git), also in a report written before agents/dev.md
+#   stopped listing them. The QA of a report listing another ignored work
+#   product, and a dev dispatch with no obligation, keep the refusal.
+#   Coverage: hooks/tests/test_gitignore_preflight_reads.py.
 # ---------------------------------------------------------------------------
 
 import glob
@@ -780,14 +790,18 @@ def gitignored_deliverables(prompt):
     # E6 (P1c X6): a report the dispatch's own obligation declares is what it
     # writes: its producer dispatched again (the round this rule's refusal
     # names) rewrites it, so it is no manifest of work the dispatch ships.
-    own = {a.get('path') for a in own_obligation(prompt).get('artifacts') or [] if isinstance(a, dict)}
+    doc = own_obligation(prompt)
+    own = {a.get('path') for a in doc.get('artifacts') or [] if isinstance(a, dict)}
+    # E8: a dev dispatch ships what its own report lists; another task's report it cites (a sibling
+    # lane's, its fan-out's canonical) is reading material.
+    dev_task = obligation.canonical_task_id(doc.get('task_id')) if doc.get('role') == 'dev' else None
 
     for match in matches:
         if _in_any_span(match.start(), audit_spans):
             continue
 
         report_rel = match.group(0)
-        if report_rel in own:
+        if report_rel in own or dev_task and source_task_id(report_rel) != dev_task:
             continue
 
         if (cycle_task_id is not None
@@ -825,7 +839,8 @@ def gitignored_deliverables(prompt):
         report_blocked = []
 
         for path in all_paths:
-            if not (isinstance(path, str) and path):
+            # E9: docs/reference/generated-tests-policy.md keeps generated tests out of git: no deliverable.
+            if not (isinstance(path, str) and path) or path.startswith('tests/generated/'):
                 continue
             if not is_gitignored(path, repo_root):
                 continue
