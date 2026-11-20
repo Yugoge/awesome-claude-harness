@@ -565,7 +565,9 @@ jobs:
     # Each untraced replay also runs the launch differential (tests/replay/launchdiff.py): every
     # launcher event's hooks once more on the old path, each as its own process. With it the
     # heaviest shards took 58-59 min on a 4-CPU hosted runner and one ran past 60.
-    timeout-minutes: 90
+    # 120, not 90: on pull request 64 a shard ran 1h29m55s (2026-11-20); the same shard took 1h21m an hour
+    # earlier, so the difference is the runner. A shard cut off at its limit reports nothing.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
