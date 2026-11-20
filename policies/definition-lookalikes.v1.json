@@ -885,7 +885,7 @@
   {
    "id": "pipeline-names",
    "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "DEV_PIPELINES are the dev pipelines a score view groups; DEV_TEXTS the commands the stop gate treats as dev; prompt-workflow's set the commands that start a dev phase, redev included; step_refused_end's set the commands whose step, refused by a hook, may end on a REFUSED: line, /do included.",
+   "reason": "DEV_PIPELINES are the dev pipelines a score view groups; DEV_TEXTS the commands the stop gate treats as dev; prompt-workflow's set the commands that start a dev phase, redev included; refused_step's set the commands whose step, refused by a hook, may end on a REFUSED: line, /do included.",
    "sides": [
     [
      {
@@ -910,9 +910,9 @@
     ],
     [
      {
-      "name": "step_refused_end:in",
+      "name": "refused_step:in",
       "fingerprint": "a34f74df68a27b94",
-      "at": "hooks/stop-command-gate.py:396"
+      "at": "hooks/stop-command-gate.py:394"
      }
     ]
    ]
