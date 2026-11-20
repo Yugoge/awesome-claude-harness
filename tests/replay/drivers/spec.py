@@ -195,6 +195,18 @@ DEVIATIONS = Deviations([])
 _SECTION_RE = re.compile(r"^## Section (\d+):")
 
 
+
+def _tree_claude_home(rp):
+    """hooks/lib/claude_home.py of the tree under test (stdlib only): the one expansion of the spellings the
+    command text gives the Bash tool, read as the shell would read them."""
+    import importlib.util
+    path = os.path.join(rp.layout.harness, "hooks", "lib", "claude_home.py")
+    spec = importlib.util.spec_from_file_location("replay_tree_claude_home", path)
+    mod = importlib.util.module_from_spec(spec)
+    with rp.acting("driver"):
+        spec.loader.exec_module(mod)
+    return mod
+
 def _calls(script: str, verb: str) -> "re.Pattern":
     """A text's `<script> <verb>` call under either spelling of the script's path: `~/.claude/scripts/<script>`
     or the quoted channel `"${CLAUDE_HOME:-$HOME/.claude}/scripts/<script>"` (its quote closes after the name)."""
@@ -886,8 +898,7 @@ class SpecRun:
         self.ts = utc_now().replace("-", "").replace(":", "").replace("T", "-").rstrip("Z")
         rp.task(self.ts)
         path_line = next(b.text for b in cmdtext.blocks(o.text, "Step 3") if "docs/dev/specs/spec-" in b.text).strip()
-        path_line = re.sub(r"\$\{CLAUDE_PROJECT_DIR:-\$\((?:pwd|git rev-parse --show-toplevel)\)\}", self.project, path_line)
-        self.path = o.bind(path_line)
+        self.path = o.bind(_tree_claude_home(rp).known_text(path_line, project=self.project) or path_line)
         # Step 3 item 3: the placeholders it names, Section 5 the requirement verbatim.
         pop = sec[sec.index("Populate the template"):sec.index("Write the spec")]
         for ph in re.findall(r"`(<[^`>]+>)`\s*→", pop):

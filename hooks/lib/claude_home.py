@@ -271,11 +271,15 @@ def settings_switch(key: str, default: str) -> str:
 
 
 CLAUDE_HOME_SPELLING = "${CLAUDE_HOME:-$HOME/.claude}"  # the harness home as hooks and commands spell it
+PROJECT_ROOT_SPELLING = "${CLAUDE_PROJECT_DIR:-$PWD}"  # the project root as commands spell it for the Bash tool
 
 
-def known_text(text: str, cwd: Optional[str] = None) -> Optional[str]:
+def known_text(text: str, cwd: Optional[str] = None, project: Optional[str] = None) -> Optional[str]:
     """``text`` (a shell word as written) with ~, $HOME, $CLAUDE_PROJECT_DIR, ${CLAUDE_HOME:-$HOME/.claude} and
-    (at the call's start) $PWD expanded and its quotes dropped; None when an expansion stays."""
+    (at the call's start) $PWD expanded and its quotes dropped; None when an expansion stays. ``project``
+    (the Bash call's project directory, which its environment does not carry): ${CLAUDE_PROJECT_DIR:-$PWD} too."""
+    if project:
+        text = text.replace(PROJECT_ROOT_SPELLING, project)
     home = os.environ.get("HOME") or os.path.expanduser("~")
     known = {"HOME": home}
     if cwd:
