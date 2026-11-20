@@ -78,7 +78,7 @@ def ask_view(doc: dict) -> list:
 def question_file(project, task: str, n: int) -> Path | None:
     """Round n's question file: BA's requirement-round file, else for round 1 a BA panel's file; None when absent."""
     for rel in (ROUND.format(task=task, n=n),) + ((PANEL.format(task=task),) if n == 1 else ()):
-        if (Path(project) / rel).is_file():
+        if os.path.isfile(Path(project) / rel):  # an unreadable folder: absent, never an error
             return Path(project) / rel
     return None
 
@@ -314,7 +314,11 @@ def _question_files(project, task: str) -> list:
     family = _lib("obligation").task_family
     out = [(p, f"requirement-round:{task}:r{n}", p, "qa" if p.name.startswith("ba-panel-") else "ba")
            for n, p in rounds(project, task)]
-    for p in sorted((Path(project) / "docs/dev").glob("producer-question-*-*.json")):
+    try:
+        found = sorted((Path(project) / "docs/dev").glob("producer-question-*-*.json"))
+    except OSError:  # an unreadable folder holds none, as an absent one
+        found = []
+    for p in found:
         owner, _, role = p.name[len("producer-question-"):-len(".json")].rpartition("-")
         if family(owner) == family(task):
             out.append((p, f"producer-question:{owner}:{role}", None, role))
@@ -409,13 +413,13 @@ def question_refusal(payload: dict) -> str | None:
         span = _lib("command_span").active_span(payload.get("transcript_path") or "")
         rest = source.partition(":")[2]
         ok = span is not None and span.command == kind.partition("-")[0] and bool(_LABEL.fullmatch(rest)) and (
-            kind == "spec-question" or (project / CLEAN_REPORT.format(request=rest)).is_file())
+            kind == "spec-question" or os.path.isfile(project / CLEAN_REPORT.format(request=rest)))
     elif match and kind == "requirement-round" and match.group(3).startswith("r"):
         qfile = question_file(project, task_of(match.group(2)) or "", int(match.group(3)[1:]))
         doc = _load(qfile) if qfile else None
         ok = doc is not None and canonical(tin.get("questions")) == canonical(ask_view(doc))
     elif match and kind == "producer-question" and not match.group(3).startswith("r"):
-        ok = (project / QUESTION.format(task=task_of(match.group(2)), role=match.group(3))).is_file()
+        ok = os.path.isfile(project / QUESTION.format(task=task_of(match.group(2)), role=match.group(3)))
     else:
         ok = False
     return None if ok else f"{source!r} is asked outside the step that owns it ({KEPT[kind]}). {REFUSED}"
