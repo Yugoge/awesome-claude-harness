@@ -30,7 +30,8 @@
 #      MultiEdit or NotebookEdit tool. See E7 below.
 #  11. E8 (2026-11-20): a dev dispatch (its obligation's role) reads another task's report it cites
 #      (dev_task). E9: tests/generated/, which docs/reference/generated-tests-policy.md keeps out of
-#      git, holds no deliverable. Coverage: hooks/tests/test_gitignore_preflight_reads.py.
+#      git, holds no deliverable. E10: the report's own task's (or a lane's, or its parent's) /codex
+#      transcript is provenance. Coverage: hooks/tests/test_gitignore_preflight_reads.py.
 #
 # Blocking condition (exits 2):
 #   Any path in dev.files_modified or dev.files_created is matched by .gitignore
@@ -418,7 +419,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib import claude_home, obligation, policy_registry, schema_registry  # noqa: E402
+from lib import claude_home, codex_transcript, obligation, policy_registry, schema_registry  # noqa: E402
 
 DEV_REPORT_PATTERN = re.compile(r'docs/dev/dev-report-[A-Za-z0-9._-]+\.json')
 
@@ -650,6 +651,13 @@ def parent_task_id(src_task_id, repo_root):
     return '-'.join(segments[:-1]) if len(segments) > 1 else None
 
 
+def is_own_transcript(path, src_task_id, repo_root):
+    """E10: the /codex step's consultation transcript (lib/codex_transcript) of src_task_id, of one of its lanes
+    or of its one parent: provenance, not a work product. Another task's, or another file under docs/codex/, is not."""
+    task = codex_transcript.transcript_task(path)
+    return bool(task) and (is_lane_of_cycle(task, src_task_id) or task == parent_task_id(src_task_id, repo_root))
+
+
 def is_contract_deliverable(path, src_task_id, repo_root=None, project_dir=None):
     """E2: True only for a harness artifact the cycle declares: a path that a
     dispatch of src_task_id, or of the one parent task-id it is a lane of
@@ -831,6 +839,8 @@ def gitignored_deliverables(prompt):
 
         for path in all_paths:
             if not (isinstance(path, str) and path) or path.startswith('tests/generated/'):  # E9
+                continue
+            if is_own_transcript(path, src_task_id, repo_root):  # E10
                 continue
             if not is_gitignored(path, repo_root):
                 continue

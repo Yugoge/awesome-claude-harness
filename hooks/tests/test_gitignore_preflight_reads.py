@@ -120,3 +120,33 @@ def test_dev_dispatch_citing_its_own_tasks_other_report_keeps_the_refusal(projec
     prompt = 'Dev report file: %s\n%s' % (report_rel(TASK), obligation(
         TASK, 'dev', 'docs/dev/dev-notes-%s.json' % TASK, 'dev-report.v2'))
     assert run_gate(project, prompt, 'dev') == (2, BLOCKED + PRODUCT)
+
+
+# E10: the /codex step's consultation transcript (hooks/lib/codex_transcript) of the report's own task
+# family is provenance; any other file under docs/codex/ is judged as before. The project ignores docs/codex/.
+
+def qa_of(project, task, created):
+    (project / '.gitignore').write_text('/tests/generated/\n/build/\ndocs/codex/**\n')
+    write_report(project, task, created)
+    return 'Dev report file: %s\n%s' % (report_rel(task), obligation(
+        task, 'qa', 'docs/dev/qa-report-%s.json' % task, 'qa-report.v2'))
+
+
+@pytest.mark.parametrize('transcript', ['docs/codex/%s/dev.txt' % TASK, 'docs/codex/%s-l3/dev-iter2.txt' % TASK])
+def test_qa_of_a_report_listing_its_own_tasks_transcript_is_admitted(project, transcript):
+    """The canonical report of TASK lists its own and its lane l3's transcript."""
+    assert run_gate(project, qa_of(project, TASK, ['src/new.py', transcript]), 'qa') == (0, '')
+
+
+def test_lane_report_listing_its_parents_transcript_is_admitted(project):
+    write_report(project, TASK, [])  # the parent's canonical: parent_task_id settles on it
+    prompt = qa_of(project, TASK + '-l3', ['docs/codex/%s/qa.txt' % TASK])
+    assert run_gate(project, prompt, 'qa') == (0, '')
+
+
+@pytest.mark.parametrize('path', ['docs/codex/20260101-000000/dev.txt',        # another task's transcript
+                                  'docs/codex/%s/router-spec.md' % TASK,       # not the transcript shape
+                                  'docs/codex/%s/sub/dev.txt' % TASK,          # nor this
+                                  'build/app.js'])
+def test_qa_of_a_report_listing_another_file_is_refused(project, path):
+    assert run_gate(project, qa_of(project, TASK, ['src/new.py', path]), 'qa') == (2, BLOCKED + path)

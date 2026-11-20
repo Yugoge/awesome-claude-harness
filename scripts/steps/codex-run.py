@@ -34,11 +34,13 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from hooks.lib import codex_transcript  # noqa: E402  (the transcript path's one definition)
+
 DEFAULT_MODEL = "gpt-5.6-sol"
 EFFORT_KEY = "model_reasoning_effort"  # the Codex CLI key; without the model_ prefix it is silently ignored
 REASONING_EFFORT = "xhigh"
 FALLBACK_DIR = Path("/var/tmp/codex-outputs")
-SAFE_NAME = re.compile(r"[A-Za-z0-9._-]+")
 SAFE_MODEL = re.compile(r"[A-Za-z0-9._:/-]+")
 MODES = ("review", "exec", "detach")
 
@@ -47,10 +49,6 @@ class Refusal(Exception):
     def __init__(self, message: str, code: int):
         super().__init__(message)
         self.code = code
-
-
-def _safe_name(value: str) -> bool:
-    return SAFE_NAME.fullmatch(value) is not None and value not in (os.curdir, os.pardir)
 
 
 def resolve_wrapper(env) -> str:
@@ -78,9 +76,10 @@ def _project_root(env) -> str:
 def resolve_output_path(env) -> Path:
     """Create the output directory and return the file to write (no file is created yet)."""
     task, role = env.get("CODEX_OUT_TASK_ID", ""), env.get("CODEX_OUT_ROLE", "")
-    root = _project_root(env) if task and role and _safe_name(task) and _safe_name(role) else ""
+    rel = codex_transcript.transcript_rel(task, role)
+    root = _project_root(env) if rel else ""
     if root:
-        directory, name = Path(root) / "docs" / "codex" / task, role + ".txt"
+        directory, name = (Path(root) / rel).parent, Path(rel).name
     else:
         if task or role:
             print(f"codex-run: warning: CODEX_OUT_TASK_ID/CODEX_OUT_ROLE unsafe or incomplete, or no "
