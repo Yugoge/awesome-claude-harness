@@ -296,13 +296,6 @@
     },
     {
       "path": "hooks/tests/test_locations_relocation.py",
-      "fingerprint": "773b9b77b677b4aa",
-      "ordinal": 1,
-      "class": "test_fixture",
-      "rationale": "Synthetic location of the relocation matrix: a project or a home that is never created, under the superuser's home or a fictional user's home, given to the hooks as a path to judge (hooks/tests/test_locations_relocation.py). Carries no author identity."
-    },
-    {
-      "path": "hooks/tests/test_locations_relocation.py",
       "fingerprint": "0bc651827e8f80f4",
       "ordinal": 1,
       "class": "test_fixture",
