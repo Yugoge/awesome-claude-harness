@@ -108,11 +108,11 @@ def _repository(root) -> None:
 
 # ---------------------------------------------------------------- P3's disposition
 def disposition(root, task: str, stage: str) -> list[str]:
-    """The task's disposition at ``stage`` as gap lines, [] for chain_pass:
-    the one adapter, the chain's own disposition_lines (over P3's
-    `disposition(project_root, task_id, stage)`), used verbatim. Its
-    instrument failure raises."""
-    return _script("scripts/resolve-dev-artifact-chain.py").disposition_lines(root, task, stage)
+    """Gap lines at ``stage``, [] for chain_pass: the chain's own disposition_lines (P3's disposition), verbatim;
+    its instrument failure raises. The informational completeness run on demand: read here only if it can decide."""
+    chain = _script("scripts/resolve-dev-artifact-chain.py")
+    chain.FULL_COMPLETENESS_ON_DEMAND = True
+    return chain.disposition_lines(root, task, stage)
 
 
 # ---------------------------------------------------------------- the text the span loaded (D15)

@@ -82,8 +82,11 @@ what the environment already expresses.
 
 import argparse
 import difflib
+import functools
 import hashlib
+import itertools
 import json
+import operator
 import os
 import re
 import shutil
@@ -1519,6 +1522,7 @@ def _owned_final_mismatch(detail):
 #     exists to eliminate.
 
 
+@functools.lru_cache(maxsize=512)  # pure in two bytes values; both callers only iterate the result
 def _dp_match_pairs(p, q):
     """Exact maximum-matching alignment of two byte strings, as (i, j) pairs."""
     n, m = len(p), len(q)
@@ -1760,6 +1764,19 @@ def _optimal_structure(p, q):
             frozenset(j + lo for j in local_q), images, exact)
 
 
+def _lcs_rows(p, q):
+    """The LCS table of p and q by rows, each row built from a bit-parallel row vector (Allison-Dix:
+    bit j set iff row[j + 1] - row[j] == 1) instead of cell by cell."""
+    masks, one, full, rows, d = {}, b"\x00\x01", (1 << len(q)) - 1, [[0] * (len(q) + 1)], 0
+    for j, c in enumerate(q): masks[c] = masks.get(c, 0) | (1 << j)  # noqa: E701
+    for c in p:
+        x = masks.get(c, 0) | d
+        d = x & ((x - ((d << 1) | 1)) ^ x) & full
+        bits = format(d, "0%db" % len(q))[::-1].encode().translate(bytes.maketrans(b"01", one)) if q else b""
+        rows.append(list(itertools.accumulate(bits, initial=0)))
+    return rows
+
+@functools.lru_cache(maxsize=512)  # a pure function of two bytes values, asked again for every ordering a replay tries
 def _exact_masks(pm, qm):
     """The all-minimum-cost masks for two byte strings, with local indices.
 
@@ -1772,41 +1789,24 @@ def _exact_masks(pm, qm):
     a, b = len(pm), len(qm)
     if a == 0 or b == 0:
         return (frozenset(range(a)), frozenset(range(b)), {})
-    pre = [[0] * (b + 1) for _ in range(a + 1)]
-    for i in range(a):
-        row, prev = pre[i + 1], pre[i]
-        pi = pm[i]
-        for j in range(b):
-            if pi == qm[j]:
-                row[j + 1] = prev[j] + 1
-            else:
-                left, up = row[j], prev[j + 1]
-                row[j + 1] = left if left >= up else up
-    suf = [[0] * (b + 1) for _ in range(a + 1)]
-    for i in range(a - 1, -1, -1):
-        row, nxt = suf[i], suf[i + 1]
-        pi = pm[i]
-        for j in range(b - 1, -1, -1):
-            if pi == qm[j]:
-                row[j] = nxt[j + 1] + 1
-            else:
-                down, right = nxt[j], row[j + 1]
-                row[j] = down if down >= right else right
+    pre = _lcs_rows(pm, qm)                                   # pre[i][j] = LCS(pm[:i], qm[:j])
+    suf = [row[::-1] for row in reversed(_lcs_rows(pm[::-1], qm[::-1]))]  # LCS(pm[i:], qm[j:])
     total = pre[a][b]
     p_changed = set()
     q_changed = set()
     images = {}
+    at = {}  # the same three scans, row and column sums in C (map/zip) and matches looked up by byte
+    for j in range(b):
+        at.setdefault(qm[j], []).append(j)
     for i in range(a):
-        if any(pre[i][j] + suf[i + 1][j] == total for j in range(b + 1)):
+        row, nxt = pre[i], suf[i + 1]
+        if total in map(operator.add, row, nxt):
             p_changed.add(i)
-        targets = frozenset(
-            j for j in range(b)
-            if pm[i] == qm[j] and pre[i][j] + 1 + suf[i + 1][j + 1] == total)
+        targets = frozenset(j for j in at.get(pm[i], ()) if row[j] + 1 + nxt[j + 1] == total)
         if targets:
             images[i] = targets
-    for j in range(b):
-        if any(pre[i][j] + suf[i][j + 1] == total for i in range(a + 1)):
-            q_changed.add(j)
+    pre_cols, suf_cols = list(zip(*pre)), list(zip(*suf))
+    q_changed = {j for j in range(b) if total in map(operator.add, pre_cols[j], suf_cols[j + 1])}
     return frozenset(p_changed), frozenset(q_changed), images
 
 
