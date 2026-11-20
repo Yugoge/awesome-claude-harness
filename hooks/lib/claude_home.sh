@@ -160,8 +160,8 @@ resolve_optional_file() {
 # written; when its settings.json is a link, the directory that link resolves into.
 claude_config_home() {
   local cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" s
-  if [ -L "$cfg/settings.json" ] && s="$(readlink -e -- "$cfg/settings.json")"; then dirname -- "$s"
-  else printf '%s\n' "$cfg"; fi
+  s="$(readlink -m -- "$cfg/settings.json")"
+  if [ "$s" = "$(readlink -m -- "$cfg")/settings.json" ]; then printf '%s\n' "$cfg"; else dirname -- "$s"; fi
 }
 
 # When executed directly (not sourced), act as a tiny CLI so other languages /

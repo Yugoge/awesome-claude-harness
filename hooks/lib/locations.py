@@ -200,14 +200,23 @@ def temp_root_of(path, cwd: Optional[str] = None, roots: Optional[Tuple[str, ...
     return best
 
 
+def session_scratch_root() -> str:
+    """The root of the session scratch directories, an absolute $TMPDIR or SESSION_SCRATCH_ROOT
+    (hooks/session-scratch-init.sh's ${TMPDIR:-/var/tmp/claude-scratch}), real. The variable is read
+    here by name (_abs_var's test inline): the artifact check's static half follows an environment
+    read by a literal name, not one whose name is a parameter."""
+    tmp = os.environ.get("TMPDIR") or ""
+    root = (tmp if os.path.isabs(tmp) else None) or SESSION_SCRATCH_ROOT
+    return _real(root) or root
+
+
 def session_scratch_dir(session_id) -> Optional[str]:
-    """The session's scratch directory, <TMPDIR or SESSION_SCRATCH_ROOT>/<session id>, which
+    """The session's scratch directory, <session_scratch_root()>/<session id>, which
     hooks/session-scratch-init.sh creates; None for an id that is no single name."""
     sid = session_id if isinstance(session_id, str) else ""
     if not sid.strip(".") or os.path.basename(sid) != sid:
         return None
-    root = _abs_var("TMPDIR") or SESSION_SCRATCH_ROOT
-    return os.path.join(_real(root) or root, sid)
+    return os.path.join(session_scratch_root(), sid)
 
 
 def in_system_temp(path, cwd: Optional[str] = None) -> bool:

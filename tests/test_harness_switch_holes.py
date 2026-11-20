@@ -1,7 +1,7 @@
 """Holes of the harness-switch rule the hardcode audit of 2026-11-19 reproduced (its findings 3, 4, 7).
 
 - Finding 3: a prompt that types /harness is refused whatever tool carries it. The rule reads every
-  tool's input (hooks/lib/write_gate: tools None), so a tool it has never heard of is covered; only
+  tool's input (hooks/lib/write_gate: the prompt rule's tools None), so a tool it has never heard of is covered; only
   the CLI's own tools that deliver no prompt are named, and they pass.
 - Finding 4: scripts/harness-switch recognises a Claude Code process as the npm package names it
   (bin/claude.exe) and as the native installer does; the recogniser alone is tested, the switch is
@@ -77,11 +77,14 @@ def test_the_same_words_pass_where_no_session_takes_them_as_typed(guard_home, pr
 def test_the_rule_sees_every_tool():
     """No list of names decides which tools reach the rule: a tool added tomorrow does. The one list
     (lib/harness_switch.NO_PROMPT) names the CLI's own tools the rule would pass unread, and the gate
-    and the rule read the same one."""
+    and the rule read the same one. The rule is two files: the guard on the tools whose commands and
+    files it reads, its prompt rule on every other, and each tool reaches exactly one."""
     code = ("import sys; sys.path.insert(0, sys.argv[1]); from lib.write_gate import RULES; "
-            "from lib import harness_switch; rule = next(r for r in RULES if r.name == 'harness-switch'); "
-            "print(rule.tools, rule.skips == harness_switch.NO_PROMPT, all(rule.applies(t) for t in sys.argv[2:]), "
-            "sorted(t for t in harness_switch.NO_PROMPT if rule.applies(t)), "
+            "from lib import harness_switch; rules = [r for r in RULES if r.name.startswith('harness-switch')]; "
+            "rule = next(r for r in rules if r.name == 'harness-switch-prompt'); "
+            "print(rule.tools, rule.skips - rules[0].tools == harness_switch.NO_PROMPT, "
+            "all(sum(r.applies(t) for r in rules) == 1 for t in sys.argv[2:]), "
+            "sorted(t for t in harness_switch.NO_PROMPT if any(r.applies(t) for r in rules)), "
             "sorted(t for t in harness_switch.NO_PROMPT if t.startswith('mcp__') or t in ('Agent', 'Task', 'Bash')))")
     import subprocess
     import sys

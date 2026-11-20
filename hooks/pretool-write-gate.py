@@ -8,7 +8,8 @@ reported at once.
 The rules are the guards' own files, so each decides exactly as it did alone:
 pretool-bash-views-guard.py, pretool-overnight-hook-guard.py, pretool-tool-policy.py,
 pretool-cp-state-write-guard.py, lib/write_gate/overwrite.py (pretool-write-guard.sh's
-checks), pretool-claude-config-guard.py and pretool-harness-switch-guard.py.
+checks), pretool-claude-config-guard.py, pretool-harness-switch-guard.py and
+pretool-harness-switch-prompt.py.
 
 The rules run at the same time, one fork of this process each (lib/rule_fork), as the CLI
 ran the seven guards: the call waits for the slowest rule, not for their sum. No rule writes

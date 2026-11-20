@@ -234,14 +234,21 @@ def _state_root():
     override = os.environ.get(STATE_ROOT_ENV, '')
     if override and os.path.isabs(override):
         return override
-    return os.environ.get('TMPDIR') or '/var/tmp/claude-scratch'  # hooks/session-scratch-init.sh's root
+    _lib_path()
+    from lib import locations  # hooks/session-scratch-init.sh's root, as the one location answer gives it
+    return locations.session_scratch_root()
+
+
+def _lib_path():
+    """hooks/ on sys.path, for hooks/lib; a harness copy without hooks/lib then raises at the import."""
+    hooks_dir = str(Path(__file__).resolve().parent.parent)
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
 
 
 def _scratch_owner():
     """hooks/lib/scratch_owner.py; raises when a harness copy has no hooks/lib."""
-    hooks_dir = str(Path(__file__).resolve().parent.parent)
-    if hooks_dir not in sys.path:
-        sys.path.insert(0, hooks_dir)
+    _lib_path()
     from lib import scratch_owner
     return scratch_owner
 
