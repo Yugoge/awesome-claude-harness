@@ -58,7 +58,8 @@ module yet; `hooks/tests/test_harness_temp_state.py` pins every row.
 | git-blessed-grants | `claude-git-blessed/<tok>.grant` (under `${TMPDIR:-/tmp}`) | none since the minter, which nothing called, and the keystone's exemption were removed (S31); still classified |
 | daemon-restart-grant | `claude-allow-daemon-restart-<target>.flag` (under `CLAUDE_TMPDIR`) | `hooks/pretool-bash-safety.sh:25`, `:544` |
 | scratch-owner | `<sid>/.owner` (and `.owner.<pid>.tmp`) in the session scratch root | `hooks/session-scratch-init.sh:27`, `:73`, `hooks/lib/scratch_owner.py:17` |
-| doc-sync-notices | `<sid>/doc-sync-notices-<audience>.json` under `tempfile.gettempdir()` | `hooks/doc_sync/notice.py:39`, `:241`, `:266`, `:294` |
+| doc-sync-notices | `<sid>/doc-sync-notices-<audience>.json` in the session scratch root (`locations.session_scratch_root`) | `hooks/doc_sync/notice.py:39`, `:232`, `:266`, `:294` |
+| question-record | `claude-question-record-<project hash>-<task>-r<n>.json` (and `.….json.<pid>.tmp`) | `hooks/lib/requirement_round.py` `record_path`, `record_landed`, `question_refusal` |
 
 ## Harness-managed scratch
 
