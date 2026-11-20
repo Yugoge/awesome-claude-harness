@@ -283,6 +283,27 @@ def _plain(rp, case: str) -> None:
             d = s.dispatch("dev", block(True), description="Write a note", body=body, result=forged,
                            on_stop_block=again, stop_rounds=3, label="main Agent(dev) forged ESCALATION_ACK")
             rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
+    elif case == "dispatch-writes":
+        # tool-policy's dispatch check (_check_dispatch_writes): a dispatch declaring a file its subagent's
+        # role may not write (QA's rows deny tests/) is refused, naming the file and the role; the main
+        # agent's next call declares the same file for a role that may write it (BA), whose subagent writes it.
+        sid, note_rel = "20990101-000001", "tests/review-20990101-000001.md"
+
+        def declaring(role: str) -> str:
+            doc = {"task_id": sid, "lane": None, "lane_set": None, "role": role, "pipeline": "dev",
+                   "profile": "singular", "dispatched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                   "artifacts": [{"kind": "markdown", "path": note_rel, "identity_anchor": f"task {sid}"}]}
+            return (f"Problem: write {note_rel} naming `task {sid}` once you have read toy/__init__.py.\n"
+                    "DO NOT: modify any other file.\n" '<obligation v="1">' + json.dumps(doc) + "</obligation>")
+
+        def body(sub):
+            sub.read(path, label="agent:ba Read")
+            sub.write(os.path.join(project, note_rel), f"# Review\n\ntask {sid}: toy.add returns a + b.\n",
+                      label=f"agent:ba Write {note_rel}")
+        note(s.dispatch("qa", declaring("qa"), description="Write a review note", result="Wrote the note.",
+                        label="main Agent(qa) declaring a file QA may not write"))
+        note(s.dispatch("ba", declaring("ba"), description="Write a review note", body=body,
+                        result="Wrote the note.", label="main Agent(ba) declaring the same file"))
     elif case in ("codex", "cp-pending"):
         sid = "20990101-000001"
         run = "source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/"
@@ -572,7 +593,7 @@ def run(rp) -> None:
         return _qa_declared(rp)
     if case == "ask-first":
         return _ask_first(rp)
-    if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
+    if case in ("bg-dispatch", "dispatch-writes", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
                 "qa-provenance"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
