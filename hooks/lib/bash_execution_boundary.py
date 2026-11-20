@@ -81,6 +81,7 @@ runs the text it analyzes.  Command text is data (prove_git_rm runs git itself).
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -203,7 +204,7 @@ def _reads_program_on_stdin(args):
     """Whether an interpreter given no inline-code option reads its program from standard input:
     no operand before `-`, which names standard input."""
     for w in args:
-        lit = w.literal()
+        lit = w if w is None or isinstance(w, str) else w.literal()
         if lit == "-":
             return True
         if lit is None or not lit.startswith("-"):
@@ -218,6 +219,43 @@ def _py_dynamic(node):
     return any(isinstance(n, ast.Name) and n.id in ("globals", "locals", "vars", "__import__", "__builtins__")
                or isinstance(n, ast.Attribute) and n.attr in ("__dict__", "modules", "import_module")
                for n in ast.walk(node))
+
+
+def _py_started(node, text):
+    """(kind, value, source, shape) of the program a Python call starts, None if it starts none: kind "argv" (value
+    its literal leading words), "shell" (value the line, None if computed) or None; shape: the command as shell text,
+    a computed word or f-string part "$__py" (None or "" when the program is computed)."""
+    import ast
+    import shlex
+    f = node.func
+    name = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
+    if name not in _PY_SPAWN_CALLS or not node.args:
+        return None
+    seg, first = ast.get_source_segment(text, node) or "", node.args[0]
+    const = lambda n: n.value if isinstance(n, ast.Constant) and isinstance(n.value, str) else None  # noqa: E731
+    if name in _PY_SHELL_CALLS or name in ("spawn", "create_subprocess_shell") or any(
+            k.arg == "shell" and not (isinstance(k.value, ast.Constant) and not k.value.value) for k in node.keywords):
+        parts = first.values if isinstance(first, ast.JoinedStr) else [first]
+        return "shell", const(first), seg, "".join("$__py" if isinstance(p, ast.FormattedValue) else const(p) or ""
+                                                   for p in parts)
+    elts = first.elts if isinstance(first, (ast.List, ast.Tuple)) else \
+        node.args if name.startswith(("exec", "spawn", "create_subprocess_exec")) else [first]
+    if name.startswith(("execv", "spawnv")) and len(node.args) > 1 and isinstance(node.args[1], (ast.List, ast.Tuple)):
+        elts = [node.args[0]] + node.args[1].elts[1:]
+    if name.startswith("spawn") and name != "spawn" and elts:
+        elts = elts[1:]  # the mode
+    words = list(itertools.takewhile(lambda v: v is not None, map(const, elts)))
+    shape = " ".join(shlex.quote(const(e)) if const(e) is not None else '"$__py"' for e in elts)
+    return ("argv", words, seg, shape) if words else (None, seg, seg, None)
+
+
+def python_started_commands(text):
+    """The shapes (_py_started) of the programs Python source starts, or None when it is not Python."""
+    import ast
+    try:
+        return [e[3] for n in ast.walk(ast.parse(text)) if isinstance(n, ast.Call) for e in [_py_started(n, text)] if e]
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
 
 
 def _python_removal_calls(text):
@@ -278,32 +316,14 @@ def _python_removal_calls(text):
             else:
                 removals += inner[0]
                 unknown += inner[1]
-        elif name in _PY_SPAWN_CALLS and node.args:
-            first = node.args[0]
-            shell = name in _PY_SHELL_CALLS or name == "create_subprocess_shell" or any(
-                k.arg == "shell" and not (isinstance(k.value, ast.Constant) and not k.value.value)
-                for k in node.keywords)
-            if shell or name in ("spawn",):
-                command(const(first), seg(node))
-                continue
-            elts = first.elts if isinstance(first, (ast.List, ast.Tuple)) else \
-                node.args if name.startswith(("exec", "spawn", "create_subprocess_exec")) else [first]
-            if name.startswith(("execv", "spawnv")) and len(node.args) > 1 and isinstance(node.args[1], (ast.List, ast.Tuple)):
-                elts = [node.args[0]] + node.args[1].elts[1:]
-            if name.startswith("spawn") and name != "spawn" and elts:
-                elts = elts[1:]  # the mode
-            words = []
-            for e in elts:
-                v = const(e)
-                if v is None:
-                    break
-                words.append(v)
-            if not words:
-                unknown.append(seg(node))
-            elif os.path.basename(words[0]) in REMOVAL_EXES:
+        elif (started := _py_started(node, text)) is not None:
+            kind, value, where, _shape = started
+            if kind == "argv" and os.path.basename(value[0]) in REMOVAL_EXES:
                 removals.append(seg(node.func))
+            elif kind is None:  # a computed argv: residue
+                unknown.append(where)
             else:
-                command(shlex.join(words), seg(node))
+                command(value if kind == "shell" else shlex.join(value), where)
     return removals, unknown
 
 
