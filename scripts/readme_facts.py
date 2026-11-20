@@ -405,12 +405,9 @@ def _classified_sites(sites, root: Path, relay: str) -> tuple[list, list]:
 
     sites.open = tracked_open  # shadows the builtin inside that module only
     enum = sites.Enumerator(str(root))
-    dropped = set()
-    for parent, kids in enum.children.items():
-        event = next((ev for ev, _ in enum.regs.get(parent, [])), "Stop")
-        dropped |= {kid for kid in kids
-                    if not sites.relayed(str(root), parent, kid, event, os.path.join(relay, os.path.basename(kid)))}
-    return [(s, sites.classify(enum, s)) for s in enum.sites() if s.file not in dropped], sorted(enum.regs)
+    found, _ = sites.relayed_sites(enum, str(root), relay,
+                                   lambda parent: next((ev for ev, _ in enum.regs.get(parent, [])), "Stop"))
+    return [(s, sites.classify(enum, s)) for s in found], sorted(enum.regs)
 
 
 def blocking_sites(root=None) -> dict:

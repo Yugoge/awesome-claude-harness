@@ -1536,6 +1536,32 @@ def relayed(tree: str, parent: str, child: str, event: str, work: str) -> bool:
         os.replace(orig, stub)
 
 
+def relayed_sites(e: "Enumerator", tree: str, work: str, event=None) -> tuple[list[Site], list[str]]:
+    """(the sites a block can come from, the child files no parent relays). A child process (Enumerator.children)
+    blocks only through a parent that relays its exit 2 (relayed()); a parent that does not (one answering by
+    JSON, as permissionrequest-answer.py does) gives the child's sites no registration of its own. So a child's
+    site keeps the registrations of the parents that relay it and is dropped only when none does: one parent
+    that does not relay never takes a child away from the parents that do. `event(parent)` names the event a
+    parent's relay is tried at (default: e.event)."""
+    quiet: dict[str, set] = {}  # child file -> the parents that do not relay it
+    relaying: dict[str, set] = {}
+    for parent, kids in e.children.items():
+        ev = event(parent) if event else e.event(parent)
+        for k in kids:
+            ok = relayed(tree, parent, k, ev, os.path.join(work, os.path.basename(k)))
+            (relaying if ok else quiet).setdefault(k, set()).add(parent)
+    out = []
+    for s in e.sites():
+        gone = quiet.get(s.file, set()) - relaying.get(s.file, set())
+        if not gone:
+            out.append(s)
+            continue
+        s.regs = [r for r in s.regs if r[0] not in gone]
+        if s.file in relaying and s.regs:
+            out.append(s)
+    return out, sorted(k for k in quiet if k not in relaying)
+
+
 _SPLIT = re.compile(r"\{[^{}]*\}|%[-#0-9.]*[sdrfix]|\$\{?\w+\}?|\\n|\n|\t")
 
 
