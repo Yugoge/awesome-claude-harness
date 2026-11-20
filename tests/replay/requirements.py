@@ -77,7 +77,10 @@ SITUATIONS = ("home", "ram-disk")
 # fixtures (tests/fixtures/cli; tests/replay/replay.py writes them so). api-request-blob: CLI 2.1.322 also
 # writes, after a tool call's result, a record {"type": "api-request-blob", "sessionId", "hash", "message"}
 # that repeats the assistant message that made the call (observed in the sessions in which R17 refused).
-TRANSCRIPT_SHAPES = ("recorded", "api-request-blob")
+# hook-refused: after the producer's dispatch and after the verdict's, the same template dispatched again and
+# refused by a PreToolUse hook (its is_error result, permissionDecision reject by a hook, as CLI 2.1.322 writes
+# it): a dispatch that never ran declares nothing and is no verdict (live 2026-11-19).
+TRANSCRIPT_SHAPES = ("recorded", "api-request-blob", "hook-refused")
 
 
 def _load(name: str, path: str):
@@ -225,6 +228,20 @@ class Store:
                                          "hash": hashlib.sha256(json.dumps(use).encode()).hexdigest(),
                                          "message": {"role": "assistant", "content": [use]}}) + "\n")
         return call, agent
+
+    def refused(self, role: str, prompt: str) -> str:
+        """An Agent call a PreToolUse hook refused: its call and the CLI's error result for it."""
+        call = "toolu_" + uuid.uuid4().hex[:24]
+        self.append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": call, "name": "Agent",
+             "input": {"description": f"{role} dispatch", "subagent_type": role, "prompt": prompt}}]}})
+        error = "PreToolUse:Agent hook error: refused"
+        self.append({"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": call, "content": error, "is_error": True}]},
+            "toolUseResult": "Error: " + error, "toolDenialKind": "permission-rule",
+            "permissionDecision": {"decision": "reject", "source": "hook", "reasonType": "hook",
+                                   "reasonCode": "hook:PreToolUse"}})
+        return call
 
     def payload(self, tool: str, tool_input: dict, agent: tuple | None = None) -> dict:
         p = {"session_id": self.sid, "transcript_path": self.transcript, "cwd": self.project,
@@ -391,6 +408,8 @@ def order_cells(hooks: Hooks, made: dict, tpls: list | None = None) -> list:
             produced = obligation_of(t, tid)
             names = "Read: " + ", ".join(a["path"] for a in produced["artifacts"] if file_kind(a.get("kind")))
             store.dispatch(t.role, prompt_of(produced))
+            if shape == "hook-refused":
+                store.refused(t.role, prompt_of(produced))
             for label, consumer, ctid in (("the verdict on its artifacts", verdict, later),
                                           ("its next stage, after that verdict returned", t, later)):
                 payload = store.payload("Agent", {"description": label, "subagent_type": consumer.role,
@@ -402,6 +421,8 @@ def order_cells(hooks: Hooks, made: dict, tpls: list | None = None) -> list:
                                    order[0][:400] if "OBLIGATION GATE ORDER" in proc.stderr and order else "permitted"}))
                 if consumer is verdict:
                     store.dispatch(consumer.role, payload["tool_input"]["prompt"])
+                    if shape == "hook-refused":
+                        store.refused(consumer.role, payload["tool_input"]["prompt"])
     return cells
 
 

@@ -336,10 +336,43 @@ def continued_in_another_file(s):
     return qa, True
 
 
+def refused_by_a_hook(s):
+    """A PreToolUse hook refused the QA dispatch (CLI 2.1.322's error result, permissionDecision reject by a
+    hook): it never ran, so it declares nothing and the planning dispatch has no producer to wait for."""
+    qa = s.qa()
+    s.cut(qa)
+    with s.path.open("r+", encoding="utf-8") as handle:
+        records = [json.loads(line) for line in handle]
+        records[-1]["permissionDecision"] = {"decision": "reject", "source": "hook", "reasonType": "hook"}
+        handle.seek(0)
+        handle.truncate()
+        handle.write("".join(json.dumps(r) + "\n" for r in records))
+    return qa, True
+
+
+def refused_sibling_in_flight(s):
+    """The QA dispatch and the planning one are calls of one message; the QA's hook refused it and wrote the
+    refusal record, and the CLI has not written its result when the planning call's hooks run."""
+    import time
+    sys.path.insert(0, str(REPO / "hooks"))
+    from lib import command_span
+    qa, home = s.qa(), os.environ.get("HOME")
+    os.environ["HOME"] = str(s.project.parent / "home")
+    try:
+        day = Path(command_span._refusal_record_files(time.time())[-1])
+    finally:
+        os.environ["HOME"] = home
+    day.parent.mkdir(parents=True, exist_ok=True)
+    day.write_text(json.dumps({"v": 1, "kind": "refusal", "event": "PreToolUse", "session": s.sid,
+                               "tool_use_id": qa}) + "\n")
+    return qa, True
+
+
 CHANNELS = [returned, background_running, background_notified, background_notified_mid_turn, background_failed,
             cut_resumed_notified, cut_resumed_running, returned_then_resumed_running, resumed_twice_one_notification,
             cut_after_its_stop, cut_mid_turn, cut_in_a_blocked_stop, cut_without_agent_files, running,
-            compacted_after_return, compacted_while_in_background, continued_in_another_file]
+            compacted_after_return, compacted_while_in_background, continued_in_another_file, refused_by_a_hook,
+            refused_sibling_in_flight]
 
 
 def _world(tmp_path: Path, channel, sid: str = SID, commit_md: str | None = None):

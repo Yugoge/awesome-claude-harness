@@ -917,63 +917,36 @@ def transcript_span(transcript_path) -> Span:
     return Span("", "", 0, str(transcript_path))
 
 
-_HOOK_DENIAL = (b'"source":"hook"', b'"source": "hook"')
-_REFUSAL_TAIL = 1 << 20  # bytes read from the end of each day's refusal record
-
-
 def _refusal_record_files(now: float) -> list:
-    """The refusal record's files of today and yesterday (UTC): lib/refusal_record.py directory() and day_file(),
-    derived here as there from this file's harness home, so a reader loaded by path alone reaches them."""
-    import time
-    import zlib
+    """Yesterday's and today's (UTC) files of lib/refusal_record.py's record, its directory() and day_file()."""
+    import time, zlib  # noqa: E401
     home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-    key = "-".join((home.rsplit(os.sep, 1)[-1].lstrip("."), f"{zlib.crc32(os.fsencode(home)):08x}"))
-    folder = os.path.join(os.path.expanduser("~"), ".local", "state", "claude-harness", key, "refusals")
-    return [os.path.join(folder, "refusals-" + time.strftime("%Y-%m-%d", time.gmtime(now - d)) + ".jsonl")
-            for d in (86400, 0)]
+    key = f"{home.rsplit(os.sep, 1)[-1].lstrip('.')}-{zlib.crc32(os.fsencode(home)):08x}"
+    return [os.path.join(os.path.expanduser("~"), ".local/state/claude-harness", key, "refusals",
+                         time.strftime("refusals-%Y-%m-%d.jsonl", time.gmtime(now - d))) for d in (86400, 0)]
 
 
 def refused_calls(transcript_path, session_id: str | None = None) -> frozenset:
-    """The ids of the session's tool calls a PreToolUse hook refused: calls that never ran. Two sources, each
-    the record of the refusal itself, never its text:
-
-    - the transcript: the CLI's tool_result for the call, written when the hook has exited, whose record's
-      permissionDecision is {"decision": "reject", "source": "hook"} (CLI 2.1.322; a cut or stopped call
-      has no such decision);
-    - the refusal record (lib/refusal_record.py), today's and yesterday's file: a line of kind "refusal",
-      event "PreToolUse", this session and the call's tool_use_id. The refusing hook writes it before it
-      exits, so it holds a call whose tool_result the CLI has not written yet: a sibling of the same
-      assistant message whose hook ran first.
-
-    ``session_id`` defaults to the transcript's file name (the CLI names it so). A source that cannot be read
-    adds nothing. Standard library only."""
+    """The ids of the session's tool calls a PreToolUse hook refused (they never ran), from either record of the
+    refusal: the CLI's tool_result whose record's permissionDecision is reject by a hook (CLI 2.1.322; a call cut
+    off mid-run has none), and the refusal record's lines of kind refusal, event PreToolUse, for this session
+    (``session_id``, default the transcript's name), which the hook writes before it exits, so before the CLI
+    writes the result: a sibling call of the same message. A source that cannot be read adds nothing."""
     import time
-    found = set()
-    try:
-        with open(transcript_path, "rb") as handle:
-            data = handle.read()
-        lines = _Lines(data)
-        for begin, end in lines.offsets(_HOOK_DENIAL):
-            record = _decode(data[begin:end]) or {}
-            decision = record.get("permissionDecision")
-            if isinstance(decision, dict) and decision.get("decision") == "reject" and decision.get("source") == "hook":
-                found.update(b.get("tool_use_id") for b in _blocks(record) if b.get("type") == "tool_result")
-    except (OSError, TypeError, ValueError):
-        pass
-    session = session_id or (Path(str(transcript_path)).stem if transcript_path else "")
-    for path in _refusal_record_files(time.time()) if session else ():
+    found, session = set(), session_id or (Path(str(transcript_path)).stem if transcript_path else "")
+    for n, path in enumerate([transcript_path] + (_refusal_record_files(time.time()) if session else [])):
         try:
             with open(path, "rb") as handle:
-                handle.seek(max(0, os.fstat(handle.fileno()).st_size - _REFUSAL_TAIL))
-                tail = handle.read()
-        except OSError:
+                data = handle.read()
+        except (OSError, TypeError, ValueError):
             continue
-        for raw in tail.split(b"\n"):
-            if session.encode() not in raw:
-                continue
-            entry = _decode(raw) or {}
-            if entry.get("kind") == "refusal" and entry.get("event") == "PreToolUse" and entry.get("session") == session:
-                found.add(entry.get("tool_use_id"))
+        for begin, end in _Lines(data).offsets((b'"source":"hook"', b'"source": "hook"') if not n else (session.encode(),)):
+            r = _decode(data[begin:end]) or {}
+            d = r.get("permissionDecision") if isinstance(r.get("permissionDecision"), dict) else {}
+            if (d.get("decision"), d.get("source")) == ("reject", "hook"):
+                found.update(b.get("tool_use_id") for b in _blocks(r) if b.get("type") == "tool_result")
+            elif (r.get("kind"), r.get("event"), r.get("session")) == ("refusal", "PreToolUse", session):
+                found.add(r.get("tool_use_id"))
     return frozenset(i for i in found if isinstance(i, str) and i)
 
 
