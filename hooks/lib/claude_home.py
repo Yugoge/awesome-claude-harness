@@ -275,11 +275,9 @@ PROJECT_ROOT_SPELLING = "${CLAUDE_PROJECT_DIR:-$PWD}"  # the project root as com
 
 
 def known_text(text: str, cwd: Optional[str] = None, project: Optional[str] = None) -> Optional[str]:
-    """``text`` (a shell word as written) with ~, $HOME, $CLAUDE_PROJECT_DIR, ${CLAUDE_HOME:-$HOME/.claude} and
-    (at the call's start) $PWD expanded and its quotes dropped; None when an expansion stays. ``project``
-    (the Bash call's project directory, which its environment does not carry): ${CLAUDE_PROJECT_DIR:-$PWD} too."""
-    if project:
-        text = text.replace(PROJECT_ROOT_SPELLING, project)
+    """``text`` (a shell word as written) with ~, $HOME, $CLAUDE_PROJECT_DIR, ${CLAUDE_HOME:-$HOME/.claude}, (at the call's
+    start) $PWD and, given the Bash call's ``project``, its spelling expanded; quotes dropped; None when one stays."""
+    text = text.replace(PROJECT_ROOT_SPELLING, project) if project else text
     home = os.environ.get("HOME") or os.path.expanduser("~")
     known = {"HOME": home}
     if cwd:
