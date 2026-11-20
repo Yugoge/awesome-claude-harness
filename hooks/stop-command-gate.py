@@ -1318,16 +1318,10 @@ BLOCK_BOUND = 8000  # characters; no cap was seen in the CLI's delivery (14 kB S
 _GAP_KIND = re.compile(r"^GAP artifact=\S* problem=([A-Z_]+)\b.* lane=(\S+)$")
 
 
-def gaps_file(session) -> str:
-    """The full gap list of the session's last over-bound block (harness_temp_state: stop-gaps)."""
-    return os.path.join(importlib.import_module("lib.locations").state_root(),
-                        "claude-stop-gaps-%s.txt" % re.sub(r"[^A-Za-z0-9_.-]", "_", str(session or "unknown"))[:120])
-
-
 def _block_text(command: str, gaps: list[str], hint: str = "", session=None) -> str:
     """Today's text when it fits BLOCK_BOUND. Else: the lines that are not GAP lines (the todo lines) and the
-    hint, then the GAP lines counted by (problem, lane) with samples while room is left, then the file that
-    holds every line (rewritten here)."""
+    hint, then the GAP lines counted by (problem, lane) with a sample while room is left, then how many lines were
+    left out and the call that prints them all. Nothing is written."""
     finish = ("Decide each open question yourself (an experiment, else the default) and record the decision."
               if command == "dev-overnight" else
               "What a rule refuses is reported as refused, with the hook's output; nobody is asked about it.")
@@ -1335,25 +1329,18 @@ def _block_text(command: str, gaps: list[str], hint: str = "", session=None) -> 
     listing = "".join(f"- {gap}\n" for gap in gaps)
     if len(head) + len(listing) + len(tail) + len(hint) <= BLOCK_BOUND:
         return head + listing + tail + hint
-    path, groups, other = gaps_file(session), {}, []
+    groups, other = {}, []
     for gap in gaps:
         kind = _GAP_KIND.match(gap)
         (groups.setdefault(kind.groups(), []) if kind else other).append(gap)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path + ".tmp", "w", encoding="utf-8") as handle:
-            handle.write(head + listing)
-        os.replace(path + ".tmp", path)
-        where = f"All {len(gaps)} lines, one per line: {path} (read it in slices of a few hundred lines).\n"
-    except OSError as exc:
-        where = f"The full list of {len(gaps)} lines could not be written to {path}: {exc}\n"
-    room = BLOCK_BOUND - len(head) - len(tail) - len(where) - 200
-    out = [head]
+    room = BLOCK_BOUND - len(head) - len(tail) - 400
+    out, shown = [head], 0
     for n, line in enumerate(other):  # the non-GAP lines keep at most half the room
         if sum(map(len, out)) + len(line) > room // 2:
-            out.append(f"- ... {len(other) - n} more lines: see the file\n")
+            out.append(f"- ... {len(other) - n} more lines\n")
             break
         out.append(f"- {line[:400]}\n")
+        shown += 1
     out.append(hint)
     order = sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
     counts = [f"- {len(lines)} x problem={kind} lane={lane}\n" for (kind, lane), lines in order]
@@ -1362,11 +1349,14 @@ def _block_text(command: str, gaps: list[str], hint: str = "", session=None) -> 
     for count, (_key, lines) in zip(counts, order):
         sample = f"    e.g. {lines[0][:300]}\n"
         if room < len(count):
-            out.append(f"- ... {len(order) - counts.index(count)} more groups: see the file\n")
+            out.append(f"- ... {len(order) - counts.index(count)} more groups\n")
             break
+        shown += bool(room >= len(count) + len(sample))
         out.append(count + (sample if room >= len(count) + len(sample) else ""))
         room -= len(out[-1])
-    return "".join(out) + where + tail
+    left = (f"{len(gaps) - shown} of the {len(gaps)} lines were left out above; Step 0's disposition call "
+            "(scripts/resolve-dev-artifact-chain.py --disposition) prints every GAP line of a task.\n")
+    return "".join(out) + left + tail
 
 
 def decide(payload: dict, mode: str = "block") -> tuple[int, str]:

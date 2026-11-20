@@ -59,7 +59,6 @@ module yet; `hooks/tests/test_harness_temp_state.py` pins every row.
 | daemon-restart-grant | `claude-allow-daemon-restart-<target>.flag` (under `CLAUDE_TMPDIR`) | `hooks/pretool-bash-safety.sh:25`, `:544` |
 | scratch-owner | `<sid>/.owner` (and `.owner.<pid>.tmp`) in the session scratch root | `hooks/session-scratch-init.sh:27`, `:73`, `hooks/lib/scratch_owner.py:17` |
 | doc-sync-notices | `<sid>/doc-sync-notices-<audience>.json` in the session scratch root (`locations.session_scratch_root`) | `hooks/doc_sync/notice.py:39`, `:232`, `:266`, `:294` |
-| stop-gaps (scratch) | `claude-stop-gaps-<session>.txt` (and `.txt.tmp`): the full gap list of a Stop block over `BLOCK_BOUND` | `hooks/stop-command-gate.py` `gaps_file`, `_block_text` |
 
 ## Harness-managed scratch
 

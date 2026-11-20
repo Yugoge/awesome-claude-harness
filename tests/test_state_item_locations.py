@@ -347,17 +347,7 @@ def c09(w):
     return [("CODEX_HOME set", str(rollout.resolve()), got)]
 
 
-def g01(w):
-    # writer: the Stop gate's gaps_file, in the session's Stop hook; reader: the agent, which Reads the absolute
-    # path the block text names (it is printed by the writer, so the row checks it is absolute and the same file).
-    gate = HOOKS / "stop-command-gate.py"
-    big = f"[f'GAP artifact=a problem=X: {{i}} lane=-' for i in range(400)]"
-    return [(s, real(py(script_fn(gate, f"ns['gaps_file']({SID!r})"), w.session(s))),
-             real(re.search(r": (/\S+) \(read it", py(script_fn(gate, f"ns['_block_text']('dev', {big}, '', {SID!r})"),
-                                                       w.session(s), cwd=str(w.run_dir))).group(1))) for s in "abc"]
-
-
-ROWS = {"G01": g01, "S01": s01, "P01": p01, "R1": r1, "C04": c04, "C01": c01, "T07": t07, "C13": c13, "C06": c06,
+ROWS = {"S01": s01, "P01": p01, "R1": r1, "C04": c04, "C01": c01, "T07": t07, "C13": c13, "C06": c06,
         "C05": c05, "S29": s29, "C12": c12, "R2": r2, "C03": c03, "S02": s02, "P02": p02, "T02": t02, "S34": s34,
         "C10": c10, "P04": p04, "C09": c09, "C11": c11}
 

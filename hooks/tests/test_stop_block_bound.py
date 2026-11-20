@@ -1,6 +1,6 @@
 """The Stop gate's block text is bounded: a span with thousands of gaps gets the todo lines and the refusal hint
-first, the GAP lines counted by (problem, lane) with samples, and the path of a file that holds every line; a block
-under the bound is today's text byte for byte."""
+first, the GAP lines counted by (problem, lane) with samples, and how many lines were left out; no file is written
+anywhere; a block under the bound is today's text byte for byte."""
 import importlib.util
 import os
 import re
@@ -45,10 +45,11 @@ def test_thousands_of_gaps_give_a_bounded_block_that_leads_with_what_to_do(tmp_p
     assert all(groups[key] == n for key, n in shown.items())
     assert len(shown) + (int(more.group(1)) if more else 0) == len(groups)
     assert f"{len(gaps) - 2} GAP lines in {len(groups)} groups" in text
-    path = gate.gaps_file("sess/1")
-    assert os.path.dirname(path) == str(tmp_path / "state") and path in text
-    written = Path(path).read_text(encoding="utf-8")
-    assert written == "COMMAND_GATE /dev: not complete\n" + "".join(f"- {g}\n" for g in gaps)
+    left = re.search(r"^(\d+) of the (\d+) lines were left out above; Step 0's disposition call", text, re.M)
+    assert left and int(left.group(2)) == len(gaps) and 0 < int(left.group(1)) < len(gaps), text[-600:]
+    assert text.endswith("Finish the gaps above. What a rule refuses is reported as refused, with the hook's "
+                         "output; nobody is asked about it.\n")
+    assert not (tmp_path / "state").exists()  # no file anywhere
 
 
 def test_a_small_span_keeps_todays_text_byte_for_byte_and_writes_no_file(tmp_path, monkeypatch):
