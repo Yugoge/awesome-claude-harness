@@ -487,9 +487,16 @@ def test_a2_no_api_error_or_interrupt_reading():
 def test_a2_no_bound_counter_release_token_or_write():
     source = (HOOKS / "stop-command-gate.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
-    calls = {getattr(n.func, "attr", getattr(n.func, "id", "")) for n in ast.walk(tree) if isinstance(n, ast.Call)}
-    assert not calls & {"write_text", "write_bytes", "unlink", "remove", "rename", "replace", "mkdir", "touch",
-                        "open", "makedirs", "rmtree"}
+    name = lambda n: getattr(n.func, "attr", getattr(n.func, "id", ""))  # noqa: E731
+    block = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_block_text")
+    inside = {id(n) for n in ast.walk(block)}
+    calls = {name(n) for n in ast.walk(tree) if isinstance(n, ast.Call) and id(n) not in inside}
+    writes = {"write_text", "write_bytes", "unlink", "remove", "rename", "replace", "mkdir", "touch", "open",
+              "makedirs", "rmtree"}
+    assert not calls & writes
+    # the one write: an over-bound block's full gap list, for the agent to read; nothing in the gate reads it
+    assert {name(n) for n in ast.walk(block) if isinstance(n, ast.Call)} & writes == {"open", "makedirs", "replace"}
+    assert source.count("gaps_file(") == 2  # its definition and _block_text's one call
     for word in ("stop_hook_active", "AWAITING_INPUT", "is_pause", "settings.machine", "private-literal",
                  "claude-do-task-", "terminal_status\")", "derive_state"):
         assert word not in source, word

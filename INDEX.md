@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T03:48:38Z*
-**Total entries**: 1157
+*Last updated: 2026-11-20T07:25:46Z*
+**Total entries**: 1158
 **Convention**: kebab
 
 ## Tree
@@ -429,6 +429,7 @@ dot-claude/
 │   │   ├── `test_specialist_report_repair.py` - /dev-overnight Step 3 (commands/dev-overnight.md, the specialist template) dispatches architect,
 │   │   ├── `test_start_launchers.py` - and SubagentStart (P2-3), as rules of the one Python registration each event has (P12-L7, lib/hoo...
 │   │   ├── `test_state_dir_path_rule.py` - Each test pairs a state file's writer with its reader: with CLAUDE_STATE_DIR pointing
+│   │   ├── `test_stop_block_bound.py` - first, the GAP lines counted by (problem, lane) with samples, and the path of a file that holds e...
 │   │   ├── `test_stop_checkpoint_noop_no_ref.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 │   │   ├── `test_stop_checkpoint_refusal.py` - Drives the registered Stop hook, hooks/stop-launch.py, and the coordinator with its four default
 │   │   ├── `test_stop_command_gate.py` - The gate calls P3's disposition, P2's overnight locator and window, and P4's
