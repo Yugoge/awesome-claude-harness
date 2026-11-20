@@ -227,7 +227,7 @@ def _git_settled(res, raw) -> bool:
     return True
 
 
-# git options that write a file or run a program; an abbreviation counts from four characters (`--ou`).
+# git options that write a file or run a program (an abbreviation: git_facts.git_run_or_write_option).
 from lib.git_facts import GIT_RUN_OR_WRITE_OPTIONS, git_run_or_write_option  # noqa: E402
 _GIT_RUN_OPTIONS = tuple(sorted(GIT_RUN_OR_WRITE_OPTIONS))
 

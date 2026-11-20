@@ -47,9 +47,8 @@ _GIT_EXACT_BEFORE_RUN = {"--text": frozenset({"diff", "diff-files", "diff-index"
 
 
 def git_run_or_write_option(sub: str, word: str) -> bool:
-    """Whether ``word`` given to ``git <sub>`` is an option of GIT_RUN_OR_WRITE_OPTIONS: its exact name, or an
-    abbreviation of one that no exact option of ``sub`` also starts with (git: an exact option is never an
-    abbreviation, and an ambiguous one is refused): `--text` is diff's own, `--textc` is `--textconv`."""
+    """Whether ``word`` given to ``git <sub>`` is an option of GIT_RUN_OR_WRITE_OPTIONS: its exact name, or an abbreviation
+    no exact option of ``sub`` also starts with (as git reads it): `--text` is diff's own, `--textc` is `--textconv`."""
     name = word.split("=", 1)[0]
     if not name.startswith("--") or name == "--" or name in _GIT_EXACT_BEFORE_RUN and sub in _GIT_EXACT_BEFORE_RUN[name]:
         return False
