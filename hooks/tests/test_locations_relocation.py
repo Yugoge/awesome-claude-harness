@@ -6,7 +6,9 @@ used to test a literal is taken here with the project on the shared-memory tmpfs
 superuser's home, under a user's home, in a system temp directory, in a user's runtime
 directory and at a path with a space (PROJECTS), and, where a harness home is named, with the
 home addressed by its real path, as ~/.claude and through an account's symlinked directory:
-the answer is the same in every cell.
+the answer is the same in every cell, whoever runs the test: under the superuser's home a user
+who is not root (CI's runner) can read nothing, and a hook judges a path below a folder it cannot
+read as it judges one that is absent (the last test pins that with a folder of its own).
 
 No directory is made at a project location. The hooks judge paths, and the roots are
 injected the way a session gives them (CLAUDE_PROJECT_DIR, the payload's cwd, HOME,
@@ -30,11 +32,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / "hooks"
 sys.path.insert(0, str(HOOKS))
-NEVER = "harness-audit-throwaway-never-made"  # no test creates a directory of this name
+NEVER = "relocation-probe-never-made"  # no test creates a directory of this name
 PROJECTS = {
     "dev-shm": f"/dev/shm/{NEVER}/proj",
     "root": f"/root/{NEVER}/proj",
-    "home-user": "/home/harness-audit-throwaway-user/proj",
+    "home-user": "/home/relocation-probe-user/proj",
     "var-tmp": f"/var/tmp/{NEVER}/proj",
     "run-user": f"/run/user/{os.getuid()}/{NEVER}/proj",
     "space": f"/srv/{NEVER} with space/my proj",
@@ -726,3 +728,28 @@ def test_the_installer_loads_the_runtime_guard_config_with_pathmatch_alone(tmp_p
                           cwd=str(tmp_path), timeout=60, env={"PATH": "/usr/bin:/bin", "HOME": f"/srv/{NEVER}/home"})
     assert proc.returncode == 0 and f"/srv/{NEVER}/home/.config" in proc.stdout and "locations" in proc.stdout, \
         proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="the superuser reads every folder")
+def test_a_project_below_a_folder_the_user_cannot_read_is_judged_as_an_absent_one(tmp_path, monkeypatch, home_layout):
+    """Not the superuser: a project below a folder he cannot read (his view of /root). Every decision
+    is the one an absent project gets, none an error: the config guard's sentinel check, the round
+    and producer question files the tool policy looks for and the overnight state files raised
+    PermissionError, and the first two hooks then allowed the call (fail-open), the third did not decide it."""
+    locked = tmp_path / "locked"
+    locked.mkdir(mode=0)
+    project = str(locked / "proj")
+    try:
+        test_f1_declared_report_is_its_declarers_alone_wherever_the_project_is(tmp_path, project)
+        test_f2_a_folder_that_only_ends_in_the_text_is_not_protected(tmp_path, project, home_layout)
+        test_f2_the_folder_itself_is_a_protected_target(tmp_path, monkeypatch, project)
+        test_f8_overnight_exemption_follows_the_session_temp_and_state_roots(tmp_path, monkeypatch, project)
+        proc = _hook("pretool-overnight-hook-guard.py", _payload(project, "Bash", {"command": "ls src"}),
+                     _env(tmp_path, project), tmp_path)
+        assert (proc.returncode, proc.stderr) == (0, ""), proc.stderr
+        ask = {"questions": [{"question": "q?", "header": "h", "multiSelect": False, "options": [
+            {"label": "a", "description": "a"}, {"label": "b", "description": "b"}]}],
+            "metadata": {"source": f"producer-question:{TASK}:dev"}}  # its file is not there to show
+        _denial(_hook("pretool-tool-policy.py", _payload(project, "AskUserQuestion", ask), _env(tmp_path, project), tmp_path))
+    finally:
+        locked.chmod(0o700)

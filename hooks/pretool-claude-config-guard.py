@@ -70,7 +70,7 @@ def _project_dir() -> Path:
 
 def _sentinel_present() -> bool:
     """True iff the allow-list sentinel exists at the project root."""
-    return (_project_dir() / '.claude' / SENTINEL_NAME).exists()
+    return os.path.exists(_project_dir() / '.claude' / SENTINEL_NAME)  # an unreadable folder holds none it can show
 
 
 def _located_kind(path: str, base=None) -> str:

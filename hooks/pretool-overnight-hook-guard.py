@@ -26,6 +26,7 @@ Exit codes:
 
 import fnmatch
 import functools
+import glob
 import json
 import os
 import re
@@ -331,12 +332,16 @@ def _extract_live_worktree_path(sf: Path) -> str:
     return state.get("worktree_path", "") or ""
 
 
+def _state_files() -> list:
+    """The project's overnight state files; none when its .claude folder cannot be read, as when it is absent."""
+    claude_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()), ".claude")
+    return [claude_dir / name for name in glob.glob("overnight-state-*.json", root_dir=claude_dir)]
+
+
 def _get_active_worktree_paths() -> list[str]:
     """Return worktree_paths from all live overnight sessions."""
-    project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
-    state_files = list((project_dir / ".claude").glob("overnight-state-*.json"))
     paths = []
-    for sf in state_files:
+    for sf in _state_files():
         wt = _extract_live_worktree_path(sf)
         if wt:
             paths.append(wt)
@@ -351,13 +356,8 @@ def _get_protected_branches() -> list[str]:
     predicates still govern. A released record (lib/overnight.py's `released`, which is immutable)
     is the only one left out.
     """
-    project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
     names: list[str] = []
-    try:
-        state_files = list((project_dir / ".claude").glob("overnight-state-*.json"))
-    except OSError:
-        return names
-    for sf in state_files:
+    for sf in _state_files():
         state = _load_state(sf)
         if state is None or overnight.state_verdicts(state).released:
             continue
@@ -430,7 +430,7 @@ def _in_isolated_main_root(file_path: str) -> bool:
     """
     project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
     state_root = harness_state_dir()
-    for sf in (project_dir / ".claude").glob("overnight-state-*.json"):
+    for sf in _state_files():
         if not _extract_live_worktree_path(sf):
             continue
         main_root = (_load_state(sf) or {}).get("main_root") or str(project_dir)
@@ -511,8 +511,7 @@ def _any_live_state(sf: Path) -> bool:
 
 def is_overnight_active() -> bool:
     """Check if any overnight session is still live."""
-    project_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
-    state_files = list((project_dir / ".claude").glob("overnight-state-*.json"))
+    state_files = _state_files()
     if not state_files:
         return False
     return any(_any_live_state(sf) for sf in state_files)
@@ -885,8 +884,7 @@ def _governing_state_for_cwd(cwd: str) -> dict | None:
         cwd_real = os.path.realpath(cwd)
     except Exception:
         cwd_real = cwd
-    project_dir = Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
-    for sf in (project_dir / '.claude').glob('overnight-state-*.json'):
+    for sf in _state_files():
         state = _load_state(sf)
         if state is None or not _is_session_live(state):
             continue
