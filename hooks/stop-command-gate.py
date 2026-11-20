@@ -525,12 +525,32 @@ def p_close(span, root, payload) -> list[str]:
     close_rating = importlib.import_module("lib.close_rating")  # P4's
     asks = not _loaded_lacks(span)(re.escape(RATING_SOURCE))
     names, gaps = _cycle_names(span), []
+    owed = _owed_gap(span, root)
     for task in targets:
-        gaps += [g for name in _names(names, task) for g in disposition(root, name, "close")]
+        gaps += [g for name in _names(names, task) for g in disposition(root, name, "close") if owed(name, g)]
         if asks and close_rating.rating_required(span, task) and not close_rating.rating_asked(
                 span.transcript_path, task):
             gaps.append(f"close {task}: the close-rating question (AskUserQuestion) was not asked")
     return gaps
+
+
+_GAP_ARTIFACT = re.compile(r'^GAP artifact=("(?:[^"\\]|\\.)*"|\S+) ')
+NO_OWNER_LINE = re.compile(r"^NO_OWNER: (\S+)", re.M)
+
+
+def _owed_gap(span, root):
+    """close.md Routes' last bullet: a gap whose artifact no dispatch, lane, step or writer owes (the reader
+    obligation.declaring_dispatch, which Routes runs, answers None), reported on a NO_OWNER: <artifact> line of the
+    span's last text, is no longer owed by this run; nobody is asked, and the cycle stays unfinished. Every other
+    gap is owed."""
+    named = set(NO_OWNER_LINE.findall(span.last_text() or ""))
+    reader = importlib.import_module("lib.obligation").declaring_dispatch
+
+    def owed(task: str, gap: str) -> bool:
+        found = _GAP_ARTIFACT.match(gap)
+        path = found and (json.loads(found.group(1)) if found.group(1).startswith('"') else found.group(1))
+        return not (path in named and reader(task, path, root) is None)
+    return owed
 
 
 # close.md Step 0: a disposition call that exits non-zero runs once more; failing again, the run ends with one

@@ -1462,26 +1462,31 @@ class CloseRun:
     def run_noba(self) -> None:
         """Finding 1 (D8): Step 0 names BA's missing ticket in a /close span whose task has dispatch records of
         an earlier /close but no /dev span left. Each gap goes to the reader as Routes says; one it names no
-        owner for is Routes' last bullet: a report naming it, nobody asked, where the turn ends (the owner stops
-        it); nothing here writes BA's artifact."""
+        owner for is Routes' last bullet: a report naming it on a NO_OWNER: line, nobody asked, where the turn
+        ends and its Stop passes; nothing here writes BA's artifact."""
         o = self.o
         self.start(self.tid)
         out = self.disposition("Step 0")
         fact(self.rp, "close Step 0", {"label": "Step 0", "disposition": out["disposition"],
                                         "gaps": [(g["artifact"], g["problem"]) for g in out["gaps"]],
                                         "mode": (out["chain"] or {}).get("mode")})
+        unowed = []
         for art in dict.fromkeys(g["artifact"] for g in out["gaps"]):
             if self.reader(art, "Step 0 round 1") is not None:
                 self.route_path(art, "the artifact Step 0 names", "Step 0 round 1 routed")
                 continue
-            # Routes' last bullet (2026-11-19): nobody is asked; the run ends with the report naming the artifact
-            if "Nobody is asked: end with a report naming the task, the artifact" not in " ".join(
-                    self.routing_section().split()):
-                raise cmdtext.TextNotFound("Routes: no report-only end for an artifact nobody owes")
-            o.s.say(f"Task {self.tid}: no dispatch or request exists to re-run for {art}; nothing owes it.")
-            fact(self.rp, "close Request report", {"artifact": art.replace(self.tid, "<task>")})
-            o.s.end("other", label="/close interrupted at the Request report")
+            unowed.append(art)
+        if not unowed:
             return
+        # Routes' last bullet (2026-11-19): nobody is asked; the run ends with the report naming each artifact
+        if "one line `NO_OWNER: <artifact>` per such artifact" not in " ".join(self.routing_section().split()):
+            raise cmdtext.TextNotFound("Routes: no NO_OWNER: line for an artifact nobody owes")
+        text = "\n".join([f"Task {self.tid}: no dispatch or request exists to re-run for {', '.join(unowed)}."]
+                          + [f"NO_OWNER: {art}" for art in unowed])
+        for art in unowed:
+            fact(self.rp, "close Request report", {"artifact": art.replace(self.tid, "<task>")})
+        ev = o.s.stop(text, label=self.label("Stop on the report of an artifact nobody owes"))
+        fact(self.rp, "close Request stop", {"still_blocked": bool(ev.still_blocked)})
 
     # ------------------------------------------------------------ --auto
     def mode_question(self, extra: str) -> str:
