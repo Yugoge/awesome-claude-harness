@@ -1777,7 +1777,7 @@ def test_where_no_step_call_was_refused_the_block_text_is_unchanged(env, case):
     assert code == 2 and text == gate._block_text("dev", gaps) and "REFUSED" not in text, (case, text)
 
 
-@pytest.mark.parametrize("command", ["dev", "redev", "dev-command", "do"])
+@pytest.mark.parametrize("command", ["dev", "redev", "dev-command", "do", "close"])
 def test_the_exit_line_the_block_prints_is_the_one_the_gate_accepts_for_every_step(command):
     """(c) Every step name the todo scripts give: the printed line is one STEP_REFUSED_LINE reads as that step."""
     tc = importlib.import_module("lib.todo_canonical")
@@ -1886,6 +1886,46 @@ def test_close_auto_ends_when_each_parent_it_could_not_close_is_refused_and_name
         assert code == 2 and f"close-report-{FAMILY}.md" in text, (case, text)
         hinted = f'"REFUSED: <hook> refused <the call> for task {FAMILY}"' in text
         assert hinted is (case == "refused-not-named"), (case, text)
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "ran-later"])
+def test_a_plain_close_step_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(env, monkeypatch, case):
+    """Ruling 2026-11-20: /close gets /dev's exit. Step 2's QA dispatch refused by a hook and the step named on the
+    REFUSED: line: released, the step still open. Named with no refusal on record, or refused then run again: held."""
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    task_file(env)
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    steps = canonical("close", FAMILY)
+    env.tx.command("close", FAMILY)
+    k = next(i for i, t in enumerate(steps) if t["content"].startswith("Step 2:"))
+    env.tx.todos(steps, k)
+    if case == "named-not-refused":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    else:
+        refused_dispatch(env, "qa")
+    if case == "ran-later":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    code, text = run(env)
+    assert code == 2 and (f'"REFUSED: {steps[k]["content"]}"' in text) is (case == "released"), (case, text)
+    env.tx.say(f"REFUSED: {steps[k]['content']}: the close QA dispatch was refused\nOBLIGATION GATE ORDER")
+    assert (run(env) == (0, "")) is (case == "released"), case
+    assert command_span.active_span(env.tx.path).last_todos()[k]["status"] == "in_progress"
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "refused-not-named"])
+def test_a_commit_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(env, case):
+    """commit.md Step 7: a task whose own dispatch a hook refused (no analyst ran, so no status block), named on a
+    REFUSED: line, is owed no more; named with no refusal, or refused and not named: held."""
+    task_file(env)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    env.tx.command("commit", FAMILY)
+    if case == "named-not-refused":
+        env.tx.dispatch(FAMILY, role="changelog-analyst", pipeline="commit", profile="commit-landing")
+    else:
+        refused_parent_dispatch(env, FAMILY, role="changelog-analyst")
+    if case != "refused-not-named":
+        env.tx.say(f"REFUSED: pretool-launch.py refused the changelog-analyst dispatch for task {FAMILY}")
+    assert (run(env)[0] == 0) is (case == "released"), case
 
 
 def test_a_refused_step_line_releases_no_other_gated_command(env, monkeypatch):

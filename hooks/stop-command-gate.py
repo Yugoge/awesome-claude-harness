@@ -390,11 +390,11 @@ STEP_REFUSED_LINE = re.compile(r"^REFUSED: (Step [0-9][0-9A-Za-z.]*)\b", re.M)  
 
 
 def refused_step(span) -> str | None:
-    """/dev, /redev, /dev-command, /do: the pending step (the first not completed), when it was set in progress and a
+    """/dev, /redev, /dev-command, /do, /close: the pending step (the first not completed), when it was set in progress and a
     hook then refused its own call (command_span.refused_calls: a dispatch of its subagent_call's role with none of
     that role after it, or, with no role, the last call but TodoWrite and AskUserQuestion); else None."""
     step = next((t for t in span.last_todos() or () if t.get("status") != "completed"), {})
-    if span.command not in ("dev", "redev", "dev-command", "do") or not step.get("content"):
+    if span.command not in ("dev", "redev", "dev-command", "do", "close") or not step.get("content"):
         return None
     denied = command_span.refused_calls(span.transcript_path)
     if not denied:  # no refusal on record: no walk
@@ -753,7 +753,7 @@ def hook_refused_tasks(span) -> set:
 
 
 def hook_refused_parents(span) -> tuple:
-    """close.md --auto, a hook rejection: (named, unnamed) parents whose last dispatch (an Agent or Task call whose
+    """close.md --auto and commit.md Step 7, a hook rejection: (named, unnamed) parents whose last dispatch (an Agent or Task call whose
     obligation names the parent's task) a hook refused (command_span.refused_calls), as their task families; named
     when a REFUSED: line of the span's text names the parent (`... for task <id>`). A named parent's close is no
     longer owed by the batch; the other parents' results stand."""
@@ -790,10 +790,13 @@ def p_commit(span, root, payload) -> list[str]:
         return unresolved
     if targets is None:
         return ["commit: no target task resolved"]
-    refused = hook_refused_tasks(span)  # Step 7: reported as refused, nobody asked; the other targets still land
+    # Step 7: reported as refused, nobody asked; the other targets still land. Also a task whose own last dispatch a
+    # hook refused (no analyst ran, so no status block), named on its REFUSED: line.
+    refused = hook_refused_tasks(span) | hook_refused_parents(span)[0]
     canon, names = importlib.import_module("lib.obligation").canonical_task_id, _cycle_names(span)
     owed = _owed_gap(span, root)  # Routes: an artifact nobody owes, reported on its NO_OWNER: line
-    return [g for task in targets if canon(task) not in refused
+    family = importlib.import_module("lib.obligation").task_family
+    return [g for task in targets if not {canon(task), family(canon(task))} & refused
             for name in _names(names, task) for g in disposition(root, name, "commit") if owed(name, g)]
 
 
