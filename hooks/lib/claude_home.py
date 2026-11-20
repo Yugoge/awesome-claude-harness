@@ -235,13 +235,12 @@ def config_home() -> Path:
     """Where harness records that must not split by configuration directory live (score log, logs,
     restart state). The configuration directory (CLAUDE_CONFIG_DIR, else ~/.claude) as written; when
     its settings.json is a link, the directory that link resolves into, so configuration directories
-    linking to one harness home share its records. Shell twin: claude_config_home."""
+    linking to one harness home share its records. Shell twin: claude_config_home.
+    Path arithmetic alone, no test of the file: settings.json is a link exactly when its real path is not
+    its name below the configuration directory's real path."""
     config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    settings = config / _SENTINEL_FILE
-    try:
-        return settings.resolve(strict=True).parent if settings.is_symlink() else config
-    except (OSError, RuntimeError):
-        return config
+    real = os.path.realpath(config / _SENTINEL_FILE)
+    return config if real == os.path.join(os.path.realpath(config), _SENTINEL_FILE) else Path(os.path.dirname(real))
 
 
 def settings_env(*keys: str, any_session: bool = False) -> dict[str, str]:
