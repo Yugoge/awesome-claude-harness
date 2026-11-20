@@ -1399,12 +1399,13 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if not gated and not asking:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
-    refused = env = None
+    refused = env = analyst = None
     try:
         refused = refused_step(span) if gated else None  # one walk: the release below and the block's exit line
         env = environment_refusal(span, root) if gated else None  # the gate's own attempt, read once
+        analyst = analyst_refused(span) if gated else None
         if gated and (no_target_end(span, root) or step_refused_end(span, refused) or no_owner_end(span, root)
-                      or environment_end(span, env)):
+                      or environment_end(span, env) or analyst_refused_end(span, analyst)):
             return 0, "", terminal
     except Exception:  # an unread record releases nothing: the gaps below decide
         pass
@@ -1421,10 +1422,31 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
         return 0, "", terminal
     if not gaps:  # (7)
         return 0, "", terminal
-    text = _block_text(span.command, gaps, _exit_hint(span, refused, env), payload.get("session_id"))
+    text = _block_text(span.command, gaps, _exit_hint(span, refused, env) + (
+        f"A hook refused the {analyst} dispatch. To end the turn, write the line \"REFUSED: <hook> refused the "
+        f"{analyst} dispatch; nothing was {'published' if analyst == 'push-analyst' else 'merged'}\", then the "
+        "hook's own output.\n" if analyst else ""), payload.get("session_id"))
     if mode == "advisory":
         return 0, "would block\n" + text, terminal
     return 2, text, None
+
+
+ANALYST = {"push": "push-analyst", "merge": "merge-analyst"}  # push.md Step 3, merge.md Step 2
+
+
+def analyst_refused(span) -> str | None:
+    """/push, /merge: the command's own analyst, when a hook refused its last dispatch (command_span.refused_calls):
+    no grant is written and Step 5 cannot run; else None."""
+    role = ANALYST.get(span.command)
+    last = next((c for c in span.iter_calls("Agent", "Task", newest_first=True)
+                 if c.input.get("subagent_type") == role), None) if role else None
+    return role if last is not None and last.id in command_span.refused_calls(span.transcript_path) else None
+
+
+def analyst_refused_end(span, role: str | None) -> bool:
+    """``role`` (analyst_refused) is named by a REFUSED: line of the last text: the run ends, nothing published or
+    merged."""
+    return bool(role) and bool(re.search(rf"^REFUSED: .*\b{role}\b", span.last_text() or "", re.M))
 
 
 def _exit_hint(span, refused, env) -> str:
