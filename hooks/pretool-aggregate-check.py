@@ -3,7 +3,7 @@
 existence before allowing the orchestrator to dispatch the QA subagent in
 parallel-dev cycles. G3, the collection check at the next dispatch.
 
-Fan-out collection check (QA dispatches only). A lane report declares a
+Fan-out collection check (a dev QA dispatch only, _is_qa_dispatch). A lane report declares a
 fan-out by its own `lane_set` naming two or more lanes. For each fan-out in the
 dispatch's scope it BLOCKS (exit 2), in every mode as on master, while every
 lane has reported and the canonical aggregate dev-report-<task-id>.json is
@@ -88,15 +88,14 @@ def _load_stdin():
 
 
 def _is_qa_dispatch(data):
-    """Return True iff this Agent call dispatches subagent_type=qa."""
-    if not isinstance(data, dict):
+    """True iff this Agent call dispatches subagent_type=qa to verify the dev fan-out's output: its obligation
+    declares the dev QA's verdict, a qa-report.v2 (a BA-QA writes ba-qa-report.v1 and is not collected for: its
+    verdict precedes a re-declared lane's dev); a QA dispatch with no obligation keeps the conservative scan."""
+    tool_input = data.get("tool_input") if isinstance(data, dict) and data.get("tool_name") in DISPATCH_TOOLS else None
+    if not isinstance(tool_input, dict) or tool_input.get("subagent_type") != "qa":
         return False
-    if data.get("tool_name") not in DISPATCH_TOOLS:
-        return False
-    tool_input = data.get("tool_input") or {}
-    if not isinstance(tool_input, dict):
-        return False
-    return tool_input.get("subagent_type") == "qa"
+    ob = _parsed_obligation(_qa_prompt_body(data))
+    return ob is None or any(isinstance(a, dict) and a.get("schema") == "qa-report.v2" for a in ob.get("artifacts") or [])
 
 
 def _classify_filename(name):
