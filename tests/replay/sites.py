@@ -281,6 +281,8 @@ class PyModule:
                 for a in node.names:
                     if node.level:
                         pkg = os.path.dirname(self.rel)
+                        for _ in range(node.level - 1):  # `from ..x import y`: one package up per extra dot
+                            pkg = os.path.dirname(pkg)
                         modname = node.module.split(".") if node.module else []
                         sub = os.path.join(pkg, *modname, a.name) + ".py"
                         mod = os.path.join(pkg, *modname) + ".py"
@@ -1401,9 +1403,14 @@ TOOLS = re.compile(r"[\"']([A-Z][A-Za-z]+)[\"']")
 OBLIGATION_TOOLS = {"TodoWrite", "Agent", "Task"}
 
 
-def _site_tools(s: Site) -> set[str] | None:
+CONST_NAME = re.compile(r"\b([A-Z][A-Z0-9_]+)\b")
+
+
+def _site_tools(s: Site, e: "Enumerator | None" = None) -> set[str] | None:
     """The tools a PreToolUse site can refuse: its hooks' matchers, narrowed by a tool-name test in its
-    guard; None when nothing narrows it (every tool)."""
+    guard; None when nothing narrows it (every tool). A test against a named constant
+    (`tool_name in DISPATCH_TOOLS`, held in the site's module or a library it imports) is read through
+    that constant's value."""
     tools: set[str] | None = set()
     for _, ev, m in s.regs:
         if ev != "PreToolUse":
@@ -1417,6 +1424,11 @@ def _site_tools(s: Site) -> set[str] | None:
             continue
         for mt in TOOL_TEST.finditer(c):
             named = set(TOOLS.findall(mt.group(1)))
+            if not named and e is not None:
+                m = e.module(s.file)
+                if isinstance(m, PyModule):
+                    for const in CONST_NAME.findall(mt.group(1)):
+                        named |= set(m._tools(ast.Name(id=const)) or ())
             if named:
                 tools = named if tools is None else (tools & named or named)
     return tools
@@ -1474,7 +1486,7 @@ def classify(e: "Enumerator", s: Site) -> tuple[str, str]:
     if events <= {"PostToolUse", "PostToolUseFailure"}:
         return "G", "after the call ran: the block returns its text to the same actor, whose next call is the next round"
     if "PreToolUse" in events:
-        tools = _site_tools(s)
+        tools = _site_tools(s, e)
         if tools and tools <= OBLIGATION_TOOLS:
             return "G", f"refuses the actor's own {'/'.join(sorted(tools))} (its todo record or its dispatch); its next compliant call clears it"
         # a tool named as an event's matcher (`PreToolUse:Agent`, the event a hook runs on) is no call the
