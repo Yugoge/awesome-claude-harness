@@ -135,6 +135,7 @@ LOCATIONS: Tuple[Location, ...] = (
     Location("question-record", CONTROL,
              (_p("claude-question-record-*.json"), _p(".claude-question-record-*.json.*.tmp"))),
     # Harness-managed scratch.
+    Location("stop-gaps", SCRATCH, (_p("claude-stop-gaps-*.txt"), _p("claude-stop-gaps-*.txt.tmp"))),
     Location("claude-scratch", SCRATCH, (_p("claude-scratch", "*"),), tree=True),
     Location("codex-outputs", SCRATCH, (_p("codex-outputs"),), tree=True),
     Location("graphify-cache", SCRATCH, (_p("claude-graphify"),), tree=True,
