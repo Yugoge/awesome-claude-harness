@@ -1414,23 +1414,27 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
         return 0, "", terminal
     text = _block_text(span.command, gaps, _exit_hint(span, refused, env) + (
         f"A hook refused the {analyst} dispatch. To end the turn, write the line \"REFUSED: <hook> refused the "
-        f"{analyst} dispatch; nothing was {'published' if analyst == 'push-analyst' else 'merged'}\", then the "
+        f"{analyst} dispatch; nothing was {'published' if span.command == 'push' else 'merged'}\", then the "
         "hook's own output.\n" if analyst else ""), payload.get("session_id"))
     if mode == "advisory":
         return 0, "would block\n" + text, terminal
     return 2, text, None
 
 
-ANALYST = {"push": "push-analyst", "merge": "merge-analyst"}  # push.md Step 3, merge.md Step 2
-
-
 def analyst_refused(span) -> str | None:
-    """/push, /merge: the command's own analyst, when a hook refused its last dispatch (command_span.refused_calls):
-    no grant is written and Step 5 cannot run; else None."""
-    role = ANALYST.get(span.command)
+    """/push, /merge: the command's own analyst (the role of the dispatch template commands/<command>.md declares
+    for its own pipeline, read by lib/dispatch_template), when a hook refused its last dispatch
+    (command_span.refused_calls): no grant is written and Step 5 cannot run; else None."""
+    if span.command not in ("push", "merge"):
+        return None
+    fences = importlib.import_module("lib.dispatch_template")._parsed_fences(
+        (command_span.COMMANDS_DIR / f"{span.command}.md").read_text(encoding="utf-8"))
+    roles = {kind for _body, kind, _roles, _profiles, example in fences
+             if f'"pipeline": "{span.command}"' in (example or "")}
     last = next((c for c in span.iter_calls("Agent", "Task", newest_first=True)
-                 if c.input.get("subagent_type") == role), None) if role else None
-    return role if last is not None and last.id in command_span.refused_calls(span.transcript_path) else None
+                 if c.input.get("subagent_type") in roles), None)
+    return last.input["subagent_type"] if last is not None and last.id in command_span.refused_calls(
+        span.transcript_path) else None
 
 
 def analyst_refused_end(span, role: str | None) -> bool:
