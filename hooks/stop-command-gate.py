@@ -426,10 +426,13 @@ def no_target_end(span, root) -> bool:
     """A /close or /commit that bound no task and dispatched none ends on its NO_TARGET: line (close.md's and
     commit.md's "Which task?" and refused flag combinations; nobody is asked): the span's last main-agent text holds
     the line, the span dispatched no task, and its flags are refused or _targets binds no task it resolves. A run
-    that worked on a task is never released by it."""
-    if span.command not in ("close", "commit") or span.session_families() \
+    that worked on a task is never released by it. Likewise a /dev or /do typed with no text at all (dev.md Step 1,
+    do.md: it ends saying how to type it)."""
+    if span.command not in ("close", "commit", "dev", "do") or span.session_families() \
             or not NO_TARGET_LINE.search(span.last_text() or ""):
         return False
+    if span.command in ("dev", "do"):
+        return not span.args.strip()
     if _flags_refused(span):
         return True
     if "--bulk" in span.args.split():  # a legal --bulk binds no task by design: its own predicate holds it
@@ -719,8 +722,9 @@ def p_commit(span, root, payload) -> list[str]:
         return ["commit: no target task resolved"]
     refused = hook_refused_tasks(span)  # Step 7: reported as refused, nobody asked; the other targets still land
     canon, names = importlib.import_module("lib.obligation").canonical_task_id, _cycle_names(span)
+    owed = _owed_gap(span, root)  # Routes: an artifact nobody owes, reported on its NO_OWNER: line
     return [g for task in targets if canon(task) not in refused
-            for name in _names(names, task) for g in disposition(root, name, "commit")]
+            for name in _names(names, task) for g in disposition(root, name, "commit") if owed(name, g)]
 
 
 # ---------------------------------------------------------------- git facts (merge, push)

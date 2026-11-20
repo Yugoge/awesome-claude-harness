@@ -1710,6 +1710,32 @@ def test_close_ends_on_a_no_owner_line_for_an_artifact_nobody_owes(env, monkeypa
         assert (ticket in text) is (case != "other-gap-too"), (case, text)
 
 
+@pytest.mark.parametrize("command,args,line,released", [
+    ("dev", "", True, True), ("do", "", True, True), ("dev", "", False, False), ("do", "", False, False),
+    ("dev", "fix the build", True, False), ("do", "rename heading", True, False)])
+def test_an_empty_dev_or_do_ends_on_its_no_target_line(env, command, args, line, released):
+    """dev.md Step 1, do.md: typed with no text, the run ends on its NO_TARGET: line (nobody asked); with text, or
+    without the line, the Stop holds as before."""
+    env.tx.command(command, args)
+    if line:
+        env.tx.say(f"NO_TARGET: /{command} was given no text; /{command} <text> starts one")
+    assert (run(env)[0] == 0) is released
+
+
+@pytest.mark.parametrize("case", ["released", "owned", "no-line"])
+def test_commit_ends_on_a_no_owner_line_for_an_artifact_nobody_owes(env, monkeypatch, case):
+    from lib import obligation
+    monkeypatch.setattr(obligation, "declaring_dispatch",
+                        lambda *a, **k: {"source": "dispatch"} if case == "owned" else None)
+    task_file(env)
+    ticket = f"docs/dev/ticket-{FAMILY}.md"
+    env.fake.answers[(FAMILY, "commit")] = [gap(ticket, "MISSING_ARTIFACT", "absent")]
+    env.tx.command("commit", FAMILY)
+    if case != "no-line":
+        env.tx.say(f"NO_OWNER: {ticket}")
+    assert (run(env)[0] == 0) is (case == "released"), case
+
+
 def test_a_refused_step_line_releases_no_other_gated_command(env, monkeypatch):
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
     env.tx.command("close", FAMILY)
