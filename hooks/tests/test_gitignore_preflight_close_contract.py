@@ -99,7 +99,7 @@ def sandbox(tmp_path, monkeypatch):
         os.symlink(os.path.join(REPO_ROOT, name), root / name)
     # Mirrors the real .gitignore:142 rule under test. Not a modification of the
     # repository's own ignore rules — this is a fixture.
-    (root / '.gitignore').write_text('docs/dev/\ntests/generated/\n')
+    (root / '.gitignore').write_text('docs/dev/\ntests/generated/\nbuild/\n')
     subprocess.run(['git', 'init', '-q'], cwd=root, check=True)
     return root
 
@@ -264,10 +264,10 @@ def test_an_undeclared_path_of_the_same_shape_is_refused(sandbox):
 
 def test_a_file_a_dispatch_only_wrote_is_refused(sandbox):
     """A dispatch's own write is no declaration: the work product stays refused."""
-    declare_cycle(sandbox, TS, ['docs/dev/close-report-%s.md' % TS], writes=['tests/generated/x.py'])
-    rel = write_report(sandbox, TS, created=['tests/generated/x.py'])
+    declare_cycle(sandbox, TS, ['docs/dev/close-report-%s.md' % TS], writes=['build/x.py'])
+    rel = write_report(sandbox, TS, created=['build/x.py'])
     rc, err = run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel)
-    assert rc == 2 and 'tests/generated/x.py' in err
+    assert rc == 2 and 'build/x.py' in err
 
 
 def test_lane_report_may_carry_parent_close_artifacts(sandbox):
@@ -290,11 +290,10 @@ def test_negative_control_unauthorised_work_product_still_refused(sandbox):
     assert err == 'BLOCKED: gitignored deliverables detected: docs/dev/my-analysis.json'
 
 
-def test_negative_control_generated_tests_still_refused(sandbox):
+def test_generated_tests_are_no_deliverable(sandbox):
+    """E9 (was test_negative_control_generated_tests_still_refused: rc 2)."""
     rel = write_report(sandbox, 'T1', created=['tests/generated/T1/test_ac_1.py'])
-    rc, err = run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel)
-    assert rc == 2
-    assert 'tests/generated/T1/test_ac_1.py' in err
+    assert run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel) == (0, '')
 
 
 def test_contract_shaped_name_with_foreign_task_id_still_refused(sandbox):
@@ -307,10 +306,10 @@ def test_contract_shaped_name_with_foreign_task_id_still_refused(sandbox):
 
 def test_contract_shaped_name_outside_mandated_dir_still_refused(sandbox):
     """The mandated directory is part of the shape; elsewhere it is a work product."""
-    rel = write_report(sandbox, 'T1', created=['tests/generated/close-report-T1.md'])
+    rel = write_report(sandbox, 'T1', created=['build/close-report-T1.md'])
     rc, err = run_gate(sandbox_hook(sandbox), 'Dev report file: %s\n' % rel)
     assert rc == 2
-    assert 'tests/generated/close-report-T1.md' in err
+    assert 'build/close-report-T1.md' in err
 
 
 def test_audit_span_cannot_launder_a_real_deliverable(sandbox):
@@ -442,7 +441,7 @@ def lane_row(task_id, dev_report=None):
 def test_step2_lane_matrix_is_not_harvested(sandbox):
     """A lane report cited only as Step 2 read material must not be opened."""
     write_report(sandbox, 'T1-adj', created=['docs/dev/lane-scratch.json'])
-    write_report(sandbox, 'T1', created=['tests/generated/T1/test_ac.py'])
+    write_report(sandbox, 'T1', created=['build/T1/test_ac.py'])
     prompt = close_step2_prompt([lane_row('T1-adj')], 'T1')
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
     assert rc == 0, 'Step 2 lane matrix still refused: %s' % err
@@ -453,7 +452,7 @@ def test_step2_admits_every_contract_projection(sandbox):
     """Each mandated projection of the same resolver object must be covered."""
     write_report(sandbox, 'T1-adj', created=['docs/dev/lane-scratch.json'])
     write_report(sandbox, 'T1-doc', created=['docs/codex/T1-doc/dev.txt'])
-    write_report(sandbox, 'T1', created=['tests/generated/T1/conftest.py'])
+    write_report(sandbox, 'T1', created=['build/T1/conftest.py'])
     lanes = [lane_row('T1-adj'), lane_row('T1-doc')]
     rc, err = run_gate(sandbox_hook(sandbox), close_step2_prompt(lanes, 'T1'))
     assert rc == 0, err
@@ -672,10 +671,10 @@ def close_step2_canonical_prompt(canonical_rel, close_task_id, lanes_by_pattern=
 
 def test_step2_canonical_parent_report_is_not_harvested(sandbox):
     """The canonical, cited outside every span, is read material — not a manifest."""
-    write_report(sandbox, 'T1-init', created=['tests/generated/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1-init', created=['build/T1-init/test_ac.py'])
     write_report(sandbox, 'T1-inject', created=['docs/dev/pre-edit-T1-inject/x.py'])
     write_report(sandbox, 'T1',
-                 modified=['tests/generated/T1-init/test_ac.py'],
+                 modified=['build/T1-init/test_ac.py'],
                  created=['docs/dev/pre-edit-T1-inject/x.py'])
     prompt = close_step2_canonical_prompt('docs/dev/dev-report-T1.json', 'T1')
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
@@ -685,8 +684,8 @@ def test_step2_canonical_parent_report_is_not_harvested(sandbox):
 
 def test_step2_canonical_admitted_with_lane_paths_enumerated_too(sandbox):
     """The same admission holds when the lane matrix is also spelled out (E3 + E4)."""
-    write_report(sandbox, 'T1-init', created=['tests/generated/T1-init/test_ac.py'])
-    write_report(sandbox, 'T1', created=['tests/generated/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1-init', created=['build/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1', created=['build/T1-init/test_ac.py'])
     prompt = close_step2_prompt([lane_row('T1-init')], 'T1') + \
         '- Canonical dev report: docs/dev/dev-report-T1.json\n'
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
@@ -734,7 +733,7 @@ def test_live_instance_close_step2_canonical_now_admitted():
 
 def test_e4_canonical_without_shard_provenance_still_refused(sandbox):
     """An unauthorised work product in the canonical has no shard provenance."""
-    write_report(sandbox, 'T1-init', created=['tests/generated/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1-init', created=['build/T1-init/test_ac.py'])
     write_report(sandbox, 'T1', created=['docs/dev/my-analysis.json'])
     prompt = close_step2_canonical_prompt('docs/dev/dev-report-T1.json', 'T1')
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
@@ -744,13 +743,13 @@ def test_e4_canonical_without_shard_provenance_still_refused(sandbox):
 
 def test_e4_is_all_or_nothing_per_report(sandbox):
     """One uncovered path refuses the whole canonical, message unchanged."""
-    write_report(sandbox, 'T1-init', created=['tests/generated/T1-init/test_ac.py'])
-    write_report(sandbox, 'T1', modified=['tests/generated/T1-init/test_ac.py'],
+    write_report(sandbox, 'T1-init', created=['build/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1', modified=['build/T1-init/test_ac.py'],
                  created=['docs/dev/my-analysis.json'])
     prompt = close_step2_canonical_prompt('docs/dev/dev-report-T1.json', 'T1')
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
     assert rc == 2
-    assert blocked_paths(err) == {'tests/generated/T1-init/test_ac.py',
+    assert blocked_paths(err) == {'build/T1-init/test_ac.py',
                                   'docs/dev/my-analysis.json'}
 
 
@@ -766,40 +765,40 @@ def test_e4_foreign_task_id_canonical_still_refused(sandbox):
 
 def test_e4_lane_shard_cited_outside_a_span_is_not_the_canonical(sandbox):
     """E4 suppresses exactly one path per dispatch; a lane shard is not it."""
-    write_report(sandbox, 'T1-init', created=['tests/generated/T1-init/test_ac.py'])
-    write_report(sandbox, 'T1', created=['tests/generated/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1-init', created=['build/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1', created=['build/T1-init/test_ac.py'])
     prompt = close_step2_canonical_prompt('docs/dev/dev-report-T1-init.json', 'T1')
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
     assert rc == 2, 'a lane shard was admitted by the canonical exemption'
-    assert 'tests/generated/T1-init/test_ac.py' in err
+    assert 'build/T1-init/test_ac.py' in err
 
 
 def test_e4_without_deliverable_anchor_still_refused(sandbox):
     """No declared close-report means no <P>, so E4 cannot fire."""
-    write_report(sandbox, 'T1-init', created=['tests/generated/T1-init/test_ac.py'])
-    write_report(sandbox, 'T1', created=['tests/generated/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1-init', created=['build/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1', created=['build/T1-init/test_ac.py'])
     prompt = close_step2_canonical_prompt('docs/dev/dev-report-T1.json', 'T1').replace(
         'docs/dev/close-report-T1.md', 'the close transcript')
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
     assert rc == 2
-    assert 'tests/generated/T1-init/test_ac.py' in err
+    assert 'build/T1-init/test_ac.py' in err
 
 
 def test_e4_ambiguous_deliverable_anchor_fails_closed(sandbox):
     """Two distinct close-report task-ids disable E4 exactly as they disable E3."""
-    write_report(sandbox, 'T1-init', created=['tests/generated/T1-init/test_ac.py'])
-    write_report(sandbox, 'T1', created=['tests/generated/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1-init', created=['build/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1', created=['build/T1-init/test_ac.py'])
     prompt = close_step2_canonical_prompt('docs/dev/dev-report-T1.json', 'T1') + \
         'Also see docs/dev/close-report-T2.md\n'
     rc, err = run_gate(sandbox_hook(sandbox), prompt)
     assert rc == 2
-    assert 'tests/generated/T1-init/test_ac.py' in err
+    assert 'build/T1-init/test_ac.py' in err
 
 
 def test_e4_does_not_launder_other_citations(sandbox):
     """Citing the canonical never admits some OTHER report's work product."""
-    write_report(sandbox, 'T1-init', created=['tests/generated/T1-init/test_ac.py'])
-    write_report(sandbox, 'T1', created=['tests/generated/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1-init', created=['build/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1', created=['build/T1-init/test_ac.py'])
     rel = write_report(sandbox, 'T9', created=['docs/dev/my-analysis.json'])
     prompt = close_step2_canonical_prompt('docs/dev/dev-report-T1.json', 'T1') + \
         'Dev report file: %s\n' % rel
@@ -818,12 +817,12 @@ def test_canonical_name_is_not_caller_chosen():
 
 def test_shard_provenance_is_read_off_disk_not_off_the_prompt(sandbox):
     gate = load_gate_module()
-    write_report(sandbox, 'T1-init', created=['tests/generated/T1-init/test_ac.py'])
+    write_report(sandbox, 'T1-init', created=['build/T1-init/test_ac.py'])
     root = str(sandbox)
     assert gate.shard_recorded_paths('T1', root) == {
-        'tests/generated/T1-init/test_ac.py'}
+        'build/T1-init/test_ac.py'}
     assert gate.has_lane_shard_provenance(
-        ['tests/generated/T1-init/test_ac.py'], 'T1', root)
+        ['build/T1-init/test_ac.py'], 'T1', root)
     assert not gate.has_lane_shard_provenance(['docs/dev/my-analysis.json'], 'T1', root)
     assert not gate.has_lane_shard_provenance([], 'T1', root)
     assert not gate.has_lane_shard_provenance(['x'], 'NOSUCH', root)
@@ -1157,7 +1156,7 @@ READING_PRODUCERS = [
 
 @pytest.mark.parametrize('profile,role,pipeline', READING_PRODUCERS)
 def test_e5_reading_producer_of_the_reports_task_admits(landing_sandbox, profile, role, pipeline):
-    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    rel = write_report(landing_sandbox, LANDED, created=['build/x/test_a.py'])
     prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline=pipeline))
     rc, err = run_gate(sandbox_hook(landing_sandbox), prompt)
     assert rc == 0, '%s dispatch of the report\'s own task refused: %s' % (profile, err)
@@ -1165,23 +1164,23 @@ def test_e5_reading_producer_of_the_reports_task_admits(landing_sandbox, profile
 
 
 def test_e5_without_obligation_refused_identically(landing_sandbox):
-    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    rel = write_report(landing_sandbox, LANDED, created=['build/x/test_a.py'])
     rc, err = run_gate(sandbox_hook(landing_sandbox), commit_step7_prompt(rel))
     assert rc == 2
-    assert err == 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py'
+    assert err == 'BLOCKED: gitignored deliverables detected: build/x/test_a.py'
 
 
 def test_e5_grant_line_admits_nothing(landing_sandbox, tmp_path):
     """The preflight no longer reads the grant: a live grant named in the
     prompt (at either state root) leaves the verdict where the obligation
     puts it."""
-    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    rel = write_report(landing_sandbox, LANDED, created=['build/x/test_a.py'])
     grant = tmp_path / ('claude-commit-grant-%s-sid-nonce.json' % LANDED)
     grant.write_text(json.dumps({'task_id': LANDED, 'expires_at': '2999-01-01T00:00:00+00:00'}))
     rc, err = run_gate(sandbox_hook(landing_sandbox),
                        commit_step7_prompt(rel, grant_path=str(grant)))
     assert rc == 2
-    assert err == 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py'
+    assert err == 'BLOCKED: gitignored deliverables detected: build/x/test_a.py'
     rc, _ = run_gate(sandbox_hook(landing_sandbox),
                      commit_step7_prompt(rel, landing_obligation(), grant_path=str(grant)))
     assert rc == 0
@@ -1198,10 +1197,10 @@ def test_e5_grant_line_admits_nothing(landing_sandbox, tmp_path):
     landing_obligation().replace('"commit"', '"nonsense"'),      # G1 rejects it
 ])
 def test_e5_other_obligations_refused(landing_sandbox, obligation):
-    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    rel = write_report(landing_sandbox, LANDED, created=['build/x/test_a.py'])
     rc, err = run_gate(sandbox_hook(landing_sandbox), commit_step7_prompt(rel, obligation))
     assert rc == 2
-    assert err == 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py'
+    assert err == 'BLOCKED: gitignored deliverables detected: build/x/test_a.py'
 
 
 def test_e5_never_widens_the_admissible_path_set(landing_sandbox):
@@ -1226,7 +1225,7 @@ def test_e5_effective_report_belongs_to_the_task_resolve_verifies(landing_sandbo
     gate = load_gate_module()
     root = str(landing_sandbox)
     rel = write_report(landing_sandbox, LANDED + '.effective',
-                       created=['tests/generated/x/test_a.py'])
+                       created=['build/x/test_a.py'])
     monkeypatch.setattr(gate, 'get_repo_root', lambda: root)
     assert gate.source_task_id(rel) == LANDED + '.effective'
     prompt = commit_step7_prompt(rel, landing_obligation())
@@ -1295,14 +1294,14 @@ def test_the_preflight_alone_decides_the_rule(landing_sandbox):
     """G3 armed or not never re-applies the rule; the preflight refuses and admits
     the same dispatches G3's former copy did, under every barrier mode."""
     shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
-    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    rel = write_report(landing_sandbox, LANDED, created=['build/x/test_a.py'])
     refused = commit_step7_prompt(rel)
     admitted = commit_step7_prompt(rel, landing_obligation())
     for mode in (None, 'advisory', 'block'):
         assert run_g3(landing_sandbox, refused, mode) == (0, '')
         assert run_g3(landing_sandbox, admitted, mode) == (0, '')
     assert run_gate(sandbox_hook(landing_sandbox), refused) == (
-        2, 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py')
+        2, 'BLOCKED: gitignored deliverables detected: build/x/test_a.py')
     assert run_gate(sandbox_hook(landing_sandbox), admitted)[0] == 0
 
 
@@ -1342,7 +1341,7 @@ def test_g3_and_the_preflight_admit_every_reading_producer(landing_sandbox, prof
     """P3 row 13: the admission is the rule's, so G3 armed and the preflight's
     copy both admit it."""
     shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
-    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    rel = write_report(landing_sandbox, LANDED, created=['build/x/test_a.py'])
     prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline=pipeline))
     assert run_g3(landing_sandbox, prompt, 'block', role) == (0, '')
     assert run_gate(sandbox_hook(landing_sandbox), prompt) == (0, '')
@@ -1353,8 +1352,8 @@ def test_the_preflight_keeps_the_guard_on_a_dev_dispatch(landing_sandbox, profil
     """A dev dispatch, and /dev's own final QA (Step 13, pipeline dev): the preflight
     refuses it; G3 armed leaves the rule to it."""
     shutil.copy2(G3_HOOK, landing_sandbox / 'hooks' / 'pretool-aggregate-check.py')
-    rel = write_report(landing_sandbox, LANDED, created=['tests/generated/x/test_a.py'])
+    rel = write_report(landing_sandbox, LANDED, created=['build/x/test_a.py'])
     prompt = commit_step7_prompt(rel, landing_obligation(profile=profile, role=role, pipeline='dev'))
     assert run_g3(landing_sandbox, prompt, 'block', role) == (0, '')
     assert run_gate(sandbox_hook(landing_sandbox), prompt) == (
-        2, 'BLOCKED: gitignored deliverables detected: tests/generated/x/test_a.py')
+        2, 'BLOCKED: gitignored deliverables detected: build/x/test_a.py')

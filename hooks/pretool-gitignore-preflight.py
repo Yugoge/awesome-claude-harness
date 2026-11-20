@@ -28,6 +28,9 @@
 #  10. The dispatched agent type cannot write: policies/tool-policy.v1.json
 #      declares it (under "roles" or "built_in_agents") with no Write, Edit,
 #      MultiEdit or NotebookEdit tool. See E7 below.
+#  11. E8 (2026-11-20): a dev dispatch (its obligation's role) reads another task's report it cites
+#      (dev_task). E9: tests/generated/, which docs/reference/generated-tests-policy.md keeps out of
+#      git, holds no deliverable. Coverage: hooks/tests/test_gitignore_preflight_reads.py.
 #
 # Blocking condition (exits 2):
 #   Any path in dev.files_modified or dev.files_created is matched by .gitignore
@@ -780,14 +783,16 @@ def gitignored_deliverables(prompt):
     # E6 (P1c X6): a report the dispatch's own obligation declares is what it
     # writes: its producer dispatched again (the round this rule's refusal
     # names) rewrites it, so it is no manifest of work the dispatch ships.
-    own = {a.get('path') for a in own_obligation(prompt).get('artifacts') or [] if isinstance(a, dict)}
+    doc = own_obligation(prompt)
+    own = {a.get('path') for a in doc.get('artifacts') or [] if isinstance(a, dict)}
+    dev_task = obligation.canonical_task_id(doc.get('task_id')) if doc.get('role') == 'dev' else None
 
     for match in matches:
         if _in_any_span(match.start(), audit_spans):
             continue
 
         report_rel = match.group(0)
-        if report_rel in own:
+        if report_rel in own or dev_task and source_task_id(report_rel) != dev_task:
             continue
 
         if (cycle_task_id is not None
@@ -825,7 +830,7 @@ def gitignored_deliverables(prompt):
         report_blocked = []
 
         for path in all_paths:
-            if not (isinstance(path, str) and path):
+            if not (isinstance(path, str) and path) or path.startswith('tests/generated/'):  # E9
                 continue
             if not is_gitignored(path, repo_root):
                 continue
