@@ -732,7 +732,7 @@ def test_the_installer_loads_the_runtime_guard_config_with_pathmatch_alone(tmp_p
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="the superuser reads every folder")
 def test_a_project_below_a_folder_the_user_cannot_read_is_judged_as_an_absent_one(tmp_path, monkeypatch, home_layout):
-    """Not the superuser: a project below a folder he cannot read (his view of /root). Every decision
+    """Not the superuser: a project below a folder he cannot read (his view of the superuser's home). Every decision
     is the one an absent project gets, none an error: the config guard's sentinel check, the round
     and producer question files the tool policy looks for and the overnight state files raised
     PermissionError, and the first two hooks then allowed the call (fail-open), the third did not decide it."""
