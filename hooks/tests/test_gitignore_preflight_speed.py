@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOK = REPO_ROOT / "hooks" / "pretool-gitignore-preflight.py"
 TASK = "20260101-120000"
 LANE = TASK + "-l1"
-PATHS = [f"tests/generated/{LANE}/test_AC{i:02d}.py" for i in range(1, 6)]
+PATHS = [f"build/{LANE}/out{i:02d}.js" for i in range(1, 6)]
 REPORT = f"docs/dev/dev-report-{LANE}.json"
 
 
@@ -40,11 +40,11 @@ def _dispatch(use_id, task_id, artifacts):
 
 @pytest.fixture
 def store(tmp_path):
-    """A project whose lane report lists gitignored generated tests its own dev dispatch
+    """A project whose lane report lists gitignored build outputs its own dev dispatch
     wrote, and the account root holding that session."""
     project = tmp_path / "proj"
     (project / "docs" / "dev").mkdir(parents=True)
-    (project / ".gitignore").write_text("tests/generated/\n")
+    (project / ".gitignore").write_text("build/\n")
     subprocess.run(["git", "init", "-q"], cwd=project, check=True)
     (project / REPORT).write_text(json.dumps({"dev": {"files_modified": [], "files_created": PATHS}}))
     root = tmp_path / "projects"
