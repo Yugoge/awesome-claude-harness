@@ -6,6 +6,7 @@ G2 (``check_round``, ``stand_in``, ``check_analysis``) and the Stop gate (``ends
 ``line_questions``) decide by live here."""
 from __future__ import annotations
 
+import glob
 import hashlib
 import importlib
 import json
@@ -314,11 +315,8 @@ def _question_files(project, task: str) -> list:
     family = _lib("obligation").task_family
     out = [(p, f"requirement-round:{task}:r{n}", p, "qa" if p.name.startswith("ba-panel-") else "ba")
            for n, p in rounds(project, task)]
-    try:
-        found = sorted((Path(project) / "docs/dev").glob("producer-question-*-*.json"))
-    except OSError:  # an unreadable folder holds none, as an absent one
-        found = []
-    for p in found:
+    folder = Path(project) / "docs/dev"  # glob finds none in an unreadable folder, as in an absent one
+    for p in sorted(folder / name for name in glob.glob("producer-question-*-*.json", root_dir=folder)):
         owner, _, role = p.name[len("producer-question-"):-len(".json")].rpartition("-")
         if family(owner) == family(task):
             out.append((p, f"producer-question:{owner}:{role}", None, role))

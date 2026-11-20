@@ -26,6 +26,7 @@ Exit codes:
 
 import fnmatch
 import functools
+import glob
 import json
 import os
 import re
@@ -333,10 +334,8 @@ def _extract_live_worktree_path(sf: Path) -> str:
 
 def _state_files() -> list:
     """The project's overnight state files; none when its .claude folder cannot be read, as when it is absent."""
-    try:
-        return list(Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()), ".claude").glob("overnight-state-*.json"))
-    except OSError:
-        return []
+    claude_dir = Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()), ".claude")
+    return [claude_dir / name for name in glob.glob("overnight-state-*.json", root_dir=claude_dir)]
 
 
 def _get_active_worktree_paths() -> list[str]:
