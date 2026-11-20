@@ -2032,7 +2032,7 @@ def _hidden_script_text(path, cwd, trusted):
 
 def _stdin_body(redir):
     """The program a here-document (quoted, or with nothing the shell expands) or a literal here-string feeds."""
-    text = redir.hd.body_src.text if redir.hd is not None and redir.op in ('<<', '<<-') else None
+    text = redir.hd.body_src.text if redir.hd is not None and redir.op in shell_parse.HERE_DOCUMENT_OPS else None
     text = text if text is None or redir.hd.quoted or not set('$`\\') & set(text) else None
     return (text if redir.op != '<<<' else redir.target and redir.target.value()) if redir.io in (None, '0') else None
 
