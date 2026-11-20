@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T08:44:53Z*
-**Total entries**: 1160
+*Last updated: 2026-11-20T10:43:03Z*
+**Total entries**: 1161
 **Convention**: kebab
 
 ## Tree
@@ -141,7 +141,6 @@ dot-claude/
 │   │   ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 │   │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
 │   │   ├── `close_rating.py` - The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports.
-│   │   ├── `closeout.py` - CLI:
 │   │   ├── `codex_transcript.py` - written by scripts/steps/codex-run.py, read by the gitignore preflight as its task's provenance. ...
 │   │   ├── `command_span.py` - rule of which transcript record is a prompt the human typed
 │   │   ├── `commit_journal.py` - WHY THIS EXISTS
@@ -201,6 +200,7 @@ dot-claude/
 │   ├── tests/
 │   │   ├── fixtures/
 │   │   ├── `_fixtures_obligation_terminal.py` - hooks/tests/test_posttool_overnight_loop_terminal_gate.py (which pin that
+│   │   ├── `allowed_by_design.py` - The hook suites assert through the real hook that each of these runs (test_removal_policy_own_scr...
 │   │   ├── `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 │   │   ├── `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 │   │   ├── `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
@@ -225,6 +225,7 @@ dot-claude/
 │   │   ├── `test_bash_safety_degraded_fallback.py` - Until 2026-11-19 a command passed the degraded path only when it was provably plain: no removal r...
 │   │   ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
 │   │   ├── `test_bash_safety_http_stop_npm_global.py` - The HTTP /stop rule (BS-02, search-15) refuses a request to a localhost port's /stop path segment...
+│   │   ├── `test_bash_safety_plain_pipelines.py` - Until 2026-11-20 one pipeline that was not a plain shape (any `if` or `for`, a variable argument,...
 │   │   ├── `test_bash_safety_preclean_stdin.py` - An exec'd process gets its environment and argv strings through the kernel, which refuses one str...
 │   │   ├── `test_bash_safety_rules.py` - their cases, the over-blocks fixed, the bulk-commit writer closed from Bash, and the release word...
 │   │   ├── `test_bash_safety_sensitive_names.py` - check (`.env`, `credentials`, `secret`, `password`) over the full path of each parsed write targe...
@@ -364,7 +365,6 @@ dot-claude/
 │   │   ├── `test_overnight_question_deny.py` - hooks/pretool-overnight-hook-guard.py denies AskUserQuestion to every caller of
 │   │   ├── `test_overnight_row13_consumers.py` - - The PM test plan, triage and retro reports and the specialists' reports are
 │   │   ├── `test_overnight_state_file_write_guard.py` - overnight-state write-protection (ticket 20261001-161041-r10, AC4/AC5/AC6)
-│   │   ├── `test_overnight_trace_evidence.py` - (P1b E3). Which report is inspected and which of its fields are required is
 │   │   ├── `test_overnight_trace_yield.py` - (P1b row 18)
 │   │   ├── `test_overnight_wake.py` - The wake is one recurring CronCreate of lib/overnight.py's WAKE_PROMPT, scheduled at Step 0 and d...
 │   │   ├── `test_overnight_window.py` - window_open, closeout_gaps, stop_contract.timelock_released and the /stop helper
@@ -510,7 +510,7 @@ dot-claude/
 │   ├── `posttool-orchestrator-ran.py` - hooks/pretool-orchestrator-gate.py counts a main-agent call at PreToolUse, before the other hooks'
 │   ├── `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check (G3)
 │   ├── `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
-│   ├── `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
+│   ├── `posttool-overnight-trace.py` - Records the yield of a specialist's report in an overnight cycle
 │   ├── `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
 │   ├── `posttool-restart-sendmessage.py` - A validated /restart send is recorded as dispatched in the restart state, as before; any other
 │   ├── `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes
@@ -1077,6 +1077,7 @@ dot-claude/
 │   ├── `test_permission_allow_readonly.py` - default mode) and the proof that none of them also allows a mutating or executing neighbour
 │   ├── `test_permission_ask_dry_run.py` - `Bash(kubectl apply:*)`, `Bash(kubectl create:*)` and `Bash(npm publish:*)` were whole-verb deny ...
 │   ├── `test_permission_coverage.py` - entry that covers it (P2 R6/R17, D14: entries are respelled, none granted or withdrawn)
+│   ├── `test_permission_deny_rules.py` - Claude Code runs the PreToolUse hooks first and then its permission rules, and a deny match wins ...
 │   ├── `test_permission_pipe_to_shell.py` - The CLI splits a compound command at `&&`, `||`, `;`, `|`, `|&`, `&` and newlines and judges each
 │   ├── `test_permission_readonly_allow.py` - Root cause: settings.json's permissions.allow had no entry for a few everyday read-only commands,...
 │   ├── `test_pre_commit_dev_command_files.py` - dev-family command files as the tree holds them

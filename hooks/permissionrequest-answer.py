@@ -48,10 +48,16 @@ def denied_in_text(command: str) -> str | None:
         if not (isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")")):
             continue
         body = rule[5:-1]
-        body = body[:-2] if body.endswith(":*") else body
-        # `*` inside a word: word characters (b*ash: bash), elsewhere any text; no trailing `*`: ends with a word.
-        rx = re.sub(r"(?<=\w)\\\*(?=\w)", r"\\w*", re.escape(body)).replace(r"\*", ".*")
-        rx = r"(?:^|[\s;&|(){}`'\"])" + rx + ("" if body.endswith("*") else r"(?=[\s;&|)`'\"]|$)")
+        prefix = body.endswith(":*")
+        if prefix:
+            # `P:*`: P is a literal prefix, as Claude Code reads it (a `*` in P is that character), ending a word.
+            body = body[:-2]
+            rx = re.escape(body)
+        else:
+            # `*` inside a word: word characters (b*ash: bash), elsewhere any text; no trailing `*`: ends with a word.
+            rx = re.sub(r"(?<=\w)\\\*(?=\w)", r"\\w*", re.escape(body)).replace(r"\*", ".*")
+        open_end = body.endswith("*") and not prefix
+        rx = r"(?:^|[\s;&|(){}`'\"])" + rx + ("" if open_end else r"(?=[\s;&|)`'\"]|$)")
         if re.search(rx, command):
             return rule
     return None

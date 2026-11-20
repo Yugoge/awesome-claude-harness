@@ -268,7 +268,7 @@ A person is never asked to approve a tool call. A rule allows the call or refuse
 
 | Where the call stands | What decides |
 |---|---|
-| A deny rule in `settings.json` matches | Claude Code refuses it |
+| A deny rule in `settings.json` matches | Claude Code refuses it, after the PreToolUse hooks ran and even when one of them allowed the call. That denial is decided by Claude Code alone: it names no means, no hook sees it, and it is not in the harness's refusal record. So a general Bash deny rule stands only where no hook decides the family, or where the hook refuses it always and it must stay unreleasable by `/do` or `/allow` (`tests/test_permission_deny_rules.py`) |
 | A PreToolUse hook refuses it | Refused, with the hook's reason |
 | Claude Code would ask (its own `rm`/`rmdir` critical-path check, a deny rule's command found inside a command it cannot split, or, outside `bypassPermissions` mode, no allow rule) | `hooks/permissionrequest-answer.py` answers at once. A Bash or Monitor command is refused when the Bash rules (`lib/bash_safety_rules.py`, the removal rule among them) or a Bash deny rule refuse it, and otherwise runs in `bypassPermissions` mode; a removal runs in any mode once the removal rule has proved it. Another tool runs in `bypassPermissions` mode and is refused in any other mode. An error, or no answer within 30 seconds, is a refusal |
 | Anything else | It runs |

@@ -81,8 +81,10 @@ def extract_bash_touched_paths(command: str) -> List[Tuple[str, bool]]:
 
     A move whose words are all plain and whose destination is decidable writes the destination and
     removes ``<dest>/<basename(source)>``, the entry a directory destination loses; any other move
-    may remove its destination too. A command whose name is computed may do anything to each of its
-    static path operands (`"$RM" f`), so each is touched and may be removed.
+    may remove its destination too. A command whose name is computed is not read (`"$RM" f`,
+    `"$PY" -m pytest hooks`): each of its static path operands is touched, not removed, so a
+    protected file it names is refused and a directory above one is not; whether it removes is the
+    removal policy's decision (lib/bash_safety_rules).
     """
     found = _targets(command)
     out: List[Tuple[str, bool]] = _computed_command_operands(command)
@@ -115,7 +117,7 @@ def _computed_command_operands(command: str) -> List[Tuple[str, bool]]:
         for w in res.args:
             v = w.value()
             if v and not v.startswith("-"):
-                out.append((os.path.expanduser(v) if v.startswith("~") else v, True))
+                out.append((os.path.expanduser(v) if v.startswith("~") else v, False))
     return out
 
 

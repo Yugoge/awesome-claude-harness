@@ -8,7 +8,7 @@ The rules run in this order, each as its own hook would run alone
    writer;
 2. posttool-overnight-file-check.py: the returned producer's artifacts against the
    cycle contract (exit 2 returns the finding to the agent);
-3. posttool-overnight-trace.py: the overnight trace record;
+3. posttool-overnight-trace.py: a specialist report's yield;
 4. lib/dev_loop_checks.py advice(), advice only: for a returned dev dispatch, the
    layer match, guard integrity and minimum diff checks of the task its obligation
    names, as additionalContext; it never refuses.

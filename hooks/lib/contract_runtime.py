@@ -2,8 +2,7 @@
 
 This module is the single shared engine consumed by every contract-aware
 hook (pretool-subagent-enforce, posttool-subagent-track,
-posttool-overnight-file-check) plus check-overnight-reports.py and
-lib/closeout.py.
+posttool-overnight-file-check) plus check-overnight-reports.py.
 
 Public surface:
     session_record(session_id, payload=None) -> dict | None   # the session's state record

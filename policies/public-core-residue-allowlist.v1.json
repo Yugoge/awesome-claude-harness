@@ -190,13 +190,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# only if it is itself a structural sentinel. Never fabricate a <author-path> default.\""
     },
     {
-      "path": "hooks/lib/closeout.py",
-      "fingerprint": "be6e14f3b6aaba80",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# WS1: resolve via the shared claude_home resolver, never the literal <author-path>.\""
-    },
-    {
       "path": "hooks/lib/policy_registry.py",
       "fingerprint": "4ad2cf1d12440999",
       "ordinal": 1,

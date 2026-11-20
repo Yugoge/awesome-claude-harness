@@ -334,46 +334,47 @@ def test_the_hook_never_opens_the_transcript_for_such_a_write(tmp_path):
 
 
 def test_the_declarable_shapes_are_read_from_the_command_files(tmp_path, monkeypatch):
-    policy = _policy()
-    from lib import command_span, stop_contract
+    _policy()
+    from lib import command_span, declared_paths, stop_contract
 
     commands = tmp_path / "commands"
     commands.mkdir()
     monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
     monkeypatch.setattr(command_span, "COMMANDS_DIR", commands)  # harness_commands' own (P5 R10)
-    forms = lambda target: policy._target_forms(target, {"cwd": str(PROJECT)})  # noqa: E731
+    forms = lambda target: declared_paths._target_forms(target, {"cwd": str(PROJECT)})  # noqa: E731
     # No command file: only the producer question's shape (G2's rule) remains.
-    shapes = policy._declarable_shapes()
-    assert policy._could_be_declared(shapes, forms("docs/dev/producer-question-x-ba.json"))
-    assert not policy._could_be_declared(shapes, forms("out/1.weird"))
+    shapes = declared_paths._declarable_shapes()
+    assert declared_paths._could_be_declared(shapes, forms("docs/dev/producer-question-x-ba.json"))
+    assert not declared_paths._could_be_declared(shapes, forms("out/1.weird"))
     (commands / "x.md").write_text('```\n{"artifacts": [{"kind": "markdown", "path": "out/<task_id>.weird"},\n'
                                    ' {"kind": "spec_views", "path": "trees/{x.y}/leaf"}]}\n```\n')
-    shapes = policy._declarable_shapes()
+    shapes = declared_paths._declarable_shapes()
     for declarable in ("out/1.weird", "a/b/2.weird/child", "trees/z/leaf", "leaf/below.py"):
-        assert policy._could_be_declared(shapes, forms(declarable)), declarable
+        assert declared_paths._could_be_declared(shapes, forms(declarable)), declarable
     for undeclarable in ("out/1.weirdo", "src/leafy.py", "a.md"):
-        assert not policy._could_be_declared(shapes, forms(undeclarable)), undeclarable
+        assert not declared_paths._could_be_declared(shapes, forms(undeclarable)), undeclarable
     # A command file that cannot be read: any target may be declared, so every write keeps the check.
     (commands / "broken.md").mkdir()
-    assert policy._could_be_declared(policy._declarable_shapes(), forms("src/a.py"))
+    assert declared_paths._could_be_declared(declared_paths._declarable_shapes(), forms("src/a.py"))
 
 
 @pytest.mark.parametrize("value", ["20261028-101010", "a/b", "x/../../y", "/../../../z/w", "q/", "."])
 def test_every_path_a_current_template_declares_is_declarable(value):
     # Whatever a dispatch binds a placeholder to ("/" and ".." included), the path it declares is one
     # the filter keeps the check for, in place and as the directory above a target.
-    policy = _policy()
-    shapes = policy._declarable_shapes()
+    _policy()
+    from lib import declared_paths
+    shapes = declared_paths._declarable_shapes()
     seen = 0
     for file in sorted((ROOT / "commands").glob("*.md")):
-        for raw in policy._TEMPLATE_PATH_RE.findall(file.read_text(encoding="utf-8")):
-            path = policy._SHAPE_PLACEHOLDER_RE.sub(value, json.loads(f'"{raw}"'))
-            parts = policy._parts(path)
+        for raw in declared_paths._TEMPLATE_PATH_RE.findall(file.read_text(encoding="utf-8")):
+            path = declared_paths._SHAPE_PLACEHOLDER_RE.sub(value, json.loads(f'"{raw}"'))
+            parts = declared_paths._parts(path)
             if not parts or ".." in parts or path.startswith("/"):
                 continue  # a path tool-policy never takes as declared
             seen += 1
             for target in ("/".join(parts), "/".join(parts) + "/below.txt", "nested/" + "/".join(parts)):
-                assert policy._could_be_declared(shapes, policy._target_forms(target, {"cwd": str(PROJECT)})), \
+                assert declared_paths._could_be_declared(shapes, declared_paths._target_forms(target, {"cwd": str(PROJECT)})), \
                     (file.name, raw, value, target)
     assert seen
 
@@ -432,7 +433,7 @@ def _oracle_openers(data: bytes) -> list:
 
 def _oracle(policy, data: bytes, calls: list) -> list:
     """(parts, role, task, id) of every path the dispatches declare, read as the hook read them before."""
-    from lib import dispatch_template, obligation
+    from lib import declared_paths, dispatch_template, obligation
 
     openers, out = _oracle_openers(data), []
     for call in calls:
@@ -445,20 +446,20 @@ def _oracle(policy, data: bytes, calls: list) -> list:
         paths, role, task_id = [], subagent_type, None
         if own is not None:
             role, task_id = own.get("role"), own.get("task_id")
-            paths += policy._declared_paths(own)
+            paths += declared_paths._declared_paths(own)
             template = dispatch_template.template_obligation(own.get("pipeline"), subagent_type, prompt)
             if template and all(template.get(k) == own.get(k) for k in ("role", "profile")):
-                paths += policy._declared_paths(template)
-            if role in policy._question_roles() and isinstance(task_id, str) and task_id:
-                paths.append(policy._QUESTION_PATH.format(task_id=task_id, role=role))
+                paths += declared_paths._declared_paths(template)
+            if role in declared_paths._question_roles() and isinstance(task_id, str) and task_id:
+                paths.append(declared_paths._QUESTION_PATH.format(task_id=task_id, role=role))
         else:
             command = next((name for offset, name in reversed(openers) if offset < call.line), None)
             template = dispatch_template.template_obligation(command, subagent_type, prompt) if command else None
             if template:
                 role, task_id = template.get("role") or role, template.get("task_id")
-                paths += policy._declared_paths(template)
+                paths += declared_paths._declared_paths(template)
         for path in dict.fromkeys(paths):
-            parts = policy._parts(path)
+            parts = declared_paths._parts(path)
             if parts and ".." not in parts and not path.startswith("/"):
                 out.append((parts, role, task_id, call.id))
     return out
@@ -501,28 +502,29 @@ def _decision(policy, s, tool, tool_input, agent=None):
 
 def _oracle_decision(policy, s, tool, tool_input, agent=None):
     """What the hook decided before, from the oracle's reading of the same record."""
+    from lib import declared_paths
     data = s.transcript.read_bytes()
     payload = _payload(s, tool, tool_input, agent)
     writes = policy._write_targets(tool, policy._extract_targets(tool, tool_input))
-    shapes = policy._declarable_shapes()
-    if not writes or not any(policy._could_be_declared(shapes, policy._target_forms(t, payload)) for t in writes):
+    shapes = declared_paths._declarable_shapes()
+    if not writes or not any(declared_paths._could_be_declared(shapes, declared_paths._target_forms(t, payload)) for t in writes):
         return ("own", [])
     calls = _oracle_calls(data)
     if not calls:
         return ("own", [])
     mine, own = None, set()
     if payload.get("agent_id"):
-        mine = policy._caller_dispatches(payload, policy._session_transcript(payload), calls)
+        mine = declared_paths._caller_dispatches(payload, policy._session_transcript(payload), calls)
         declared = _oracle(policy, data, [c for c in calls if c.id in mine]) if mine else []
-        own = {t for t in writes if any(policy._covers(d[0], f) for f in policy._target_forms(t, payload)
+        own = {t for t in writes if any(declared_paths._covers(d[0], f) for f in declared_paths._target_forms(t, payload)
                                        for d in declared)}
     declarations = _oracle(policy, data, calls)
     for t in [t for t in writes if t not in own]:
-        covering = [d for d in declarations if any(policy._covers(d[0], f) for f in policy._target_forms(t, payload))]
+        covering = [d for d in declarations if any(declared_paths._covers(d[0], f) for f in declared_paths._target_forms(t, payload))]
         if not covering:
             continue
         if mine is None:
-            mine = policy._caller_dispatches(payload, policy._session_transcript(payload), calls)
+            mine = declared_paths._caller_dispatches(payload, policy._session_transcript(payload), calls)
         if any(d[3] in mine for d in covering):
             own.add(t)
             continue
@@ -1230,7 +1232,7 @@ def test_the_raw_reads_give_what_the_text_reads_gave(tmp_path, seed):
 def test_the_declarable_shapes_decode_only_an_escaped_value(tmp_path, monkeypatch):
     # A path value with no backslash is taken as written; json.loads gave the same (or refused a control
     # character, and the raw text was taken). The shapes equal the ones decoding every value gave.
-    policy = _policy("tool_policy_shape_values")
+    _policy("tool_policy_shape_values")
     from lib import command_span, declared_paths, stop_contract
 
     def decoded_every_value():
@@ -1244,7 +1246,7 @@ def test_the_declarable_shapes_decode_only_an_escaped_value(tmp_path, monkeypatc
                 shapes.add(declared_paths._shape(value))
         return shapes
 
-    assert policy._declarable_shapes() == decoded_every_value()
+    assert declared_paths._declarable_shapes() == decoded_every_value()
     commands = tmp_path / "commands"
     commands.mkdir()
     monkeypatch.setattr(stop_contract, "COMMANDS_DIR", commands)
@@ -1382,7 +1384,7 @@ def test_the_last_part_screen_decides_as_the_whole_path(seed, monkeypatch):
     # it gives reading every path whole.
     import random
 
-    policy = _policy("tool_policy_screen")
+    _policy("tool_policy_screen")
     from lib import declared_paths
 
     rng = random.Random(seed)
@@ -1401,14 +1403,14 @@ def test_the_last_part_screen_decides_as_the_whole_path(seed, monkeypatch):
                "artifacts": [rng.choice([{"path": path()}, {"kind": "json", "path": path()}, {"path": 3}, "x", {}])
                              for _ in range(rng.randrange(0, 4))]}
         prompt = "You are it.\n" + _block(doc)
-        targets = [policy._target_forms(t, {"cwd": str(PROJECT)}) for t in rng.sample(pool, rng.randrange(1, 3))]
+        targets = [declared_paths._target_forms(t, {"cwd": str(PROJECT)}) for t in rng.sample(pool, rng.randrange(1, 3))]
         got = declared_paths._obligation_may_declare(prompt, targets)
         with monkeypatch.context() as m:
             m.setattr(declared_paths, "_last_part", lambda path: declared_paths._LAST_UNKNOWN)
             assert got == declared_paths._obligation_may_declare(prompt, targets), (doc, targets)
         seen.add(got)
     assert seen == {True, False}
-    ends = {part for t in pool for form in policy._target_forms(t, {"cwd": str(PROJECT)}) for part in form}
+    ends = {part for t in pool for form in declared_paths._target_forms(t, {"cwd": str(PROJECT)}) for part in form}
     assert any(isinstance(r, str) and r not in ends for r in read), "the screen skipped no path"
     assert declared_paths._LAST_UNKNOWN in read
 

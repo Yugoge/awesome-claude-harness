@@ -34,13 +34,12 @@ IDENTITY = ("-c", "user.name=sandbox", "-c", "user.email=sandbox@example.invalid
 CALLER_IMPORTS = (
     "from lib.git_command_classifier import (\n"
     "    _unquote_token,\n"
-    "    _segments as _shell_segments,\n"
     "    _command_token_index as _cmd_token_index,\n"
     "    _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,\n"
     "    GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS,\n"
     ")\n"
     "from lib.git_command_classifier import (\n"
-    "    _segments, _basename, _WRAPPERS, _ENV_ASSIGN_RE,\n"
+    "    _basename, _WRAPPERS, _ENV_ASSIGN_RE,\n"
     "    _command_token_index, _git_subcommand, iter_shell_texts,\n"
     ")\n"
 )
@@ -48,7 +47,7 @@ CALLER_IMPORTS = (
 # Ways the classifier can break, each appended to a copy of it.
 BREAKAGES = {
     # The guard imports a name the classifier lacks.
-    "lacks-imported-name": "\nglobals().pop('_segments', None)\n",
+    "lacks-imported-name": "\nglobals().pop('_basename', None)\n",
     "lacks-current-name": "\ndel GIT_GLOBAL_VALUE_OPTS\n",
     "raises-at-import": "\nraise RuntimeError('simulated classifier failure')\n",
     "raises-when-called": ("\ndef classify_git_command(command_text):\n"

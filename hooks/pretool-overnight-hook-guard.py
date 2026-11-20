@@ -2013,25 +2013,5 @@ def main():
     sys.exit(0)
 
 
-def _self_test() -> int:
-    """Simulated overnight + self_repair-enabled contract grant test."""
-    sr = {'enabled': True, 'reason': 'ac8', 'allowed_roles': ['dev'],
-          'allowed_path_prefixes': ['/tmp/t24-ac8/'],
-          'expires_at': '2099-01-01T00:00:00Z', 'audit_required': False}
-    assert _self_repair_block({'self_repair': sr}) is sr, 'enabled grant returns dict'
-    assert _self_repair_block({'self_repair': dict(sr, enabled=False)}) is None, 'disabled = None'
-    assert _expires_passed('2020-01-01T00:00:00Z') and not _expires_passed('2099-01-01T00:00:00Z')
-    assert _path_under_prefix('/tmp/t24-ac8/x', '/tmp/t24-ac8/')
-    assert not _path_under_prefix('/etc/passwd', '/tmp/t24-ac8/')
-    g, _ = _grant_decision_for('/tmp/t24-ac8/x.py', 'dev', '', sr); assert g, 'dev grant ok'
-    g, _ = _grant_decision_for('/tmp/t24-ac8/x.py', 'qa', '', sr); assert not g, 'qa role denied'
-    g, _ = _grant_decision_for('/etc/passwd', 'dev', '', sr); assert not g, 'outside-prefix denied'
-    g, _ = _grant_decision_for('/tmp/t24-ac8/x.py', 'dev', '',
-                               dict(sr, expires_at='2020-01-01T00:00:00Z')); assert not g, 'expired denied'
-    print('self-repair grant self-test: PASS (8 grant-logic assertions)'); return 0
-
-
 if __name__ == '__main__':
-    if '--self-test' in sys.argv:
-        sys.exit(_self_test())
     main()

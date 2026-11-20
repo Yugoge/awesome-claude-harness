@@ -182,14 +182,16 @@ def test_ac10_touched_paths_mark_what_is_removed(command, expected):
 
 
 @pytest.mark.parametrize("command, written, touched", [
-    ('"$PY" scripts/x.py', [], {("scripts/x.py", True)}),
-    ('"$RM" .claude/hooks/x', [], {(".claude/hooks/x", True)}),
-    ('"$CP" cp-01 /tmp/d', ["/tmp/d"], {("cp-01", True), ("/tmp/d", True), ("/tmp/d", False)}),
+    ('"$PY" scripts/x.py', [], {("scripts/x.py", False)}),
+    ('"$RM" .claude/hooks/x', [], {(".claude/hooks/x", False)}),
+    ('"$CP" cp-01 /tmp/d', ["/tmp/d"], {("cp-01", False), ("/tmp/d", False)}),
+    ('"$PY" -m pytest hooks -q', [], {("pytest", False), ("hooks", False)}),
     ('"$X" "$Y"', [], set()),
 ])
 def test_ac10_a_computed_command_touches_each_static_operand(command, written, touched):
-    """Its name is computed: each static path operand may be written or removed, and only the old
-    copy reading (an operand spelled after cp or mv) names a written destination."""
+    """Its name is computed, so it is not read: each static path operand is touched, not removed (a
+    directory above a protected file is not refused for it; the removal policy decides removals), and
+    only the old copy reading (an operand spelled after cp or mv) names a written destination."""
     assert bwt.extract_bash_write_paths(command) == written
     assert set(bwt.extract_bash_touched_paths(command)) == touched
 

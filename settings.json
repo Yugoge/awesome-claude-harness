@@ -214,8 +214,7 @@
       "mcp__memory-server__search_nodes",
       "mcp__playwright__*",
       "Bash(python3 \"${CLAUDE_HOME:-$HOME/.claude}/scripts/session-resources.py\":*)",
-      "Bash(python3 scripts/session-resources.py:*)",
-      "Bash(python3 scripts/lib/soundness_gate.py:*)"
+      "Bash(python3 scripts/session-resources.py:*)"
     ],
     "deny": [
       "Bash(. *session_dirs.t*)",
@@ -236,7 +235,6 @@
       "Bash(curl *session_dirs?*)",
       "Bash(dash *session_dirs.t*)",
       "Bash(dash *session_dirs?*)",
-      "Bash(dd:*)",
       "Bash(deno *session_dirs.t*)",
       "Bash(deno *session_dirs?*)",
       "Bash(docker *session_dirs.t*)",
@@ -252,7 +250,6 @@
       "Bash(eval *session_dirs?*)",
       "Bash(exec *session_dirs.t*)",
       "Bash(exec *session_dirs?*)",
-      "Bash(fdisk:*)",
       "Bash(find *session_dirs.t*)",
       "Bash(find *session_dirs?*)",
       "Bash(fish *session_dirs.t*)",
@@ -375,7 +372,6 @@
       "Bash(rm *session_dirs?*)",
       "Bash(rm -rf /*:*)",
       "Bash(rm -rf /:*)",
-      "Bash(rm -rf:*)",
       "Bash(rsync *session_dirs.t*)",
       "Bash(rsync *session_dirs?*)",
       "Bash(ruby *session_dirs.t*)",

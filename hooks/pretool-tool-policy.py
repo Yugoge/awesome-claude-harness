@@ -445,25 +445,6 @@ def _note_bash_write_target(data: dict, target) -> None:
 # dispatches' files, what a set of dispatches declares) are lib/declared_paths,
 # loaded only for a write, its bytecode cached like every lib module: this
 # file, compiled on every tool call, keeps the rule and the transcript reader.
-# Under their old names here they are lib/declared_paths' own.
-_READERS = frozenset({
-    "_HARNESS_ROOT", "_DEFAULT_SUBAGENT_TYPE", "_AGENT_ID_CHARS", "_parts", "_question_roles", "_QUESTION_PATH",
-    "_TEMPLATE_PATH_RE", "_SHAPE_PLACEHOLDER_RE", "_ANY", "_shape", "_read_text", "_command_text",
-    "_declarable_shapes", "_could_be_declared", "_declared_paths", "_load_json", "_plain_agent_id", "_agent_files",
-    "_FENCE_SHAPES", "_segment_prefix", "_template_shapes", "_example_shapes", "_template_bounds",
-    "_shapes_may_cover", "_template_may_cover", "_PATTERN_FIELDS", "_obligation_may_declare",
-    "_started_dispatches", "_caller_dispatches", "_covers", "_target_forms",
-})
-
-
-def __getattr__(name):
-    if name in _READERS:
-        from lib import declared_paths
-
-        return getattr(declared_paths, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 def _write_targets(tool_name: str, targets: list) -> list:
     if tool_name != "Bash" and tool_name not in WRITE_TOOLS:
         return []
@@ -1968,8 +1949,10 @@ def _protected(path: str, removed: bool, home, config: str, state: str, git_file
     if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
         return "a /do task sidecar"
     provenance = os.path.join(state, "report-provenance")  # lib/report_provenance.ledger_dir
-    if _below(path, provenance) or (removed and _below(provenance, path)):
+    if _below(path, provenance):
         return "the QA report provenance ledger, which only hooks write (CD-6)"
+    if removed and _below(provenance, path):
+        return "a directory holding the QA report provenance ledger, which only hooks write (CD-6)"
     push = _push_input(path, state)
     if push:
         return push

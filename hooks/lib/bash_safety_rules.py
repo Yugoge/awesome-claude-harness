@@ -4297,10 +4297,11 @@ class ServiceView:
     def __init__(self, command, cwd=None):
         self.raw, self.sites, self.code, self.runners, self.redirect_sites = False, [], [], [], []
         self.exec_redirects, self.plain, self.command, self.sets = [], False, command, {}
+        self.script, self.aliased, self._quiet = None, False, None
         self.cwd = cwd if isinstance(cwd, str) and cwd else os.getcwd()
         try:
             from lib.shell_parse import _AssignScope, parse, resolve, walk
-            script = parse(command)
+            script = self.script = parse(command)
             if script.error is not None:
                 raise ValueError(script.error.code)
             nested, scope = False, _AssignScope(script)
@@ -4309,6 +4310,7 @@ class ServiceView:
                 if site.dynamic or site.templated or (r.unresolved and not str(r.unresolved).startswith("xargs_")):
                     self.raw = True
                 nested = nested or tuple(site.context) != ("top",)
+                self.aliased = self.aliased or "alias" in site.context or r.name == "alias"
                 self.redirect_sites.append(site)
                 if not site.cmd.words and tuple(site.context) == ("top",) and scope.certain(site, site.cmd):
                     self.sets.update((a.name, (a.word.span[0], a.static_value())) for a in site.cmd.assignments
@@ -4362,15 +4364,41 @@ class ServiceView:
                 out[words[0].span[0]:words[-1].span[1]] = " " * (words[-1].span[1] - words[0].span[0])
         return "".join(out)
 
+    def unplain(self, text):
+        """`text` (the command, or its executable view) with the pipelines the command-position reading reads whole
+        blanked (_quiet_spans), offsets and line ends kept: what a pre-OB-L11 whole-command reading still reads of a
+        command that is not a plain shape. Nothing is blanked when a bare `exec` redirects the shell's own output
+        (it holds for every later command), when an alias is defined or used (a plain name may then run its body),
+        or when the pipelines cannot be told apart (any failure): the whole text is read, as before."""
+        from lib.shell_parse import _blank
+        if self._quiet is None:
+            self._quiet = []
+            if not (self.raw or self.exec_redirects or self.aliased or self.script is None):
+                with contextlib.suppress(Exception):
+                    self._quiet = _quiet_spans(self.script, self) or []
+        if len(text) != len(self.command):
+            return text
+        out = list(text)
+        for a, b in self._quiet:
+            _blank(out, a, b, keep_newlines=True)
+        return "".join(out)
 
-# The plain shape. Only a command made wholly of these simple commands, each with static arguments and plain
-# redirections, is read at command position alone; every other command also keeps the pre-OB-L11 whole-command
-# readings (service_rules, kill_pid_rule), so a launcher, wrapper or payload the parser does not classify (uv run,
-# npx, nsenter, git -c alias.x='!..', git rebase --exec, PAGER=..) loses no refusal the rules had before.
+
+# The plain shape. A command made wholly of these simple commands, each with plain redirections, is read at command
+# position alone. Any other command also keeps the pre-OB-L11 whole-command readings (service_rules,
+# kill_pid_rule), over its text without the plain pipelines that write no file (ServiceView.unplain), so a launcher,
+# wrapper or payload the parser does not classify (uv run, npx, nsenter, git -c alias.x='!..', git rebase --exec,
+# PAGER=..) loses no refusal the rules had before, and neither does text a command writes to a file and runs.
 _PLAIN_READERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "ls", "echo",
                             "printf", "wc"})
+# The readers that run nothing and write no file whatever their arguments are: an argument is data, static or
+# expanded (_data_word). sed (w, e, -i), rg (--pre) and jq keep static arguments only.
+_PURE_READERS = _PLAIN_READERS - {"rg", "sed", "jq"}
 _KILL_PROBE_OPTS = ("-0", "-l", "-L")  # kill -0 probes a pid, -l / -L list the signals: nothing is sent
 _PLAIN_FILTERS = frozenset({"grep", "egrep", "fgrep", "rg", "sed", "jq", "cat", "head", "tail", "wc"})
+# Later pipe stages too, with static arguments, outside the forms that write a file or run a program
+# (_sorter_writes_or_runs).
+_PLAIN_SORTERS = frozenset({"sort", "uniq", "cut"})
 _PLAIN_GIT_READS = frozenset({"log", "show", "diff", "status", "grep", "blame", "rev-parse", "ls-files", "ls-tree",
                               "cat-file", "shortlog", "describe", "rev-list"})
 _SED_PRINT = re.compile(r"^(([0-9]+|\$)(,([0-9]+|\$))?)?p$")
@@ -4380,6 +4408,19 @@ def _plain_word(w, params=False):
     """A static word (literal or glob), or with `params` a parameter expansion holding no command substitution."""
     kinds = ("lit", "glob", "param") if params else ("lit", "glob")
     return all(p.kind in kinds for p in w.parts) and not w.substitutions()
+
+
+_PARAM_ASSIGNS = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=")
+
+
+def _data_word(w):
+    """A word of a program that only reads its arguments: static, or parameter expansions holding nothing that
+    runs or assigns (no command or process substitution, no arithmetic, no `${x:=v}`, which sets x for every
+    later command). Whatever such a word expands to, the program reads it as data."""
+    from lib.shell_parse import active_parts
+    return _plain_word(w) or (_plain_word(w, params=True) and all(
+        p.kind in ("lit", "glob", "param") and not (p.kind == "param" and _PARAM_ASSIGNS.match(p.text))
+        for p in active_parts(w.parts)))
 
 
 def _abs_norm(path, cwd="/"):
@@ -4475,7 +4516,8 @@ def _plain_simple(cmd, sv, piped):
         return False
     args = list(cmd.words[1:])
     vals = [w.value() if _plain_word(w) else None for w in args]
-    if piped and name not in _PLAIN_FILTERS:
+    sorter = piped and name in _PLAIN_SORTERS
+    if piped and not sorter and name not in _PLAIN_FILTERS:
         return False
     if name == "kill":  # a probe or a listing of literal words, or `kill -0 "$PID"` alone
         return bool(vals) and vals[0] in _KILL_PROBE_OPTS and _plain_kill_args(args[1:]) \
@@ -4489,7 +4531,9 @@ def _plain_simple(cmd, sv, piped):
             and _plain_redirects(cmd, sv, reads_ok=False)
     if name == "git":
         return _plain_git(args) and _plain_redirects(cmd, sv)
-    if name not in _PLAIN_READERS or None in vals:
+    if name in _PURE_READERS:
+        return all(_data_word(w) for w in args) and _plain_redirects(cmd, sv)
+    if None in vals or not (sorter or name in _PLAIN_READERS) or (sorter and _sorter_writes_or_runs(name, vals)):
         return False
     if name == "rg" and any(v.startswith("--pre") for v in vals):
         return False
@@ -4505,12 +4549,15 @@ def _plain_simple(cmd, sv, piped):
 def _plain_kill_args(words):
     """bash's kill reads -s SIG and -n NUM (attached too) after -0, -l or -L, so `kill -0 ${X:--s} KILL 4242` and
     `kill -0 "$A" 4242` (A=-sKILL) send SIGKILL: only literal words stay plain, or one double-quoted bare parameter
-    as the sole word (one word, so it cannot be an option and a PID)."""
+    as the sole word (one word, so it cannot be an option and a PID), or as the sole word the shell's own pid
+    parameters `$$` and `$!`, quoted or not: the shell sets them, to digits (`$!` to nothing before a background
+    job), and nothing can assign them."""
     if all(p.kind == "lit" for w in words for p in w.parts) and not any(w.substitutions() for w in words):
         return True
-    return len(words) == 1 and len(words[0].parts) == 1 and words[0].parts[0].kind == "param" \
-        and words[0].parts[0].quote == "double" and re.match(r"^([A-Za-z_][A-Za-z0-9_]*|[0-9])$", words[0].parts[0].text) \
-        and not words[0].substitutions()
+    if len(words) != 1 or len(words[0].parts) != 1 or words[0].parts[0].kind != "param" or words[0].substitutions():
+        return False
+    p = words[0].parts[0]
+    return p.text in ("$", "!") or (p.quote == "double" and re.match(r"^([A-Za-z_][A-Za-z0-9_]*|[0-9])$", p.text))
 
 
 def _dd_whole(cmd, sv):
@@ -4524,8 +4571,8 @@ def _dd_whole(cmd, sv):
 
 def _kill_probe(cmd, sv):
     """The liveness probe, which sends no signal: `kill -0` and then only PIDs, as literal words that are no option,
-    one double-quoted bare parameter, or one `$name` alone that the command sets once to digits
-    (ServiceView.set_once: digits split into digits, never into `-s SIG`)."""
+    one double-quoted bare parameter, `$$` or `$!` (_plain_kill_args), or one `$name` alone that the command sets
+    once to digits (ServiceView.set_once: digits split into digits, never into `-s SIG`)."""
     rest = cmd.words[2:]
     if not rest or [w.value() if _plain_word(w) else None for w in cmd.words[:2]] != ["kill", "-0"] \
             or any((w.value() or w.text).startswith("-") for w in rest):
@@ -4534,16 +4581,62 @@ def _kill_probe(cmd, sv):
                                       and sv.set_once(rest[0], cmd.span[0], "[0-9]+"))
 
 
-def _plain_script(script, sv):
-    """True when every pipeline of the command is plain simple commands: a reader with static arguments,
-    `kill -0|-l|-L`, an fdisk listing, dd onto an ordinary file or /dev/null|stdout|stderr|fd/N, a git read; a later
-    pipe stage only a filter."""
+def _plain_pipeline(pipeline, sv):
+    """True when every stage is a plain simple command: a reader with static arguments (a pure reader with
+    arguments that are data, _data_word), `kill -0|-l|-L`, an fdisk listing, dd onto an ordinary file or
+    /dev/null|stdout|stderr|fd/N, a git read; a later pipe stage only a filter, or sort, uniq or cut."""
     from lib.shell_parse import SimpleCommand
+    return all(isinstance(stage, SimpleCommand) and _plain_simple(stage, sv, i > 0)
+               for i, stage in enumerate(pipeline.stages))
+
+
+def _plain_script(script, sv):
+    """True when every pipeline of the command is plain (_plain_pipeline)."""
+    return all(_plain_pipeline(pipeline, sv) for pipeline, _sep in script.items)
+
+
+def _writes_file(cmd):
+    """A plain command, or a compound's own redirections, writing a file other than the null device: an output
+    redirection, or dd's of= outside /dev/null, /dev/stdout and /dev/stderr."""
+    words = [w.value() or "" for w in getattr(cmd, "words", ())]
+    return any(x.writes() and (x.target is None or x.target.value() != locations.NULL_DEVICE) for x in cmd.redirects) \
+        or (words[:1] == ["dd"] and any(v.startswith("of=") and v[3:] not in locations.STD_SINKS for v in words[1:]))
+
+
+_QUIET_BODIES = frozenset({"subshell", "group", "if", "while", "until", "for", "select", "case"})
+
+
+def _quiet_spans(script, sv):
+    """The spans a whole-command reading leaves out (ServiceView.unplain): each plain pipeline of `script` that
+    writes no file other than the null device, with its heredoc bodies. Nothing runs what such a pipeline prints,
+    and a file it wrote could be run by a later command, so one that writes a file stays in. The pipelines inside
+    a compound command's bodies count the same way where the compound's output is not kept either: its own
+    redirections are plain and write no file, and every later stage of its pipeline is a plain filter that writes
+    none. A function's body and a coproc's stay in (a call or a read may send their output anywhere). None when
+    the command defines a function: a plain name may then run that body."""
+    from lib.shell_parse import Compound
+    spans = []
     for pipeline, _sep in script.items:
-        for i, stage in enumerate(pipeline.stages):
-            if not isinstance(stage, SimpleCommand) or not _plain_simple(stage, sv, i > 0):
-                return False
-    return True
+        stages = pipeline.stages
+        if stages and _plain_pipeline(pipeline, sv):
+            if not any(_writes_file(s) for s in stages):
+                spans.append((stages[0].span[0], stages[-1].span[1]))
+                spans.extend(x.hd.body_span for s in stages for x in s.redirects if x.hd is not None)
+            continue
+        for i, stage in enumerate(stages):
+            if not isinstance(stage, Compound):
+                continue
+            if stage.kind == "function":
+                return None
+            if stage.kind in _QUIET_BODIES and _plain_redirects(stage, sv) and not _writes_file(stage) and all(
+                    not isinstance(s, Compound) and _plain_simple(s, sv, True) and not _writes_file(s)
+                    for s in stages[i + 1:]):
+                for body in stage.body:
+                    inner = _quiet_spans(body, sv)
+                    if inner is None:
+                        return None
+                    spans.extend(inner)
+    return spans
 
 
 # The raw-text readings the rules had before OB-L11: `text` is the command, an interpreter's code or a runner's
@@ -4582,7 +4675,9 @@ def _raw_systemctl(text, env):
 
 
 def _raw_workflow(text, view):
-    return grep(r"(rm|mv)\s", view) and grep(WORKFLOW_STATE_RE, text)
+    """rm or mv as a word of its own (after a path, a quote or a separator), not the end of another word or option
+    (uname -srm, confirm, terraform, --rm), and a workflow state path."""
+    return grep(r"(?<![\w.-])(rm|mv)\s", view) and grep(WORKFLOW_STATE_RE, text)
 
 
 # The command-position readings.
@@ -4805,18 +4900,20 @@ def service_rules(command, view, env, sv=None):
         refuse("BLOCKED: Attempting to redirect from/to sensitive file via Bash", f"Command: {command}",
                "Edit sensitive files manually — never via AI-driven Bash redirection.", released_line())
 
-    # A rule refuses when its command-position reading refuses OR its pre-OB-L11 reading of the whole command
-    # does, unless the command is a plain shape (_plain_script), for which the command-position reading is exact.
+    # A rule refuses when its command-position reading refuses OR its pre-OB-L11 reading does. That reading runs
+    # over the command without its plain pipelines that write no file (ServiceView.unplain), for which the
+    # command-position reading is exact; a command that is a plain shape as a whole (_plain_script) has none.
     def reads(raw_rule, structural):  # a raw-text rule: interpreter code and runner lines keep it
         if sv.raw:
             return raw_rule(command)
         return structural() or any(raw_rule(t) for t in sv.code + sv.runners) \
-            or (not sv.plain and raw_rule(command))
+            or (not sv.plain and raw_rule(sv.unplain(command)))
 
     def reads_view(view_rule, structural, view=view):  # an executable-view rule: runner lines keep it
         if sv.raw:
             return view_rule(view)
-        return structural() or any(view_rule(t) for t in sv.runners) or (not sv.plain and view_rule(view))
+        return structural() or any(view_rule(t) for t in sv.runners) \
+            or (not sv.plain and view_rule(sv.unplain(view)))
 
     if reads(_raw_daemon_json, lambda: _daemon_json_write(sv)):
         refuse("BLOCKED: Modifying Docker daemon config is refused", f"Command: {command}", released_line())
@@ -4841,7 +4938,7 @@ def service_rules(command, view, env, sv=None):
                    released_line())
     if _raw_workflow(command, view) if sv.raw else (
             _workflow_state_removal(command, sv) or any(_raw_workflow(t, t) for t in sv.runners)
-            or (not sv.plain and _raw_workflow(command, view))):
+            or (not sv.plain and _raw_workflow(sv.unplain(command), sv.unplain(view)))):
         refuse("BLOCKED: Deleting/moving workflow state files is refused", f"Command: {command}",
                    "These files are required by the workflow enforcement system.", released_line())
 
@@ -4935,11 +5032,14 @@ def snapshot_before(payload):
 
 def _scratch_owner(payload):
     """The write policy's answers about the calling actor's own scratch directory: (owner test for a path, the note
-    naming that directory or ""). Both are hooks/pretool-tool-policy.py's own (_scratch_status, _note_own_scratch),
-    loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an actor may write
-    scratch files, with no second one here. An actor the write policy gives no directory (a main agent whose
-    session scratch was not made, a subagent whose role does not resolve) owns nothing, and so does any failure
-    to ask."""
+    naming that directory or ""). All are hooks/pretool-tool-policy.py's own (_scratch_status, _note_own_scratch,
+    _main_scratch), loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an
+    actor may write scratch files, with no second one here. For a removal the owner test also passes a path inside
+    the session's scratch directory (where $TMPDIR points, so where the programs any actor of the session runs
+    leave their files), for every caller of that session, once its owner record names the session; the note then
+    names that directory too, on a line of its own, unless it is the one already named. An actor the write policy
+    gives no directory (a session whose scratch was not made, a subagent whose role does not resolve) owns nothing
+    more, and any failure to ask owns nothing."""
     import importlib.util
     import io
     try:
@@ -4951,22 +5051,29 @@ def _scratch_owner(payload):
         note = io.StringIO()
         with contextlib.redirect_stderr(note):  # the note for a refused write to system temp names the directory
             policy._note_own_scratch(role, payload, os.path.join(locations.DEFAULT_TEMP_DIR, "removal"))
+        shared = policy._main_scratch({"session_id": payload.get("session_id")})
     except BaseException:  # noqa: BLE001 - also a bootstrap that exits: nothing is owned
         return (lambda path: False), ""
 
     def owns(path):
         try:
-            return policy._scratch_status(role, path, payload) == "owner"
+            return policy._scratch_status(role, path, payload) == "owner" or (
+                bool(shared) and locations.is_inside(path, shared))
         except Exception:  # noqa: BLE001
             return False
-    return owns, note.getvalue().strip()
+    lines = [note.getvalue().strip()]
+    if shared and shared + "/" not in lines[0]:
+        lines.append(f"removal-policy: this session's scratch directory is {shared}/ ($TMPDIR, for every actor of "
+                     "the session).")
+    return owns, "\n".join(filter(None, lines))
 
 
 def _removal_in_own_scratch(proof, payload, owns):
     """Whether every file a removal names (lib/bash_execution_boundary.py `removal_targets`) lies inside the caller's
-    own scratch directory, from every directory the command may run it in (the call's cwd and each literal `cd`,
-    as written and normalised). A file passes when the place it resolves to and the directory holding its entry
-    both pass the write policy's owner test, so a link outside that directory pointing into it does not."""
+    own scratch directory or its session's (_scratch_owner), from every directory the command may run it in (the
+    call's cwd and each literal `cd`, as written and normalised). A file passes when the place it resolves to and
+    the directory holding its entry both pass the owner test, so a link outside such a directory pointing into it
+    does not, and neither does the directory itself."""
     targets, dirs, cwd = proof.get("targets"), proof.get("cwds"), payload.get("cwd")
     if not isinstance(targets, list) or not targets:
         return False
@@ -4991,7 +5098,8 @@ def removal_policy(payload_text, command):
     The analyzer runs in its own process under a time and memory limit. A command it proves (PROVEN_INERT,
     PROVEN_SAFE_REMOVAL) passes; a filesystem removal it finds (FORBIDDEN_REMOVAL) is refused, unless the analyzer
     knows every file the command removes and each lies inside the calling actor's own scratch directory as the
-    write policy defines it (the owner, 2026-11-19: one's own temp folder may be deleted). A command it cannot
+    write policy defines it, or inside its session's scratch directory (the owner, 2026-11-19: one's own temp
+    folder may be deleted; 2026-11-20: the session's, where $TMPDIR sends every actor's programs). A command it cannot
     prove safe is judged on one of two paths, which are two rules, not one:
       primary  — the analyzer answers UNRESOLVED. It has already refused every removal it sees where it would be
                  executed (a removal program in command position, find -delete, git rm/clean, a removal call in
@@ -5064,7 +5172,8 @@ def removal_policy(payload_text, command):
             return None  # every file it removes is known and lies in the caller's own scratch directory
         own = (note, "A removal runs when every file it names is known (written out, or a variable set to a "
                "literal earlier in the same command and not changed since; no pattern, `~` or value from the "
-               "environment or a substitution) and lies inside that directory.") if note else ()
+               "environment or a substitution) and lies inside "
+               + ("one of those directories." if "\n" in note else "that directory.")) if note else ()
     if decision and named:
         refuse(f"BLOCKED: removal-policy — {decision[5:]}", f"Command: {command}",
                    "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. "
@@ -5083,10 +5192,11 @@ def removal_policy(payload_text, command):
 
 def kill_pid_rule(command, view, sv=None):
     """BS-35: kill <pid>, read at command position (OB-L11) and, unless the command is a plain shape, on the
-    executable view as before; a command ServiceView cannot read keeps the view's reading alone."""
+    executable view of what is not a plain pipeline (ServiceView.unplain) as before; a command ServiceView cannot
+    read keeps the view's reading alone."""
     sv = sv if sv is not None else ServiceView(command)
     if _raw_kill_pid(view) if sv.raw else (_kill_pid(sv) or any(_raw_kill_pid(t) for t in sv.runners)
-                                           or (not sv.plain and _raw_kill_pid(view))):
+                                           or (not sv.plain and _raw_kill_pid(sv.unplain(view)))):
         refuse("BLOCKED: kill with PIDs is refused — verify the target is safe before killing", f"Command: {command}",
                    "REASON: Killing a PID can cascade to unrelated processes. Use a scoped restart instead.",
                    released_line())
@@ -5282,6 +5392,15 @@ def _uniq_writes(args):
     return operands >= 2
 
 
+def _sorter_writes_or_runs(name, args):
+    """sort with -o / -uoFILE / --output / --outp= / --o (it writes the file) or --compress-program (it runs
+    one), or uniq with an output operand: the forms of a pure filter that are no filter."""
+    if name == "sort":
+        return any(_long_prefix_of(a, ("--output", "--compress-program"))
+                   or (a.startswith("-") and not a.startswith("--") and "o" in a) for a in args)
+    return name == "uniq" and _uniq_writes(args)
+
+
 _ACK_AG_SHORT = frozenset("iIsSvwlLcnhHQFk1")
 _ACK_AG_LONG = frozenset({"--ignore-case", "--smart-case", "--case-sensitive", "--invert-match", "--word-regexp",
                           "--literal", "--count", "--files-with-matches", "--files-without-matches", "--nocolor",
@@ -5333,10 +5452,7 @@ def _shape_simple(cmd, invs, stage, state):
         return False
     if name in ("ack", "ag") and not _ack_ag_options_ok(args):
         return False  # ack/ag take any unique abbreviation (--pag=, --pa, --ackr=): only listed options stay inside
-    if name == "sort" and any(_long_prefix_of(a, ("--output", "--compress-program"))
-                              or (a.startswith("-") and not a.startswith("--") and "o" in a) for a in args):
-        return False  # -o / -uoFILE / --output / --outp= / --o write a file; --compress-program runs one
-    if name == "uniq" and _uniq_writes(args):
+    if _sorter_writes_or_runs(name, args):
         return False
     if name == "git":
         if not _shape_git(cmd, invs):

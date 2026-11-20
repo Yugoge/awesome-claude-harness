@@ -2,7 +2,8 @@
 
 - For a period it gives the totals and the counts by event, rule, hook, role, project, day and
   provider, the loops (one actor, the identical refusal more than once), and counts a let-through
-  (unproven) apart from the refusals; reports a writer could not merge count once.
+  (unproven) apart from the refusals; reports a writer could not merge count once. A let-through whose
+  call another hook refused (same session, event and tool-call id) is counted apart again, not listed.
 - reconcile pairs the record with the hook refusals of the session transcripts by tool-call id (a
   blocked stop by session, agent and time): no difference exits 0; a line taken out of the record,
   and a line no transcript holds, are each printed and exit 1. A refused prompt and a call rejected
@@ -115,6 +116,56 @@ def test_a_let_through_is_listed_with_the_snapshot_taken_before_it_ran(monkeypat
     assert "let through unproven (not refusals): 2" in out and "      " + text.splitlines()[1] in out
 
 
+UNPROVEN_TEXT = ("hooks/lib/bash_safety_rules.py", "removal-policy let through unproven: UNRESOLVED dynamic_command_head:$X\n"
+                 "snapshot: refs/checkpoints/main 5aab; bring a file back: git -C /work/app restore --source=5aab -- <path>")
+PRIVILEGE = ("hooks/pretool-git-privilege-guard.py", "BLOCKED: agent git push")
+HEADING = "let through by the removal policy, refused by another hook"
+
+
+def extracted_rows(tmp_path, *ids) -> str:
+    now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    path = tmp_path / "refusals.jsonl"
+    path.write_text("".join(json.dumps({"tool_use_id": i, "record_uuid": None, "ts": now, "session_id": SID, "agent_id": None,
+                                        "hook_event": "PreToolUse:Bash"}) + "\n" for i in ids))
+    return str(path)
+
+
+def test_a_let_through_another_hook_refused_is_counted_apart_and_not_listed(monkeypatch, tmp_path):
+    """Live wall 3, B: one call, a refusal by one hook and the removal policy's unproven line from its own process."""
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/app")
+    R.write(call("Bash", {"command": "X=git; $X push"}, "toolu_p"), [PRIVILEGE], "hooks/pretool-launch.py")
+    R.write(call("Bash", {"command": "X=git; $X push"}, "toolu_p"), [UNPROVEN_TEXT], UNPROVEN_TEXT[0], R.UNPROVEN)
+    s = json.loads(reader("--json").stdout)
+    assert (s["refusals"], s["unproven"], s["unproven_refused_elsewhere"]) == (1, 0, 1)
+    assert s["unproven_calls"] == [] and s["unproven_by_rule"] == []
+    text = reader().stdout
+    assert f"let through unproven (not refusals): 0    {HEADING}: 1" in text and "each with its snapshot" not in text
+    out = reader("reconcile", "--refusals", extracted_rows(tmp_path, "toolu_p"))
+    assert out.returncode == 0 and "in the record: 1    differences: 0" in out.stdout, out.stdout + out.stderr
+    assert "'unproven': 0, 'unproven, refused by another hook': 1}" in out.stdout
+
+
+def test_a_lone_let_through_is_listed_as_let_through(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/app")
+    R.write(call("Bash", {"command": "X=ls; $X ."}, "toolu_u"), [UNPROVEN_TEXT], UNPROVEN_TEXT[0], R.UNPROVEN)
+    R.write(call("Bash", {"command": "git push"}, "toolu_r"), [PRIVILEGE], "hooks/pretool-launch.py")  # another call
+    s = json.loads(reader("--json").stdout)
+    assert (s["refusals"], s["unproven"], s["unproven_refused_elsewhere"]) == (1, 1, 0)
+    assert [x["snapshot"] for x in s["unproven_calls"]] == [UNPROVEN_TEXT[1].splitlines()[1]]
+    assert f"let through unproven (not refusals): 1    {HEADING}: 0" in reader().stdout
+    out = reader("reconcile", "--refusals", extracted_rows(tmp_path, "toolu_r"))
+    assert out.returncode == 0 and "'unproven': 1, 'unproven, refused by another hook': 0}" in out.stdout, out.stdout
+
+
+def test_a_lone_refusal_has_no_let_through(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/app")
+    R.write(call("Bash", {"command": "git push"}, "toolu_r"), [PRIVILEGE], "hooks/pretool-launch.py")
+    s = json.loads(reader("--json").stdout)
+    assert (s["refusals"], s["unproven"], s["unproven_refused_elsewhere"], s["unproven_calls"]) == (1, 0, 0, [])
+    out = reader("reconcile", "--refusals", extracted_rows(tmp_path, "toolu_r"))
+    assert out.returncode == 0 and "'unproven': 0, 'unproven, refused by another hook': 0}" in out.stdout, out.stdout
+
+
 def test_the_period_bounds_what_is_counted_and_split_reports_count_once():
     folder = Path(R.directory())
     folder.mkdir(parents=True)
@@ -175,7 +226,8 @@ def test_reconcile_is_zero_and_every_removed_or_added_line_is_a_difference(monke
     out = reader("reconcile", "--transcripts", str(projects), str(projects))
     assert out.returncode == 0, out.stdout + out.stderr
     assert "hook refusals in the transcripts: 7    in the record: 7    differences: 0" in out.stdout
-    assert "{'no transcript line': 2, 'codex': 1, 'unproven': 1}, CLI permission-rule denials 1" in out.stdout
+    assert ("{'no transcript line': 2, 'codex': 1, 'unproven': 1, 'unproven, refused by another hook': 0}, "
+            "CLI permission-rule denials 1") in out.stdout
 
     day = next(Path(R.directory()).glob("*.jsonl"))
     kept = day.read_text().splitlines()

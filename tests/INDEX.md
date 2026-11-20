@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T08:17:36Z*
-**Total entries**: 339
+*Last updated: 2026-11-20T10:43:04Z*
+**Total entries**: 340
 **Convention**: kebab
 
 ## Tree
@@ -281,6 +281,7 @@ tests/
 ├── `test_permission_allow_readonly.py` - default mode) and the proof that none of them also allows a mutating or executing neighbour
 ├── `test_permission_ask_dry_run.py` - `Bash(kubectl apply:*)`, `Bash(kubectl create:*)` and `Bash(npm publish:*)` were whole-verb deny ...
 ├── `test_permission_coverage.py` - entry that covers it (P2 R6/R17, D14: entries are respelled, none granted or withdrawn)
+├── `test_permission_deny_rules.py` - Claude Code runs the PreToolUse hooks first and then its permission rules, and a deny match wins ...
 ├── `test_permission_pipe_to_shell.py` - The CLI splits a compound command at `&&`, `||`, `;`, `|`, `|&`, `&` and newlines and judges each
 ├── `test_permission_readonly_allow.py` - Root cause: settings.json's permissions.allow had no entry for a few everyday read-only commands,...
 ├── `test_pre_commit_dev_command_files.py` - dev-family command files as the tree holds them

@@ -1,8 +1,6 @@
 """Unit tests of hooks/lib/shell_parse.py: one class per node type and view."""
 
-import json
 import os
-import subprocess
 import sys
 
 import pytest
@@ -31,7 +29,17 @@ class TestNeverRaises:
     def test_garbage_gives_a_script(self, text):
         s = sp.parse(text)
         assert isinstance(s, sp.Script)
-        sp.facts(text if isinstance(text, str) else "")
+        text = text if isinstance(text, str) else ""
+        script = sp.parse(text)  # every view reads it without raising
+        for site in sp.walk(script):
+            res = sp.resolve(site.cmd)
+            site.cmd.argv(), res.name, res.argv(), [w[0] for w in res.wrappers], sorted(site.fed)
+            [a.static_value() for a in site.cmd.assignments]
+            [r.target.value() for r in site.cmd.redirects if r.target is not None]
+        [e.as_dict() for e in script.errors()]
+        [t.as_dict() for t in sp.write_targets(script)]
+        [g.as_dict() for g in sp.git_invocations(script)]
+        sp.executable_view(text)
 
     def test_error_keeps_commands_before_it(self):
         s = sp.parse("ls; echo 'open")
@@ -364,17 +372,6 @@ class TestGitInvocations:
 class TestArgvSplit:
     def test_like_shlex(self):
         assert sp.argv_split("a 'b c' \"d\\\"e\" f\\ g") == ["a", "b c", 'd"e', "f g"]
-
-
-class TestCli:
-    def test_facts(self):
-        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push > /tmp/x"}})
-        out = subprocess.run([sys.executable, os.path.join(LIB, "shell_parse.py"), "--facts"],
-                             input=payload, text=True, capture_output=True, check=True).stdout
-        facts = json.loads(out)
-        assert facts["error"] is None
-        assert facts["git_invocations"][0]["subcommand"] == "push"
-        assert facts["write_targets"][0]["path"] == "/tmp/x"
 
 
 class TestConsumerDefects:

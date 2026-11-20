@@ -125,7 +125,14 @@ def test_untracked_entries_do_not_change_the_generated_text(tmp_path):
         (folder / name).mkdir()
         (folder / name / 'junk.pyc').write_text('')
     assert regen_readme_module.render_readme(folder, repo) == readme_before
-    assert regen_index_module.render_index(folder, repo) == index_before
+    index_after = regen_index_module.render_index(folder, repo)
+    # The two INDEX renders may fall in different seconds, and the timestamp line is the one
+    # generated line that carries the clock: drop exactly that line, in the format the writer
+    # prints, and compare the status and the rest of the text whole.
+    for status, text in (index_before, index_after):
+        assert status is RegenStatus.WRITTEN
+        assert len(INDEX_STAMP.findall(text)) == 1, text
+    assert INDEX_STAMP.sub('', index_after[1]) == INDEX_STAMP.sub('', index_before[1])
 
 
 @pytest.mark.parametrize('prefix', ['# folder\n\n', '# Folder\n\nHand-written intro.\n\n## Use\n\nrun it\n\n'])

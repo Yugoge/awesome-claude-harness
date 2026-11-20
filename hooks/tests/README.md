@@ -2,12 +2,13 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 287
+- **Total files**: 288
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
 ## Files
 - `_fixtures_obligation_terminal.py` - hooks/tests/test_posttool_overnight_loop_terminal_gate.py (which pin that
+- `allowed_by_design.py` - The hook suites assert through the real hook that each of these runs (test_removal_policy_own_scr...
 - `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 - `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 - `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with
@@ -34,6 +35,7 @@
 - `test_bash_safety_degraded_fallback.py` - Until 2026-11-19 a command passed the degraded path only when it was provably plain: no removal r...
 - `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
 - `test_bash_safety_http_stop_npm_global.py` - The HTTP /stop rule (BS-02, search-15) refuses a request to a localhost port's /stop path segment...
+- `test_bash_safety_plain_pipelines.py` - Until 2026-11-20 one pipeline that was not a plain shape (any `if` or `for`, a variable argument,...
 - `test_bash_safety_preclean_stdin.py` - An exec'd process gets its environment and argv strings through the kernel, which refuses one str...
 - `test_bash_safety_rules.py` - their cases, the over-blocks fixed, the bulk-commit writer closed from Bash, and the release word...
 - `test_bash_safety_sensitive_names.py` - check (`.env`, `credentials`, `secret`, `password`) over the full path of each parsed write targe...
@@ -173,7 +175,6 @@
 - `test_overnight_question_deny.py` - hooks/pretool-overnight-hook-guard.py denies AskUserQuestion to every caller of
 - `test_overnight_row13_consumers.py` - - The PM test plan, triage and retro reports and the specialists' reports are
 - `test_overnight_state_file_write_guard.py` - overnight-state write-protection (ticket 20261001-161041-r10, AC4/AC5/AC6)
-- `test_overnight_trace_evidence.py` - (P1b E3). Which report is inspected and which of its fields are required is
 - `test_overnight_trace_yield.py` - (P1b row 18)
 - `test_overnight_wake.py` - The wake is one recurring CronCreate of lib/overnight.py's WAKE_PROMPT, scheduled at Step 0 and d...
 - `test_overnight_window.py` - window_open, closeout_gaps, stop_contract.timelock_released and the /stop helper

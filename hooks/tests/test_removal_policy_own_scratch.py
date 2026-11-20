@@ -31,6 +31,9 @@ sys.path.insert(0, os.path.join(HOOKS_DIR, "lib"))
 
 import bash_execution_boundary as eb  # noqa: E402
 
+sys.path.insert(0, HERE)
+import allowed_by_design  # noqa: E402
+
 SID = "5e6f7a8b-1c2d-4e3f-9a0b-1c2d3e4f5a6b"
 AGENT, OTHER_AGENT = "a1b2c3d4e5f60718", "a9999999999999999"
 OTHER_SID = "0f0e0d0c-0b0a-4908-8706-050403020100"
@@ -145,22 +148,7 @@ def project(tmp_path_factory):
     return Project(tmp_path_factory.mktemp("own-scratch"))
 
 
-OWN = [
-    "rm -f {own}/a.txt",
-    "rm -rf {own}/sub",
-    "rm {own}/a {own}/sub/b",
-    "rm -f .claude/scratch/{sid}/dev/{agent}/a.txt",              # relative, from the project the call runs in
-    "cd {root}; rm -f .claude/scratch/{sid}/dev/{agent}/a.txt",   # after a `cd` written out
-    "rm {own}/a; unlink {own}/b",
-    "ls {own}; rm -f {own}/a.txt && echo done",
-    "if [ -f {own}/a.txt ]; then rm {own}/a.txt; fi",
-    # through a variable set to a literal earlier in the same command (2026-11-20)
-    "D={own}/sub; rm -rf $D",
-    "D={own}/sub; rm -rf \"$D\"",
-    "S={own}; cd /; rm -f $S/a.txt $S/sub/b",
-    # the recorded shape of 2026-11-19 18:04Z, neutral names
-    "cd {root}/src; S={own}; rm -f $S/probe.py; time python3 tool.py --out $S/probe.json",
-]
+OWN = allowed_by_design.OWN_SCRATCH_REMOVALS  # stated once; tests/test_permission_deny_rules.py reads it too
 NOT_OWN = [
     "rm {root}/src/main.py",                                      # a project file
     "rm -f {own}/a.txt {root}/src/main.py",                       # one own, one not
@@ -244,7 +232,7 @@ def session(project):
 
 def test_a_main_agent_removes_inside_its_session_scratch(project, session):
     root, own, _other = session
-    for command in ("rm -f " + own + "/a.txt", "rm -rf " + own + "/sub", "rm -rf " + own + "/pytest-of-root/x"):
+    for command in (t.format(own=own) for t in allowed_by_design.SESSION_SCRATCH_REMOVALS):
         code, err = project.bash(command, caller=None, TMPDIR=root)
         assert code == 0 and "removal-policy" not in err, (command, err)
 

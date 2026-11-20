@@ -157,16 +157,15 @@ def _doc_sync(name: str):
 
 
 def test_every_doc_sync_listing_leaves_out_the_same_files(tmp_path, monkeypatch):
-    """The audit's input: a watched folder that holds lifecycle.jsonl. The INDEX statistics
-    (regen_index._build_stats) and the inventory line (patch._count_entries, _build_file_list)
-    counted it; the rendered tree and the README listing left it out."""
+    """The audit's input: a watched folder that holds lifecycle.jsonl. The inventory line
+    (patch._count_entries, _build_file_list) counted it; the rendered tree and the README
+    listing left it out."""
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
     folder = tmp_path / "hooks"
     folder.mkdir()
     for name in ("a.md", "lifecycle.jsonl", "agent-scores.json", "INDEX.md"):
         (folder / name).write_text("# a\n")
     entries = 1  # a.md
-    assert _doc_sync("regen_index")._build_stats(folder)["total"] == entries
     patch = _doc_sync("patch")
     assert patch._count_entries(folder, False) == entries
     assert f"({entries} entries)" in patch._build_file_list(folder)

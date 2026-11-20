@@ -9,13 +9,14 @@ defects made that channel fire on ordinary string DATA:
   (a) the `dynamic_git_token` branch checked only "token looks like an expansion"
       AND "next word is a git verb".  It did NOT apply the quote-balance /
       escaped-quote structural filter that the OBFUSCATION branch already
-      applies via `_is_obfuscation_candidate()`.  An unbalanced quote is the
+      applied.  An unbalanced quote is the
       signature of `.split()` cutting a multi-word string literal in half — the
       shell never execs that fragment.
 
-  (b) `_segments_with_kind()` splits on newlines without tracking quote state,
-      so a continuation line of a MULTI-LINE quoted literal becomes a "segment"
-      whose first token reads as a command word.
+  (b) the classifier's segment splitter (since retired) split on newlines
+      without tracking quote state, so a continuation line of a MULTI-LINE
+      quoted literal became a "segment" whose first token reads as a command
+      word.
 
 The generalisation was wide because the git subcommand set is full of ordinary
 English verbs (init status log config add clean help describe pull show grep).

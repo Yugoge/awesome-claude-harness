@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T03:48:38Z*
-**Total entries**: 86
+*Last updated: 2026-11-20T07:46:42Z*
+**Total entries**: 85
 **Convention**: kebab
 
 ## Tree
@@ -37,7 +37,6 @@ lib/
 ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
 ├── `close_rating.py` - The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports.
-├── `closeout.py` - CLI:
 ├── `codex_transcript.py` - written by scripts/steps/codex-run.py, read by the gitignore preflight as its task's provenance. ...
 ├── `command_span.py` - rule of which transcript record is a prompt the human typed
 ├── `commit_journal.py` - WHY THIS EXISTS

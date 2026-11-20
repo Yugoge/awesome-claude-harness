@@ -39,10 +39,6 @@ CONTRACT (do not weaken):
 
 from __future__ import annotations
 
-import json
-import os
-import sys
-
 # Obligation kinds. The analyzer must discharge every emitted offset.
 KIND_SUBSTITUTION = "substitution"   # $(...) or `...` or $((...)) or $[...]
 KIND_PROCSUB = "procsub"             # <(...) or >(...)
@@ -437,16 +433,3 @@ def census(raw: str, heredoc_body: bool = False) -> dict:
                 obligations.append({"kind": ob["kind"], "offset": off})
 
     return {"obligations": obligations, "fatal": fatal}
-
-
-def main() -> int:
-    raw = os.environ.get("CMD_INPUT")
-    if raw is None:
-        raw = sys.stdin.read()
-    json.dump(census(raw), sys.stdout)
-    sys.stdout.write("\n")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

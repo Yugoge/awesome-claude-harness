@@ -5,7 +5,9 @@
         The period's totals (default: the last 7 days), then the counts by event, rule, hook, role,
         project, day and provider, and the loops: one actor refused the identical call, stop or prompt
         more than once. A call the removal policy let through unproven is no refusal: counted apart, and
-        listed with the snapshot taken before it ran (the last 20; --json: all).
+        listed with the snapshot taken before it ran (the last 20; --json: all). One that another hook
+        refused (a refusal record of the same session, event and tool-call id) never ran: it is counted
+        apart again, as let through by the removal policy and refused by another hook, and not listed.
     refusals reconcile [--since T] [--until T] [--dir DIR] [--transcripts DIR ...] [--refusals FILE]
         The record against the hook refusals the session transcripts hold for the period, by tool-call
         id; a blocked stop has none and pairs by session, agent and time. Every difference is printed;
@@ -14,8 +16,9 @@
         the transcript side from a file of extracted rows instead (one JSON object a line: tool_use_id
         or record_uuid, ts, session_id, agent_id, hook_event). Not compared, and counted: a record of
         a refused prompt or of a call rejected after it ran that no transcript line shows (neither
-        leaves a tool result or a feedback message), a Codex seat's record, an unproven let-through,
-        and a denial by the CLI's own permission rules (no hook ran).
+        leaves a tool result or a feedback message), a Codex seat's record, an unproven let-through
+        (apart: one another hook refused, as the summary counts it), and a denial by the CLI's own
+        permission rules (no hook ran).
 
 T is a UTC date or time (2026-11-16, 2026-11-16T08:30). The record is read where refusal_record.py's
 directory() puts it for this harness home, the one definition the hooks write by; --dir reads another.
@@ -85,10 +88,21 @@ def _rules(record: dict) -> list[str]:
     return [f"{r.get('hook')} {r.get('id') or '-'}" for r in record.get("rules") or []] or ["-"]
 
 
+def _unproven(found: list) -> tuple[list, list]:
+    """(the unproven let-throughs, those of them another hook refused): the removal policy's hook writes its
+    line without seeing the other registrations' verdicts, so a refusal record of the same session, event and
+    tool-call id means the call never ran."""
+    refused = {(r.get("session"), r.get("event"), r["tool_use_id"]) for r in found
+               if r.get("kind") == R.REFUSAL and r.get("tool_use_id")}
+    unproven = [r for r in found if r.get("kind") == R.UNPROVEN]
+    elsewhere = [r for r in unproven if (r.get("session"), r.get("event"), r.get("tool_use_id")) in refused]
+    return [r for r in unproven if not any(r is x for x in elsewhere)], elsewhere
+
+
 def summary(found: list) -> dict:
     """The counts the owner asked for, most frequent first."""
     refused = [r for r in found if r.get("kind") == R.REFUSAL]
-    unproven = [r for r in found if r.get("kind") == R.UNPROVEN]
+    unproven, elsewhere = _unproven(found)
 
     def count(rows, key) -> list:
         return sorted(collections.Counter(k for r in rows for k in key(r)).items(), key=lambda kv: (-kv[1], str(kv[0])))
@@ -100,7 +114,7 @@ def summary(found: list) -> dict:
               "agent_id": key[1], "session": key[0], "event": key[2], "tool": key[3], "rules": list(key[5]),
               "refused": str(key[4] or "")[:120]} for key, rows in same.items() if len(rows) > 1]
     return {
-        "refusals": len(refused), "unproven": len(unproven),
+        "refusals": len(refused), "unproven": len(unproven), "unproven_refused_elsewhere": len(elsewhere),
         "by_event": count(refused, lambda r: [r.get("event")]), "by_rule": count(refused, _rules),
         "by_hook": count(refused, lambda r: sorted({x.get("hook") for x in r.get("rules") or []})),
         "by_role": count(refused, lambda r: [r.get("role") or "main"]),
@@ -118,7 +132,8 @@ def summary(found: list) -> dict:
 
 def render(s: dict, since: str, until: str, folder: str, damaged: int) -> str:
     lines = [f"record: {folder}", f"period: {since} .. {until} (UTC)",
-             f"refusals: {s['refusals']}    let through unproven (not refusals): {s['unproven']}"]
+             f"refusals: {s['refusals']}    let through unproven (not refusals): {s['unproven']}    "
+             f"let through by the removal policy, refused by another hook: {s['unproven_refused_elsewhere']}"]
     if damaged:
         lines.append(f"unreadable lines: {damaged}")
     for title, key in (("by event", "by_event"), ("by rule (hook, rule id)", "by_rule"), ("by hook", "by_hook"),
@@ -242,7 +257,8 @@ def reconcile(recorded: list, found: list, since: str, until: str) -> tuple[list
     counts = {"transcripts": sum(map(inside, found)), "record": sum(map(inside, compared)) - unshown, "differences": len(differences),
               "not_compared": {"no transcript line": unshown,
                                "codex": sum(r.get("provider") == "codex" for r in recorded if inside(r)),
-                               "unproven": sum(r.get("kind") == R.UNPROVEN for r in recorded if inside(r))}}
+                               "unproven": sum(map(inside, _unproven(recorded)[0])),
+                               "unproven, refused by another hook": sum(map(inside, _unproven(recorded)[1]))}}
     return differences, counts
 
 

@@ -36,7 +36,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `posttool-orchestrator-ran.py` - hooks/pretool-orchestrator-gate.py counts a main-agent call at PreToolUse, before the other hooks'
 - `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check (G3)
 - `posttool-overnight-loop.py` - PostToolUse:TodoWrite Hook: Overnight Loop Detection
-- `posttool-overnight-trace.py` - Writes one JSONL trace record per Agent invocation to:
+- `posttool-overnight-trace.py` - Records the yield of a specialist's report in an overnight cycle
 - `posttool-push-gate-token-verify.py` - The push gate stays, with its reconciliation path (owner's decision, 2026-09-05)
 - `posttool-restart-sendmessage.py` - A validated /restart send is recorded as dispatched in the restart state, as before; any other
 - `posttool-runcode-watchdog.py` - PostToolUse Hook: Cancel timeout watchdog after browser_run_code completes

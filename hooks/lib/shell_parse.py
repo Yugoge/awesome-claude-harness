@@ -16,15 +16,12 @@ Layers, bottom up:
 * ``parse``: the tree Script -> Pipeline -> SimpleCommand | Compound.
 * views over the tree: ``walk``, ``resolve``, ``argv``, ``split_options``,
   ``executable_view``, ``write_targets``, ``git_invocations``, ``argv_split``.
-* ``python3 shell_parse.py --facts`` reads one hook payload on stdin and prints
-  one JSON fact sheet, so a shell hook needs one Python start per call.
 """
 
 from __future__ import annotations
 
 import bisect
 import importlib.util
-import json
 import os
 import re
 import sys
@@ -275,6 +272,8 @@ class Part:
         if self.kind != "param":
             return False
         t = self.text
+        if t == "!":
+            return False  # `$!` (and `${!}`): the last background job's pid, no indirection
         return t.startswith("!") or ("@" in t and t.rsplit("@", 1)[1][:1] in REEXPAND_OPS)
 
     def __repr__(self):
@@ -4710,73 +4709,3 @@ def argv_split(text):
                 v = r.target.value()
                 out.append(v if v is not None else r.target.text)
     return out
-
-
-# ---------------------------------------------------------------------------
-# Facts and CLI
-# ---------------------------------------------------------------------------
-
-def facts(text):
-    """One JSON-ready fact sheet for ``text``: parse status and every view."""
-    script = parse(text)
-    sites = []
-    for site in walk(script):
-        res = resolve(site.cmd)
-        sites.append({
-            "argv": site.cmd.argv(),
-            "head": res.name,
-            "resolved_argv": res.argv(),
-            "wrappers": [w[0] for w in res.wrappers],
-            "context": list(site.context),
-            "fed": sorted(site.fed),
-            "dynamic": site.dynamic,
-            "assignments": [[a.name, a.static_value()] for a in site.cmd.assignments],
-            "redirects": [{"op": r.op, "fd": r.fd, "fd_var": r.fd_var,
-                           "target": r.target.value() if r.target is not None else None,
-                           "heredoc": r.hd.delim if r.hd is not None else None}
-                          for r in site.cmd.redirects],
-            "unresolved": res.unresolved,
-        })
-    return {
-        "schema": "shell-parse-facts.v1",
-        "error": script.error.as_dict() if script.error else None,
-        "errors": [e.as_dict() for e in script.errors()],
-        "commands": sites,
-        "write_targets": [t.as_dict() for t in write_targets(script)],
-        "git_invocations": [g.as_dict() for g in git_invocations(script)],
-        "executable_view": executable_view(text),
-    }
-
-
-def _payload_command(raw):
-    try:
-        payload = json.loads(raw)
-    except ValueError:
-        return raw
-    if isinstance(payload, dict):
-        ti = payload.get("tool_input")
-        if isinstance(ti, dict) and isinstance(ti.get("command"), str):
-            return ti["command"]
-        if isinstance(payload.get("command"), str):
-            return payload["command"]
-    return ""
-
-
-def main(argv_=None):
-    args = sys.argv[1:] if argv_ is None else argv_
-    raw = sys.stdin.read()
-    if "--facts" in args:
-        try:
-            out = facts(_payload_command(raw))
-        except Exception as exc:  # the CLI never raises; a crash is a fact too
-            out = {"schema": "shell-parse-facts.v1",
-                   "error": {"code": "internal", "offset": -1, "context": type(exc).__name__}}
-        json.dump(out, sys.stdout)
-        sys.stdout.write("\n")
-        return 0
-    sys.stderr.write("usage: shell_parse.py --facts < hook-payload.json\n")
-    return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -134,6 +134,45 @@ def test_a_computed_command_over_no_protected_operand_is_allowed(tmp_path, calle
     assert proc.returncode == 0, proc.stderr
 
 
+# Live wall 3, probe 1: harmless commands whose program is computed and one of whose operands is a
+# directory above a protected file ({state} the state dir, {above} the folder holding the harness home).
+# The command is not read, so each operand is touched, not removed: these pass the protected stage,
+# and whether one removes is the removal policy's decision (test_removal_policy_parsed_rule).
+COMPUTED_OVER_A_DIRECTORY = [
+    "X=ls; $X -d {state}", "X=ls; $X -d /", "$(command -v ls) -d {state}", "X=du; $X -sh {state} /var/tmp",
+    "X=ls; $X -l {state}/agentic-commit", "X=ls; $X .", "X=ls; $X hooks", "X=ls; $X scripts", "X=ls; $X {above}",
+    '"$PY" -m pytest hooks -q', '"$CLAUDE_HOME/venv/bin/python" -m pytest . -q']
+
+
+def holding_a_token(tmp_path) -> str:
+    state = tmp_path / "state"
+    path, _ = push_inputs(str(state))["token"]
+    os.makedirs(os.path.dirname(path))
+    open(path, "w").write("{}")
+    return str(state)
+
+
+@pytest.mark.parametrize("caller", list(CALLERS))
+@pytest.mark.parametrize("command", COMPUTED_OVER_A_DIRECTORY)
+def test_a_computed_command_over_a_directory_above_a_protected_file_is_allowed(tmp_path, caller, command):
+    text = command.format(state=holding_a_token(tmp_path), above=os.path.dirname(ROOT))
+    proc = run(tmp_path, "Bash", {"command": text}, CALLERS[caller], cwd=ROOT)
+    assert proc.returncode == 0 and "D11/D12" not in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("command, what", [
+    ("X=ls; $X -d {state}/report-provenance", "the QA report provenance ledger, which only hooks write (CD-6)"),
+    ('"$EDITOR" {state}/claude-do-task-abc.json', "a /do task sidecar"),
+    ("X=cat; $X settings.machine.json", "the harness home's settings.machine.json")])
+def test_a_computed_command_naming_a_protected_file_directly_stays_denied(tmp_path, command, what):
+    assert_denied(run(tmp_path, "Bash", {"command": command.format(state=tmp_path / "state")}, cwd=ROOT), what)
+
+
+def test_a_removal_of_a_directory_above_the_ledger_names_it_a_directory_holding_the_ledger(tmp_path):
+    proc = run(tmp_path, "Bash", {"command": f"rm -r {tmp_path / 'state'}"}, CALLERS["dev"])
+    assert_denied(proc, "a directory holding the QA report provenance ledger, which only hooks write (CD-6)")
+
+
 @pytest.mark.parametrize("form", ["Write", "Edit", "echo", "rm", "mv", "sed"])
 @pytest.mark.parametrize("rel", R3 + ("settings.machine.json", "private-literals.txt"))
 def test_the_same_names_in_a_product_repository_stay_writable(tmp_path, form, rel):

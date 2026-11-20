@@ -123,6 +123,15 @@ def test_a_removal_reached_through_computed_text_is_refused(command):
     assert seen(command), eb.analyze(command)
 
 
+# The protected-path stage of pretool-tool-policy.py counts a computed program's operands as touched, not
+# removed (live wall 3): a remover whose name is set in the command, aimed at a folder holding protected files,
+# is refused here, by hooks/pretool-bash-safety.sh's removal policy.
+@pytest.mark.parametrize("command", ["RM=rm; $RM -r hooks", "RM=rm; \"$RM\" -rf .git", "x=rm; $x -r scripts"])
+def test_a_remover_named_in_the_command_over_a_protected_folder_is_refused_by_the_removal_policy(command):
+    refused, _entry, err = policy(command)
+    assert refused and "BLOCKED: removal-policy" in err, err
+
+
 TRAILING_COMMENT = ["r${EMPTY}m qa-p", "$TOOL --version", "grep -rn x src", "rm -rf build", "ls -la",
                     "S=status; git $S --short", "python3 - <<'E'\nprint(1)\nE"]
 

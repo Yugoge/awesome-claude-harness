@@ -19,6 +19,9 @@ HOOKS = REPO / "hooks"
 sys.path.insert(0, str(HOOKS))
 from lib.runtime_guard.config import REQUIRED_KEYS  # noqa: E402
 
+sys.path.insert(0, str(HOOKS / "tests"))
+import allowed_by_design  # noqa: E402
+
 
 @pytest.fixture(scope="module")
 def sandbox(tmp_path_factory):
@@ -44,27 +47,7 @@ def run(sandbox, command):
 
 
 # The over-blocks fixed: each was refused by raw-text co-occurrence (or by an inexact kill/dd reading).
-MUST_PASS = [
-    "kill -0 12345 && echo alive",
-    "kill -l",
-    "grep -rn kill -i src/",
-    "fdisk -l",
-    "dd if=/dev/zero of=/tmp/blob.bin bs=1k count=4",
-    'grep -rn "docker compose down" docs/',
-    "sed -n 1,20p /etc/docker/daemon.json",
-    "grep tcp /etc/docker/daemon.json",
-    'rg -n "systemctl restart nginx" docs',
-    "jq .platform .claude/workflow-abc.json",
-    "grep -rn killall ~/.claude/hooks/",
-    # the exact harmless forms the lane names
-    "kill -L",
-    'kill -0 "$SERVER_PID" 2>/dev/null && echo running',
-    "dd if=/dev/zero of=/dev/null bs=1k count=1",
-    "dd if=in.bin of=/dev/stdout",
-    "dd if=in.bin of=/dev/fd/3",
-    # prose about the commands, in a heredoc written to a file
-    "cat <<'EOF' > notes.md\nrun docker compose down, then systemctl restart nginx\nEOF",
-]
+MUST_PASS = allowed_by_design.COMMAND_POSITION_PASSES  # stated once; tests/test_permission_deny_rules.py reads it too
 
 
 @pytest.mark.parametrize("command", MUST_PASS)
@@ -163,16 +146,7 @@ def test_round2_a_command_the_rule_protects_against_is_refused(sandbox, command,
 
 # A down/restart/stop word that is not the compose verb (a command `exec` or `run` runs, a service name) and a
 # prune flag outside `system prune` are data.
-MUST_PASS_ROUND2 = [
-    "docker compose exec db pg_ctl stop",
-    "docker compose exec app supervisorctl restart worker",
-    "docker compose run --rm app ./manage.py down",
-    "docker compose logs -f stop",
-    "docker system --help prune -a",
-    "dd if=in.bin of=/dev/stdout 2>/dev/null",
-    "dd if=in.bin of=out.img 2>dd.log",
-    "git -C . mv notes.md docs/notes.md",
-]
+MUST_PASS_ROUND2 = allowed_by_design.WORD_OUTSIDE_VERB_PASSES
 
 
 @pytest.mark.parametrize("command", MUST_PASS_ROUND2)
@@ -272,8 +246,7 @@ def test_round4_a_computed_kill_word_or_double_slash_dd_target_is_refused(sandbo
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
 
 
-@pytest.mark.parametrize("command", ['kill -0 "$SERVER_PID" 2>/dev/null && echo running',
-                                     "dd if=in.bin of=//dev/stdout"])
+@pytest.mark.parametrize("command", allowed_by_design.PROBE_PASSES)
 def test_round4_the_probe_and_a_double_slash_stdout_still_pass(sandbox, command):
     r = run(sandbox, command)
     assert r.returncode == 0, (command, r.stderr)

@@ -2270,53 +2270,10 @@ def _finish(record, ctx):
     return record
 
 
-# ===========================================================================
-# Standalone offline entry point
-# ===========================================================================
-
-def _cli(argv=None):
-    import argparse
-    parser = argparse.ArgumentParser(
-        description="Run the two mandatory soundness checks against a "
-                    "candidate image supplied by any producer.")
-    parser.add_argument("--candidate", required=True,
-                        help="file holding the combined candidate bytes")
-    parser.add_argument("--path", required=True,
-                        help="repo-relative path the candidate represents")
-    parser.add_argument("--mode", default="100644")
-    parser.add_argument("--baseline", help="file holding the baseline bytes")
-    parser.add_argument("--git-root",
-                        help="enable tracked-set discovery rooted here")
-    parser.add_argument("--evaluation-cap", type=int,
-                        default=DEFAULT_EVALUATION_CAP)
-    parser.add_argument("--explain", action="store_true",
-                        help="print every evaluation the search performed")
-    args = parser.parse_args(argv)
-
-    with open(args.candidate, "rb") as handle:
-        candidate = handle.read()
-    baseline = b""
-    if args.baseline:
-        with open(args.baseline, "rb") as handle:
-            baseline = handle.read()
-
-    composer = WholeFileComposer(args.path, candidate, baseline, args.mode)
-    discovery = (TrackedSetDiscovery(args.git_root) if args.git_root
-                 else NullDiscovery())
-    record = evaluate(composer, discovery=discovery,
-                      evaluation_cap=args.evaluation_cap)
-    if not args.explain:
-        record.pop("controls", None)
-    json.dump(record, sys.stdout, sort_keys=True, indent=2)
-    sys.stdout.write("\n")
-    return 0 if record["gate_pass"] else (1 if record["gate_pass"] is False
-                                          else 2)
-
-
 class WholeFileComposer:
     """The degenerate D1 producer: one hunk, the whole file.
 
-    Used by the standalone entry point and by the whole-file adoption seam,
+    Used by the whole-file adoption seam,
     where the candidate image IS the file and there is exactly one atomic
     region to attribute to.
     """
@@ -2503,6 +2460,3 @@ def screen_landing(path, image, mode, slices=None, baseline=b"",
                      % (path, record.get("reason")))
     return None
 
-
-if __name__ == "__main__":  # pragma: no cover - CLI
-    sys.exit(_cli())
