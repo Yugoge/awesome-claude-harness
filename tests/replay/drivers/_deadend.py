@@ -12,9 +12,9 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
 
   do-report       Step 5's Write of the do-report is not made before the Stop: the Stop gate (P5)
                   refuses the Stop; the main agent's next action is that Write, then it stops again.
-  do-report-ask   as do-report, and between the refused Stop and the Write the main agent asks one
-                  AskUserQuestion and stops twice after the answer (D23: neither the answer nor
-                  stopping again releases the gate, so both Stops are refused too).
+  do-report-ask   as do-report, and between the refused Stop and the Write the main agent ends twice
+                  on a REFUSED: line naming Step 5 with no call a hook refused (neither releases the gate,
+                  so both Stops are refused too; nobody is asked since 2026-11-19).
   do-dispatch     Step 2's work is first handed to a subagent: /do runs without subagents, so the
                   dispatch is refused; the main agent's next action does Step 2 itself.
   todo-canonical  the first TodoWrite carries the canonical list with one step's text changed: refused;
@@ -121,12 +121,6 @@ from .do import DoTurn
 PIPELINE = "deadend"
 COST = 60
 
-QUESTION = {"questions": [{"question": "Should the do-report describe the TypeError change as a fix or as a feature?",
-                           "header": "do-report", "multiSelect": False,
-                           "options": [{"label": "fix (Recommended)", "description": "toy.add misbehaved on non-numbers"},
-                                       {"label": "feature", "description": "a new argument check"}]}]}
-
-
 class Turn(DoTurn):
     """A /do turn with one departure (the case); everything else as drivers/do.py plays it."""
 
@@ -201,10 +195,11 @@ class Turn(DoTurn):
         self.rounds.append({"label": "/do Stop", "blocked": ev.still_blocked, "hooks": [h["hook"] for h in ev.blocks]})
         if self.withheld:
             if self.case == "do-report-ask":
-                o.s.tool("AskUserQuestion", QUESTION, label=self.label("AskUserQuestion after the refused Stop"))
-                for n in (1, 2):  # the answer, and stopping again and again, release nothing
-                    lab = f"/do Stop after the answer ({n})"
-                    ev = o.s.stop("Stopping after the answer.", label=lab)
+                # nobody is asked (2026-11-19); a REFUSED: line with no call a hook refused, and stopping on it
+                # again and again, release nothing (stop-command-gate.py step_refused_end reads the record)
+                for n in (1, 2):
+                    lab = f"/do Stop after an unrecorded refusal ({n})"
+                    ev = o.s.stop("REFUSED: Step 5: Write do-report: the Write was refused.", label=lab)
                     self.rounds.append({"label": lab, "blocked": ev.still_blocked,
                                         "hooks": [h["hook"] for h in ev.blocks]})
             fn, a, k, label = self.withheld
