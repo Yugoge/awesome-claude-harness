@@ -538,7 +538,9 @@ def p_close(span, root, payload) -> list[str]:
     asks = not _loaded_lacks(span)(re.escape(RATING_SOURCE))
     names, gaps = _cycle_names(span), []
     owed = _owed_gap(span, root)
-    for task in targets:
+    refused = hook_refused_parents(span)[0] if "--auto" in span.args.split() else set()
+    family = importlib.import_module("lib.obligation").task_family
+    for task in (t for t in targets if family(t) not in refused):  # a parent a hook refused, reported
         gaps += [g for name in _names(names, task) for g in disposition(root, name, "close") if owed(name, g)]
         if asks and close_rating.rating_required(span, task) and not close_rating.rating_asked(
                 span.transcript_path, task):
@@ -748,6 +750,23 @@ def hook_refused_tasks(span) -> set:
         last[canon(doc.get("task_id"))] = block
     named = {canon(t) for t in REFUSED_LINE.findall("\n".join(span.texts()))}
     return {t for t, block in last.items() if t in named and (block or {}).get("failure_code") == "hook_blocked"}
+
+
+def hook_refused_parents(span) -> tuple:
+    """close.md --auto, a hook rejection: (named, unnamed) parents whose last dispatch (an Agent or Task call whose
+    obligation names the parent's task) a hook refused (command_span.refused_calls), as their task families; named
+    when a REFUSED: line of the span's text names the parent (`... for task <id>`). A named parent's close is no
+    longer owed by the batch; the other parents' results stand."""
+    ob = importlib.import_module("lib.obligation")
+    denied = command_span.refused_calls(span.transcript_path)
+    last = {}
+    for call in span.iter_calls("Agent", "Task") if denied else ():
+        found = ob.parse_obligation(call.input.get("prompt"))
+        if isinstance(found, ob.ParsedObligation):
+            last[ob.task_family(ob.canonical_task_id(found.obligation.get("task_id")))] = call.id in denied
+    said = {ob.task_family(ob.canonical_task_id(t)) for t in REFUSED_LINE.findall("\n".join(span.texts()))}
+    refused = {t for t, was in last.items() if was and t}
+    return refused & said, refused - said
 
 
 def p_commit(span, root, payload) -> list[str]:
@@ -1364,7 +1383,13 @@ def _exit_hint(span, refused, env) -> str:
             "hook's own output; the step stays open and the next prompt resumes it.\n" if refused else "")
     hint += (f"The gate's own write to the close report's directory failed. To end the turn, write the line "
              f"\"{env}\"; the cycle stays open and the next round follows once the cause is gone.\n" if env else "")
-    return hint
+    try:
+        unnamed = hook_refused_parents(span)[1] if span.command == "close" and "--auto" in span.args.split() else ()
+    except Exception:  # an unread record adds no hint
+        unnamed = ()
+    return hint + "".join(f"A hook refused the last dispatch for parent {task}. To end its part of the batch, write the "
+                          f"line \"REFUSED: <hook> refused <the call> for task {task}\", then the hook's own output; the "
+                          "other parents' results stand.\n" for task in sorted(unnamed))
 
 
 def main(argv=None) -> int:

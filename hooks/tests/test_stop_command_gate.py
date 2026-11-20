@@ -1840,6 +1840,47 @@ def test_close_environment_exit_on_a_real_unwritable_directory(env, monkeypatch)
             folder.chmod(0o755)
 
 
+def refused_parent_dispatch(env, task, role="qa"):
+    doc = {"task_id": task, "lane": None, "lane_set": None, "role": role, "pipeline": "close", "profile": "singular",
+           "dispatched_at": "2026-11-01T09:00:00Z", "artifacts": [{"kind": "json", "path": f"docs/dev/qa-report-{task}.json",
+                                                                 "schema": "qa-report.v2", "identity": {"task_id": task}}]}
+    env.tx.tool("Agent", {"subagent_type": role, "description": role,
+                          "prompt": f'<obligation v="1">{json.dumps(doc)}</obligation>\nwork'},
+                ok=False, result=HOOK_REFUSED, extra=HOOK_DECISION)
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "refused-not-named", "ran-later", "plain-close"])
+def test_close_auto_ends_when_each_parent_it_could_not_close_is_refused_and_named(env, monkeypatch, case):
+    """close.md --auto: a parent whose last dispatch a hook refused, named on a REFUSED: line, is owed no more; the
+    other parent's landing stands. A parent named with no refusal on record, refused but not named (the block names
+    the line), refused then dispatched again, or a plain /close: held."""
+    auto = case != "plain-close"
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py",
+                        types.SimpleNamespace(auto_targets=lambda root, action, cutoff: [FAMILY, OTHER]))
+    task_file(env)
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    args = "--auto" if auto else FAMILY
+    env.tx.command("close", args)
+    env.tx.todos(canonical("close", args), len(canonical("close", args)))
+    if case == "named-not-refused":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    else:
+        refused_parent_dispatch(env, FAMILY)
+    if case == "ran-later":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    env.tx.dispatch(OTHER, role="qa", pipeline="close")
+    if case != "refused-not-named":
+        env.tx.say(f"REFUSED: pretool-launch.py refused the close QA dispatch for task {FAMILY}\nOBLIGATION GATE ORDER")
+    code, text = run(env)
+    if case == "released":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and f"close-report-{FAMILY}.md" in text, (case, text)
+        hinted = f'"REFUSED: <hook> refused <the call> for task {FAMILY}"' in text
+        assert hinted is (case == "refused-not-named"), (case, text)
+
+
 def test_a_refused_step_line_releases_no_other_gated_command(env, monkeypatch):
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
     env.tx.command("close", FAMILY)
