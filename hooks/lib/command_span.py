@@ -938,7 +938,7 @@ def refused_calls(transcript_path, session_id: str | None = None) -> frozenset:
     the record of the refusal itself, never its text:
 
     - the transcript: the CLI's tool_result for the call, written when the hook has exited, whose record's
-      permissionDecision is {"decision": "reject", "source": "hook"} (CLI 2.1.322; a cut or interrupted call
+      permissionDecision is {"decision": "reject", "source": "hook"} (CLI 2.1.322; a cut or stopped call
       has no such decision);
     - the refusal record (lib/refusal_record.py), today's and yesterday's file: a line of kind "refusal",
       event "PreToolUse", this session and the call's tool_use_id. The refusing hook writes it before it
