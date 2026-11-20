@@ -1034,8 +1034,9 @@ def dispatch_obligations(
     contributes nothing.
     """
     try:
-        calls, _results, _notifications = _read_parent_calls(Path(transcript_path))
-        refused = _lib_module("command_span").refused_calls(transcript_path)  # a call a hook refused never ran
+        calls, results, _notifications = _read_parent_calls(Path(transcript_path))
+        refused = {i for i, found in results.items() if any(r.get("_hook_refused") for r in found)} \
+            | _lib_module("command_span").recorded_refusals(Path(transcript_path).stem)  # a call a hook refused never ran
     except Exception:
         return []
     found: list[dict] = []

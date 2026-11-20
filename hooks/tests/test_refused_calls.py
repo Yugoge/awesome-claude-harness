@@ -72,3 +72,14 @@ def test_an_unreadable_source_adds_nothing(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     assert command_span.refused_calls(str(tmp_path / "missing.jsonl")) == frozenset()
     assert command_span.refused_calls(None) == frozenset()
+
+
+def test_the_records_a_reader_holds_give_the_same_refused_calls_as_the_file(tmp_path, monkeypatch):
+    """A reader that already holds the transcript's bytes (a Span) or its records (subagent_restart's parent
+    reading, for dispatch_obligations) asks the same one test, hook_refused, without opening the file again."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    records = [_use("toolu_ran"), _result("toolu_ran"), _use("toolu_refused"), _result("toolu_refused", hook=True)]
+    path = _transcript(tmp_path, records)
+    assert command_span.refused_calls(str(path), data=path.read_bytes()) == command_span.refused_calls(str(path)) \
+        == {"toolu_refused"}
+    assert [i for r in records for i in command_span.hook_refused(r)] == ["toolu_refused"]

@@ -599,7 +599,10 @@ class Span:
     def dispatch_calls(self, before: str | None = None):
         """The span's Agent/Task calls (iter_calls, ``before`` as there) but those a hook refused (refused_calls):
         a call that never ran is no dispatch. Every reader of dispatches reads them here."""
-        refused = refused_calls(self.transcript_path)
+        try:  # from the span's own bytes: the file is not read again for this
+            refused = refused_calls(self.transcript_path, data=self._lines()[0].data)
+        except (OSError, TypeError, ValueError):
+            refused = frozenset()
         return (c for c in self.iter_calls(*_subagent().DISPATCH_TOOLS, before=before) if c.id not in refused)
 
     def dispatches(self) -> list:
@@ -948,29 +951,44 @@ def _read_once(path) -> bytes | None:
         return None
 
 
-def refused_calls(transcript_path, session_id: str | None = None) -> frozenset:
-    """The ids of the session's tool calls a PreToolUse hook refused (they never ran), from either record of the
-    refusal: the CLI's tool_result whose record's permissionDecision is reject by a hook (CLI 2.1.322; a call cut
-    off mid-run has none), and the refusal record's lines of kind refusal, event PreToolUse, for this session
-    (``session_id``, default the transcript's name), which the hook writes before it exits, so before the CLI
-    writes the result: a sibling call of the same message. A source that cannot be read adds nothing."""
+def hook_refused(record) -> list:
+    """The tool_use ids whose result this transcript record is, when the record says a PreToolUse hook refused
+    them: permissionDecision reject by a hook (CLI 2.1.322; a call cut off mid-run has none). The one test of a
+    transcript record; a reader that already holds the records asks it of each one."""
+    d = record.get("permissionDecision") if isinstance(record, dict) else None
+    if not isinstance(d, dict) or (d.get("decision"), d.get("source")) != ("reject", "hook"):
+        return []
+    return [b.get("tool_use_id") for b in _blocks(record) if b.get("type") == "tool_result"]
+
+
+def recorded_refusals(session: str) -> frozenset:
+    """The tool_use ids the refusal record (lib/refusal_record.py, today's and yesterday's file, each read once per
+    process) holds a PreToolUse refusal of for ``session``: the refusing hook writes it before it exits, so before
+    the CLI writes the result (a sibling call of the same message)."""
     import time
-    found, session = set(), session_id or (Path(str(transcript_path)).stem if transcript_path else "")
-    for n, path in enumerate([transcript_path] + (_refusal_record_files(time.time()) if session else [])):
-        try:
-            data = _read_once(path) if n else _read(path)
-        except (OSError, TypeError, ValueError):
-            data = None
-        if data is None:
-            continue
-        for begin, end in _Lines(data).offsets((b'"source":"hook"', b'"source": "hook"') if not n else (session.encode(),)):
+    found = set()
+    for path in _refusal_record_files(time.time()) if session else ():
+        data = _read_once(path)
+        for begin, end in _Lines(data).offsets((session.encode(),)) if data else ():
             r = _decode(data[begin:end]) or {}
-            d = r.get("permissionDecision") if isinstance(r.get("permissionDecision"), dict) else {}
-            if (d.get("decision"), d.get("source")) == ("reject", "hook"):
-                found.update(b.get("tool_use_id") for b in _blocks(r) if b.get("type") == "tool_result")
-            elif (r.get("kind"), r.get("event"), r.get("session")) == ("refusal", "PreToolUse", session):
+            if (r.get("kind"), r.get("event"), r.get("session")) == ("refusal", "PreToolUse", session):
                 found.add(r.get("tool_use_id"))
     return frozenset(i for i in found if isinstance(i, str) and i)
+
+
+def refused_calls(transcript_path, session_id: str | None = None, data: bytes | None = None) -> frozenset:
+    """The ids of the session's tool calls a PreToolUse hook refused (they never ran): hook_refused of the
+    transcript's records (``data``, its bytes when the caller holds them, else the file read) and
+    recorded_refusals of the session (``session_id``, default the transcript's name). A source that cannot be read
+    adds nothing."""
+    session = session_id or (Path(str(transcript_path)).stem if transcript_path else "")
+    try:
+        data = _read(transcript_path) if data is None else data
+    except (OSError, TypeError, ValueError):
+        data = b""
+    found = {i for begin, end in _Lines(data).offsets((b'"source":"hook"', b'"source": "hook"'))
+             for i in hook_refused(_decode(data[begin:end]))}
+    return frozenset(i for i in found if isinstance(i, str) and i) | recorded_refusals(session)
 
 
 def recorded_result(transcript_path, use) -> dict:

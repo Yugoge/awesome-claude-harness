@@ -607,6 +607,8 @@ def _read_parent_calls(
                     if isinstance(tool_id, str) and tool_id:
                         result = dict(block)
                         result["_parent_line"] = line_no
+                        if tool_id in command_span.hook_refused(record):  # a call a hook refused: it never ran
+                            result["_hook_refused"] = True
                         results.setdefault(tool_id, []).append(result)
 
     return calls, results, latest_notifications
