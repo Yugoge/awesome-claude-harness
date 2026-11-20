@@ -41,6 +41,19 @@ GIT_ARGV_RUN_OR_WRITE_OPTIONS = frozenset({
 # Those, and the options that run a program the configuration names (drivers, filters, editor, pager).
 GIT_RUN_OR_WRITE_OPTIONS = GIT_ARGV_RUN_OR_WRITE_OPTIONS | {
     "--ext-diff", "--textconv", "--filters", "--edit", "--paginate"}
+# The read subcommands' own exact options (git 2.54, `git <sub> -h`, `git help <sub>`) that are a prefix of one of those.
+_GIT_EXACT_BEFORE_RUN = {"--text": frozenset({"diff", "diff-files", "diff-index", "diff-tree", "grep", "log", "show"}),
+                         "--filter": frozenset({"cat-file"})}
+
+
+def git_run_or_write_option(sub: str, word: str) -> bool:
+    """Whether ``word`` given to ``git <sub>`` is an option of GIT_RUN_OR_WRITE_OPTIONS: its exact name, or an abbreviation
+    no exact option of ``sub`` also starts with (as git reads it): `--text` is diff's own, `--textc` is `--textconv`."""
+    name = word.split("=", 1)[0]
+    if not name.startswith("--") or name == "--" or name in _GIT_EXACT_BEFORE_RUN and sub in _GIT_EXACT_BEFORE_RUN[name]:
+        return False
+    own = [o for o, subs in _GIT_EXACT_BEFORE_RUN.items() if sub in subs and o.startswith(name)]
+    return name in GIT_RUN_OR_WRITE_OPTIONS or not own and any(f.startswith(name) for f in GIT_RUN_OR_WRITE_OPTIONS)
 
 # `git remote` flags that keep it a read (a form that does not take one makes git refuse it).
 GIT_REMOTE_READ_FLAGS = frozenset({"-v", "--verbose", "-n", "--push", "--all"})

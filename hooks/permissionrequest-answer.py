@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """PermissionRequest: answer every permission request by rule, so no tool call waits for a person.
 
-The rules it applies, its failure behaviour and what it leaves to other hooks are stated once, in
-docs/how-it-works.md ("Permission prompts") and the ledger row H-101; decide() below is that table.
-An error or no decision within DEADLINE seconds is a deny; exit 2 is never used (at this event it would
-leave the request to a person).
+Its rules are stated once, in docs/how-it-works.md ("Permission prompts") and ledger row H-101; decide() is that
+table. An error or no decision within DEADLINE seconds is a deny; exit 2, which leaves it to a person, is never used.
 """
 from __future__ import annotations
 
@@ -42,9 +40,8 @@ def bash_rules(payload: dict) -> tuple[str, bool] | None:
 
 
 def denied_in_text(command: str) -> str | None:
-    """A Bash deny rule of the harness's settings.json whose command appears anywhere in the text, where a word
-    starts. Claude Code asks, rather than denies, when it finds a deny rule's command in a part of the text it
-    could not split into commands (`...; su postgres -c "..."`); that request is refused here as the rule says."""
+    """A Bash deny rule of settings.json whose command starts a word anywhere in the text: Claude Code asks, not
+    denies, for one in a part it cannot split (`...; su postgres -c "..."`); refused here as the rule says."""
     with open(os.path.join(os.path.dirname(HOOKS), "settings.json")) as fh:
         rules = json.load(fh).get("permissions", {}).get("deny", [])
     for rule in rules:
@@ -52,8 +49,7 @@ def denied_in_text(command: str) -> str | None:
             continue
         body = rule[5:-1]
         body = body[:-2] if body.endswith(":*") else body
-        # `*` inside a word stands for word characters (b*ash: bash), elsewhere for any text; a rule not
-        # ending in `*` ends where a word ends.
+        # `*` inside a word: word characters (b*ash: bash), elsewhere any text; no trailing `*`: ends with a word.
         rx = re.sub(r"(?<=\w)\\\*(?=\w)", r"\\w*", re.escape(body)).replace(r"\*", ".*")
         rx = r"(?:^|[\s;&|(){}`'\"])" + rx + ("" if body.endswith("*") else r"(?=[\s;&|)`'\"]|$)")
         if re.search(rx, command):
@@ -90,13 +86,9 @@ def decide(payload: dict) -> tuple[str, str, bool] | None:
 
 
 def record(raw: str, message: str) -> None:
-    """REFUSAL-RECORD CALL SITE: lib/refusal_record.report(<the payload>, [(<this file>, <the deny message>)],
-    <this file>); it records a PermissionRequest once refusal_record.EVENTS names that event."""
+    """REFUSAL-RECORD CALL SITE: lib/refusal_record.report(<payload>, [(<this file>, <deny message>)], <this file>)."""
     try:
-        from lib import refusal_record  # type: ignore[attr-defined]
-    except ImportError:
-        return
-    try:
+        from lib import refusal_record
         me = os.path.abspath(__file__)
         refusal_record.report(raw, [(me, message)], me)
     except Exception:  # noqa: BLE001 -- recording never decides
