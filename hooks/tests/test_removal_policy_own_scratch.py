@@ -54,6 +54,12 @@ KNOWN = [
     ("ls /s/own; rm -f /s/own/x && echo done > /s/own/log", ["/s/own/x"], []),
     ("cd sub && rm x", ["x"], None),      # a `cd` whose directory is not written out as an absolute path
     ("cd; rm x", ["x"], None),
+    # A variable holding a literal set earlier in the same command, surely run and not changed (2026-11-20)
+    ("D=/s/own/x; rm -rf \"$D\"", ["/s/own/x"], []),
+    ("S=/s/own; rm -f $S/a ${S}/b", ["/s/own/a", "/s/own/b"], []),
+    ("S=/s/own; cd /e; rm -f $S/a rel", ["/s/own/a", "rel"], ["/e"]),
+    ("S=/s/own && rm $S/a", ["/s/own/a"], []),
+    ("S=/s/own; S=/etc; rm -f $S/x", ["/etc/x"], []),   # the later value: known, and not own
 ]
 UNKNOWN = [
     "rm /s/own/x; rm $D", "rm -rf \"$D\"", "rm *.tmp", "rm /s/own/*", "rm /s/own/{a,b}", "rm ~/x", "rm -rf",
@@ -62,6 +68,10 @@ UNKNOWN = [
     "echo x | xargs rm /s/own/x", "x=$(rm /s/own/x)", "find /s/own -name '*.tmp' -delete",
     "find /s/own -exec rm {} +", "shred -u /s/own/x", "srm /s/own/x", "rm /s/own/x; git rm y",
     "rm /s/own/x; git rm -f y", "rm /s/own/x; $TOOL y", "rm /s/own/x; python3 -c 'import os; os.unlink(\"y\")'",
+    # not known: from the environment, a substitution, a branch or loop, `read`, `+=`, a prefix, a pattern
+    "rm -rf $TMPDIR/x", "S=$(mktemp -d); rm -rf $S", "S=/s/own; rm -rf $S/*", "if x; then S=/s/own; fi; rm $S/a",
+    "for i in 1; do S=/s/own; done; rm $S/a", "S=/s/own; read S; rm $S/a", "S=/s/own; S+=/b; rm $S/a",
+    "S=/s/own rm $S/a", "true && S=/s/own; rm $S/a", "S=/s/own; rm -- $S/a $X", "S=/s/own; rm $S/a$(id)",
 ]
 
 
@@ -144,6 +154,12 @@ OWN = [
     "rm {own}/a; unlink {own}/b",
     "ls {own}; rm -f {own}/a.txt && echo done",
     "if [ -f {own}/a.txt ]; then rm {own}/a.txt; fi",
+    # through a variable set to a literal earlier in the same command (2026-11-20)
+    "D={own}/sub; rm -rf $D",
+    "D={own}/sub; rm -rf \"$D\"",
+    "S={own}; cd /; rm -f $S/a.txt $S/sub/b",
+    # the recorded shape of 2026-11-19 18:04Z, neutral names
+    "cd {root}/src; S={own}; rm -f $S/probe.py; time python3 tool.py --out $S/probe.json",
 ]
 NOT_OWN = [
     "rm {root}/src/main.py",                                      # a project file
@@ -157,7 +173,11 @@ NOT_OWN = [
     "rm -rf {own}",                                               # the directory itself is not inside it
     "cd src && rm -f ../.claude/scratch/{sid}/dev/{agent}/a.txt",  # relative after a `cd` that is not written out
     "rm -rf {own}/*",                                             # a pattern: the files are not written out
-    "D={own}/sub; rm -rf $D",                                     # a variable
+    "S={own}; rm -rf $S/*",                                       # a pattern through a variable
+    "S={own}; S=/etc; rm -f $S/x",                                # reassigned before the removal
+    "S=$(mktemp -d); rm -rf $S",                                  # a substitution's value
+    "rm -rf $TMPDIR/x",                                           # from the environment
+    "if true; then S={own}; fi; rm -f $S/a.txt",                  # assigned in a branch
     "D=$(mktemp -d); touch $D/x; rm -rf $D",                      # a directory the command makes: not known here
     "sudo rm -f {own}/a.txt",                                     # not the command's own head
     "find {own} -name '*.tmp' -delete",
@@ -182,7 +202,7 @@ def test_any_other_removal_is_refused_and_names_the_own_directory(project, templ
     assert code == 2 and "BLOCKED: removal-policy" in err, (template, err)
     found = NAMED.search(err)
     assert found and found.group(1) == project.own, (template, err)
-    assert "A removal runs when every file it names is written out" in err, err
+    assert "A removal runs when every file it names is known" in err, err
 
 
 def test_the_named_directory_is_one_the_same_actor_may_write_and_delete_in(project):

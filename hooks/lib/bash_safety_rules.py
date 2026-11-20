@@ -5061,9 +5061,10 @@ def removal_policy(payload_text, command):
             payload = None
         owns, note = _scratch_owner(payload if isinstance(payload, dict) else {})
         if isinstance(proof, dict) and isinstance(payload, dict) and _removal_in_own_scratch(proof, payload, owns):
-            return None  # every file it removes is written out and lies in the caller's own scratch directory
-        own = (note, "A removal runs when every file it names is written out in the command (no variable, pattern "
-               "or `~`) and lies inside that directory.") if note else ()
+            return None  # every file it removes is known and lies in the caller's own scratch directory
+        own = (note, "A removal runs when every file it names is known (written out, or a variable set to a "
+               "literal earlier in the same command and not changed since; no pattern, `~` or value from the "
+               "environment or a substitution) and lies inside that directory.") if note else ()
     if decision and named:
         refuse(f"BLOCKED: removal-policy — {decision[5:]}", f"Command: {command}",
                    "REASON: every execution boundary must be provably inert or a provably non-filesystem removal (e.g. "
