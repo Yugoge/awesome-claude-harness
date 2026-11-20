@@ -1,8 +1,8 @@
 # dot-claude
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-19T12:57:59Z*
-**Total entries**: 1147
+*Last updated: 2026-11-20T02:48:21Z*
+**Total entries**: 1153
 **Convention**: kebab
 
 ## Tree
@@ -142,6 +142,7 @@ dot-claude/
 │   │   ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
 │   │   ├── `close_rating.py` - The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports.
 │   │   ├── `closeout.py` - CLI:
+│   │   ├── `codex_transcript.py` - written by scripts/steps/codex-run.py, read by the gitignore preflight as its task's provenance. ...
 │   │   ├── `command_span.py` - rule of which transcript record is a prompt the human typed
 │   │   ├── `commit_journal.py` - WHY THIS EXISTS
 │   │   ├── `commit_pipeline.py` - ONE home for the two questions the commit-authorization chain could not
@@ -301,6 +302,7 @@ dot-claude/
 │   │   ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_COMMAND_RE (hooks/pretool-git-privilege-guard.py) and
 │   │   ├── `test_git_dynamic_directory.py` - `"$VIRTUAL_ENV/bin/pip" show pytest` runs pip wherever the variable points:
 │   │   ├── `test_git_facts_one_definition.py` - Each class is one fact. Before these merges each hook carried its own copy, the copies differed,
+│   │   ├── `test_git_guard_inline_python.py` - Python given on standard input (a here-document or a here-string) was not read at all, so
 │   │   ├── `test_git_hidden_code.py` - The classifier reads shell text, so `python3 -c 'subprocess.run(["git","push"])'`
 │   │   ├── `test_git_prefix_enumeration.py` - THE DEFECT
 │   │   ├── `test_git_residual_override.py` - Background
@@ -310,6 +312,7 @@ dot-claude/
 │   │   ├── `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
 │   │   ├── `test_git_word_unquoted.py` - as git receives them, quotes and backslashes removed, before any rule judges them
 │   │   ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
+│   │   ├── `test_gitignore_preflight_reads.py` - dispatch ships them (E8, E9 in hooks/pretool-gitignore-preflight.py's header)
 │   │   ├── `test_gitignore_preflight_speed.py` - Dev dispatches ended the PreToolUse launcher with a RuleOverrun traceback after 60 s: each
 │   │   ├── `test_gitignore_preflight_write_capability.py` - pretool-gitignore-preflight.py scopes its refusal by the dispatched agent's
 │   │   ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
@@ -390,6 +393,7 @@ dot-claude/
 │   │   ├── `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 │   │   ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
 │   │   ├── `test_refusal_record.py` - - One refused call, stop or prompt is one line holding every field of the record, each bounded;
+│   │   ├── `test_refused_calls.py` - A PreToolUse hook's refusal reaches two records: the refusal record (lib/refusal_record.py), writ...
 │   │   ├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 │   │   ├── `test_removal_policy_own_scratch.py` - The owner, 2026-11-19: one's own temp folder may be deleted. Until then every removal the analyze...
 │   │   ├── `test_removal_policy_parsed_rule.py` - "Only a removal program in a position where it would be executed counts, and removal calls in Pyt...
@@ -486,7 +490,7 @@ dot-claude/
 │   ├── `git-fswatch@.service` - service file
 │   ├── `merge.sh` - merge.sh - wrapper for /merge slash command
 │   ├── `notification-idle-overnight.py` - Its only effect was appending a record to the harness home's
-│   ├── `permissionrequest-answer.py` - The rules it applies, its failure behaviour and what it leaves to other hooks are stated once, in
+│   ├── `permissionrequest-answer.py` - Its rules are stated once, in docs/how-it-works.md ("Permission prompts") and ledger row H-101; d...
 │   ├── `permissionrequest-launch.py` - PermissionRequest: answer every permission request by rule (hooks/permissionrequest-answer.py).
 │   ├── `posttool-allowlist-consume.py` - PostToolUse Hook: /allow grant consumption
 │   ├── `posttool-attribution-post.py` - Pairs with pretool-attribution-pre.py via (session_id, tool_use_id). Purely
@@ -1009,6 +1013,7 @@ dot-claude/
 │   ├── `test_commit_multi_repo_plan.py` - Python script
 │   ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
 │   ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
+│   ├── `test_completeness_on_demand.py` - blocking_issues holds an entry of a completeness diagnostic's form -- the only way that run can d...
 │   ├── `test_completeness_span_accounting.py` - halves on one code path
 │   ├── `test_conftest_hermetic.py` - conftest.py removes CLAUDE_PROJECT_DIR, PASEO_HOME, CLAUDE_HOME, CODEX_HOME,
 │   ├── `test_cycle_records_commit_set.py` - (P10 R8 rules 2 and 3, A25; #27 comment 6737075938 item 3)
@@ -1026,6 +1031,7 @@ dot-claude/
 │   ├── `test_disposition.py` - (scripts/resolve-dev-artifact-chain.py ``disposition`` and ``--disposition``)
 │   ├── `test_do_partly_failed_close_route.py` - The state: the /do main agent wrote src/a.py, listed it, and its turn ended with
 │   ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
+│   ├── `test_exact_masks_equivalence.py` - the tables and the three mask sets must be exactly those of the cell-by-cell definition."""
 │   ├── `test_git_auto_push_opt_in.py` - Guards D1: nothing pushes outside /push unless GIT_AUTO_PUSH=1. Four code paths
 │   ├── `test_git_clean_guard_vectors.py` - The pre-clean WIP snapshot guard (task dev-20260719-150041-c, lane r03-c) is
 │   ├── `test_graphify_enrich_outputs.py` - graphify-query.py check their results against their schemas before writing (P10 A17)

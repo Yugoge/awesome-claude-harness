@@ -2,8 +2,8 @@
  "version": 1,
  "description": "Definitions of hooks/ and scripts/ that look alike and are allowed to coexist because they answer different questions. Read by tests/defs_registry (python3 -m tests.defs_registry), which groups every literal definition by the sameness rule of tests/defs_registry/check.py and fails on a group the register does not split. Each entry: a reason (required) and two or more sides; the definitions of one side answer one question, so two copies on one side are still a duplicate. A definition is identified by its scope-qualified name and the fingerprint of its sorted members (sha256, 16 hex), never by file or line; `at` is where it was when registered. Seeded from the duplicate-definition audit of f199dfb1e: its 61 different-questions families (sides = the distinct member sets of the family) and its ruled-out look-alike pairs (sides = the named definitions).",
  "ceiling": {
-  "uncovered_groups": 195,
-  "definitions_in_uncovered_groups": 632,
+  "uncovered_groups": 0,
+  "definitions_in_uncovered_groups": 0,
   "note": "tests/defs_registry/test_defs_registry.py fails when this tree has more uncovered groups, or more definitions in them, than this; lower it as merges land, never raise it to admit a new copy. The goal is 0 and 0."
  },
  "entries": [
@@ -885,7 +885,7 @@
   {
    "id": "pipeline-names",
    "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "DEV_PIPELINES are the dev pipelines a score view groups; DEV_TEXTS the commands the stop gate treats as dev; prompt-workflow's set the commands that start a dev phase, redev included.",
+   "reason": "DEV_PIPELINES are the dev pipelines a score view groups; DEV_TEXTS the commands the stop gate treats as dev; prompt-workflow's set the commands that start a dev phase, redev included; step_refused_end's set the commands whose step, refused by a hook, may end on a REFUSED: line, /do included.",
    "sides": [
     [
      {
@@ -906,6 +906,13 @@
       "name": "<module>._DEV_COMMANDS",
       "fingerprint": "1600c9eb2ee79e0b",
       "at": "hooks/prompt-workflow.py:368"
+     }
+    ],
+    [
+     {
+      "name": "step_refused_end:in",
+      "fingerprint": "a34f74df68a27b94",
+      "at": "hooks/stop-command-gate.py:396"
      }
     ]
    ]
@@ -1018,7 +1025,7 @@
   {
    "id": "reading-pipelines",
    "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "READING_PIPELINES and the codex binding read a dev report; STAGES are the chain disposition's stages; NO_INJECTION are the pipelines that get no score injection.",
+   "reason": "READING_PIPELINES and the codex binding read a dev report; STAGES are the chain disposition's stages; NO_INJECTION are the pipelines that get no score injection; no_target_end's set the typed commands that may end on a NO_TARGET: line, /do among them and no chain stage.",
    "sides": [
     [
      {
@@ -1044,6 +1051,13 @@
       "name": "<module>.NO_INJECTION",
       "fingerprint": "a056414c552ff5c1",
       "at": "hooks/lib/score_view.py:15"
+     }
+    ],
+    [
+     {
+      "name": "no_target_end:in",
+      "fingerprint": "287d96000c95ea4c",
+      "at": "hooks/stop-command-gate.py:431"
      }
     ]
    ]
@@ -2507,7 +2521,7 @@
   {
    "id": "pipelines-exempt-preflight-vs-codex",
    "source": "lane defs-git (defs-83)",
-   "reason": "READING_PIPELINES asks which pipelines dispatch agents the gitignore preflight lets read their own obligation; subagentstop-codex-enforce asks which pipelines dispatch agents that are not bound by /dev --codex; stop-command-gate's no_target_end asks which commands may end on a NO_TARGET line. All are close and commit today, but each is its own rule's scope.",
+   "reason": "READING_PIPELINES asks which pipelines dispatch agents the gitignore preflight lets read their own obligation; subagentstop-codex-enforce asks which pipelines dispatch agents that are not bound by /dev --codex; stop-command-gate's no_owner_end asks which commands may end on a NO_OWNER line. All are close and commit today, but each is its own rule's scope.",
    "sides": [
     [
      {
@@ -2525,9 +2539,9 @@
     ],
     [
      {
-      "name": "no_target_end:in",
+      "name": "no_owner_end:in",
       "fingerprint": "f760bc7563f8dcc5",
-      "at": "hooks/stop-command-gate.py:402"
+      "at": "hooks/stop-command-gate.py:562"
      }
     ]
    ]

@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-19T12:58:00Z*
-**Total entries**: 84
+*Last updated: 2026-11-20T02:48:22Z*
+**Total entries**: 85
 **Convention**: kebab
 
 ## Tree
@@ -38,6 +38,7 @@ lib/
 ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
 ├── `close_rating.py` - The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports.
 ├── `closeout.py` - CLI:
+├── `codex_transcript.py` - written by scripts/steps/codex-run.py, read by the gitignore preflight as its task's provenance. ...
 ├── `command_span.py` - rule of which transcript record is a prompt the human typed
 ├── `commit_journal.py` - WHY THIS EXISTS
 ├── `commit_pipeline.py` - ONE home for the two questions the commit-authorization chain could not

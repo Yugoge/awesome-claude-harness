@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-19T12:58:00Z*
-**Total entries**: 288
+*Last updated: 2026-11-20T02:48:22Z*
+**Total entries**: 291
 **Convention**: kebab
 
 ## Tree
@@ -120,6 +120,7 @@ tests/
 ├── `test_git_cmd_cross_consistency.py` - Verifies that GIT_COMMAND_RE (hooks/pretool-git-privilege-guard.py) and
 ├── `test_git_dynamic_directory.py` - `"$VIRTUAL_ENV/bin/pip" show pytest` runs pip wherever the variable points:
 ├── `test_git_facts_one_definition.py` - Each class is one fact. Before these merges each hook carried its own copy, the copies differed,
+├── `test_git_guard_inline_python.py` - Python given on standard input (a here-document or a here-string) was not read at all, so
 ├── `test_git_hidden_code.py` - The classifier reads shell text, so `python3 -c 'subprocess.run(["git","push"])'`
 ├── `test_git_prefix_enumeration.py` - THE DEFECT
 ├── `test_git_residual_override.py` - Background
@@ -129,6 +130,7 @@ tests/
 ├── `test_git_view_reads_as_shell.py` - Each case is a decision that changed when the classifier moved from a
 ├── `test_git_word_unquoted.py` - as git receives them, quotes and backslashes removed, before any rule judges them
 ├── `test_gitignore_preflight_close_contract.py` - The gate previously harvested any docs/dev/dev-report-*.json cited anywhere in an
+├── `test_gitignore_preflight_reads.py` - dispatch ships them (E8, E9 in hooks/pretool-gitignore-preflight.py's header)
 ├── `test_gitignore_preflight_speed.py` - Dev dispatches ended the PreToolUse launcher with a RuleOverrun traceback after 60 s: each
 ├── `test_gitignore_preflight_write_capability.py` - pretool-gitignore-preflight.py scopes its refusal by the dispatched agent's
 ├── `test_grant_binding.py` - hooks/pretool-tool-policy.py, beside the derived write permission and for every caller alike:
@@ -209,6 +211,7 @@ tests/
 ├── `test_read_size_guard_offset.py` - the number of lines it actually returns (OB-L43)
 ├── `test_reader_memos.py` - A hook that reads every dispatch of a long session asks for the same roster and
 ├── `test_refusal_record.py` - - One refused call, stop or prompt is one line holding every field of the record, each bounded;
+├── `test_refused_calls.py` - A PreToolUse hook's refusal reaches two records: the refusal record (lib/refusal_record.py), writ...
 ├── `test_removal_policy_o2_o4.py` - Each command below was denied as UNRESOLVED because the census or the lexer
 ├── `test_removal_policy_own_scratch.py` - The owner, 2026-11-19: one's own temp folder may be deleted. Until then every removal the analyze...
 ├── `test_removal_policy_parsed_rule.py` - "Only a removal program in a position where it would be executed counts, and removal calls in Pyt...

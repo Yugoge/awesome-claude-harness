@@ -191,6 +191,8 @@ _INLINE_INERT_REASONS = ("interpreter_removal_token_in_output_sink", "interprete
 # names list.remove and set.remove, so it counts only as the os module's (os.remove, an alias of os,
 # or a bare `remove` imported from os).
 _PY_REMOVAL_CALLS = frozenset(("unlink", "rmdir", "rmtree", "removedirs"))
+# The removal programs whose operands _removal_targets reads: every operand a target, no option takes a value.
+_OPERAND_REMOVERS = ("rm", "unlink")
 # Calls that start a program: a string is a shell command line for the first four (and for any
 # call given shell=True); otherwise the first word, or the first element of a list, is the program.
 _PY_SHELL_CALLS = frozenset(("system", "popen", "getoutput", "getstatusoutput"))
@@ -2393,7 +2395,7 @@ class Analyzer:
         """The operands of a `rm` or `unlink` run as the command's own head: written out, or the offset
         of one that expands (resolved by _known_removal_targets). None for a pattern, `~`, a possible
         option, no operand, or shred/srm. Neither has an option taking a value."""
-        if base != "rm" and base != "unlink":
+        if base not in _OPERAND_REMOVERS:
             return None
         lits = [a.literal() for a in args]
         end = lits.index("--") if "--" in lits else len(lits)
@@ -3949,7 +3951,7 @@ def _known_removal_targets(raw, targets):
         return targets
     from shell_parse import write_targets
     try:
-        known = {t.word.span[0]: t.path for t in write_targets(raw) if t.mechanism in ("rm", "unlink")
+        known = {t.word.span[0]: t.path for t in write_targets(raw) if t.mechanism in _OPERAND_REMOVERS
                  and t.decidable and t.path and t.word is not None}
     except Exception:  # noqa: BLE001 - a reading that fails knows nothing
         return None

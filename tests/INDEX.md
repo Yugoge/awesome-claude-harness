@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-19T12:58:00Z*
-**Total entries**: 335
+*Last updated: 2026-11-20T02:48:23Z*
+**Total entries**: 337
 **Convention**: kebab
 
 ## Tree
@@ -222,6 +222,7 @@ tests/
 ├── `test_commit_multi_repo_plan.py` - Python script
 ├── `test_commit_sh_reachability.py` - commands/dev-overnight.md:1561 previously called a bare, unqualified
 ├── `test_completeness_channel_invariant.py` - One defect with a producer half and a consumer half:
+├── `test_completeness_on_demand.py` - blocking_issues holds an entry of a completeness diagnostic's form -- the only way that run can d...
 ├── `test_completeness_span_accounting.py` - halves on one code path
 ├── `test_conftest_hermetic.py` - conftest.py removes CLAUDE_PROJECT_DIR, PASEO_HOME, CLAUDE_HOME, CODEX_HOME,
 ├── `test_cycle_records_commit_set.py` - (P10 R8 rules 2 and 3, A25; #27 comment 6737075938 item 3)
@@ -239,6 +240,7 @@ tests/
 ├── `test_disposition.py` - (scripts/resolve-dev-artifact-chain.py ``disposition`` and ``--disposition``)
 ├── `test_do_partly_failed_close_route.py` - The state: the /do main agent wrote src/a.py, listed it, and its turn ended with
 ├── `test_empty_old_string_diagnosis.py` - A real cycle emitted twenty-one ledger entries whose `old` was the empty string
+├── `test_exact_masks_equivalence.py` - the tables and the three mask sets must be exactly those of the cell-by-cell definition."""
 ├── `test_git_auto_push_opt_in.py` - Guards D1: nothing pushes outside /push unless GIT_AUTO_PUSH=1. Four code paths
 ├── `test_git_clean_guard_vectors.py` - The pre-clean WIP snapshot guard (task dev-20260719-150041-c, lane r03-c) is
 ├── `test_graphify_enrich_outputs.py` - graphify-query.py check their results against their schemas before writing (P10 A17)
