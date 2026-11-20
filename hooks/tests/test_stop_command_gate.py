@@ -16,6 +16,7 @@ Run with: python3 -m pytest hooks/tests/test_stop_command_gate.py -q
 from __future__ import annotations
 
 import ast
+import errno
 import hashlib
 import importlib.util
 import json
@@ -1778,6 +1779,65 @@ def test_the_exit_line_the_block_prints_is_the_one_the_gate_accepts_for_every_st
     for content in steps:
         found = gate.STEP_REFUSED_LINE.search(f"REFUSED: {content}")
         assert found and found.group(1) == content.split(":", 1)[0], content
+
+
+# ---------------------------------------------------------------- /close: the environment and --auto's refused parent
+def close_open(env, monkeypatch, args=FAMILY):
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    task_file(env)
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    env.tx.command("close", args)
+    env.tx.todos(canonical("close", args), 2)
+
+
+def failing_probe(monkeypatch, code):
+    def refuse(*a, **k):
+        raise OSError(code, os.strerror(code))
+    monkeypatch.setattr(gate.tempfile, "TemporaryFile", refuse)
+
+
+@pytest.mark.parametrize("case", ["released", "claim-only", "other-code", "other-errno", "no-line"])
+def test_close_ends_on_the_environment_line_only_when_the_gates_own_write_fails(env, monkeypatch, case):
+    """close.md Round-open: the gate's own one-byte write to docs/dev is the fact. It fails with ENOSPC: the block
+    names the line and the Stop passes on it. The agent's line while the gate's write succeeds, a line with another
+    code, a failure the rule does not name (ENOENT), or no line: held as before."""
+    close_open(env, monkeypatch)
+    folder = str(env.project / "docs" / "dev")
+    if case != "claim-only":
+        failing_probe(monkeypatch, errno.ENOENT if case == "other-errno" else errno.ENOSPC)
+    code, text = run(env)
+    line = f"ENVIRONMENT: ENOSPC {folder}"
+    assert code == 2 and (f'write the line "{line}"' in text) is (case not in ("claim-only", "other-errno")), text
+    if case != "no-line":
+        env.tx.say("No space left on the device holding docs/dev; free space, then /close again.\n"
+                   + (f"ENVIRONMENT: EROFS {folder}" if case == "other-code" else line))
+    assert (run(env) == (0, "")) is (case == "released"), case
+
+
+def test_close_environment_exit_on_a_real_unwritable_directory(env, monkeypatch):
+    """The same without a stand-in: docs/dev made unwritable for real. A non-root user: mode 0555 (EACCES). Root,
+    which mode bits do not stop: a read-only tmpfs over docs/dev, only inside a private mount namespace
+    (ns-pytest.sh), never on the host's own."""
+    folder = env.project / "docs" / "dev"
+    close_open(env, monkeypatch)  # the cycle's own files first, then the directory made unwritable
+    mounted = False
+    if os.geteuid() != 0:
+        folder.chmod(0o555)
+        want = "EACCES"
+    else:
+        if os.readlink("/proc/self/ns/mnt") == os.readlink("/proc/1/ns/mnt"):
+            pytest.skip("root outside a private mount namespace: no read-only mount is made here")
+        subprocess.run(["mount", "-t", "tmpfs", "-o", "ro,size=64k", "none", str(folder)], check=True)
+        mounted, want = True, "EROFS"
+    try:
+        assert run(env)[0] == 2
+        env.tx.say(f"ENVIRONMENT: {want} {folder}")
+        assert run(env) == (0, "")
+    finally:
+        if mounted:
+            subprocess.run(["umount", str(folder)], check=True)
+        else:
+            folder.chmod(0o755)
 
 
 def test_a_refused_step_line_releases_no_other_gated_command(env, monkeypatch):

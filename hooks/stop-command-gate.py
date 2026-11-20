@@ -49,7 +49,8 @@ through the one adapter `disposition`), the do-report's one reading
 dev-lifecycle's --auto target function, the merge-analyst's and push-analyst's
 grants (hooks/lib/merge_grant.py) and the push-gate token's path
 (scripts/write-push-gate-token.py). No target comes from a dispatch prompt or a
-tool result. The gate writes nothing but its own output (stdout:
+tool result. The gate writes nothing but its own output and /close's probe of docs/dev, one byte to an
+unnamed temporary file it drops at once (environment_refusal) (stdout:
 the terminal time-lock status of an allowed Stop, see main), keeps no count
 and has no release but the work itself: the next compliant step clears each
 gap. The human's /stop opens a span that is not gated, and nothing here
@@ -57,6 +58,7 @@ offers a stop.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import importlib.util
 import json
@@ -65,6 +67,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -571,6 +574,37 @@ def no_owner_end(span, root) -> bool:
     owed, names = _owed_gap(span, root), _cycle_names(span)
     lines = [(name, g) for task in targets or () for name in _names(names, task) for g in disposition(root, name, span.command)]
     return not unresolved and bool(lines) and not any(owed(name, g) for name, g in lines)
+
+
+# close.md Round-open: a cause in the environment that persists. The gate's own attempt is the fact, never a line.
+ENV_ERRNOS = (errno.ENOSPC, errno.EDQUOT, errno.EROFS, errno.EACCES, errno.EPERM)
+ENV_LINE = re.compile(r"^ENVIRONMENT: (E[A-Z]+) (/\S+)", re.M)
+
+
+def environment_refusal(span, root) -> str | None:
+    """/close: the line "ENVIRONMENT: <code> <directory>" when the gate's own attempt at what a close round needs,
+    one byte written and synced to an unnamed temporary file in the project's docs/dev (the close report's
+    directory; tempfile.TemporaryFile, which leaves no name and is gone on close), fails with the operating system's
+    no-space, quota, read-only or permission error; else None (it succeeded, or failed otherwise)."""
+    folder = os.path.join(root, "docs", "dev")
+    if span.command != "close":
+        return None
+    try:
+        with tempfile.TemporaryFile(dir=folder) as fh:
+            fh.write(b"x")
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as exc:
+        return f"ENVIRONMENT: {errno.errorcode[exc.errno]} {folder}" if exc.errno in ENV_ERRNOS else None
+    return None
+
+
+def environment_end(span, line: str | None) -> bool:
+    """The last text holds the gate's own ENVIRONMENT: line (the same code and directory): the run ends there and
+    the cycle stays unfinished; the next round follows once the cause is gone."""
+    found, own = ENV_LINE.search(span.last_text() or ""), ENV_LINE.match(line or "")
+    return bool(found and own) and found.group(1) == own.group(1) and \
+        os.path.realpath(found.group(2)) == os.path.realpath(own.group(2))
 
 
 # close.md Step 0: a disposition call that exits non-zero runs once more; failing again, the run ends with one
@@ -1296,10 +1330,12 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if not gated and not asking:  # (5)
         return 0, "", terminal
     root = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd()
-    refused = None
+    refused = env = None
     try:
         refused = refused_step(span) if gated else None  # one walk: the release below and the block's exit line
-        if gated and (no_target_end(span, root) or step_refused_end(span, refused) or no_owner_end(span, root)):
+        env = environment_refusal(span, root) if gated else None  # the gate's own attempt, read once
+        if gated and (no_target_end(span, root) or step_refused_end(span, refused) or no_owner_end(span, root)
+                      or environment_end(span, env)):
             return 0, "", terminal
     except Exception:  # an unread record releases nothing: the gaps below decide
         pass
@@ -1316,12 +1352,19 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
         return 0, "", terminal
     if not gaps:  # (7)
         return 0, "", terminal
-    text = _block_text(span.command, gaps) + (f"A hook refused this step's own call. To end the turn, write the line "
-                                              f"\"REFUSED: {refused}\", then the hook's own output; the step stays "
-                                              "open and the next prompt resumes it.\n" if refused else "")
+    text = _block_text(span.command, gaps) + _exit_hint(span, refused, env)
     if mode == "advisory":
         return 0, "would block\n" + text, terminal
     return 2, text, None
+
+
+def _exit_hint(span, refused, env) -> str:
+    """What the block adds where an exit holds but its line is not yet written: the exact line, filled in."""
+    hint = (f"A hook refused this step's own call. To end the turn, write the line \"REFUSED: {refused}\", then the "
+            "hook's own output; the step stays open and the next prompt resumes it.\n" if refused else "")
+    hint += (f"The gate's own write to the close report's directory failed. To end the turn, write the line "
+             f"\"{env}\"; the cycle stays open and the next round follows once the cause is gone.\n" if env else "")
+    return hint
 
 
 def main(argv=None) -> int:
