@@ -1,7 +1,7 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T07:22:50Z*
+*Last updated: 2026-11-20T08:17:36Z*
 **Total entries**: 339
 **Convention**: kebab
 
@@ -26,7 +26,7 @@ tests/
 │   ├── `test_check.py` - Each test builds a small harness-shaped tree, derives the static half on it and
 │   ├── `test_mutations.py` - Each test copies the tree under test (this checkout) to a scratch directory,
 │   ├── `test_presence_faults.py` - CPython 3.10 and 3.12 (the CI versions): os.path.exists/isfile/isdir/lexists catch every OSError
-│   ├── `test_register.py` - A rule (6) violation an entry names (artifact, reader, event and tool, mutation) is not reported ...
+│   ├── `test_register.py` - A rule (6) violation on an entry's artifact whose decisions were all taken at its event and tool ...
 │   ├── `test_rule1_7.py` - declared artifact) and rule (7) (a list that repeats a declaration)
 │   ├── `test_rule2.py` - Each test builds a small harness-shaped tree, derives the static half on it and runs the check's
 │   ├── `test_rule4_6.py` - mutation), rule (5) (the chain function's output used verbatim) and rule (6) (a deciding read
