@@ -327,11 +327,14 @@ def test_uncapped_option_scan_is_linear(command, hit):
 
 
 def test_shell_payload_with_a_very_long_option_run_is_refused_fast(sandbox):
-    command = "fish -c 'git" + " -P" * 20000 + " stash'"
-    start = child_cpu()
-    r = run(sandbox, command)
-    elapsed = child_cpu() - start
-    assert r.returncode == 2 and STASH in r.stderr, r.stderr[-300:]
-    # The re-lex this guards against took 10.6 s (N6). Resolved, it takes about 2.5 s of the hook's CPU time; CPU
-    # seconds, not wall time, since a shared CI runner under xdist took 5.04 s of wall time (2026-11-18).
-    assert elapsed < 5.0, elapsed
+    elapsed = {}
+    for options in (10000, 20000):
+        start = child_cpu()
+        r = run(sandbox, "fish -c 'git" + " -P" * options + " stash'")
+        elapsed[options] = child_cpu() - start
+        assert r.returncode == 2 and STASH in r.stderr, r.stderr[-300:]
+    # The re-lex this guards against grew with the square of the run (10.6 s for 20,000 options, N6); resolved, the
+    # cost grows with its length (about 2.5 s). Twice the options must cost well under four times as much. The two
+    # runs are compared with each other, in the hook's CPU seconds, because no fixed bound holds on every runner:
+    # 5.04 s of wall time under xdist (2026-11-18), 5.995 CPU seconds on a slow Python 3.10 runner (2026-11-20).
+    assert elapsed[20000] < 3 * elapsed[10000], elapsed
