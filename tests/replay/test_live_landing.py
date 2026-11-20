@@ -421,7 +421,7 @@ EXERCISES = {PRE.name: {STOP, TODO, SESSION} | BASH | WRITE | AGENT, HOME.name: 
 # one the REACHED entry of its scenario does not name fails test_again_with_your_settings's `hooklist` part.
 # (P2's overnight guard, under either matcher, is a rule of P12's write gate: its old registration's removal
 # is among those the scenarios reach.)
-RATING = ("PostToolUse", "AskUserQuestion|Agent|Task")  # its dispatch half is both dispatch tools since 2026-11-19
+RATING = ("PostToolUse", "AskUserQuestion|Agent|Task|Write|Edit|MultiEdit")  # both dispatch tools since 2026-11-19; a landed question file since 2026-11-20
 PROMPT = ("UserPromptSubmit", None)
 # The harness switch's UserPromptSubmit registration (hooks/userprompt-harness-switch.sh, /harness off|on):
 # appended after the event's other hooks, which stay as they were; it acts only on a typed /harness
