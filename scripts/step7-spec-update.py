@@ -6,7 +6,7 @@ This script implements the Step 8 algorithm specified verbatim in commands/commi
 section "### Step 8: Spec-update dispatch (post-commit, advisory)".
 
 It is the executable embodiment of the algorithm that the /commit orchestrator runs
-in stages (1) context.spec_path -> (2) close-report continuation line -> (3) mtime+marker
+in stages (1) context.spec_path -> (2) close-report continuation line -> (3) marker
 glob -> (4) advisory outcome. The orchestrator may either follow the commit.md
 prose directly OR invoke this harness; both paths satisfy the AC-05 contract because
 they execute identical decision logic.
@@ -124,11 +124,7 @@ def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path)
     return sp if sp.is_file() else None
 
 
-def _stage3_mtime_glob(task_id: str, dev_docs_root: pathlib.Path):
-    cr = dev_docs_root / f"close-report-{task_id}.md"
-    cr_mtime = cr.stat().st_mtime
-    lo = cr_mtime - 24 * 3600
-    hi = cr_mtime + 3600
+def _stage3_marker_glob(task_id: str, dev_docs_root: pathlib.Path):
     specs_dir = dev_docs_root / "specs"
     if not specs_dir.is_dir():
         return []
@@ -138,9 +134,6 @@ def _stage3_mtime_glob(task_id: str, dev_docs_root: pathlib.Path):
         if not p.is_file():
             continue
         if not SPEC_BASENAME_RE.match(p.name):
-            continue
-        m = p.stat().st_mtime
-        if not (lo <= m <= hi):
             continue
         try:
             content = p.read_text(encoding="utf-8", errors="replace")
@@ -215,8 +208,8 @@ def main() -> int:
         print(f"Stage 2 dispatch: {sp2}")
         return 0
 
-    # Stage (3) mtime + literal-task-id glob
-    candidates = _stage3_mtime_glob(task_id, dev_docs_root)
+    # Stage (3) literal-task-id glob
+    candidates = _stage3_marker_glob(task_id, dev_docs_root)
 
     # Stage (4) outcome (advisory: printed, nothing dispatched)
     if not candidates:

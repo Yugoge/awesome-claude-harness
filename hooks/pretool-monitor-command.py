@@ -55,7 +55,6 @@ BASH_RULES = () if Rule is None else (
     Rule('grep-backtrack-guard', 'pretool-grep-backtrack-guard.py', ('Bash',)),
     Rule('attribution-pre', 'pretool-attribution-pre.py', ('Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'), timeout=30),
     Rule('block-branch-pr-worktree', 'pretool-block-branch-pr-worktree.py', ('Bash',)),
-    Rule('bulk-commit-detector', 'pretool-bulk-commit-detector.py', ('Bash',), timeout=5),
     Rule('git-privilege-guard', 'pretool-git-privilege-guard.py', ('Bash',)),
 )
 

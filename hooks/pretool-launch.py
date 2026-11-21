@@ -49,7 +49,6 @@ RULES = (
     Rule('block-branch-pr-worktree', 'pretool-block-branch-pr-worktree.py', ('Bash',)),
     Rule('dispatch-gate', 'pretool-dispatch-gate.py', DISPATCH_TOOLS),
     Rule('runcode-watchdog', 'pretool-runcode-watchdog.py', ('mcp__playwright__browser_run_code',)),
-    Rule('bulk-commit-detector', 'pretool-bulk-commit-detector.py', ('Bash',), timeout=5),
     Rule('git-privilege-guard', 'pretool-git-privilege-guard.py', ('Bash',)),
     Rule('monitor-command', 'pretool-monitor-command.py', ('Monitor',), timeout=360),
 )

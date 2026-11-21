@@ -31,7 +31,7 @@
 #  11. E8 (2026-11-20): a dev dispatch (its obligation's role) reads another task's report it cites
 #      (dev_task). E9: tests/generated/, which docs/reference/generated-tests-policy.md keeps out of
 #      git, holds no deliverable. E10: the report's own task's (or a lane's, or its parent's) /codex
-#      transcript is provenance. Coverage: hooks/tests/test_gitignore_preflight_reads.py.
+#      transcript is provenance. E11: .claude/scratch (ignores itself). Coverage: hooks/tests/test_gitignore_preflight_reads.py.
 #
 # Blocking condition (exits 2):
 #   Any path in dev.files_modified or dev.files_created is matched by .gitignore
@@ -419,7 +419,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib import claude_home, codex_transcript, obligation, policy_registry, schema_registry  # noqa: E402
+from lib import claude_home, codex_transcript, locations, obligation, policy_registry, schema_registry  # noqa: E402
 
 DEV_REPORT_PATTERN = re.compile(r'docs/dev/dev-report-[A-Za-z0-9._-]+\.json')
 
@@ -743,7 +743,6 @@ def is_report_of_task(report_rel, task_id, repo_root):
 def get_repo_root():
     """The project the dispatch works in (CLAUDE_PROJECT_DIR, else the cwd), whose docs/dev reports and
     .gitignore the rule reads."""
-    from lib import locations
     return str(locations.project_root(bash=True))
 
 
@@ -837,7 +836,9 @@ def gitignored_deliverables(prompt):
 
         for path in all_paths:
             if not (isinstance(path, str) and path) or path.startswith('tests/generated/') \
-                    or is_own_transcript(path, src_task_id, repo_root):  # E9, E10
+                    or is_own_transcript(path, src_task_id, repo_root) \
+                    or tuple(os.path.relpath(os.path.join(repo_root, path), repo_root).split(os.sep)[:2]) \
+                    == locations.SCRATCH_PARTS:  # E9, E10, E11: the scratch root ignores itself
                 continue
             if not is_gitignored(path, repo_root):
                 continue

@@ -242,7 +242,7 @@ NARROW_EXEMPTIONS = [
     ("echo x > secret.log", WRITE),
     ("echo x > secrets-report.yaml", WRITE),
     ("echo x > reporter-secret.txt", WRITE),
-    ("echo x > password_reporter.py", WRITE),
+    ("echo x > password_reporter.json", WRITE),
     ("echo x > .env.dist", WRITE),
     ("cat credentials.report > /tmp/x", READ),
     ("cat .env.dist > /tmp/x", READ),
@@ -529,7 +529,7 @@ def test_a_code_or_doc_operand_of_a_copy_or_sed_passes(sandbox, command):
 
 
 # The code/doc operand exemption never covers env, credential or key names, data files, a secret directory, a name
-# whose stem is the secret word, nor any redirection.
+# whose stem is the secret word, nor a command whose output goes to a file reading such a name.
 @pytest.mark.parametrize("command,label", [
     ("sed -i s/a/b/ .env", WRITE),
     ("sed -i s/a/b/ config/secrets.yaml", WRITE),
@@ -538,9 +538,45 @@ def test_a_code_or_doc_operand_of_a_copy_or_sed_passes(sandbox, command):
     ("cp passwords.txt /tmp/x", READ),
     ("cp db_password.txt /tmp/x", READ),
     ("cp ~/.ssh/id_rsa /tmp/x.md", READ),
-    ("echo x > docs/password-reset.md", WRITE),
     ("sed -i s/a/b/ src/password_reset.py > /tmp/log", READ),
 ])
 def test_the_code_or_doc_operand_exemption_stays_narrow(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# The rule judges the act, not the name (live refusals of 2026-11-20). Writing a code or doc file whose name only
+# holds a secret word, by any writer, is no secret write; a proven reader whose only redirections go to /dev/null or
+# merge a stream opens no file, whatever it names.
+@pytest.mark.parametrize("command", [
+    "cat > /srv/work/scripts/release/check_secrets.py <<'EOF'\n#!/usr/bin/env python3\n"
+    '"""Static scan; the .env is never opened."""\nprint("ok")\nEOF',
+    "echo x | tee src/check_secrets.py",
+    "echo x > password_reporter.py",
+    "echo x > docs/password-reset.md",
+    "date -u +%FT%TZ; echo --- env file tracked?; git -C /srv/work ls-files .env .env.example | head; "
+    "ls -la /srv/work/.env 2>/dev/null | cut -c1-60",
+    "ls -la /srv/work/.env 2>/dev/null",
+    "git ls-files .env 2>&1 | head",
+])
+def test_a_secret_word_in_a_written_or_listed_name_is_no_secret_act(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+# What the rule exists for stays refused: a redirection into, appending to or out of an env, credential, key or
+# token file, or a read of one into a file; a code name whose stem is the secret word or under a secret directory.
+@pytest.mark.parametrize("command,label", [
+    ("cat > /srv/work/.env <<'EOF'\nA=1\nEOF", WRITE),
+    ("echo A=1 >> .env 2>/dev/null", WRITE),
+    ("echo x 2>&1 > ~/.ssh/id_ed25519", WRITE),
+    ("echo t > .secret_token 2>/dev/null", WRITE),
+    ("cat > secrets.py <<'EOF'\nKEY = 'x'\nEOF", WRITE),
+    ("cat > config/secrets/check.py <<'EOF'\nx = 1\nEOF", WRITE),
+    ("ls -la .env 2>/srv/work/err.txt", READ),
+    ("cat .env 2>/dev/null > /srv/work/copy.txt", READ),
+    ("sort < .env > /srv/work/sorted.txt 2>/dev/null", READ),
+])
+def test_a_secret_files_redirection_stays_refused_whatever_else_is_redirected(sandbox, command, label):
     r = run(sandbox, command)
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)

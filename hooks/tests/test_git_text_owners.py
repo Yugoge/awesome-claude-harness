@@ -56,7 +56,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / "hooks"
 GUARD = HOOKS / "pretool-git-privilege-guard.py"
-BULK = HOOKS / "pretool-bulk-commit-detector.py"
 sys.path.insert(0, str(HOOKS))
 
 from lib.git_command_classifier import classify_git_command  # noqa: E402
@@ -391,7 +390,7 @@ def _run(hook, command, repo, env, subagent):
 def test_the_hooks_let_text_through(tmp_path, subagent):
     repo, env = _sandbox(tmp_path)
     for command in MUST_PASS:
-        for hook in (GUARD, BULK):
+        for hook in (GUARD,):
             proc = _run(hook, command, repo, env, subagent)
             assert proc.returncode == 0, (hook.name, command, proc.stderr)
 

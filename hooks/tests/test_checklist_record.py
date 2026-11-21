@@ -257,16 +257,3 @@ def test_a_dispatch_counts_for_its_steps_current_run_only(s):
     for n in range(4):
         s.todo(_frontier(n))
     assert s.todo(_frontier(4))[0].returncode == 2
-
-
-@pytest.mark.parametrize("name", ["posttool-todo-sequence.py", "posttool-todo-count.py"])
-def test_the_retired_todo_hooks_are_unregistered_exit_0_stubs(name):
-    """P5 R19: both leave the PostToolUse TodoWrite group and stay as tracked stubs (a running
-    session keeps the hook list it loaded); their rules are pretool-todo-validate.py's."""
-    text = (HOOKS / name).read_text()
-    assert sum(line.startswith("# STUB:") for line in text.splitlines()) == 1
-    assert name not in (HOOKS.parent / "settings.json").read_text()
-    for payload in ("", json.dumps({"tool_name": "TodoWrite", "tool_input": {"todos": _frontier(1)}})):
-        p = subprocess.run([sys.executable, str(HOOKS / name)], input=payload, capture_output=True, text=True,
-                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, timeout=60)
-        assert (p.returncode, p.stdout, p.stderr) == (0, "", "")

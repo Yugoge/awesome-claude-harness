@@ -26,6 +26,8 @@ Activation logic:
      bound by the flag. Unbound: exit 0. Bound: exit 2 ("CODEX_ENFORCE_BLOCKED").
   7. A QA of a /dev-family cycle whose record is low (lib/score_view.py, D32) is bound with no flag and no line; any codex call,
      failed or not, lets it stop. PostToolUseFailure records a failed Skill attempt too (D25).
+  8. A bound stop passes while a codex call on this machine was seen to hit the usage limit and its reset
+     time is ahead (lib/codex_transcript.py unavailable_until), each stop on that state; it writes no ledger entry.
 
 Exit codes:
   0: Allow stop (pass-through).
@@ -39,7 +41,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import agent_cycle, dispatch_template, score_view
+from lib import agent_cycle, codex_transcript, dispatch_template, score_view
 from lib.agent_resolver import resolve_agent_type
 
 CODEX_REQUIRED_LINE = re.compile(r"^\s*codex_required:\s*true\s*$", re.M)
@@ -112,6 +114,8 @@ def main() -> None:
                          or _template_asks(resolution, agent_type, data.get("agent_transcript_path")))
     # A repeated stop is no attempt; a failed Skill call has its own ledger entry (D25).
     if not asked and not forced:
+        sys.exit(0)
+    if codex_transcript.unavailable_until():  # a real call on this machine hit the usage limit: the stop passes
         sys.exit(0)
 
     # No ledger entry: block stop

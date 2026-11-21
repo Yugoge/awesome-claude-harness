@@ -749,12 +749,12 @@ def _span(src, a, b):
     return (src.off(a), src.off(b - 1) + 1 if b > a else src.off(a))
 
 
-def _open_subscript(raw):
+def _open_subscript(raw, memo=None):
     """True when ``raw`` is NAME[ followed by an unclosed subscript (quotes and $( ) skipped)."""
     m = _SUBSCRIPT_START_RE.match(raw)
     if not m:
         return False
-    level, j = 1, m.end()
+    level, j = memo or (1, m.end())  # memo, one list per word: resume after the last step a shorter prefix held
     while j < len(raw):
         c = raw[j]
         if c == "\\":
@@ -770,6 +770,8 @@ def _open_subscript(raw):
         elif c == "]":
             level -= 1
         j += 1
+        if memo is not None and j < len(raw):
+            memo[:] = (level, j)
     return level > 0
 
 
@@ -782,6 +784,7 @@ def _lex_word(src, i, depth=0, assign=False):
     start = i
     segs = []
     parts = []
+    sub_memo = []
     lit_chars = []
     lit_idx = []
     run = {"chars": [], "idx": [], "q": None}
@@ -824,7 +827,7 @@ def _lex_word(src, i, depth=0, assign=False):
     while i < n:
         c = t[i]
         if c in " \t\n" or c in _OP_CHARS:
-            if assign and _open_subscript(t[start:i]):
+            if assign and _open_subscript(t[start:i], sub_memo):
                 keep(i)
                 i += 1
                 continue
@@ -995,7 +998,7 @@ def _lex_word(src, i, depth=0, assign=False):
         keep(i)
         i += 1
 
-    if assign and _open_subscript(t[start:i]):
+    if assign and _open_subscript(t[start:i], sub_memo):
         raise LexError("unterminated_subscript", src.off(start))  # bash: looking for matching `]'
     flush()
     return Word(segs, src.off(start), src.slice(start, i), parts), i

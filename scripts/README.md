@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 109
+- **Total files**: 107
 - **Subdirectories**: 8
 - **Naming convention**: kebab
 
@@ -55,7 +55,6 @@ Organization and usage documentation for `scripts/`.
 - `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
 - `harness-switch` - harness-switch file
 - `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
-- `iterate-failed-pipelines.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
 - `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 - `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 - `measure-hero-fold.py` - Description: Renders the document that holds the hero, docs/status.md, LOCALLY from the
@@ -78,7 +77,6 @@ Organization and usage documentation for `scripts/`.
 - `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
 - `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
 - `readme_facts.py` - Description: One function per fact (FACTS below), one source per function, nothing the pages do not
-- `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
 - `refusals` - refusals file
 - `regen-folder-docs.py` - doc-sync regenerates a folder's INDEX.md and README.md AUTO regions only when a live harness
 - `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.

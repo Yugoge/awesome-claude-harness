@@ -1,7 +1,7 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T10:43:04Z*
+*Last updated: 2026-11-20T17:00:10Z*
 **Total entries**: 340
 **Convention**: kebab
 
@@ -228,6 +228,7 @@ tests/
 ├── `test_completeness_span_accounting.py` - halves on one code path
 ├── `test_conftest_hermetic.py` - conftest.py removes CLAUDE_PROJECT_DIR, PASEO_HOME, CLAUDE_HOME, CODEX_HOME,
 ├── `test_cycle_records_commit_set.py` - (P10 R8 rules 2 and 3, A25; #27 comment 6737075938 item 3)
+├── `test_day_windows_to_warnings.py` - One test group per window: /restart's cross-account sweep (subagent_restart.sibling_transcripts and
 ├── `test_declared_vocab_readers.py` - (P1b row 19 rule 7): the orphan-agent detector asks the command files
 ├── `test_defs_shell_cd_scopes.py` - A brace group, a loop, an if and a case body run in the current shell, in the directory in effect,
 ├── `test_defs_shell_consumers_agree.py` - Each hook below refuses its own base command. A wrapper, runner, payload option or shell
@@ -255,7 +256,6 @@ tests/
 ├── `test_home_secret_denies.py` - OB-L19's Read/Edit secret denies are written `**/<name>`, `<name>` or a relative path, and the CLI
 ├── `test_hook_rejection_retry.py` - A hook-rejected operation is reported, never asked about, and never retried: only the owner's own /allow grant, typed by him, lets it through (dev, paseo-daemon, clean); an operation no grant can let through is withdrawn, never left to the owner's own run.
 ├── `test_interruption_signals.py` - Every banner asserted here was measured in the real transcript corpus under
-├── `test_iterate_failed_pipelines_compat.py` - It answers the call origin/master's /dev-overnight Step 17 makes (commands/dev-overnight.md:1384 ...
 ├── `test_landing.py` - render-settings land, run from hooks/auto-commit.sh), migrate's push exclusion and the settings
 ├── `test_landing_history_seeding.py` - render-settings' seeding (the list's one producer, P7b R5) also takes, from every ref (branches,
 ├── `test_late_repair_driftfree_effective_state.py` - scripts/late-repair-controller.py's ``resolve_effective_report_state`` is the

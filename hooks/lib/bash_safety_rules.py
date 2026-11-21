@@ -3857,10 +3857,6 @@ _SENSITIVE_WRITERS = frozenset({"tee", "cp", "mv", "install", "rsync", "ln", "dd
 # The verbs that write what they read into another file: a listed name among their operands is a secret read
 # into a file, as an argument of a command whose output is redirected into one is.
 _SENSITIVE_COPIERS = frozenset(INTO_DIR_VERBS)
-# The writers the base never judged without an output redirection: a source-code or Markdown/reST document operand
-# of theirs (`sed -i ... src/password_reset.py`, `mv docs/password-reset.md docs/pw.md`) is no secret file
-# (lib/sensitive_names.is_code_or_doc_operand).
-_OPERAND_WRITERS = _SENSITIVE_COPIERS | {"sed"}
 # The verbs whose source operand, copied into a path that is not sensitive, may be a template (`.env.example`).
 _TEMPLATE_COPIERS = frozenset({"cp", "cat"})
 # How each network client reads its options: which long options take a value and which take none, which short
@@ -4165,12 +4161,13 @@ def sensitive_redirect(command, kept=False):
     host-less, not host `.` or `..`; not with an output value holding `#`, a curl URL holding `{`, `}`, `[` or `]`
     without -g/--globoff, nor aria2c without -o or with -Z/--force-sequential, -i/--input-file, --conf-path or a
     parameterized URI, nor curl -K/--config or wget --config, nor httpie or xh without -o/--output), never as an
-    option's value, a redirection or write target or another
-    command's operand; a `file:` URL a network client reads into its own output file
-    (curl -o, wget -O) is a secret read; a code file copied onto a code-file name; a source-code or Markdown/reST
-    operand of cp, mv, install, rsync, ln or sed -i (is_code_or_doc_operand). A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by substring on
-    their raw text. A command the parser cannot read is judged on its raw text by substring, so it is refused more,
-    never less.
+    option's value, a redirection or write target or another command's operand; a `file:` URL a network client reads
+    into its own output file (curl -o, wget -O) is a secret read; a code file copied onto a code-file name; a
+    source-code or Markdown/reST write target or operand of cp, mv, install, rsync, ln or sed -i
+    (is_code_or_doc_operand). A proven reader (lib/bash_read_only.py) whose every redirection goes to /dev/null or
+    merges a stream writes no file. A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by
+    substring on their raw text. A command the parser cannot read is judged on its raw text by substring, so it is
+    refused more, never less.
     """
     from lib.sensitive_names import (RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_code_or_doc_operand,
                                      is_sensitive_name)
@@ -4185,7 +4182,7 @@ def sensitive_redirect(command, kept=False):
             if not writer or t.mode == "delete":
                 continue
             if t.path is not None:
-                if t.mechanism.split("-", 1)[0] in _OPERAND_WRITERS and is_code_or_doc_operand(t.path):
+                if is_code_or_doc_operand(t.path):
                     continue
                 if is_sensitive_name(t.path, report=True, template=True) and not _code_copy(t):
                     return "write"
@@ -4194,15 +4191,15 @@ def sensitive_redirect(command, kept=False):
         for site in walk(script):
             redirs = [r for r in site.cmd.redirects if r.target is not None]
             outputs = [r for r in redirs if r.writes()]
-            if any(_word_sensitive(r.target, report=True, template=True) for r in outputs):
+            if any(_word_sensitive(r.target, report=True, template=True)
+                   and not is_code_or_doc_operand(r.target.value()) for r in outputs):
                 return "write"
             name = _command_name(site.cmd)
             network = name in _NETWORK_CLIENTS
             writes, url_names_output, urls = (_network_output(name, [w.value() for w in site.cmd.words[1:]])
                                               if network else (False, False, {}))
-            if any(r.fd == 1 or r.op in BOTH_STREAMS_OPS for r in outputs) and tuple(site.context) == ("top",) \
-                    and is_read_only(command[slice(*site.cmd.span)]):
-                outputs = []  # lib/bash_read_only.py's reader, its output thrown into /dev/null: what it reads lands nowhere
+            if outputs and tuple(site.context) == ("top",) and is_read_only(command[slice(*site.cmd.span)]):
+                outputs = []  # lib/bash_read_only.py's reader, each stream it redirects into /dev/null: no file
             if not outputs and network and writes:
                 # A client writing its own output file reads a `file:` URL into it (curl file:///.env -o /tmp/y).
                 if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
@@ -4657,8 +4654,9 @@ def _raw_disk(view):
     return grep(r"^\s*(dd|mkfs|fdisk|shred)\b", view)
 
 
-def _raw_killall(view, family):
-    return grep(r"(killall|pkill)\s+.*(" + (re.escape(family) + "|" if family else "") + "claude|docker)", view)
+def _raw_kill_by_name(view):
+    return grep(r"(?<![\w.-])(pkill|killall)\s", view) or grep(r"(?<![\w.-])(pgrep|pidof|ps)\s", view) \
+        and grep(r"(?<![\w.-])kill(?!\s+-[0lL]\b)(?!(\s+-\S+)*\s+([0-9]|[\"']?\$[$!]))(\s|$)", view)
 
 
 def _raw_kill_signal(view):
@@ -4836,10 +4834,13 @@ def _destructive_disk(sv):
     return False
 
 
-def _kill_protected_family(sv, family):
-    rx = re.compile("(" + (re.escape(family) + "|" if family else "") + "claude|docker)")
-    return any(rx.search(w.value() if w.value() is not None else w.text)
-               for _n, args, _s, _r in sv.named("killall", "pkill") for w in args)
+def _kill_by_name(sv):
+    """pkill or killall; or, in a command that searches processes by name or pattern (pgrep, pidof, ps), a kill that
+    is no probe or listing and signals PIDs it computes (xargs, a substitution, a variable), not `$$` or `$!`."""
+    return bool(sv.named("pkill", "killall")) or bool(sv.named("pgrep", "pidof", "ps")) and any(
+        (not args or args[0].value() not in _KILL_PROBE_OPTS) and (any(wr[0] == "xargs" for wr in r.wrappers) or any(
+            w.value() is None and [(p.kind, p.text) for p in w.parts] not in ([("param", "$")], [("param", "!")])
+            for w in args)) for _n, args, _s, r in sv.named("kill"))
 
 
 def _kill_signal(sv):
@@ -4891,7 +4892,6 @@ def service_rules(command, view, env, sv=None):
 
     Read at command position through ServiceView (OB-L11); a command it cannot read keeps the raw-text reading."""
     sv = sv if sv is not None else ServiceView(command)
-    family = env["family"]
     sensitive = sensitive_redirect(command)
     if sensitive == "write":
         refuse("BLOCKED: Attempting to write to sensitive file via Bash", f"Command: {command}",
@@ -4923,9 +4923,12 @@ def service_rules(command, view, env, sv=None):
         refuse("BLOCKED: docker system prune -a is refused", f"Command: {command}", released_line())
     if reads_view(_raw_disk, lambda: _destructive_disk(sv), sv.without(view, "dd", _dd_whole)):
         refuse("BLOCKED: Destructive disk operation detected", f"Command: {command}", released_line())
-    if reads_view(lambda t: _raw_killall(t, family), lambda: _kill_protected_family(sv, family)):
-        refuse(f"BLOCKED: Killing {family + '/' if family else ''}claude/docker processes is refused",
-                   f"Command: {command}", released_line())
+    if reads_view(_raw_kill_by_name, lambda: _kill_by_name(sv)):
+        refuse("BLOCKED: Killing processes by name or pattern is refused (pkill, killall, or kill of PIDs a process "
+               "search computes)", f"Command: {command}", "REASON: a name or pattern also matches the processes of "
+               "other agents and sessions on this machine. Instead: stop a background task you started with the "
+               "TaskStop tool; bound a foreground command so it ends by itself (timeout 600 <command>); or signal "
+               "the process this same command starts (<command> & ... ; kill $!).", released_line())
     if reads_view(_raw_kill_signal, lambda: _kill_signal(sv), sv.without(view, "kill", _kill_probe)):
         refuse("BLOCKED: kill with signals is refused — use graceful shutdown methods", f"Command: {command}",
                    released_line())
@@ -5030,11 +5033,12 @@ def snapshot_before(payload):
             or f"write_checkpoint failed (rc={rc or p.returncode}); see the checkpoint log"}
 
 
-def _scratch_owner(payload):
+def _scratch_owner(payload, removal=True):
     """The write policy's answers about the calling actor's own scratch directory: (owner test for a path, the note
     naming that directory or ""). All are hooks/pretool-tool-policy.py's own (_scratch_status, _note_own_scratch,
     _main_scratch), loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an
-    actor may write scratch files, with no second one here. For a removal the owner test also passes a path inside
+    actor may write scratch files, with no second one here (the git guard's commit in it asks with removal=False).
+    For a removal the owner test also passes a path inside
     the session's scratch directory (where $TMPDIR points, so where the programs any actor of the session runs
     leave their files), for every caller of that session, once its owner record names the session; the note then
     names that directory too, on a line of its own, unless it is the one already named. An actor the write policy
@@ -5051,7 +5055,7 @@ def _scratch_owner(payload):
         note = io.StringIO()
         with contextlib.redirect_stderr(note):  # the note for a refused write to system temp names the directory
             policy._note_own_scratch(role, payload, os.path.join(locations.DEFAULT_TEMP_DIR, "removal"))
-        shared = policy._main_scratch({"session_id": payload.get("session_id")})
+        shared = removal and policy._main_scratch({"session_id": payload.get("session_id")})
     except BaseException:  # noqa: BLE001 - also a bootstrap that exits: nothing is owned
         return (lambda path: False), ""
 
@@ -7093,7 +7097,6 @@ def environment():
     return {
         "prefix": os.environ.get("CLAUDE_PROTECTED_DAEMON_PREFIX", ""),
         "targets": os.environ.get("CLAUDE_PROTECTED_DAEMON_TARGETS", ""),
-        "family": os.environ.get("CLAUDE_PROTECTED_PROCESS_FAMILY", ""),
         "dev_systemd": os.environ.get("CLAUDE_DEV_SYSTEMD", ""),
         "grant_dir": os.environ.get("CLAUDE_DAEMON_RESTART_SENTINEL_DIR")
                      or locations.DEFAULT_TEMP_DIR,  # the owner's helper's own rule

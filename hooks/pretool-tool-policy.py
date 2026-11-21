@@ -357,15 +357,15 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
 
 
 def _note_own_scratch(role: str, data: dict, target) -> None:
-    """After a refused write of ``target`` to system temp or scratch, name the
-    caller's own scratch directory as a literal path. It is the directory
+    """After a refused write of ``target`` outside the caller's own scratch directory, name
+    that directory as a literal path. It is the directory
     _scratch_status judges "owner": the main agent's session scratch, a
     subagent's resource session's when one resolves, else
     <project>/.claude/scratch/<session_id>/<role>/<agent_id>/."""
     from pathlib import Path
 
     try:
-        if _scratch_status(role, target, data) not in ("sibling", "system_temp"):
+        if _scratch_status(role, target, data) == "owner":
             return
         own, binding = _main_scratch(data), _owner_binding(role, data)
         if not own and binding is not None:
@@ -1842,6 +1842,10 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
                 _note_bash_write_target(data, target)
             if check_tool in WRITE_TOOLS:
                 _note_own_scratch(role, data, target)
+            elif tool_name == "Monitor":  # the CLI's sleep guard names it: name a wait the role may run
+                sys.stderr.write("tool-policy.v1 note: to wait for a condition, run the loop in a foreground Bash call "
+                                 "(timeout up to 600000 ms): until <check>; do sleep 2; done; "
+                                 "to wait for a command you started, run it with run_in_background: true.\n")
             _note_inflight_token_route(role, tool_name, target)
             sys.exit(2)
         if check_tool in WRITE_TOOLS:

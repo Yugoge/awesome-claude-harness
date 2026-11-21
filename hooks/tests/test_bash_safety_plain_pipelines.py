@@ -122,7 +122,7 @@ def test_a_word_that_is_only_data_passes(sandbox, command):
 
 KILL_SIG = "kill with signals is refused"
 KILL_PID = "kill with PIDs is refused"
-KILLALL = "Killing claude/docker processes"
+KILLALL = "Killing processes by name or pattern"
 COMPOSE = "docker-compose down/stop/restart"
 WORKFLOW = "workflow state files"
 MUST_REFUSE = [
@@ -130,7 +130,7 @@ MUST_REFUSE = [
     ("if kill -9 4242; then echo done; fi", KILL_SIG),
     ("for p in 1 2; do kill -TERM $p; done", KILL_SIG),
     ("date | kill -9 4242", KILL_SIG),
-    ("ps aux | awk '{print $2}' | xargs kill -9", KILL_SIG),
+    ("ps aux | awk '{print $2}' | xargs kill -9", KILLALL),
     ("grep -rn x src | sort; if true; then kill -KILL 4242; fi", KILL_SIG),
     # behind a launcher the parser does not know, beside plain pipelines
     ("uv run kill -9 4242", KILL_SIG),

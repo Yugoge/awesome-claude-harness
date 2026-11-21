@@ -133,20 +133,16 @@ the dev report.
 ### Step 3: Resolve the disposition; complete the cycle when incomplete (skip if BULK=true)
 
 `--force` never skips this step, and `--dry-run` completes the cycle here exactly as a real run
-does: only the commit itself is previewed. One Bash call binds the close-report's path (used
-inside the call only), prints its mtime in epoch seconds (nothing when there is no file), and
-prints the task's disposition at the close stage, the dev stage plus a close-report whose last
-non-empty line classifies `yes`:
+does: only the commit itself is previewed. One Bash call prints the task's disposition at the
+close stage, the dev stage plus a close-report whose last non-empty line classifies `yes`:
 
 ```bash
-CLOSE_REPORT="$(bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-close-report.sh" "$TASK_ID")" || true
-stat -c %Y "$CLOSE_REPORT" 2>/dev/null || stat -f %m "$CLOSE_REPORT" 2>/dev/null || true
 python3 "${CLAUDE_HOME:-$HOME/.claude}"/scripts/resolve-dev-artifact-chain.py --disposition --stage close --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>"
 ```
 
 Its output is data, read verbatim:
 
-- `DISPOSITION=chain_pass`: go on to check 3, then Step 4.
+- `DISPOSITION=chain_pass`: go on to Step 4.
 - `DISPOSITION=incomplete`: complete the cycle, then run this call again, until it prints
   `chain_pass`. Each `GAP artifact=<path> problem=<code>: <message> lane=<lane>` line on an
   artifact other than the close-report is a dev-stage gap: route it (Routes). The gap on the
@@ -163,12 +159,6 @@ The same output carries a `/dev` task's chain data fields (`mode`, `lanes`, `rep
 `CHAIN=` line: each run binds `ARTIFACT_CHAIN` to that JSON verbatim (empty for a `/do` task,
 whose run prints none), and `close.md` Steps 1-2, Step 5 and Step 7 read the latest run's.
 No second chain call is made.
-
-**Check 3 — close-report age (advisory, never aborts)**: if the `chain_pass` run's mtime is older
-than 86400 seconds (24 h), print `Close-gate: WARNING — close-report for task ${TASK_ID} is older
-than 24h (mtime: <mtime>). Proceeding — staleness is advisory. Re-run /close if the tree has
-drifted since this approval.` and continue. Age alone never blocks a commit: Step 6 reviews every
-planned file's actual change vs HEAD on every invocation.
 
 ### Step 4: Deprecated --force usage audit (only when FORCE=true)
 
@@ -606,9 +596,9 @@ predicate is anchored to the current `TASK_ID`; an artifact of another cycle is 
    Exactly one matching line whose path exists is the spec to update; print `WARNING: linked via
    close-report, not context.spec_path`.
 3. **Specs of this cycle.** Otherwise take the files `<DEV_DOCS_ROOT>/specs/spec-YYYYMMDD-HHMMSS.md`
-   (that basename form only) modified between 24 hours before and 1 hour after the close report's
-   modification time and holding the literal line `<!-- spec-continuation-of: <TASK_ID> -->`. That
-   line is the only content test: no other search, no free-form scan of a spec.
+   (that basename form only) holding the literal line `<!-- spec-continuation-of: <TASK_ID> -->`,
+   whenever they were modified. That line is the only content test: no other search, no free-form
+   scan of a spec.
 4. **Outcome (advisory: print, dispatch nothing).** No file: `No spec associated with task-id
    <TASK_ID>`. One file: `spec produced this cycle but not linked in context: <path>`. Several:
    `multiple specs produced this cycle without context linkage: <paths>; explicit context.spec_path

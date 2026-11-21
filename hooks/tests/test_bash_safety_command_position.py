@@ -59,7 +59,7 @@ def test_a_command_that_only_names_the_words_passes(sandbox, command):
 # The commands the rules exist for, with the refusal each must give.
 KILL_SIG = "kill with signals is refused"
 MUST_REFUSE = [
-    ("pgrep -f vite | xargs kill -9", KILL_SIG),
+    ("pgrep -f vite | xargs kill -9", "Killing processes by name or pattern"),
     ("sudo kill -9 4242", KILL_SIG),
     ("timeout 5 kill -TERM 4242", KILL_SIG),
     ("kill -09 4242", KILL_SIG),
@@ -71,7 +71,7 @@ MUST_REFUSE = [
     ("cp a /etc/docker/daemon.json", "Modifying Docker daemon config"),
     ("sed -i s/a/b/ /etc/docker/daemon.json", "Modifying Docker daemon config"),
     ('T=~/.claude/todos/; rm -rf "$T"', "workflow state files"),
-    ("pkill -f claude", "Killing claude/docker processes"),
+    ("pkill -f claude", "Killing processes by name or pattern"),
     # wrappers, path forms and payloads
     ("/bin/kill -9 4242", KILL_SIG),
     ("env X=1 nohup kill -KILL 4242", KILL_SIG),
@@ -79,7 +79,7 @@ MUST_REFUSE = [
     ("find /proc -maxdepth 1 -name 4242 -exec kill -9 {} \\;", KILL_SIG),
     ("kill -s KILL 4242", KILL_SIG),
     ("sudo kill 4242", "kill with PIDs is refused"),
-    ("sudo killall -9 docker", "Killing claude/docker processes"),
+    ("sudo killall -9 docker", "Killing processes by name or pattern"),
     ("docker compose -f compose.yml down", "docker-compose down/stop/restart"),
     ("sudo docker-compose stop", "docker-compose down/stop/restart"),
     ("docker system prune --all", "docker system prune -a"),
@@ -161,7 +161,7 @@ def test_round2_a_word_outside_the_verb_position_passes(sandbox, command):
 # before command position, so a launcher or git/pager form the parser does not classify loses no refusal.
 COMPOSE = "docker-compose down/stop/restart"
 UNIT = "refused for production services"
-KILLALL = "Killing claude/docker processes"
+KILLALL = "Killing processes by name or pattern"
 PRUNE = "docker system prune -a"
 MUST_REFUSE_ROUND3 = [
     ("dd if=/dev/zero of=/dev/fd/3 3</dev/sda", DISK),

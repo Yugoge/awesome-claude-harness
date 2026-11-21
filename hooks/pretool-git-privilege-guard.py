@@ -9,7 +9,8 @@ Refused for an agent:
   - git commit, unless a /commit grant bound to the commit's repository,
     branch and HEAD authorizes it, or its subject is
     `auto-bulk: end-of-cycle commit for <branch>` while a /commit --bulk
-    sentinel is live. Stderr literal: `BLOCKED: agent git commit`.
+    sentinel is live, or its repository lies wholly in the caller's own scratch
+    directory (_own_scratch_commit). Stderr literal: `BLOCKED: agent git commit`.
   - git merge (any form; /merge merges inside hooks/merge.sh, whose subprocess
     no hook sees). Stderr literal: `BLOCKED: agent git merge`.
   - git push (any form; /push pushes inside hooks/push.sh). Stderr literal:
@@ -182,8 +183,11 @@ _GIT_REDIRECT_ENV_VARS = shell_parse.GIT_REDIRECT_ENV_VARS
 _GIT_REDIRECT_FLAGS = shell_parse.GIT_REDIRECT_OPTS
 
 
+_COMMIT_NOTE = ''  # names the caller's own scratch directory on a commit refusal (_evaluate_commit)
+
+
 def _block(message):
-    sys.stderr.write(message)
+    sys.stderr.write(message + _COMMIT_NOTE)
     sys.exit(2)
 
 
@@ -1057,7 +1061,50 @@ def _grant_provenance_refusal(grant, grant_path, data):
     return ''
 
 
+_SCRATCH_CALL_GIT = ('add', 'commit', 'status', 'log', 'diff', 'show', 'rev-parse', 'ls-files')
+
+
+def _own_scratch_commit(command, data):
+    """(True when every commit of `command` lands wholly inside the caller's own scratch directory, the note
+    naming that directory or ''). Own: the write policy's one definition (lib/bash_safety_rules._scratch_owner,
+    removal=False). The call runs only cd/pushd and git _SCRATCH_CALL_GIT with no option but -C and user.* config,
+    no GIT_ word and no write but /dev/null, so nothing in it repoints the repository first; each commit's
+    directory is followed through its cds (shell_parse.CdScopes) and -C, and the repository git finds there
+    now (work tree, git dir, common dir, objects, index; real paths, the hook's environment) must lie in it.
+    A directory not there yet, an unknown cd or any doubt is no answer: False."""
+    from lib import bash_safety_rules, locations
+    owns, note = bash_safety_rules._scratch_owner(data, removal=False)
+    note = note and note + ('\nA throwaway repository whose work tree and git directory both lie there, made by '
+                            '`git init` in an earlier call, commits there without a grant.\n')
+    script = shell_parse.parse(command)
+    sites, invocations = _git_view(command)
+    if script.error is not None or 'GIT_' in command or not invocations or any(
+            k not in {at for at, _inv in invocations}
+            and shell_parse.resolve(site.cmd).name not in shell_parse.CWD_BUILTINS for k, site in enumerate(sites)):
+        return False, note
+    if any(t.path != locations.NULL_DEVICE for t in shell_parse.write_targets(script, raw=command)):
+        return False, note
+    scopes, cwd = shell_parse.CdScopes(command).run(script), _hook_cwd(data)
+    for _at, inv in invocations:
+        if (inv.subcommand not in _SCRATCH_CALL_GIT or inv.unresolved or None in inv.C_dirs
+                or any(opt != '-C' and opt not in shell_parse.GIT_CONFIG_OPTS for opt, _v in inv.global_opts)
+                or any(not str(key).startswith('user.') for key, _v in inv.config_pairs)):
+            return False, note
+        for d in scopes.of(inv.word) if inv.subcommand == 'commit' else ():
+            top = os.path.join(cwd, d, *inv.C_dirs)
+            paths = [] if d == '?' else _git_output([
+                '-C', top, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--absolute-git-dir',
+                '--git-common-dir', '--git-path', 'objects', '--git-path', 'index']).splitlines()
+            if len(paths) != 5 or not all(owns(os.path.realpath(p)) for p in [top] + paths):
+                return False, note
+    return True, note
+
+
 def _evaluate_commit(command, data):
+    global _COMMIT_NOTE
+    owned, _COMMIT_NOTE = _own_scratch_commit(command, data)
+    if owned:
+        return
     cwd = _hook_cwd(data)
     if _auto_bulk_subject(command, cwd):
         # The auto-bulk subject authorizes nothing by itself: a live /commit --bulk

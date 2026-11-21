@@ -3578,3 +3578,82 @@ def test_rc2_merge_sh_with_its_output_redirected_is_step_5s_call(env, repo):
     assert gate.step5_call(f"bash {HOOKS}/merge.sh feature 2>&1", gate.MERGE_CALL, "feature")
     assert gate.step5_call(f"bash {HOOKS}/merge.sh feature > /dev/null", gate.MERGE_CALL, "feature")
     assert not gate.step5_call(f"bash {HOOKS}/merge.sh other 2>&1", gate.MERGE_CALL, "feature")
+
+
+# The owner-only gap, from the recorded loop (neutral values): a /commit span open since an earlier turn, a later turn
+# the owner opened with /restart, the agent's grant call refused ("no live /commit user-intent sentinel"), and the
+# /commit Stop demanding the Task-id commit at every Stop of that turn. Only write-commit-grant.py's grant lands that
+# commit, and it mints only while the owner's /commit stands, so no agent action in that turn closes the gap.
+GRANT_REFUSED = ("Cannot write commit grant: no live /commit user-intent sentinel for session. A commit grant may "
+                 "only be minted from within an actual /commit (non-bulk) invocation. Invoke /commit from a fresh "
+                 "turn.")
+
+
+def later_turn(env, *extra):
+    """The recorded shape: /commit <task> typed, the cycle's other gaps ``extra``, then a /restart turn whose grant
+    call is refused and whose last text says the commit waits for the owner's /commit."""
+    task_file(env)
+    env.tx.command("commit", FAMILY)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY) + list(extra)
+    env.tx.say("Step 5 stopped: the grant was refused in an earlier turn.")
+    env.tx.command("restart", "back, carry on")
+    env.tx.tool("Bash", {"command": f"python3 scripts/write-commit-grant.py --task-id {FAMILY}"}, ok=False,
+                result=GRANT_REFUSED)
+    env.tx.say(f"The grant is refused in this turn; please type /commit {FAMILY}.")
+
+
+def owner_line(task=FAMILY):
+    return f"{gate.OWNER_ONLY}/commit {task}; GAP artifact=. problem=MISSING_TASK_TRAILER: no commit reachable " \
+           f"from HEAD carries Task-id: {task} lane=-"
+
+
+def test_owner_only_a_commit_only_the_owners_typed_commit_can_land_ends_the_turn_and_names_the_command(
+        env, monkeypatch, capsys):
+    """Behaviour 1: the turn ends; the owner reads what is still open and the exact command to type."""
+    later_turn(env)
+    assert run(env) == (0, f"COMMAND_GATE /commit: open for the owner\n- {owner_line()}\n")
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps(env.payload)))
+    assert gate.main([]) == 0
+    assert json.loads(capsys.readouterr().out) == {"systemMessage": run(env)[1]}
+
+
+def test_owner_only_gaps_the_agent_can_close_are_still_demanded_and_the_commit_is_marked(env):
+    """Behaviour 2: another gap of the cycle holds the Stop as before; the Task-id line is marked as not demanded in
+    this turn, and once the agent closes the other gap the turn ends."""
+    later_turn(env, gap(f"docs/dev/close-report-{FAMILY}.md", "INVALID_CLOSE_VERDICT", "expected 'yes'"))
+    code, text = run(env)
+    assert code == 2 and f"- {owner_line()}\n" in text, text
+    assert f"- GAP artifact=docs/dev/close-report-{FAMILY}.md problem=INVALID_CLOSE_VERDICT" in text, text
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)  # the agent fixed the close report
+    assert run(env)[0] == 0
+
+
+@pytest.mark.parametrize("turn", ["typed-this-turn", "intent-live"])
+def test_owner_only_in_a_turn_the_grant_can_be_minted_the_commit_is_demanded_until_it_exists(env, turn):
+    """Behaviour 3: the owner typed /commit in this turn, or the grant writer's own check of the owner's /commit holds
+    for the session (its user-intent sentinel, fresh): the Task-id commit is demanded, unmarked, until it exists. The
+    agent's own words make no gap the owner's."""
+    task_file(env)
+    env.tx.command("commit", FAMILY)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    if turn == "intent-live":
+        env.tx.command("restart", "back")
+        (env.state / f"claude-commit-userintent-{SID}.flag").write_text("true")
+    env.tx.say(f"Only the owner can land this; please type /commit {FAMILY}.")
+    code, text = run(env)
+    assert code == 2 and gate.OWNER_ONLY not in text and "problem=MISSING_TASK_TRAILER" in text, text
+    env.fake.answers[(FAMILY, "commit")] = []  # the landed commit
+    assert run(env) == (0, "")
+
+
+def test_owner_only_an_intent_past_the_grant_writers_window_mints_nothing(env):
+    """The grant writer's window (its _USERINTENT_WINDOW_MINUTES) is the gate's: a sentinel older than that mints no
+    grant, so in a later turn the commit is the owner's again."""
+    later_turn(env)
+    flag = env.state / f"claude-commit-userintent-{SID}.flag"
+    flag.write_text("true")
+    assert run(env)[0] == 2
+    window = gate._script("scripts/write-commit-grant.py")._USERINTENT_WINDOW_MINUTES
+    old = datetime.now().timestamp() - 60 * (window + 1)
+    os.utime(flag, (old, old))
+    assert run(env)[0] == 0

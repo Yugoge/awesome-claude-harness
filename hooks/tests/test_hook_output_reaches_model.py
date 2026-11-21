@@ -102,18 +102,6 @@ def test_quality_gate_warns_through_additional_context(tmp_path, repo):
     assert _context(p.stdout, "PreToolUse").startswith(f"QUALITY GATE WARNING — {repo / 'a.py'}:")
 
 
-def test_bulk_commit_detector_warns_through_additional_context(tmp_path, repo):
-    for part in ("hooks", "commands", "scripts"):
-        (repo / part).mkdir()
-        (repo / part / "f.txt").write_text("x\n")
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    p = _run("pretool-bulk-commit-detector.py",
-             {"tool_name": "Bash", "tool_input": {"command": "git commit -m 'chore(claude): sync all uncommitted'"}},
-             _env(tmp_path), repo)
-    assert p.returncode == 0 and p.stderr == ""
-    assert "WARN (bulk-commit-detector, not blocking)" in _context(p.stdout, "PreToolUse")
-
-
 def test_prompt_purity_warns_the_orchestrator_through_additional_context(tmp_path, repo):
     prompt = "Fix the parser. Run `grep -rn foo src && pytest -q` first."
     p = _run("pretool-orchestrator-prompt-purity.py",

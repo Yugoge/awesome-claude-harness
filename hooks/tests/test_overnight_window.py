@@ -5,7 +5,7 @@ Acceptance 6 (time-lock in any timezone, the locator per isolation kind),
 8 (a forged token releases nothing; a human-typed /stop does) and 10 (the
 closeout on disk) at unit level and through the real hooks as subprocesses,
 on throwaway git repositories. Since P5 the time-lock is the Stop gate's step 4
-(hooks/stop-command-gate.py; stop-overnight-timelock.py is an exit-0 stub) and
+(hooks/stop-command-gate.py; the old stop-overnight-timelock.py is retired) and
 the closeout after end_time is a gap of the /dev-overnight span's predicate, so
 these cases run the gate: a session's Stop inside the window in any span, and a
 /dev-overnight Stop after end_time whose checklist is complete.

@@ -99,7 +99,7 @@ def test_a_monitors_probe_loop_passes(sandbox):
 # What the rules exist to stop: a signal sent to a process, by number or by pattern, in each of those positions.
 KILL_SIG = "kill with signals is refused"
 KILL_PID = "kill with PIDs is refused"
-KILL_FAMILY = "claude/docker processes is refused"
+KILL_FAMILY = "Killing processes by name or pattern"
 RUNTIME_GUARD = "[protected-runtime-guard] BLOCK"
 SIGNALS = [
     ("if kill -9 4242 2>/dev/null; then echo killed; fi", KILL_SIG),

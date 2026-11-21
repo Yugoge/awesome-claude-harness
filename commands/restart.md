@@ -15,10 +15,12 @@ CLAUDE.md lesson 16. Inside `/dev-overnight` the session's own wake (`commands/d
 Step 0) runs the same procedure with no human; with 0 candidates it finalizes and the session
 carries on with its checklist step in progress.
 
-Usage: `/restart` or `/restart <guidance text>`. The guidance is the operator's words after the
+Usage: `/restart`, `/restart <guidance text>`, or either with `--cross-account` as the first
+word after the command (step 2). The guidance is the operator's words after the
 command, verbatim, with no length limit. With candidates it rides inside each `resume_message`
 that prepare returns; with none, step 7 reads it. The mechanics sit in hooks:
-`hooks/userprompt-restart-authorize.py` issues the capability and persists the guidance,
+`hooks/userprompt-restart-authorize.py` issues the capability, persists the guidance and
+prepares the recovery set (step 2),
 `hooks/posttool-restart-sendmessage.py` journals each send and
 `hooks/subagentstop-restart-track.py` records response evidence, all on
 `hooks/lib/subagent_restart.py` and pinned by `tests/test_restart_command.py`.
@@ -31,7 +33,17 @@ so the steps below are the rule.
    `RESTART_BLOCKED_TOOL_UNAVAILABLE` and tell the user to restart Claude Code with this harness
    loaded, resume this parent session with `claude --resume <session-id>`, and invoke `/restart`
    again. Do not fall back to `Agent`.
-2. **Prepare the recovery set.**
+2. **Read the recovery set.** On a typed `/restart`, `hooks/userprompt-restart-authorize.py`
+   has already prepared it: right after issuing the capability it ran the prepare command below
+   and handed its stdout, verbatim, to this turn's context between the line
+   `[/restart] RECOVERY SET PREPARED (the output of restart-subagents.py prepare, verbatim):` and
+   the line `[/restart] END OF RECOVERY SET`. That JSON is step 2's result: read it and go on
+   with step 3; do not run prepare again. Run the prepare command yourself only when that block is
+   absent or cut short (no END line): the context holds the line `[/restart] RECOVERY SET NOT PREPARED:` instead (preparing
+   ran past the hook's time budget, or the helper failed, the reason named on that line), or
+   neither line (the hook did not run to its end: an install without it, or its time limit), or no
+   `/restart` was typed (the overnight wake, `commands/dev-overnight.md` Step 0). A payload with no
+   session id never gets this far: the capability cannot be issued, so the hook refuses the prompt.
 
    ```text
    python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/restart-subagents.py" prepare
@@ -44,17 +56,32 @@ so the steps below are the rule.
    the SendMessage gate's. Its output is the candidate set of THIS parent session's own transcript (after
    `claude --resume` it carries the interrupted history forward); other sessions and accounts are
    not scanned by default, and children that finished (a terminal `end_turn` report) are already
-   excluded, so do not re-judge the list. Only when the operator asks for the account-rotation case
-   (another account's recent session in this project, scanned only when `CLAUDE_RESTART_ACCOUNTS_ROOT`
-   names the accounts root), append `--cross-account` to the prepare command; a foreign-origin
-   candidate can be resumed only from a state prepared with it. A `candidate_count` of `0` has
-   nothing to resume and sends no message: skip steps 3-4 and follow
-   [Zero-candidate continuation](#zero-candidate-continuation). Step 5 is not skipped on either
-   path; the zero-candidate path reaches it from its step 6.
+   excluded, so do not re-judge the list. The account-rotation case (another account's
+   session in this project, scanned only when `CLAUDE_RESTART_ACCOUNTS_ROOT` names the accounts
+   root) is prepared with `--cross-account`: typed as the first word after the command
+   (`/restart --cross-account [guidance]`), the hook passes it to prepare itself, and the block's
+   `cross_account` is `true` (the guidance is still the whole argument, verbatim); asked for in
+   words instead, run the prepare command with `--cross-account` appended, whose output then
+   replaces the block. A foreign-origin candidate can be resumed only from a state prepared with
+   it. The cross-account sweep reads every other session of this project, newest first, up to
+   `CLAUDE_RESTART_SIBLING_MAX_BYTES` (default 256 MiB); copies of this session under other
+   accounts are always read and their children are ordinary candidates.
+   The interrupted children of a session last written more than
+   `CLAUDE_RESTART_SIBLING_WINDOW_SECONDS` ago (default a day) are listed apart in
+   `older_candidates`, each with its `session_last_written`, and a line of `warnings` says so.
+   Resume an older candidate (in step 3, as any other) only when the operator's guidance asks for
+   it, by naming it or by asking for everything; otherwise report them in one line (how many, the
+   newest `session_last_written`) and leave them: an older candidate nobody resumed holds back no
+   finalize. A `siblings_not_read` count means the byte bound was reached: report it in one line
+   with its `newest` age; the state file names each transcript left unread. A `candidate_count`
+   of `0` with no older candidate to resume has nothing to resume and sends no message: skip
+   steps 3-4 and follow [Zero-candidate continuation](#zero-candidate-continuation). Step 5 is
+   not skipped on either path; the zero-candidate path reaches it from its step 6.
 3. **Resume every pending candidate.** In one parallel tool-call batch where supported, call
-   `SendMessage` exactly once for every candidate whose status is `pending`. A `dispatched`
+   `SendMessage` exactly once for every candidate whose status is `pending` (and every older
+   candidate step 2 says to resume). A `dispatched`
    candidate is already running: wait for it and never enqueue a duplicate message. Use its exact
-   `agent_id` as `to` and the exact `resume_message` emitted by the prepare command as `message`.
+   `agent_id` as `to` and the exact `resume_message` step 2's set holds as `message`.
    Do not edit, summarize, prefix, suffix, translate, or otherwise rewrite that message.
 4. **Wait for response evidence.** After all sends return, run the helper with a tool timeout of
    at least 600000 ms:
@@ -83,7 +110,8 @@ so the steps below are the rule.
 
 ## Zero-candidate continuation
 
-`candidate_count` from step 2 is the only discriminator. Greater than `0` runs steps 3-5 and the
+`candidate_count` from step 2 is the only discriminator (older candidates the guidance asks
+for count with it). Greater than `0` runs steps 3-5 and the
 guidance rides along with each resume. Exactly `0` runs steps 6-8 in place of steps 3-4, and step 6
 makes the step 5 finalize call. A zero count with `candidates: []` is a complete, valid result,
 never an error to retry.
@@ -126,7 +154,8 @@ never an error to retry.
   never issues the directive to itself.
 - **DO NOT call `Agent` or `Task`** to replace an interrupted subagent or to stand in for the main
   agent in step 8, and do not copy a transcript into a fresh prompt and call that a restart.
-- **DO NOT omit any candidate**, even if its last transcript entry looks nearly complete.
+- **DO NOT omit any candidate** of `candidates`, even if its last transcript entry looks nearly
+  complete. `older_candidates` follow step 2's rule instead.
 - **DO NOT overwrite the active `/dev`, `/redev`, `/spec` or `/dev-overnight` TodoWrite/workflow
   bookmark, nor complete its steps before step 5.** `/restart` is an orthogonal control operation
   with no todo script: `hooks/pretool-workflow-gate.py` exempts only the exact, unchained helper

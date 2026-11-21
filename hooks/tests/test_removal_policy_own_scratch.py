@@ -294,7 +294,7 @@ def test_the_owner_test_is_the_write_policys_own(project, monkeypatch):
             assert owns(path) == (policy._scratch_status(role, path, payload) == "owner"), (caller, path)
         assert bool(note) == bool(caller), (caller, note)
     source = open(os.path.join(HOOKS_DIR, "lib", "bash_safety_rules.py"), encoding="utf-8").read()
-    body = source[source.index("def _scratch_owner(payload):"):source.index("def removal_policy(payload_text, command):")]
+    body = source[source.index("def _scratch_owner(payload"):source.index("def removal_policy(payload_text, command):")]
     assert "_scratch_status(" in body and "_note_own_scratch(" in body
     assert '"scratch"' not in body and "'scratch'" not in body and "session_resources" not in body, \
         "the removal policy composes no scratch path of its own"

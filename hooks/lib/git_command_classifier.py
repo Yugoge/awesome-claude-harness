@@ -25,9 +25,10 @@ Where an invocation is found:
     only cat, tee or another data reader reads runs just its expansion's
     substitutions, unless the text holds a group, a compound command or an
     `exec` with redirections; one written to a file is data only when every
-    other command of the text is inert and writes nothing (cat, ls, grep, ...),
-    the file may land as data (_is_code_file: no hidden or `hooks` component,
-    not under `~`, absolute only under /tmp), and the here-document is in the
+    other command of the text is inert and writes nothing (cat, ls, grep, cut,
+    cd when every written path is absolute, ...), the file may land as data
+    (_is_code_file: no hidden or `hooks` component, not under `~user`, outside
+    the project and temp roots no `bin`, `sbin` or `etc` one), and the here-document is in the
     tool command itself, not in a `-c` string or substitution);
   - every shell `-c` string, every program option's value (`rg --pre`), and
     what echo or printf print into a pipe a shell reads, each read as a
@@ -237,7 +238,6 @@ _DEGRADE = (re.compile(r'[\'"`\\]'), re.compile(r'[\'"`\\$()<>]'))
 _MAX_DATA_DEPTH = 16
 # Characters without which quoted text holds no command after a separator.
 _DATA_HINT_RE = re.compile(r'[;\n|&`(]')
-_NOT_DROPPABLE_RE = re.compile(r'\n|\$\(|<\(|>\(|`')
 
 
 class _Cmd:
@@ -358,28 +358,30 @@ def _opens_compound(cmd):
 # many ways to run a file (`sh < x.sh`, `cat x.sh | sh`, `sh x.*`, `cp x.sh y
 # && sh y`, `xargs`, `find -exec`, `make`) need no list of their own.
 #
-# Inert commands print, count, list, test or make directories, run nothing
+# Inert commands print, count, cut, list, test or make directories, run nothing
 # they are given and, as _is_inert requires, write nothing. chmod is absent
-# (its +x is the step to running a file), cd (it moves the written file's
-# relative path into `.git/` or a home directory), git (its config and
+# (its +x is the step to running a file), cd unless every written path is
+# absolute (it moves a relative one into `.git/` or a home directory), git (its config and
 # attributes run programs: `core.fsmonitor`, `diff.external`), cp, mv, xargs,
 # find, make, tee and every shell and interpreter.
 _INERT_COMMANDS = frozenset({
     'cat', 'head', 'tail', 'wc', 'ls', 'echo', 'printf', 'test', '[',
-    'true', 'false', 'mkdir', 'pwd',
+    'true', 'false', 'mkdir', 'pwd', 'cut', 'tr',
 })
 # grep and rg are inert as text owners (_is_text_only).
 _INERT_TEXT_OWNERS = frozenset({'grep', 'rg'})
 # Where a written here-document may land as data. The rule is closed: a path
 # with a hidden component (`.git/`, `.bashrc`, `.claude/`, `.vscode/`,
 # `.config/`, and `..`, which leaves the tree), one with a `hooks` component
-# (`core.hooksPath`), an absolute or home (`~`) one outside the project and
-# the temp roots (lib/locations.data_parts: the project wherever it is checked
-# out; its managed scratch `.claude/scratch/` counts from below that folder),
-# and one of these names (any case, files a tool runs by name) is code. Names
-# a tool runs that need no dot:
+# (`core.hooksPath`), one under `~user`, a device or /proc name, an absolute
+# one outside the project and the temp roots (lib/locations.data_parts: the
+# project wherever it is checked out; its managed scratch `.claude/scratch/`
+# counts from below that folder) with a `bin`, `sbin` or `etc` component, as
+# written or resolved, and one of these names (any case, files a tool runs by
+# name) is code. Names a tool runs that need no dot:
 _CODE_FILES = frozenset({'makefile', 'gnumakefile', 'gitconfig'})
 _CODE_DIRS = frozenset({'hooks'})
+_SYSTEM_CODE_DIRS = _CODE_DIRS | {'bin', 'sbin', 'etc'}
 # Commands that copy their input to a file a word of theirs names.
 _FILE_COPIERS = frozenset({'cp', 'mv', 'ln', 'install', 'truncate', 'dd'})
 _NULL_FILES = locations.STD_SINKS
@@ -427,15 +429,19 @@ def _written_paths(cmds, k, end):
 
 def _is_code_file(path):
     """True iff a here-document written to path may be run or read as code by a tool (see _CODE_FILES)."""
-    rel = locations.data_parts(path)
+    rel, dirs = locations.data_parts(path), _CODE_DIRS
     if rel is None:
-        return True
+        full = os.path.expanduser(path); real = os.path.realpath(full)  # noqa: E702
+        if not os.path.isabs(full) or any(locations.is_device(p) or locations.below(locations.absolute(p), locations.PROC_DIR)
+                                          is not None for p in (full, real)):  # as written and resolved
+            return True
+        rel, dirs = os.path.normpath(full).split('/')[1:] + real.split('/')[1:], _SYSTEM_CODE_DIRS
     parts = [part.lower() for part in rel]
     return (not parts or parts[-1] in _CODE_FILES
-            or any(p.startswith('.') or p in _CODE_DIRS for p in parts))
+            or any(p.startswith('.') or p in dirs for p in parts))
 
 
-def _is_inert(cmd, written):
+def _is_inert(cmd, written, absolute=False):
     """True iff the simple command cmd is inert (_INERT_COMMANDS and the rest), as written.
 
     It stands alone: no assignment, wrapper or reserved word before its
@@ -464,7 +470,7 @@ def _is_inert(cmd, written):
         return False
     if name == 'printf' and any(v == '-v' or v.startswith('-v') for v in values[1:2]):
         return False  # `printf -v PATH .` assigns a variable
-    if name in _INERT_COMMANDS:
+    if name in _INERT_COMMANDS or (name == 'cd' and absolute):
         return True
     return name in _INERT_TEXT_OWNERS and _is_text_only(cmd.words)
 
@@ -490,20 +496,28 @@ def _here_docs_are_data(toks, cmds, k, nested=False):
         return False
     if any(cmd.redirs and _values(cmd.words)[:1] == ['exec'] for cmd in cmds):
         return False
-    j = k
-    while True:
-        if not _reads_input_as_data(cmds[j]):
-            return False
+    j = _pipe_end(cmds, k)
+    return all(map(_reads_input_as_data, cmds[k:j])) and _written_file_is_data(cmds, k, j, nested)
+
+
+def _pipe_end(cmds, k):
+    """The index past the last command of the pipe cmds[k] starts."""
+    j = k + 1
+    while j < len(cmds) and cmds[j].opener in shell_parse.PIPE_OPS:
         j += 1
-        if j >= len(cmds) or cmds[j].opener not in shell_parse.PIPE_OPS:
-            break
+    return j
+
+
+def _written_file_is_data(cmds, k, j, nested=False):
+    """True iff no command may run what the pipe cmds[k:j] writes: one answer for every reader of the text."""
     paths, unknown = _written_paths(cmds, k, j)
     if not (paths or unknown):
         return True
     if nested or unknown or any(map(_is_code_file, paths)):
         return False
     written = {_basename(p) for p in paths}
-    return all(_is_inert(cmd, written) for n, cmd in enumerate(cmds) if not k <= n < j)
+    absolute = all(os.path.isabs(os.path.expanduser(p)) for p in paths)
+    return all(_is_inert(cmd, written, absolute) for n, cmd in enumerate(cmds) if not k <= n < j)
 
 
 def _code_commands(text, depth=0, captured=False, nested=False):
@@ -787,9 +801,12 @@ def _segment_invocations(command_text, tagged=False, nested=False):
     read from quoted text a command is given.
     """
     cmds, exact = _code_commands(command_text, nested=nested)
-    droppable = (exact and not _NOT_DROPPABLE_RE.search(command_text)
+    # One line with no substitution, as the shell reads it (a newline or a
+    # backquote inside quoted text is text), and no file it writes may be run.
+    droppable = (exact and not any(cmd.opener == '\n' or _subst_bodies(cmd) for cmd in cmds)
                  and not any(cmd.opener in shell_parse.PIPE_OPS and not _is_text_only(cmd.words)
-                             and not _is_stdin_consumer(cmd.words) for cmd in cmds))
+                             and not _is_stdin_consumer(cmd.words) for cmd in cmds)
+                 and all(_written_file_is_data(cmds, k, _pipe_end(cmds, k), nested) for k in range(len(cmds))))
     for cmd in cmds:
         for inv in _invocations(cmd.words):
             yield (inv, False) if tagged else inv
@@ -907,7 +924,8 @@ def _dynamic_only_in_directory(word):
 # Text whose quoting the scan cannot follow is a residual when what follows its
 # shell `-c` is git-shaped; a string nested deeper than _MAX_SHELL_DEPTH always
 # is. A here-document is shell text only when a shell may read it
-# (_reads_as_shell); for any other reader it runs only the substitutions the
+# (_reads_as_shell) or a command of the text may run the file it is written to
+# (_written_file_is_data); otherwise it runs only the substitutions the
 # outer shell performs to expand it, and none when its delimiter is quoted.
 #
 # _runs_runtime_code fails closed: a list of dangerous programs can never be
@@ -1023,7 +1041,7 @@ _STDIN_PATHS = frozenset(('-',) + locations.STDIN_DEVICES)
 _MAX_CODE_DEPTH = 64
 
 
-def _shell_words(text, info=None):
+def _shell_words(text, info=None, nested=False):
     """Split shell text into simple commands of words, as the shell reads them.
 
     Returns (commands, bodies). A command is a list of (value, runtime) words,
@@ -1031,7 +1049,7 @@ def _shell_words(text, info=None):
     run-time part _RUNTIME; runtime is True when it holds one. bodies are the
     texts that run as commands of their own: substitution bodies, then what
     here-documents run (_here_doc_texts). Raises LexError on text the lexer
-    cannot read.
+    cannot read. nested: text is not the tool command itself (_written_file_is_data).
 
     info, a dict, receives what may feed run-time text to each command's
     standard input: info['feeds'] holds a set per command, of 'pipe' (a pipe,
@@ -1098,8 +1116,10 @@ def _shell_words(text, info=None):
     end_cmd()
     doc_fed = [False] * len(cmds)
     n_subst = len(bodies)
+    grouped = _group(toks) if docs else []
     for body, quoted, owner, stop in docs:
-        texts = _here_doc_texts(body, quoted, any(map(_reads_as_shell, cmds[owner:stop])))
+        texts = _here_doc_texts(body, quoted, any(map(_reads_as_shell, cmds[owner:stop])) or not
+                                _written_file_is_data(grouped, owner, _pipe_end(grouped, owner), nested))
         bodies.extend(texts)
         runtime = info is not None and _here_doc_is_runtime(body, quoted)
         for k in range(owner, min(stop, len(cmds))):
@@ -1231,7 +1251,7 @@ def _eval_payload(words, idx):
     return None
 
 
-def _shell_c_strings(text, fed=False):
+def _shell_c_strings(text, fed=False, nested=False):
     """Yield (kind, string, fed, built_by_code) for each shell `-c` string text runs.
 
     kind 'text': a string the scan resolved. 'runtime': one holding a value the
@@ -1245,7 +1265,7 @@ def _shell_c_strings(text, fed=False):
         return
     info = {}
     try:
-        cmds, bodies = _shell_words(text, info)
+        cmds, bodies = _shell_words(text, info, nested)
     except Exception:  # text the lexer cannot read, or nesting past the interpreter's limit
         if _SHELL_C_SHAPE_RE.search(text):
             yield 'unlexable', text, fed, False
@@ -1278,7 +1298,7 @@ def _shell_c_strings(text, fed=False):
             for j in range(n_subst))
         yield ('runtime' if runtime else 'text'), value, fed or bool(feeds), built_by_code
     for body, body_fed in zip(bodies, info['body_fed']):
-        yield from _shell_c_strings(body, fed or body_fed)
+        yield from _shell_c_strings(body, fed or body_fed, True)
 
 
 # Options whose value is a program the command runs, read as a command line of
@@ -1708,7 +1728,7 @@ def _shell_layers(command_text):
     def visit(text, depth, fed=False):
         texts.append(text.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
         codes.append((text, fed))
-        for kind, value, value_fed, built_by_code in _shell_c_strings(text, fed):
+        for kind, value, value_fed, built_by_code in _shell_c_strings(text, fed, depth > 0):
             if depth >= _MAX_SHELL_DEPTH:
                 unresolved.append(value.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
             elif kind == 'unlexable':

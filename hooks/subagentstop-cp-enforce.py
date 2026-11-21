@@ -18,8 +18,9 @@
 # stopping subagent's own running slots (agent_id = the payload's CLI agent_id,
 # which pretool-cp-checkin.py binds to the slot file that agent Read, through
 # spec-check.py register; running per hooks/lib/agent_resolver.py
-# cp_state_running, the one rule role resolution also takes) with >=1
-# checkpoint "pending". Another agent's pending checkpoints are not this
+# cp_state_running, the one rule role resolution also takes; a slot checked in
+# more than a day ago counts too, its block entry carrying stale_note's warning)
+# with >=1 checkpoint "pending". Another agent's pending checkpoints are not this
 # agent's to mark (P1c X6: a /spec split's dev and qa slots refused the spec
 # subagent's stop, a dead end). Replayed with CLI ids (P9 F-E4): an agent
 # leaving one pending is blocked until it marks it; /spec's own stop never is,
@@ -37,7 +38,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 
 
 def main() -> int:
-    from agent_resolver import cp_state_running  # inside main: an import error fails safe
+    from agent_resolver import cp_state_running, stale_note  # inside main: an import error fails safe
 
     mode = (os.environ.get("CP_ENFORCE_MODE", "advisory") or "advisory").strip().lower()
     try:
@@ -69,6 +70,7 @@ def main() -> int:
                     "agent_type": st.get("agent_type"),
                     "agent_id": st.get("agent_id"),
                     "pending": pend,
+                    **({"warning": stale_note(st, path)} if stale_note(st) else {}),
                 })
     except Exception:
         pending_hits = []

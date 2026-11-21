@@ -132,8 +132,8 @@ def test_commit_completes_an_unclosed_task_from_one_disposition() -> None:
     # D10 (--dry-run): the cycle completes first; no close-gate relaxation is left.
     assert "`--dry-run` completes the cycle here exactly as a real run does" in flat
     assert "DRYRUN" not in step3 and "check 2 relaxed" not in command
-    # Check 3 stays advisory; checks 1, 2 and 4 are the disposition.
-    assert "Check 3 — close-report age (advisory, never aborts)" in step3
+    # The disposition alone decides; no close-report age is read (2026-11-20).
+    assert "close-report age" not in command and "stat -c %Y" not in step3
     assert "check 4" not in command.lower() and "FORCED" not in command
     for gone in ("AWAITING_INPUT", "awaiting-input", "R15", "arbitrat", "route_finding", "owing_dispatch",
                  "pass_with_exceptions", "artifact_role", "source_check"):

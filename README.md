@@ -254,7 +254,7 @@ In words. You type a command. The orchestrator splits the work into lanes and di
 | **Shell and secrets deny list** | `settings.json` denies `sudo`, `rm -rf`, `dd`, `mkfs`, force-push, `git reset --hard`, `systemctl restart`, `kubectl delete` and package publish. It denies `Read` on `.env` files, keys, credentials and secret files. `Edit` and a shell redirect are refused on all of them but keys. A shell read is not refused. |
 | **UI-audit skills** | Playwright review: axe-core injection, APCA contrast, an anti-pattern catalog, a state matrix, token conformance, a weighted beauty score. |
 | **Ask-first round** | `/spec`, `/dev`, `/redev` and `/dev-command` ask you first. Intent, scope, edge cases, acceptance. In Claude Code's question dialog. A skipped question settles to its stated default. |
-| **Hard Stop gate** | `/dev`, `/close`, `/commit` and the other gated commands cannot end until code confirms their todo list and artifacts. `/stop` is your exit. An environment switch turns it off. The shipped settings never set it. |
+| **Hard Stop gate** | `/dev`, `/close`, `/commit` and the other gated commands cannot end until code confirms their todo list and artifacts. A commit only your own typed `/commit` can land holds nothing: the turn ends naming the command to type. `/stop` is your exit. An environment switch turns it off. The shipped settings never set it. |
 | **Parallel lanes, no phases** | Several outcomes run as parallel lanes in one cycle. QA fails a plan that phases or defers one. |
 | **Declared obligations** | Each dispatch declares the artifacts its agent owes. A hook checks them when the agent stops, while its context still exists. |
 | **Usage-limit resume** | `/restart` resumes each interrupted agent by its original id. Never a replacement. |
@@ -268,7 +268,7 @@ In words. You type a command. The orchestrator splits the work into lanes and di
 Every agent commit, push, merge and hard reset is refused. Something you typed lets one through. It covers the main agent and every subagent, interactive or overnight. Only `/harness off` switches it off. Built from the two incidents above. Scars, not hypotheticals. The code names both, with dates. Interactive matters. The ninety-three-file push happened in one.
 
 - **Grants.** `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. `/do` is the main agent's, for one turn, and only where the protected branch cannot move. It never covers a commit or a push. A command that starts with `git reset --hard` also meets the `settings.json` deny, which nothing lifts.
-- **Stays free.** Read-only git, `add`, a checkout or `restore` of a single file, `stash list`, `show` and `pop`.
+- **Stays free.** Read-only git, `add`, a checkout or `restore` of a single file, `stash list`, `show` and `pop`. A commit in a throwaway repository that lies wholly inside the agent's own scratch directory.
 - **Limits.** `/push` and `/merge` run git inside their own wrappers. No hook sees inside.
 
 <details>

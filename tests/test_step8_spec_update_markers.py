@@ -70,6 +70,26 @@ def test_stage4_unlinked_spec_prints_and_dispatches_nothing(tmp_path: Path) -> N
     assert "DISPATCHED" not in proc.stderr and "dispatch" not in proc.stdout.lower()
 
 
+def test_stage3_finds_the_marked_spec_whenever_it_was_modified(tmp_path: Path) -> None:
+    """The continuation line names the task exactly: a cycle of several days still finds its spec, an
+    unmarked spec is still no spec of the cycle, two marked specs are still the "several" outcome."""
+    docs = _docs(tmp_path)
+    (docs / "specs").mkdir()
+    old, plain, again = (docs / "specs" / f"spec-2026010{n}-000000.md" for n in (1, 2, 3))
+    old.write_text(f"# spec\n<!-- spec-continuation-of: {TASK} -->\n", encoding="utf-8")
+    plain.write_text("# spec\n", encoding="utf-8")
+    report = (docs / f"close-report-{TASK}.md").stat().st_mtime
+    for spec in (old, plain):
+        os.utime(spec, (report - 3 * 86400, report - 3 * 86400))
+    proc = _run(docs)
+    assert f"STEP8_UNLINKED_SPEC: task-id={TASK} count=1 paths={old}" in proc.stderr, proc.stderr
+    assert f"spec produced this cycle but not linked in context: {old}" in proc.stderr
+    again.write_text(f"<!-- spec-continuation-of: {TASK} -->\n", encoding="utf-8")
+    proc = _run(docs)
+    assert f"STEP8_UNLINKED_SPEC: task-id={TASK} count=2 paths={old},{again}" in proc.stderr, proc.stderr
+    assert f"multiple specs produced this cycle without context linkage: {old},{again}" in proc.stderr
+
+
 def _step8_text() -> str:
     text = COMMIT_MD.read_text(encoding="utf-8")
     start = text.index("### Step 8:")
@@ -84,12 +104,12 @@ def test_the_text_names_the_markers_the_script_emits() -> None:
     assert skips and set(re.findall(r"STEP8_SKIPPED: (\w+)", step)) == skips
 
 
-def test_the_text_orders_the_scripts_continuation_pattern_and_window() -> None:
+def test_the_text_orders_the_scripts_continuation_pattern_and_marker() -> None:
     spec = importlib.util.spec_from_file_location("step7_spec_update", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     step = re.sub(r"\s+", " ", _step8_text())
     assert re.search(r"match each line against ``(.+?)`` \(", step).group(1) == module.CONTINUATION_RE.pattern
-    assert "modified between 24 hours before and 1 hour after the close report's modification time" in step
+    assert "holding the literal line `<!-- spec-continuation-of: <TASK_ID> -->`, whenever they were modified" in step
     assert "`<!-- spec-continuation-of: <TASK_ID> -->`" in step
 

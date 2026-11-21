@@ -11,9 +11,10 @@ call, the main agent's StopFailure). Then, in order:
             (send_policy.decide: the cut agent resumes only through /restart; no valid /restart
             capability), the one decision on the grant
   restart   the owner types /restart: the authorizer (hooks/userprompt-restart-authorize.py) mints the
-            grant, and the main agent runs restart.md's procedure as written (recovery.restart_turn):
-            prepare, one SendMessage per pending candidate with its exact resume message, the resumed
-            agent's end, status with response evidence for every candidate, finalize
+            grant and prepares the recovery set, and the main agent runs restart.md's procedure as
+            written (recovery.restart_turn): reads that set, one SendMessage per pending candidate
+            with its exact resume message, the resumed agent's end, status with response evidence
+            for every candidate, finalize
   reuse     the same SendMessage again after finalize consumed the grant: refused
 
 then a Stop. What each case showed is kept in out/facts.json ("restart no-grant", "restart",

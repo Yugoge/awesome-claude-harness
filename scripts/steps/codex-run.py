@@ -20,7 +20,8 @@ are set and each matches [A-Za-z0-9._-]+ and is neither "." nor ".."; otherwise
 
 stdout: `out=<path>` first (then the wrapper's output, for review and exec), and for detach also
 `pid=<pid>` of the detached run. The wrapper's stdout and stderr are merged into the file and its stdin
-is /dev/null. Exit: the wrapper's own status (detach: 0 once launched); 64 usage; 73 output directory
+is /dev/null. A finished foreground call updates the codex-unavailable state (hooks/lib/codex_transcript.py
+observe). Exit: the wrapper's own status (detach: 0 once launched); 64 usage; 73 output directory
 not creatable; 127 wrapper unavailable.
 """
 from __future__ import annotations
@@ -165,7 +166,9 @@ def main(argv: list[str] | None = None) -> int:
             if mode == "detach":
                 print(f"pid={run_detached(command, sink)}", flush=True)
                 return 0
-            return run_foreground(command, sink)
+            code = run_foreground(command, sink)
+        codex_transcript.observe(code, out)  # the machine's codex-unavailable knowledge, from this call's outcome
+        return code
     except Refusal as refusal:
         print(f"codex-run: {refusal}", file=sys.stderr)
         return refusal.code

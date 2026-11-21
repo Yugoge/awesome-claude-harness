@@ -114,8 +114,9 @@ def is_code_or_doc_operand(text):
     """True when a plain static path is a source-code file or a Markdown/reStructuredText document
     (`src/password_reset.py`, `docs/password-policy.md`) whose directories carry no secret word and whose base name
     is no key or exact env-file name and does not begin with the secret word as its stem (`credentials.py`,
-    `secrets.md`, `password.md` are not). Used only for the operands of cp, mv, install, rsync, ln and sed -i, which
-    the base never judged; a redirection, tee, dd, a network client's output or truncate keeps the full check."""
+    `secrets.md`, `password.md` are not). Used for every write target (`cat > src/check_secrets.py`) and for the
+    source operands of cp, mv, install, rsync and ln; a name a command whose output goes to a file reads keeps the
+    full check."""
     if not text or not PLAIN_PATH.match(text):
         return False
     name = base_name(text)

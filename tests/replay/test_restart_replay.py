@@ -3,9 +3,10 @@
 A usage limit cuts a read-only subagent. Before any /restart, restart.md's prepare only says that
 every resume send will be refused until /restart mints a grant (exit 0: it reads the grant as data),
 and the exact resume message /restart would hand the cut agent is refused by the no-background hook,
-the one decision on the grant. Then the owner's /restart: the
-authorizer mints the grant, prepare, one SendMessage with the exact resume message per candidate,
-the resumed agent's end, status with response evidence for every candidate, finalize. The same
+the one decision on the grant. Then the owner's /restart: the authorizer mints the grant and
+hands over the prepared recovery set (no prepare call follows), one SendMessage with the exact
+resume message per candidate, the resumed agent's end, status with response evidence for every
+candidate, finalize. The same
 message sent again after finalize consumed the grant is refused. The run meets no hook error, no
 block but those two refusals, and the Stop that ends it passes. The same driver is a traced replay
 of the artifact check (tests/test_artifact_graph.py).
@@ -38,6 +39,7 @@ def test_restart_without_grant_refused_then_recovered(replays, key):
     send = no_grant["send"]
     assert send["refused"] and send["text"].startswith(BLOCK) and NO_GRANT in send["text"], no_grant
 
+    assert r.fact("restart set") == {"handed_over": True}, "the typed /restart's issuer prepared no set"
     recovered = r.fact("restart")["recovered"]
     assert recovered and all(a["sent"] and a["resumed"] for a in recovered), recovered
 

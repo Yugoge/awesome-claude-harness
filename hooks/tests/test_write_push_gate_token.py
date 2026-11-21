@@ -3,8 +3,8 @@
 changelog-analyst (under /commit) and the cleaner (under /clean) both call it after
 their own commit. It resolves the token path under harness_state_dir() -- where
 hooks/push.sh reads it -- and writes only a token that would authorize /push: the
-commit is a commit object and live HEAD (the rule hooks/posttool-push-gate-token-verify.py
-applied after the fact), and no other session's token is replaced (DO NOT rule 7).
+commit is a commit object and live HEAD (the rule a retired PostToolUse hook applied
+after the fact), and no other session's token is replaced (DO NOT rule 7).
 """
 
 import hashlib
@@ -104,11 +104,3 @@ def test_not_a_repository_is_a_usage_error(tmp_path):
                            "--commit", "c"], capture_output=True, text=True,
                           env=dict(os.environ, CLAUDE_STATE_DIR=str(tmp_path / "s"), GIT_CEILING_DIRECTORIES=str(tmp_path)))
     assert proc.returncode == 2
-
-
-def test_the_retired_verify_hook_is_an_exit_0_stub():
-    hook = ROOT / "hooks" / "posttool-push-gate-token-verify.py"
-    assert any(line.startswith("# STUB:") for line in hook.read_text().splitlines())
-    proc = subprocess.run([sys.executable, str(hook)], input='{"tool_input": {"file_path": "/x"}}',
-                          capture_output=True, text=True)
-    assert proc.returncode == 0

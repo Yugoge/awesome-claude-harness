@@ -76,7 +76,8 @@ class Box:
     def env(self, **extra) -> dict:
         env = {"PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin", "HOME": str(self.home),
                "CLAUDE_PROJECT_DIR": str(self.project), "CODEX_ISO_BIN": str(self.wrapper),
-               "STUB_LOG": str(self.log), "FAKE_CODEX_MARKER": str(self.marker), "PYTHONDONTWRITEBYTECODE": "1"}
+               "STUB_LOG": str(self.log), "FAKE_CODEX_MARKER": str(self.marker), "PYTHONDONTWRITEBYTECODE": "1",
+               "CLAUDE_STATE_DIR": str(self.root)}  # a call's outcome updates the state dir (codex-unavailable)
         env.update(extra)
         return {key: value for key, value in env.items() if value is not None}
 

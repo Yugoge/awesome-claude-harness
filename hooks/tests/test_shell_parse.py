@@ -570,3 +570,28 @@ class TestComputedShellOptions:
         site = cmds('env $O -S "rm d"')[0]
         r = sp.resolve(site)
         assert (r.name, r.unresolved) == ("rm", "computed-env-option")
+
+
+def test_a_long_open_subscript_in_a_heredoc_is_lexed_in_linear_time():
+    """A word in assignment position whose subscript stays open runs across blanks to its `]`; the lexer
+    rechecked the whole word at every blank, so a long one in a here-document fed to a shell cost the square
+    of its length (seconds per hook on 13-25 KB commands). Compared in CPU seconds, two sizes against each
+    other, because no fixed bound holds on every runner: twice the text costs about twice, never four times."""
+    import time
+
+    def cost(n):
+        word = "v[k]=[\n" + "".join("  w%d, x,\n" % k for k in range(n)) + "]"
+        text = "bash <<'E'\n" + word + "\nE\n"
+        best = None
+        for _ in range(3):
+            sp._PAYLOAD_MEMO.clear()
+            started = time.process_time()
+            sites = list(sp.walk(sp.parse(text)))
+            spent = time.process_time() - started
+            best = spent if best is None else min(best, spent)
+        assert [s.context for s in sites] == [("top",), ("top", "heredoc_shell")]
+        assert [a.word.raw.text for a in sites[1].cmd.assignments] == [word]  # one word, read to its `]`
+        return best
+
+    small, large = cost(600), cost(1200)
+    assert large < 3 * small, (small, large)

@@ -159,7 +159,7 @@ Agents remove a tracked file with a non-forced `git rm` (with or without `-r`, `
 | **Ship** | `/checkpoint` | Manual snapshot to `refs/checkpoints/<branch>`. | Want a safety snapshot without advancing HEAD or committing. |
 | **Quality** | `/clean` | Cleanup cohort (cleaner + inspectors). | Repo has drifted — stray files or style violations to sweep. |
 | **Quality** | `/test` | Test workflow (execute + validate). | You need the test suite executed and its results validated. |
-| **Control** | `/do` | Break-glass consent for the main agent, one turn (never a subagent); does not silence the bulk-commit warning. | Main agent must break the rules for one entire turn. |
+| **Control** | `/do` | Break-glass consent for the main agent, one turn (never a subagent). | Main agent must break the rules for one entire turn. |
 | **Control** | `/allow` | Structured single-use break-glass grant for one specific operation. | Green-light one specific blocked operation, a single time. |
 | **Control** | `/restart` | Resume every quota-interrupted subagent from its original transcript and ID; with no recoverable subagent, continue the invoking session's own main agent. Optional trailing text is carried verbatim as guidance for the next phase. | A session/usage limit interrupted running subagents — or interrupted a session that had none, leaving only the main agent to continue. |
 | **Control** | `/stop` | Cancel an overnight session. | Mid-overnight, to abort a running session. |
@@ -255,12 +255,11 @@ Counted from the tracked clean `settings.json`, paseo module off (with it on, `U
 | PermissionRequest | 1 | Answers every permission request by rule (see "Permission prompts" below) |
 | PostToolUse | 17 | Doc-sync, allowlist grant consumption, checkpoint writes |
 | PostToolUseFailure | 1 | Allowlist grant consumption on a failed tool result |
-| Notification | 1 | An exit-0 stub (`notification-idle-overnight.py`): reads and writes nothing |
 | Stop | 1 | One entry, `stop-launch.py`, which runs the workflow coordinator: its phases are the spec-coverage phase (an exit-0 stub: the split is decided at the spec subagent's own stop), the auto-commit checkpoint snapshot, the completion gate (overnight time-lock, `/do` report, the other gated commands) and allowlist cleanup |
 | SessionEnd | 1 | Scratch-directory sweep |
 | SubagentStop | 8 | cp-state enforcement, artifact contract, e2e and codex-ledger checks, `/restart` response evidence, minimum-diff, layer-match and guard-integrity warnings |
 
-Retired hooks stay in the tree as exit-0 stubs (marked by a `# STUB:` line), so a running session whose loaded hook list still names one gets exit 0, never a missing file. Three are still registered in `settings.json` and count in the table above: `notification-idle-overnight.py`, `posttool-push-gate-token-verify.py` and `pretool-push-analyst-grant-guard.py`. `render-settings check` (run by `scripts/doctor`) fails a hook command whose file is missing or is a stub the clean form does not register. The landing repairs an overlay that registers one: at the first Stop after HEAD moves, it drops from `settings.machine.json`, and from the working `settings.json`, each hook command whose script is a harness hook HEAD deleted or marks `# STUB:`, or that another registered command already runs, and `logs/landing.log` names the drops by event and count.
+Retired hooks stay in the tree as exit-0 stubs (marked by a `# STUB:` line), so a running session whose loaded hook list still names one gets exit 0, never a missing file. `render-settings check` (run by `scripts/doctor`) fails a hook command whose file is missing or is a stub the clean form does not register. The landing repairs an overlay that registers one: at the first Stop after HEAD moves, it drops from `settings.machine.json`, and from the working `settings.json`, each hook command whose script is a harness hook HEAD deleted or marks `# STUB:`, or that another registered command already runs, and `logs/landing.log` names the drops by event and count.
 
 #### Permission prompts
 

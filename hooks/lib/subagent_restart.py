@@ -409,6 +409,7 @@ def _parse_time(raw: Any) -> datetime | None:
 
 
 GRANT_ORIGINS = ("restart", "overnight-wake")
+GRANT_TTL_MIN, GRANT_TTL_MAX = 60, 86400  # seconds
 
 
 def mint_grant(
@@ -430,8 +431,17 @@ def mint_grant(
         ttl = ttl_seconds or int(os.environ.get("CLAUDE_RESTART_GRANT_TTL_SECONDS", "7200"))
     except (TypeError, ValueError) as exc:
         raise RestartError("restart grant TTL is not an integer") from exc
-    if ttl < 60 or ttl > 86400:
-        raise RestartError("restart grant TTL must be between 60 and 86400 seconds")
+    # Out of bounds is no refusal (the owner's ruling of 2026-11-20): the nearest bound is
+    # used, and the returned grant's ttl_warning, which the issuer prints, says so. Safe
+    # either way: the grant is session- and transcript-bound and finalize consumes it, so
+    # its lifetime only bounds a recovery that never finalizes, and that stays within
+    # [GRANT_TTL_MIN, GRANT_TTL_MAX] as before.
+    used = min(max(ttl, GRANT_TTL_MIN), GRANT_TTL_MAX)
+    warning = (
+        f"warning: restart grant TTL {ttl} s is outside {GRANT_TTL_MIN}-{GRANT_TTL_MAX} s; "
+        f"{used} s is used" if used != ttl else None
+    )
+    ttl = used
     now = _utcnow()
     grant = {
         "schema_version": SCHEMA_VERSION,
@@ -443,7 +453,7 @@ def mint_grant(
         "origin": origin,
     }
     _atomic_write_json(grant_path(sid), grant)
-    return grant
+    return dict(grant, ttl_warning=warning) if warning else grant
 
 
 def revoke_wake_grant(session_id: str) -> bool:
@@ -975,8 +985,25 @@ def sibling_window_seconds() -> int:
         return DEFAULT_SIBLING_WINDOW_SECONDS
 
 
-def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Path]:
-    """Other RECENT sessions' top-level transcripts for this project, any account.
+DEFAULT_SIBLING_MAX_BYTES = 256 << 20
+
+
+def sibling_max_bytes() -> int:
+    """Bytes of other sessions' transcripts one prepare reads at most (CLAUDE_RESTART_SIBLING_MAX_BYTES)."""
+    try:
+        return max(0, int(os.environ.get("CLAUDE_RESTART_SIBLING_MAX_BYTES", str(DEFAULT_SIBLING_MAX_BYTES))))
+    except (TypeError, ValueError):
+        return DEFAULT_SIBLING_MAX_BYTES
+
+
+def sibling_transcripts(
+    project_dir: str | Path, exclude: str | Path,
+) -> list[tuple[Path, float, bool]]:
+    """Other sessions' top-level transcripts for this project, any account, newest first.
+
+    Each entry is ``(path, seconds since it was last written, older)``: ``older``
+    when that is more than sibling_window_seconds(). A copy of the invoking
+    session itself (its session id under another account root) is never older.
 
     Consulted ONLY when the operator explicitly opted into cross-account
     discovery (``prepare --cross-account``). Default discovery never leaves the
@@ -1012,14 +1039,30 @@ def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Pa
     what "even after switching accounts" actually means in practice. The
     current session's own transcript is never subject to this window: it is
     read unconditionally by the caller before sibling_transcripts runs.
+
+    The owner's ruling of 2026-11-20 ("没有一个允许禁止！都改成警告但是由agent
+    自行处理": no time window may refuse or silently leave out) replaced that
+    cut-off. The window no longer decides who is read; it separates two lists.
+    A copy of the invoking session under another root is always read, whatever
+    its age (every copy is read, since each holds its own partial view). Every
+    other session is read too; the children found in one last written more than
+    the window ago are listed apart by prepare_state (``older_candidates``, each
+    with that age, and a warning), and commands/restart.md has the agent resume
+    them only when the operator's guidance asks for them. What the window used
+    to prevent, the months of abandoned work resumed in one wave, is now
+    prevented by that rule instead of by not looking. The cost of looking is
+    bounded by sibling_max_bytes(): transcripts are read newest first, and those
+    past the bound are named in the output as not read, never dropped silently.
     """
     slug = project_slug(project_dir)
     try:
         exclude_resolved = Path(exclude).resolve()
     except OSError:
         exclude_resolved = Path(exclude)
-    cutoff = time.time() - sibling_window_seconds()
-    seen: dict[str, Path] = {}
+    now = time.time()
+    window = sibling_window_seconds()
+    seen: dict[str, tuple[Path, float]] = {}
+    copies: list[tuple[Path, float]] = []
     for root in account_project_roots():
         candidate_dir = root / slug
         if not candidate_dir.is_dir():
@@ -1039,12 +1082,24 @@ def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Pa
             if not SESSION_RE.fullmatch(sid):
                 continue
             try:
-                if entry.stat().st_mtime < cutoff:
-                    continue
+                age = max(0.0, now - entry.stat().st_mtime)
             except OSError:
                 continue
-            seen.setdefault(sid, resolved)
-    return list(seen.values())
+            if sid == exclude_resolved.stem:
+                copies.append((resolved, age))
+            else:
+                seen.setdefault(sid, (resolved, age))
+    others = sorted(seen.values(), key=lambda item: item[1])
+    return [(p, a, False) for p, a in copies] + [(p, a, a > window) for p, a in others]
+
+
+def _span(seconds: float) -> str:
+    days, rest = divmod(int(seconds), 86400)
+    return f"{days} d {rest // 3600} h" if days else f"{rest // 3600} h {rest % 3600 // 60} min"
+
+
+def _ago(seconds: float) -> str:
+    return _span(seconds) + " ago"
 
 
 def build_resume_message(
@@ -1145,9 +1200,30 @@ def prepare_state(
     # (see guidance_path).
     guidance = load_guidance(sid, grant) if grant is not None else None
     discovered = discover_candidates(own_transcript)
+    not_read: list[tuple[Path, float]] = []
     if cross_account and project_dir is not None:
-        for sibling in sibling_transcripts(project_dir, exclude=own_transcript):
-            discovered.extend(discover_candidates(sibling))
+        budget = sibling_max_bytes()
+        for sibling, age, older in sibling_transcripts(project_dir, exclude=own_transcript):
+            try:
+                size = sibling.stat().st_size
+            except OSError:
+                size = 0
+            copy = sibling.stem == sid  # a copy of this session: read whatever its age or size
+            if size > budget and not copy:  # newest first: what is left out is the oldest, and it is named
+                not_read.append((sibling, age))
+                budget = 0
+                continue
+            budget -= 0 if copy else size
+            for candidate in discover_candidates(sibling):
+                if older:
+                    candidate["older"] = True
+                    candidate["session_last_written_seconds_ago"] = int(age)
+                    candidate["session_last_written"] = _ago(age)
+                discovered.append(candidate)
+    first: dict[str, dict[str, Any]] = {}  # one entry per agent: copies of one session hold the same calls
+    for candidate in discovered:
+        first.setdefault(candidate["agent_id"], candidate)
+    discovered = list(first.values())
     with _state_lock(sid):
         old = _read_state(sid) or {}
         old_items = {
@@ -1187,6 +1263,9 @@ def prepare_state(
             "grant_issued_at": grant.get("issued_at") if grant is not None else None,
             "cross_account": bool(cross_account),
             "operator_guidance": guidance,
+            "siblings_not_read": [
+                {"transcript": str(path), "session_last_written": _ago(age)} for path, age in not_read
+            ],
             "created_at": old.get("created_at") or _iso(),
             "updated_at": _iso(),
             "candidates": items,
@@ -1223,7 +1302,8 @@ def completed_resumes(session_id: str) -> dict[str, str]:
         return {}
     if state is None or not status_view(state)["complete"]:
         return {}
-    return {c["agent_id"]: str(c.get("tool_use_id")) for c in state.get("candidates", []) if isinstance(c, dict)}
+    return {c["agent_id"]: str(c.get("tool_use_id")) for c in state.get("candidates", [])
+            if isinstance(c, dict) and not _older_open(c)}
 
 
 def _load_state(session_id: str) -> dict[str, Any]:
@@ -1234,19 +1314,66 @@ def _load_state(session_id: str) -> dict[str, Any]:
     return state
 
 
+OLDER_WARNING = (
+    "WARNING: {count} interrupted child(ren) in older_candidates were found in sessions last "
+    "written more than {window} ago (each lists session_last_written). They are not in "
+    "candidates: resume them only when the operator's guidance asks for them; otherwise report "
+    "them in one line and leave them (commands/restart.md step 2)."
+)
+NOT_READ_WARNING = (
+    "WARNING: {count} older transcript(s) of other sessions of this project were not read: this "
+    "prepare reads at most {limit} bytes of them (CLAUDE_RESTART_SIBLING_MAX_BYTES), newest first; "
+    "the state file's siblings_not_read names each. Report this in one line (commands/restart.md step 2)."
+)
+
+
+def _older_open(item: dict[str, Any]) -> bool:
+    """An older-session candidate nobody resumed: it holds back no finalize."""
+    return item.get("older") is True and item.get("status") == "pending"
+
+
 def status_view(state: dict[str, Any]) -> dict[str, Any]:
     candidates = state.get("candidates") if isinstance(state.get("candidates"), list) else []
     public: list[dict[str, Any]] = []
+    older: list[dict[str, Any]] = []
+    incomplete: list[str] = []
     for item in candidates:
         if not isinstance(item, dict):
             continue
-        public.append({key: item.get(key) for key in (
+        entry = {key: item.get(key) for key in (
             "agent_id", "parent_session_id", "origin_transcript_path", "agent_type",
             "description", "tool_use_id",
             "agent_transcript_path", "evidence", "interruption_line", "status",
             "attempts", "resume_message",
-        )})
-    incomplete = [item["agent_id"] for item in public if item.get("status") != "response_observed"]
+        )}
+        if item.get("older") is True:
+            entry["session_last_written"] = item.get("session_last_written")
+            entry["session_last_written_seconds_ago"] = item.get("session_last_written_seconds_ago")
+            older.append(entry)
+        else:
+            public.append(entry)
+        if entry.get("status") != "response_observed" and not _older_open(item):
+            incomplete.append(entry["agent_id"])
+    not_read = state.get("siblings_not_read") if isinstance(state.get("siblings_not_read"), list) else []
+    warnings = []
+    if older:
+        warnings.append(OLDER_WARNING.format(count=len(older), window=_span(sibling_window_seconds())))
+    if not_read:
+        warnings.append(NOT_READ_WARNING.format(count=len(not_read), limit=sibling_max_bytes()))
+    view_extra: dict[str, Any] = {}
+    if warnings:
+        view_extra = {
+            "warnings": warnings,
+            "older_candidate_count": len(older),
+            "older_candidates": older,
+            # Named in full in the state file; the view says how many and which ages.
+            "siblings_not_read": {
+                "count": len(not_read),
+                "newest": not_read[0].get("session_last_written") if not_read else None,
+                "oldest": not_read[-1].get("session_last_written") if not_read else None,
+                "listed_in": str(state_path(str(state.get("parent_session_id")))),
+            },
+        }
     return {
         "schema_version": SCHEMA_VERSION,
         "parent_session_id": state.get("parent_session_id"),
@@ -1260,6 +1387,7 @@ def status_view(state: dict[str, Any]) -> dict[str, Any]:
         "complete": not incomplete,
         "incomplete_agent_ids": incomplete,
         "candidates": public,
+        **view_extra,
     }
 
 

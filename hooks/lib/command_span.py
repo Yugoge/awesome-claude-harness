@@ -926,29 +926,44 @@ def transcript_span(transcript_path) -> Span:
     return Span("", "", 0, str(transcript_path))
 
 
-def _refusal_record_files(now: float) -> list:
-    """Yesterday's and today's (UTC) files of lib/refusal_record.py's record, its directory() and day_file()."""
+def _refusal_record_files(now: float | None = None) -> list:
+    """Every day file lib/refusal_record.py's record keeps (its directory(), its day_file() names; KEEP_DAYS of
+    them), oldest first, with `now`'s (UTC) day there or not: a session's refusal is found whatever day it was
+    written (the owner's ruling of 2026-11-20; the two newest days only was a window)."""
     import time, zlib  # noqa: E401
     home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
     key = f"{home.rsplit(os.sep, 1)[-1].lstrip('.')}-{zlib.crc32(os.fsencode(home)):08x}"
-    return [os.path.join(os.path.expanduser("~"), ".local/state/claude-harness", key, "refusals",
-                         time.strftime("refusals-%Y-%m-%d.jsonl", time.gmtime(now - d))) for d in (86400, 0)]
+    folder = os.path.join(os.path.expanduser("~"), ".local/state/claude-harness", key, "refusals")
+    today = time.strftime("refusals-%Y-%m-%d.jsonl", time.gmtime(time.time() if now is None else now))
+    try:
+        names = {n for n in os.listdir(folder) if n.startswith("refusals-") and n.endswith(".jsonl")}
+    except OSError:
+        names = set()
+    return [os.path.join(folder, n) for n in sorted(names | {today})]
 
 
 _ONCE: dict = {}
 
 
-def _read_once(path) -> bytes | None:
-    """A refusal record file's bytes, read once per process while its size and mtime stay (None when it cannot be
-    read): every reader of refused_calls in one hook run shares one read, one entry per file."""
+def _refusals_in(path, session: str) -> frozenset:
+    """The tool_use ids of ``session``'s PreToolUse refusals in one refusal record file, read once per process while
+    its size and mtime stay (nothing when it cannot be read): every reader of refused_calls in one hook run shares
+    one read, one entry per file, holding the ids and not the bytes (the record keeps KEEP_DAYS files)."""
     try:
         info = os.stat(path)
-        if _ONCE.get(path, (None,))[0] != (info.st_size, info.st_mtime_ns):
+        key = (info.st_size, info.st_mtime_ns, session)
+        if _ONCE.get(path, (None,))[0] != key:
             with open(path, "rb") as handle:
-                _ONCE[path] = ((info.st_size, info.st_mtime_ns), handle.read())
+                data = handle.read()
+            found = set()
+            for begin, end in _Lines(data).offsets((session.encode(),)):
+                r = _decode(data[begin:end]) or {}
+                if (r.get("kind"), r.get("event"), r.get("session")) == ("refusal", "PreToolUse", session):
+                    found.add(r.get("tool_use_id"))
+            _ONCE[path] = (key, frozenset(i for i in found if isinstance(i, str) and i))
         return _ONCE[path][1]
     except (OSError, TypeError, ValueError):
-        return None
+        return frozenset()
 
 
 def hook_refused(record) -> list:
@@ -962,18 +977,11 @@ def hook_refused(record) -> list:
 
 
 def recorded_refusals(session: str) -> frozenset:
-    """The tool_use ids the refusal record (lib/refusal_record.py, today's and yesterday's file, each read once per
+    """The tool_use ids the refusal record (lib/refusal_record.py, every day file it keeps, each read once per
     process) holds a PreToolUse refusal of for ``session``: the refusing hook writes it before it exits, so before
     the CLI writes the result (a sibling call of the same message)."""
-    import time
-    found = set()
-    for path in _refusal_record_files(time.time()) if session else ():
-        data = _read_once(path)
-        for begin, end in _Lines(data).offsets((session.encode(),)) if data else ():
-            r = _decode(data[begin:end]) or {}
-            if (r.get("kind"), r.get("event"), r.get("session")) == ("refusal", "PreToolUse", session):
-                found.add(r.get("tool_use_id"))
-    return frozenset(i for i in found if isinstance(i, str) and i)
+    return frozenset().union(*(_refusals_in(path, session) for path in _refusal_record_files())) if session \
+        else frozenset()
 
 
 def refused_calls(transcript_path, session_id: str | None = None, data: bytes | None = None) -> frozenset:

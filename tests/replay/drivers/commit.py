@@ -5,9 +5,8 @@
 The main agent types `/commit <task-id>` (Steps 1-2 bind TASK_ID: no tool call) and runs, as the
 tree's text spells each one, read at run time:
 
-* Step 3: the step's one Bash block (the close-report path, its mtime, the `--disposition --stage
-  close` call), its output read as data: `DISPOSITION=`, the `GAP` lines, the `CHAIN=` line bound as
-  ARTIFACT_CHAIN. `incomplete`: each gap on an artifact other than the close-report is routed (the
+* Step 3: the step's one Bash block (the `--disposition --stage close` call), its output read as
+  data: `DISPOSITION=`, the `GAP` lines, the `CHAIN=` line bound as ARTIFACT_CHAIN. `incomplete`: each gap on an artifact other than the close-report is routed (the
   Routes section: its declaring-dispatch reader on the gap's path, its own Bash call, the answer acted
   on as drivers/close.py does); with no such gap left, commands/close.md Steps 1-2 run for the task
   (drivers/close.py's Step 1 and Step 2, in /commit's session); the block runs again until it prints
@@ -267,17 +266,16 @@ class CommitRun:
     def label(self, text: str) -> str:
         return f"/commit {text}"
 
-    def run_text(self, text: str, label: str, desc: str, capture=(), rules=()):
+    def run_text(self, text: str, label: str, desc: str, rules=()):
         o = self.o
         text = o.bind(text, list(rules))
-        return closedrv.run_captured(o, o.shell_bind(text), desc, label, capture)
+        return o.run(o.shell_bind(text), desc, label)
 
     # ------------------------------------------------------------ Step 3
     def disposition(self, label: str) -> tuple:
         o = self.o
         block = o.block("Step 3", anchor="--disposition")
-        c = self.run_text(block, self.label(f"{label} Bash disposition"),
-                          "Step 3: the close-report path, its age and the task's disposition", capture=("CLOSE_REPORT",))
+        c = self.run_text(block, self.label(f"{label} Bash disposition"), "Step 3: the task's disposition")
         out = (c.response.get("stdout") or "") if c.ok else (c.error or "")
         return c, parse_disposition(out)
 
@@ -836,7 +834,7 @@ class CommitRun:
         """The selection as the text orders it, made with the main agent's own calls and no script (a script
         reading the close report here would be a second decider of it): the context's spec_path (Read), the close
         report's continuation line (Read, the text's pattern on the lines outside fenced blocks), the specs of this
-        cycle (Glob, then the text's one content test, a Grep, on the files of its time window), ending in the
+        cycle (Glob, then the text's one content test, a Grep, on the files of its name form), ending in the
         outcome the text prints. A spec that stage 1 or 2 names is recorded as a fact: the toy cycle links none,
         and no spec-update agent is played."""
         o, tid = self.o, self.tid
@@ -890,16 +888,14 @@ class CommitRun:
         if not stage:
             lab = self.label("Step 8 Glob specs")
             g = o.s.tool("Glob", {"pattern": "spec-*.md", "path": sdir}, label=lab, deviation=self.devs.at(lab))
-            mtime = os.path.getmtime(report) if os.path.isfile(report) else float("-inf")
-            window = [f for f in (g.response.get("filenames") or [] if g.ok else [])
-                      if re.fullmatch(r"spec-\d{8}-\d{6}\.md", os.path.basename(f))
-                      and mtime - 24 * 3600 <= os.path.getmtime(f) <= mtime + 3600]
-            if window:
+            named = [f for f in (g.response.get("filenames") or [] if g.ok else [])
+                     if re.fullmatch(r"spec-\d{8}-\d{6}\.md", os.path.basename(f))]
+            if named:
                 lab = self.label("Step 8 Grep spec marker")
                 m = o.s.tool("Grep", {"pattern": re.escape(marker), "path": sdir, "output_mode": "files_with_matches"},
                              label=lab, deviation=self.devs.at(lab))
                 held = {os.path.join(sdir, f) for f in (m.response.get("filenames") or [])} if m.ok else set()
-                found = [f for f in window if f in held]
+                found = [f for f in named if f in held]
         if stage:
             outcome = warning if stage == 2 else f"Step 8: updating the spec {found[0]}"
         else:

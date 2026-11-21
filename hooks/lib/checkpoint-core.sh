@@ -20,7 +20,8 @@
 #
 # Algorithm (git plumbing only — no `git commit`):
 #   1. read-tree parent tree (or --empty for bootstrap)
-#   2. git add -A into a TEMP index (GIT_INDEX_FILE); return 3 when the settings clean filter refuses
+#   2. git add -A into a TEMP index (GIT_INDEX_FILE); return 3 when the settings clean filter refuses;
+#      never the project's .claude/scratch; a nested repository with no commit is left out and named
 #   2b. hard-exclude known PII file classes from the temp index (independent of .gitignore)
 #   2c. leave out (at HEAD's version) each file the private-literal rule names, then return 3,
 #       writing nothing, when the pre-commit hook's own checks still refuse the temp index
@@ -558,7 +559,18 @@ write_checkpoint() {
     checkpoint_refused_by=""
     h="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd -P)"
     { read -r top; read -r common; } < <("${git_cmd[@]}" rev-parse --show-toplevel --path-format=absolute --git-common-dir 2>/dev/null)
-    if ! GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" add -A 2>>"$CHECKPOINT_LOG_FILE"; then
+    # The project's scratch root (lib/locations.py SCRATCH_PARTS) is never staged (by a glob, so git names no root ignored
+    # elsewhere); if nothing ignores it, an ignore file in it naming all, itself too, hides it. A no-commit nested repo is left out.
+    local scratch=".claude/scratch" err="${TMP_INDEX}.err" nested="" rc=0
+    [ -d "$top/$scratch" ] && ! [ -e "$top/$scratch/.gitignore" -o -L "$top/$scratch/.gitignore" ] \
+        && ! "${git_cmd[@]}" check-ignore -q "$top/$scratch" && printf '*\n' >"$top/$scratch/.gitignore" 2>/dev/null
+    GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" add -A --ignore-errors -- :/ ":(top,exclude,glob)[.]${scratch#.}/**" 2>"$err" || rc=$?
+    cat "$err" >>"$CHECKPOINT_LOG_FILE" 2>/dev/null
+    [ "$rc" = 0 ] || { nested=$(sed -n "s/^error: '\(.*\)\/' does not have a commit checked out$/\1/p" "$err")
+        grep -v -e " does not have a commit checked out$" -e "^error: unable to index file '.*/'$" "$err" \
+            | grep -q '^\(error\|fatal\):' && nested=""; }  # any other error fails the snapshot
+    rm -f "$err"
+    if [ "$rc" != 0 ] && [ -z "$nested" ]; then
         rm -f "$TMP_INDEX"
         # Staging fails by design when this harness home's registered clean filter cannot clean
         # settings.json: a refusal if its engine, run here, refuses the file (rc 1; a missing one: 2).
@@ -641,6 +653,8 @@ write_checkpoint() {
         rm -f "$TMP_INDEX"
         return 3
     fi
+    [ -z "$nested" ] || { nested="$(wc -l <<<"$nested" | tr -d ' ') nested repositor(ies) with no commit: ${nested//$'\n'/, }"
+        checkpoint_left_out+="${checkpoint_left_out:+; }$nested"; _checkpoint_log WARN "left out ${nested} (ref=${ref})"; }
 
     local tree_sha
     tree_sha=$(GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" write-tree 2>>"$CHECKPOINT_LOG_FILE")

@@ -624,7 +624,8 @@ def test_f9_home_and_call_directory_spellings_answer_as_the_relative_one(tmp_pat
     monkeypatch.setenv("TMPDIR", f"/srv/{NEVER}/tmp")
     monkeypatch.chdir("/usr/share")  # a call directory outside the project and every temp root
     assert not _heredoc_runs_git(classifier, "/usr/share/notes.md") and not _heredoc_runs_git(classifier, "notes.md")
-    assert _heredoc_runs_git(classifier, "/usr/lib/notes.md")
+    # beside the call directory a path is judged by its own components: a bin, sbin or etc one is code
+    assert _heredoc_runs_git(classifier, "/usr/bin/notes.md")
 
 
 def test_f13_the_resource_layer_takes_a_project_in_system_temp_for_a_project(tmp_path, monkeypatch):

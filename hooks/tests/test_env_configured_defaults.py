@@ -166,10 +166,11 @@ def test_unset_grant_helper_guidance_reads_sensibly(sandbox):
 def test_process_family_rules(sandbox):
     _, env = sandbox
     assert hook(env, "docker restart demo-prod").returncode == 0
+    # every kill by name or pattern is refused, with or without the family configured (one verdict for the act)
     r = hook(env, "killall claude")
-    assert r.returncode == 2 and "Killing claude/docker processes" in r.stderr
+    assert r.returncode == 2 and "Killing processes by name or pattern" in r.stderr
     r = hook(env, "pkill -f demo-daemon")
-    assert "Killing" not in r.stderr
+    assert r.returncode == 2 and "Killing processes by name or pattern" in r.stderr
 
     env = {**env, **STAND_INS}
     # The family's docker stop/restart/rm rule is deleted (owner decision): a family container is not refused
@@ -178,7 +179,7 @@ def test_process_family_rules(sandbox):
         assert hook(env, command).returncode == 0, command
     assert "Bash(docker rm:*)" in json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
     r = hook(env, "killall demo-daemon")
-    assert r.returncode == 2 and "Killing demo/claude/docker processes" in r.stderr
+    assert r.returncode == 2 and "Killing processes by name or pattern" in r.stderr
 
 
 # Default hard bans (CLAUDE_HARD_BANNED_SCRIPTS unset or empty): the generic names, bare or as NAME.sh, match only

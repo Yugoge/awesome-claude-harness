@@ -1,8 +1,8 @@
 # tests
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T10:43:03Z*
-**Total entries**: 294
+*Last updated: 2026-11-20T17:00:09Z*
+**Total entries**: 297
 **Convention**: kebab
 
 ## Tree
@@ -43,6 +43,7 @@ tests/
 ├── `test_bash_safety_degraded_fallback.py` - Until 2026-11-19 a command passed the degraded path only when it was provably plain: no removal r...
 ├── `test_bash_safety_git_clean.py` - hooks/pretool-bash-safety.sh (task dev-20260719-150041-a, lane r01-a)
 ├── `test_bash_safety_http_stop_npm_global.py` - The HTTP /stop rule (BS-02, search-15) refuses a request to a localhost port's /stop path segment...
+├── `test_bash_safety_kill_by_pattern.py` - pkill, killall, and kill of PIDs the same command computes from a process search (pgrep, pidof, p...
 ├── `test_bash_safety_plain_pipelines.py` - Until 2026-11-20 one pipeline that was not a plain shape (any `if` or `for`, a variable argument,...
 ├── `test_bash_safety_preclean_stdin.py` - An exec'd process gets its environment and argv strings through the kernel, which refuses one str...
 ├── `test_bash_safety_rules.py` - their cases, the over-blocks fixed, the bulk-commit writer closed from Bash, and the release word...
@@ -63,6 +64,7 @@ tests/
 ├── `test_checkpoint_left_out.py` - In the harness home four leftover untracked files holding a listed literal made the rule refuse
 ├── `test_checkpoint_left_out_callers.py` - The pre-clean guard (hooks/pretool-bash-safety.sh, a granted `git clean`): a snapshot that left a...
 ├── `test_checkpoint_pii_gate.sh` - Regression tests for the checkpoint PII/credential hard-exclude + push gate
+├── `test_checkpoint_scratch_root.py` - a checkpoint snapshot fail as a whole
 ├── `test_claude_config_guard.py` - /dev-command develops project slash commands, so its dev writes the command file the cycle asks
 ├── `test_claude_config_guard_chain.py` - The proof (_proven_harmless) lets a Bash command the base reading refuses through when every writ...
 ├── `test_claude_config_guard_home_spellings.py` - The guard reads the raw command text for a write into `.claude/hooks/` or `.claude/commands/`. A ...
@@ -124,6 +126,7 @@ tests/
 ├── `test_git_dynamic_directory.py` - `"$VIRTUAL_ENV/bin/pip" show pytest` runs pip wherever the variable points:
 ├── `test_git_facts_one_definition.py` - Each class is one fact. Before these merges each hook carried its own copy, the copies differed,
 ├── `test_git_guard_inline_python.py` - Python given on standard input (a here-document or a here-string) was not read at all, so
+├── `test_git_guard_written_text_is_data.py` - A live call wrote a Markdown report with `cat > <absolute path> <<'EOF'`; the report quoted git c...
 ├── `test_git_hidden_code.py` - The classifier reads shell text, so `python3 -c 'subprocess.run(["git","push"])'`
 ├── `test_git_prefix_enumeration.py` - THE DEFECT
 ├── `test_git_residual_override.py` - Background
@@ -147,12 +150,10 @@ tests/
 ├── `test_lane_completeness_watch.py` - fan-out's canonical aggregate (P1b E5): every lane report write runs the
 ├── `test_laneb_session_resources.py` - LANE-B actor scratch, receipt, and owned-process broker tests.
 ├── `test_laneb_stop_coordinator.py` - LANE-B non-destructive receipt writers and serialized Stop coordinator.
-├── `test_laneb_stop_overnight_timelock_scoping.py` - Its time-lock and wake check are the Stop gate's step 4 (hooks/stop-command-gate.py,
 ├── `test_locations_relocation.py` - Each location decision is the same wherever the project and the harness home are, by every spelli...
 ├── `test_merge_grant_write_check.py` - Experiment E11: the privilege guard's merge-grant check sat behind
 ├── `test_misread_refusals.py` - Each group holds the shapes of refusals recorded in three days of sessions (paths, names and PIDs...
 ├── `test_monitor_command.py` - On CLI 2.1.325 (measured) a Monitor call reaches matcher-less hooks as tool_name "Monitor" with
-├── `test_notification_idle_overnight.py` - (P12), and the file stays for a session that loaded an older hook list (D15)."""
 ├── `test_now_unreferenced_p5_p9.py` - - posttool-subagent-track.py's bookmark marker. P5 moved Gate 4 to the transcript, so
 ├── `test_obligation.py` - Covers the four implementation ACs of ticket-20260929-104216-b:
 ├── `test_obligation_gate.py` - G1 is the first of five enforcement doors (spec-20260930-092323) that move
@@ -192,12 +193,13 @@ tests/
 ├── `test_pol_generative_sweeps.py` - AC-R02-10 .. AC-R02-16 (revision 2). Every deny-side population here is
 ├── `test_posttool_checkpoint_refusal.py` - Drives hooks/posttool-git-checkpoint.sh as settings.json registers it (PostToolUse on
 ├── `test_posttool_overnight_loop_terminal_gate.py` - re-checks any artifact (P1b row 3: the G4 terminal-lane block is gone)
-├── `test_pretool_push_analyst_grant_guard.py` - registers it (P12), and the file stays for a session that loaded an older hook list (D15);
+├── `test_pretool_bulk_commit_detector.py` - of hooks/pretool-launch.py, and of the Monitor rule's Bash list, went), and the file stays for a ...
 ├── `test_privilege_guard_checkpoint_fetch.py` - The auto-commit mechanism snapshots work to `refs/checkpoints/<branch>` (see
 ├── `test_privilege_guard_commit_file_operand.py` - The `-F` operand is taken from the shell-tokenised commit invocation and unquoted,
 ├── `test_privilege_guard_fails_closed.py` - When a name the guard imports from the classifier is missing, the guard raises at
 ├── `test_privilege_guard_gp08.py` - A push that forces, deletes or mirrors a ref is refused for every agent, before an
 ├── `test_privilege_guard_one_reader.py` - An auto-bulk commit is one whose own message carries the `auto-bulk:` subject: an
+├── `test_privilege_guard_own_scratch_commit.py` - The privilege guard refused every agent `git commit` without a /commit grant, also one in a repos...
 ├── `test_privilege_guard_read_only_forms.py` - Its rules judge an invocation by its subcommand name, so help (`git push --help`,
 ├── `test_privilege_guard_refusal_routes.py` - P9-5 (owner ruling D19): no step may send the owner to his own shell. The commit refusal
 ├── `test_product_repo_session_bookmark_hygiene.py` - The real SessionStart exclude step runs first, then the real UserPromptSubmit start
@@ -272,6 +274,7 @@ tests/
 ├── `test_tool_policy_own_scratch.py` - hooks/pretool-tool-policy.py refuses every role a write under /tmp or /var/tmp (the shipped
 ├── `test_tool_policy_protected_paths.py` - hooks/pretool-tool-policy.py refuses, before every other rule and for the main agent and every
 ├── `test_tool_policy_readonly_bookkeeping.py` - policies/tool-policy.v1.json is default-deny per role: lib/policy_registry._check_tool_lists refu...
+├── `test_tool_policy_refusal_means.py` - Two refusals that named none: the watcher tool (Monitor), which no role's list holds, refused wit...
 ├── `test_tool_policy_report_forgery.py` - hooks/subagentstop-e2e-enforce.py (inside hooks/subagentstop-producer-gate.py) judges the
 ├── `test_transcript_request_copies.py` - it as without them (C3)
 ├── `test_unit_anchor.py` - Imports the anchor sibling module DIRECTLY (not via the _core facade) and

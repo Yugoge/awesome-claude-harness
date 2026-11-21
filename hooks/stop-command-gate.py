@@ -35,8 +35,8 @@ payload on stdin and decides, in order:
       /merge end on Step 5's refusal, reported and never asked about
       (step5_refused), while git still meets it: no remote the push is
       judged on reads, or the source's merge stands in conflict;
-  (7) no gap: allow; advisory: `would block` and the gaps on stderr, exit 0;
-      else the block text on stderr, exit 2.
+  (7) no gap, or only OWNER_ONLY ones (a Task-id commit no grant can be minted for in this turn): allow, naming them
+      to the owner (systemMessage); advisory: `would block` and the gaps on stderr, exit 0; else the block, exit 2.
 
 Each fact comes from the one producer that writes it: the transcript through
 command_span (the CLI's record of typed prompts, tool calls and hook context,
@@ -797,9 +797,25 @@ def p_commit(span, root, payload) -> list[str]:
     refused = hook_refused_tasks(span) | hook_refused_parents(span)[0]
     canon, names = importlib.import_module("lib.obligation").canonical_task_id, _cycle_names(span)
     owed = _owed_gap(span, root)  # Routes: an artifact nobody owes, reported on its NO_OWNER: line
-    family = importlib.import_module("lib.obligation").task_family
-    return [g for task in targets if not {canon(task), family(canon(task))} & refused
-            for name in _names(names, task) for g in disposition(root, name, "commit") if owed(name, g)]
+    family, trailer = importlib.import_module("lib.obligation").task_family, " problem=MISSING_TASK_TRAILER:"
+    lines = [(task, g) for task in targets if not {canon(task), family(canon(task))} & refused
+             for name in _names(names, task) for g in disposition(root, name, "commit") if owed(name, g)]
+    held = any(trailer in g for _task, g in lines) and not _grant_mintable(span, payload)
+    return [f"{OWNER_ONLY}/commit {task}; {g}" if held and trailer in g else g for task, g in lines]
+
+
+# Step 5: a commit's grant is minted only while the owner's /commit stands. A Task-id commit only a later /commit
+# the owner types can land is named for the owner (decision's (7)), not demanded of the agent.
+OWNER_ONLY = "not demanded in this turn, only a command the owner types closes it: "
+
+
+def _grant_mintable(span, payload) -> bool:
+    """write-commit-grant.py can mint in this turn: its own check of the owner's /commit holds for the session
+    (_sentinel_live), or no prompt the owner typed follows the span's opener (the owner typed this /commit)."""
+    lines, floor = span._lines()
+    return _script("scripts/write-commit-grant.py")._sentinel_live(str(payload.get("session_id") or "")) or not any(
+        b'"tool_result"' not in raw and command_span.is_human_prompt(command_span._decode(raw))
+        for _begin, _end, raw in lines.having_back((b'"user"',), floor))
 
 
 # ---------------------------------------------------------------- git facts (merge, push)
@@ -1412,8 +1428,9 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
             gaps.append(f"gate instrument failure: {type(exc).__name__}: {exc}")
     if unread and close_stalled(span):  # the predicate cannot read the cycle the run stalled on
         return 0, "", terminal
-    if not gaps:  # (7)
-        return 0, "", terminal
+    if all(g.startswith(OWNER_ONLY) for g in gaps):  # (7); what only the owner's command closes is named, not held
+        return 0, "".join([f"COMMAND_GATE /{span.command}: open for the owner\n" if gaps else ""]
+                          + [f"- {g}\n" for g in gaps]), terminal
     text = _block_text(span.command, gaps, _exit_hint(span, refused) + (
         f"A hook refused the {analyst} dispatch. To end the turn, write the line \"REFUSED: <hook> refused the "
         f"{analyst} dispatch; nothing was {'published' if span.command == 'push' else 'merged'}\", then the "
@@ -1470,8 +1487,10 @@ def main(argv=None) -> int:
         payload = {}
     code, text, terminal = decision(payload if isinstance(payload, dict) else {}, _mode(argv))
     sys.stderr.write(text)
-    if terminal:
-        sys.stdout.write(json.dumps({"timelock_terminal": terminal}) + "\n")
+    shown = {"timelock_terminal": terminal,
+             "systemMessage": text if code == 0 and text.startswith("COMMAND_GATE") else None}
+    if any(shown.values()):  # an allowed Stop's text is the owner's: what stays open and the command to type
+        sys.stdout.write(json.dumps({k: v for k, v in shown.items() if v}) + "\n")
     return code
 
 
