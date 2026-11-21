@@ -238,8 +238,7 @@ def test_a22_the_stop_group_is_one_entry_the_launcher_with_timeout_300():
         assert retired not in text, retired
 
 
-@pytest.mark.parametrize("stub", ["stop-overnight-timelock.py", "stop-obligation-gate.py", "stop-completion-gate.py",
-                                  "stop-do-report-gate.py"])
+@pytest.mark.parametrize("stub", ["stop-obligation-gate.py", "stop-do-report-gate.py"])
 def test_a22_each_retired_stop_hook_is_a_one_line_stub_exiting_0(stub):
     text = (HOOKS / stub).read_text(encoding="utf-8")
     assert sum(line.startswith("# STUB:") for line in text.splitlines()) == 1

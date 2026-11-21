@@ -36,7 +36,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -52,11 +51,6 @@ from hooks.lib.obligation import terminal_status  # noqa: E402  (the one termina
 # rule (hooks/lib/obligation.py).
 from hooks.lib.obligation import TASK_ID_RE  # noqa: E402
 from hooks.lib.obligation import transcript_scan  # noqa: E402  (one read of each transcript per scan)
-
-_HOOK_DENY_RE = re.compile(
-    r"(?:PreToolUse|PostToolUse|Stop):[^\n]*hook error:[^\n]*BLOCKED",
-    re.IGNORECASE,
-)
 
 # --------------------------------------------------------------------------
 # Read-only reuse of sibling scripts (module exec, never their main()/CLI).
@@ -558,37 +552,6 @@ def validate_auto_flag_combination(
     return None
 
 
-def classify_walk_outcome(tool_result_text: str, *, partial_multi_repo_commit: bool = False) -> str:
-    """Classify one parent's Step-walk outcome (objection 7's structured taxonomy).
-
-    The walk itself is an orchestrator PROCEDURE (commands/close.md Step 0-3 /
-    commands/commit.md Step 3-8 -- prose an agent follows via individual tool
-    calls, not a literal bash script an exit code terminates). This pure
-    function is the recognition predicate --auto applies to each walk's
-    terminal tool-call result text:
-
-      hook_deny        -- a PreToolUse/PostToolUse/Stop hook literally
-                           blocked a tool call ("hook error: ... BLOCKED")
-      partial_abort     -- a partial multi-repository commit (commit.md only)
-      success            -- the last line's close verdict classifies yes
-                             (hooks/lib/close-verdict.py), or COMMIT: APPROVE
-                             observed
-      ordinary_reject    -- everything else (a script's own exit 1/2,
-                             CLOSE_FINDINGS, COMMIT: REJECT, ...)
-    """
-    if partial_multi_repo_commit:
-        return "partial_abort"
-    text = tool_result_text or ""
-    if _HOOK_DENY_RE.search(text):
-        return "hook_deny"
-    verdict = _load_close_verdict_module()
-    if verdict.classify_line(verdict.last_nonempty(text)) == "yes":
-        return "success"
-    if re.search(r"COMMIT:\s*APPROVE", text, re.IGNORECASE) or re.search(r"\bcommitted\b", text, re.IGNORECASE):
-        return "success"
-    return "ordinary_reject"
-
-
 # --------------------------------------------------------------------------
 # /tickets table rendering
 # --------------------------------------------------------------------------
@@ -652,7 +615,8 @@ class Progress:
 
 
 def _default_project_dir() -> str:
-    return str(Path(__file__).resolve().parent.parent)
+    from hooks.lib import locations  # as hooks.lib.obligation above: this script runs in its harness
+    return str(locations.project_root(bash=True))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

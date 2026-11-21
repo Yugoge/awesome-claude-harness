@@ -26,6 +26,7 @@ from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
 COORDINATOR_TIMEOUT = 280  # under the registration's 300 s
+RECORDER = HOOKS / "lib" / "refusal_record.py"  # the refusal record's writer, a process of its own (record)
 
 
 def _load(name: str):
@@ -58,9 +59,21 @@ def fallback(raw: bytes, reason: str) -> int:
     window = _holds(lambda: overnight.window_open(payload))
     gated = _holds(lambda: reader.active_command(payload.get("transcript_path")) in reader.GATED_COMMANDS)
     if window or gated:
-        sys.stderr.write(f"COMMAND_GATE instrument failure: {reason}. The gate is broken; the human can type /stop\n")
+        text = f"COMMAND_GATE instrument failure: {reason}. The gate is broken; the human can type /stop\n"
+        sys.stderr.write(text)
+        record(raw, __file__, text)
         return 2
     return 0
+
+
+def record(raw: bytes, hook, text: str) -> None:
+    """One line in the refusal record for a blocked stop, written by RECORDER as a process of its own: this file
+    loads no harness module for it, and whatever that process does the answer stands."""
+    try:
+        subprocess.run([sys.executable, str(RECORDER), "refusal", __file__, str(hook), text[:4000].replace("\0", " ")],
+                       input=raw, capture_output=True, timeout=10)
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -81,6 +94,8 @@ def main() -> int:
         return fallback(raw, f"{name} exited {done.returncode}" + (f" ({last})" if last else ""))
     sys.stdout.buffer.write(done.stdout)
     sys.stderr.buffer.write(done.stderr)
+    if done.returncode == 2:
+        record(raw, HOOKS / name, done.stderr.decode("utf-8", "replace"))
     return done.returncode
 
 

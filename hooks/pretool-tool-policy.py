@@ -74,6 +74,8 @@ project's root README.md and ARCHITECTURE.md by its rule-inspector only
 (_check_clean_writes; hooks/pretool-claude-config-guard.py reads clean_grant).
 
 Behavior:
+  - Every caller: an AskUserQuestion that is not a kind lib/requirement_round.KEPT keeps,
+    in the step that owns it -> exit 2 (question_refusal).
   - Every caller, first: a protected file's write, delete or rename, and a
     ScheduleWakeup prompt typing a harness command -> exit 2 (P5; _check_protected).
   - Every caller, before any check: who changed each docs/dev/qa-report-*.json
@@ -90,6 +92,11 @@ Behavior:
     ba-qa-report-*.json, dev-report-*.json), a Write/Edit/MultiEdit/NotebookEdit
     of a QA or BA-QA report, declared by a dispatch yet or not -> exit 2
     (_check_report_writes, CD-6; residuals in docs/ENFORCEMENT-LEDGER.md R-003).
+  - An Agent/Task call whose obligation declares a file its subagent could not
+    write: each declared file is put to this decision (_decide) as that
+    subagent's Write of it, the dispatch recorded as the CLI records one; a
+    refusal -> exit 2 naming the file, the role and the refusing rule
+    (_check_dispatch_writes). No declared file, nothing is read.
   - Main agent (no agent_id) -> exit 0 after the derived permission and the
     grant binding (the orchestrator gate handles the rest of the main agent).
   - Subagent role unresolvable (a NORMAL state in agent_resolver), or one
@@ -131,6 +138,7 @@ import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib import shell_parse as _sp_names  # noqa: E402 -- the shell and program vocabulary
 
 # The deny-logic imports are loaded inside a FAIL-CLOSED bootstrap
 # guard, NOT at module top (where an ImportError would be a dirty uncaught
@@ -143,6 +151,7 @@ extract_bash_write_paths = None  # type: ignore[assignment]
 extract_bash_touched_paths = None  # type: ignore[assignment]
 is_allowed = None  # type: ignore[assignment]
 harness_state_dir = None  # type: ignore[assignment]
+locations = None  # type: ignore[assignment]
 
 
 def _bootstrap_security() -> None:
@@ -152,12 +161,13 @@ def _bootstrap_security() -> None:
     NOT be wrapped by the blanket fail-open `except` in __main__.
     """
     global WRITE_TOOLS, resolve_agent_type, extract_bash_write_paths, extract_bash_touched_paths, is_allowed, \
-        harness_state_dir
+        harness_state_dir, locations
     try:
         from lib.agent_resolver import resolve_agent_type as _rat
         from lib.bash_write_targets import extract_bash_touched_paths as _ebtp, extract_bash_write_paths as _ebwp
         from lib.policy_registry import WRITE_TOOLS as _wt, is_allowed as _ia
         from lib.harness_state_dir import harness_state_dir as _hsd
+        from lib import locations as _loc
     except Exception as e:  # ImportError, bootstrap failure, resolver failure
         sys.stderr.write(
             "BLOCKED by tool-policy.v1: deny-logic bootstrap FAILED — the policy "
@@ -171,6 +181,7 @@ def _bootstrap_security() -> None:
     extract_bash_touched_paths = _ebtp
     is_allowed = _ia
     harness_state_dir = _hsd
+    locations = _loc
 
 
 def _read_payload() -> dict:
@@ -198,11 +209,6 @@ def _extract_targets(tool_name: str, tool_input: dict) -> list:
         command = tool_input.get("command") or ""
         return extract_bash_write_paths(command) if isinstance(command, str) else []
     return [None]
-
-
-_RAW_TEMP_GRANTS = {"/tmp/*", "/var/tmp/*", "*/tmp/*", "*/var/tmp/*",
-                    "/tmp/", "/var/tmp/"}
-_SYSTEM_TEMP_ROOTS = ("/tmp", "/var/tmp")
 
 
 def _project_root() -> "os.PathLike | str":
@@ -235,12 +241,12 @@ def _role_temp_exceptions(role: str) -> list:
     state = harness_state_dir()
     out = []
     for entry in allowed:
-        if not isinstance(entry, str) or entry in _RAW_TEMP_GRANTS:
+        if not isinstance(entry, str) or entry in locations.RAW_TEMP_GRANTS:
             continue
         parts = entry.strip("*").split("/")
         if "tmp" in parts:
             out.append(entry)
-        elif state not in _SYSTEM_TEMP_ROOTS and entry.startswith("*/"):
+        elif not locations.is_system_temp_root(state) and entry.startswith("*/"):
             out.append(state + entry[1:] + ("" if entry.endswith("*") else "*"))
     return out
 
@@ -275,6 +281,16 @@ def _owner_binding(role: str, data: dict):
         return None
 
 
+def _main_scratch(data: dict):
+    """The main agent's own scratch directory: its session's (locations.session_scratch_dir) when
+    hooks/session-scratch-init.sh made it for this session (lib/scratch_owner), else None."""
+    from lib.scratch_owner import owns_scratch_dir
+
+    sid = data.get("session_id")
+    own = None if data.get("agent_id") else locations.session_scratch_dir(sid)
+    return own if own and owns_scratch_dir(own, sid) else None
+
+
 def _scratch_status(role: str, target: str, data: dict) -> str:
     """Classify a write target as owner / sibling / system_temp / outside.
 
@@ -287,6 +303,9 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
     """
     from pathlib import Path
 
+    own = _main_scratch(data)
+    if own and locations.is_inside(target, own, str(_project_root())):
+        return "owner"
     binding = _owner_binding(role, data)
     if binding is not None:
         try:
@@ -302,11 +321,7 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
     try:
         rel = resolved.relative_to(scratch_root).parts
     except ValueError:
-        for root in _SYSTEM_TEMP_ROOTS:
-            root_path = Path(root)
-            if resolved == root_path or root_path in resolved.parents:
-                return "system_temp"
-        return "outside"
+        return "system_temp" if locations.in_arbitrary_temp(str(resolved), str(_project_root())) else "outside"
     dispatch_id = data.get("agent_id")
     if len(rel) >= 3 and rel[1] == role and dispatch_id and rel[2] == dispatch_id:
         return "owner"
@@ -337,12 +352,37 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
     if status == "system_temp":
         if _matches_role_exception(role, target):
             return (True, "ok")
-        return (
-            False,
-            "arbitrary /tmp and /var/tmp are denied for every role; use the "
-            "managed scratch namespace .claude/scratch/<session>/<role>/<dispatch>/",
-        )
+        return (False, "arbitrary /tmp and /var/tmp are denied for every role")
     return (True, "ok")
+
+
+def _note_own_scratch(role: str, data: dict, target) -> None:
+    """After a refused write of ``target`` outside the caller's own scratch directory, name
+    that directory as a literal path. It is the directory
+    _scratch_status judges "owner": the main agent's session scratch, a
+    subagent's resource session's when one resolves, else
+    <project>/.claude/scratch/<session_id>/<role>/<agent_id>/."""
+    from pathlib import Path
+
+    try:
+        if _scratch_status(role, target, data) == "owner":
+            return
+        own, binding = _main_scratch(data), _owner_binding(role, data)
+        if not own and binding is not None:
+            from lib import session_resources
+
+            own = session_resources.scratch_path(_project_root(), binding)
+        elif not own:
+            parts = [str(data.get("session_id") or "session"), role, str(data.get("agent_id") or "")]
+            if not all(parts):  # an id that is no single name fails the owner check below
+                return
+            own = Path(_project_root()).resolve(strict=False).joinpath(".claude", "scratch", *parts)
+        if _scratch_status(role, os.path.join(own, "f"), data) != "owner":
+            return
+        sys.stderr.write(f"tool-policy.v1 scratch: your own scratch directory is {own}/ (mkdir -p {own} first; "
+                         f"a program that writes under $TMPDIR: TMPDIR={own} <command>)\n")
+    except Exception:
+        pass
 
 
 def _emit_block(role: str, tool: str, target, reason: str) -> None:
@@ -405,33 +445,15 @@ def _note_bash_write_target(data: dict, target) -> None:
 # dispatches' files, what a set of dispatches declares) are lib/declared_paths,
 # loaded only for a write, its bytecode cached like every lib module: this
 # file, compiled on every tool call, keeps the rule and the transcript reader.
-# Under their old names here they are lib/declared_paths' own.
-_READERS = frozenset({
-    "_HARNESS_ROOT", "_DEFAULT_SUBAGENT_TYPE", "_AGENT_ID_CHARS", "_parts", "_question_roles", "_QUESTION_PATH",
-    "_TEMPLATE_PATH_RE", "_SHAPE_PLACEHOLDER_RE", "_ANY", "_shape", "_read_text", "_command_text",
-    "_declarable_shapes", "_could_be_declared", "_declared_paths", "_load_json", "_plain_agent_id", "_agent_files",
-    "_FENCE_SHAPES", "_segment_prefix", "_template_shapes", "_example_shapes", "_template_bounds",
-    "_shapes_may_cover", "_template_may_cover", "_PATTERN_FIELDS", "_obligation_may_declare",
-    "_started_dispatches", "_caller_dispatches", "_covers", "_target_forms",
-})
-
-
-def __getattr__(name):
-    if name in _READERS:
-        from lib import declared_paths
-
-        return getattr(declared_paths, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 def _write_targets(tool_name: str, targets: list) -> list:
     if tool_name != "Bash" and tool_name not in WRITE_TOOLS:
         return []
     found = targets
-    # An unexpanded word cannot name a declared path, and the device tree (a
-    # redirect's /dev/null) holds no artifact; the role rows judge both.
+    # An unexpanded word cannot name a declared path, and a device (a redirect's
+    # /dev/null; never a file of a project kept on a tmpfs: lib/locations) holds
+    # no artifact; the role rows judge both.
     return [t for t in found if isinstance(t, str) and t and not any(c in t for c in "$`\x00")
-            and not t.startswith("/dev/")]
+            and not locations.is_device(t)]
 
 
 def _session_transcript(data: dict):
@@ -452,7 +474,6 @@ def _session_transcript(data: dict):
 # without one declares nothing and is no caller's dispatch. One search of this
 # needle replaces one of "Agent" and one of "Task", each a pass over the file.
 _PROMPT_KEY = b'"prompt"'
-_DISPATCH_NAMES = (b'"Agent"', b'"Task"')
 _PIECE = 1 << 22  # bytes per read of the forward scan
 _BACK_PIECE = 1 << 20  # the first read back from an offset; each further read doubles
 
@@ -553,6 +574,8 @@ class _Record:
         from the end of the file as _dispatch_calls reads a call; None when no
         call has both. Only lines that hold the id's JSON string are decoded."""
         from lib import command_span
+        from lib.subagent import DISPATCH_TOOLS
+        names = _dispatch_names(DISPATCH_TOOLS)
 
         token = json.dumps(ident).encode()
         top = self.size  # the lines from offset top on are searched
@@ -563,9 +586,9 @@ class _Record:
                 end = data.find(b"\n", pos, top - base)
                 end = top - base if end < 0 else end
                 line = data[begin:end]
-                if any(name in line for name in _DISPATCH_NAMES):
+                if any(name in line for name in names):
                     for block in command_span._blocks(command_span._decode(line)):
-                        if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+                        if (block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS
                                 and isinstance(block.get("input"), dict) and (block.get("id") or "") == ident
                                 and block["input"].get("prompt") == prompt):
                             return command_span.Call(id=ident, name=block["name"], input=block["input"],
@@ -597,6 +620,11 @@ class _Record:
         return found[1] if found else None
 
 
+def _dispatch_names(tools) -> tuple:
+    """The JSON strings of the dispatch tool names, as a record line holds them."""
+    return tuple(json.dumps(t).encode() for t in tools)
+
+
 def _dispatch_calls(record: _Record) -> list:
     """The session's Agent/Task calls, read as command_span's Span.calls reads
     them (its line reader, the main session's own records only), without the
@@ -608,13 +636,15 @@ def _dispatch_calls(record: _Record) -> list:
     against the commands that open spans, and numbering every line of a long
     transcript would be a pass of its own."""
     from lib import command_span
+    from lib.subagent import DISPATCH_TOOLS
 
+    names = _dispatch_names(DISPATCH_TOOLS)
     calls = []
     for begin, _end, line in record.lines(_PROMPT_KEY):
-        if not any(name in line for name in _DISPATCH_NAMES):
+        if not any(name in line for name in names):
             continue
         for block in command_span._blocks(command_span._decode(line)):
-            if (block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task")
+            if (block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS
                     and isinstance(block.get("input"), dict)):
                 calls.append(command_span.Call(id=block.get("id") or "", name=block["name"], input=block["input"],
                                                line=begin, result_line=0, ok=False))
@@ -633,7 +663,8 @@ def _declarations(record, calls: list, targets=None) -> list:
 def _caller_label(role, data: dict) -> str:
     if role:
         return role
-    if not data.get("agent_id"):
+    from lib.subagent import is_subagent
+    if not is_subagent(data):
         return "main"
     return data.get("agent_type") or "unresolved"
 
@@ -705,7 +736,7 @@ _CODE_WRITE_FORMS = [re.compile(p) for p in (
     r"""['"]\+?>{1,2}['"]\s*,\s*""" + _LIT,                            # perl open(F, '>', P)
     r"""(['"])\+?>{1,2}\s*([^'"\n]*?""" + _REPORT_FAMILY + r"""-[^'"\n/]*\.json)\1""",  # perl open(F, ">P")
 )]
-_DEST_MODES = ("copy-dest", "move-dest", "link")
+_DEST_MODES = ("copy-dest", "move-dest", "link")  # the write modes that stage a destination
 _WRITER_NAMES = frozenset({"tee", "cp", "mv", "install", "ln", "rsync", "dd", "truncate", "sed", "sh", "bash",
                            "dash", "zsh", "ksh", "sponge", "sort", "uniq", "awk", "gawk", "curl", "wget", "touch"})
 _CD_LIMIT = 64
@@ -792,19 +823,9 @@ def _hits(cand: str, dirs: list) -> bool:
 
 
 def _known_text(text: str, cwd: str | None = None):
-    """``text`` with ~, $HOME, $CLAUDE_PROJECT_DIR and (at the call's start) $PWD expanded; None
-    when an expansion stays."""
-    known = {"HOME": os.environ.get("HOME") or os.path.expanduser("~")}
-    if cwd:
-        known["PWD"] = cwd
-    if os.environ.get("CLAUDE_PROJECT_DIR"):
-        known["CLAUDE_PROJECT_DIR"] = os.environ["CLAUDE_PROJECT_DIR"]
-    for name, value in known.items():
-        text = text.replace("${%s}" % name, value).replace("$" + name, value)
-    text = text.replace('"', "").replace("'", "")
-    if any(c in text for c in "$`*?["):
-        return None
-    return os.path.expanduser(text) if text.startswith("~") else text
+    from lib import claude_home
+
+    return claude_home.known_text(text, cwd)
 
 
 def _call_dirs(script, sp, cwd: str):
@@ -814,10 +835,10 @@ def _call_dirs(script, sp, cwd: str):
     dirs, unknown, first = [cwd], False, True
     for site in sp.walk(script):
         r = sp.resolve(site.cmd)
-        if r.name not in ("cd", "pushd"):
+        if r.name not in sp.CD_TARGET_BUILTINS:
             continue
         first, was_first = False, first
-        operands = [w for w in r.args if (w.value() or "") not in ("-L", "-P", "-e", "-@", "--")]
+        operands = [w for w in r.args if (w.value() or "") not in sp.CD_OPTIONS]
         if not operands:
             dest = os.environ.get("HOME") or os.path.expanduser("~")
         else:
@@ -856,28 +877,17 @@ def _url_name(url: str) -> str:
 
 
 def _operand_writes(name: str, values: list) -> list:
-    """The paths a writer names among its operands (as written): ``sort -o``, ``uniq IN OUT``, a
-    sed ``w`` command, an awk ``print > "P"``, ``openssl -out``, curl's ``-o``/``-O`` with
-    ``--output-dir``, wget's ``-O``/``-P``. Only literal operands; a read never names one."""
+    """The paths a writer names among its operands (as written): a sed ``w`` command, an awk
+    ``print > "P"``, ``openssl -out``, curl's ``-o``/``-O`` with ``--output-dir``, wget's ``-O``/``-P``
+    (sort -o and uniq IN OUT are the shared parser's). Only literal operands; a read never names one."""
+    from lib import shell_parse as sp
     out = []
     plain = [v for v in values if v is not None]
-    if name == "sort":
-        for i, v in enumerate(plain):
-            if v in ("-o", "--output") and i + 1 < len(plain):
-                out.append(plain[i + 1])
-            elif v.startswith("--output="):
-                out.append(v.split("=", 1)[1])
-            elif v.startswith("-o") and len(v) > 2 and not v.startswith("--"):
-                out.append(v[2:])
-    elif name == "uniq":
-        operands = [v for v in plain if not v.startswith("-") or v == "-"]
-        if len(operands) >= 2:
-            out.append(operands[1])
-    elif name in ("sed", "gsed"):
+    if name in ("sed", "gsed"):
         for v in plain:
             for m in _SED_W.finditer(v):
                 out.append(m.group(1) or m.group(3))
-    elif name in ("awk", "gawk", "mawk", "nawk"):
+    elif name in sp.AWK_NAMES:
         for v in plain:
             out += _AWK_OUT.findall(v)
     elif name == "openssl":
@@ -906,7 +916,7 @@ def _operand_writes(name: str, values: list) -> list:
                 prefix = v.split("=", 1)[1]
             elif v.startswith("-P") and len(v) > 2:
                 prefix = v[2:]
-            elif v in ("-O", "--output-document") and i + 1 < len(plain):
+            elif v in sp.WGET_OUTPUT_OPTS and i + 1 < len(plain):
                 out.append(plain[i + 1])
             elif "://" in v:
                 urls.append(v)
@@ -940,7 +950,7 @@ def _bash_report_writes(command: str, cwd: str) -> list:
     # command that names a report, may write it.
     for site in sites:
         words = [sp.basename(w.value() or "") for w in site.cmd.words]
-        if tokens and words and words[0] in ("xargs", "parallel") and (
+        if tokens and words and words[0] in sp.ITEM_RUNNERS and (
                 _WRITER_NAMES & set(words[1:]) or any(">" in (w.text or "") for w in site.cmd.words[1:])):
             found.append(tokens[0])
     for t in writes:
@@ -1019,7 +1029,8 @@ def _check_report_writes(role, tool_name: str, tool_input: dict, targets: list, 
     pins it as allowed; an owner decision). Whatever this misses, the e2e gate refuses by
     provenance (lib/report_provenance.py)."""
     global _DECLARED_REPORTS
-    if data.get("agent_id") or not isinstance(tool_input, dict):
+    from lib.subagent import is_subagent
+    if is_subagent(data) or not isinstance(tool_input, dict):
         return
     cwd = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     if tool_name in WRITE_TOOLS or tool_name == "Bash":
@@ -1083,8 +1094,6 @@ _HOOK_ENTRY = re.compile(r"(?:pretool|subagentstop|subagentstart)-[\w.-]*\.(?:py
 _PROVENANCE_TEXT = re.compile(r"report_provenance|report-provenance|observe_call")
 _RUNNERS = re.compile(r"(?:python[\d.]*|pypy[\d.]*|node|nodejs|deno|bun|ruby|perl|php|bash|sh|dash|zsh|ksh|"
                       r"source|\.)\Z")
-_SHELLS = frozenset({"bash", "sh", "dash", "zsh", "ksh", "source", "."})
-_SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O", "--rcfile", "--init-file"})
 _INLINE_FLAGS = re.compile(r"-[A-Za-z]*[ceEr]\Z")
 _PY_VALUE_OPTS = frozenset({"-W", "-X", "-Q"})
 _HOOKS_DIR = re.compile(r"(?:\A|[/'\"=:\s])hooks/?(?:\Z|['\"\s:;)])|hooks/lib\b|/hooks(?=['\"/\s:;)]|\Z)")
@@ -1105,8 +1114,6 @@ _WRITES = re.compile(
     r"[\"']\+?>{1,2}|[\"']\+<|print\([^)]*file\s*=")
 # Top-level module names an import statement in python code names.
 _PY_IMPORTED = re.compile(r"(?:^|[;\n])\s*(?:from\s+([\w.]+)\s+import\b|import\s+([\w.]+(?:\s*,\s*[\w.]+)*))")
-_FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
-_FIND_NAME_OPTS = frozenset({"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename"})
 _EXEC_WRAPPERS = frozenset({"env", "nice", "timeout", "nohup", "command", "exec", "stdbuf", "setsid", "time",
                             "sudo", "ionice", "chrt", "taskset", "xargs"})
 _BRACE = re.compile(r"\{([^{}]*,[^{}]*)\}")
@@ -1190,7 +1197,7 @@ def _inline_runs_hook(name: str, code: str, dirs: list) -> str | None:
         return name + " code importing the provenance module"
     if _PROVENANCE_TEXT.search(code) and _WRITES.search(code):
         return name + " code writing the provenance ledger"
-    if name.startswith(("python", "pypy")) and _imports_from(code, dirs):
+    if name.startswith(_sp_names.PYTHON_NAMES) and _imports_from(code, dirs):
         return name + " code importing from the harness hooks directory"
     return None
 
@@ -1198,7 +1205,8 @@ def _inline_runs_hook(name: str, code: str, dirs: list) -> str | None:
 def _find_runs_hook(args: list, texts: list, dirs: list) -> str | None:
     """`find ... -name <entry> -exec <interpreter> {} ;` (or `-exec {}`): the entry run by find."""
     words = [a if a is not None else t for a, t in zip(args, texts)]
-    starts = [i for i, w in enumerate(words) if w in _FIND_EXEC]
+    from lib.shell_parse import FIND_EXEC
+    starts = [i for i, w in enumerate(words) if w in FIND_EXEC]
     if not starts:
         return None
     runs = False
@@ -1212,13 +1220,14 @@ def _find_runs_hook(args: list, texts: list, dirs: list) -> str | None:
             runs = True
     if not runs:
         return None
+    from lib import shell_parse as sp
     roots = []
     for w in words:
-        if w.startswith(("-", "(", "!")):
+        if w.startswith(sp.FIND_EXPRESSION_LEADS):
             break
         roots.append(w)
     for i, w in enumerate(words[:-1]):
-        if w not in _FIND_NAME_OPTS:
+        if w not in _sp_names.FIND_NAME_TESTS:
             continue
         pat = words[i + 1].replace('"', "").replace("'", "")
         if _HOOK_ENTRY.search(pat) or _PROVENANCE_TEXT.search(pat):
@@ -1270,26 +1279,26 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             if a == "--":
                 operand = args[i + 1] if i + 1 < len(args) else None
                 break
-            if name.startswith(("python", "pypy")) and a == "-m":
+            if name.startswith(_sp_names.PYTHON_NAMES) and a == "-m":
                 module = args[i + 1] if i + 1 < len(args) else ""
                 break
-            if name.startswith(("python", "pypy")) and a in _PY_VALUE_OPTS:
+            if name.startswith(_sp_names.PYTHON_NAMES) and a in _PY_VALUE_OPTS:
                 i += 2
                 continue
-            if name in _SHELLS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
+            if name in sp.SCRIPT_RUNNERS and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a):
                 operand = None
                 break  # `sh -c CODE`: walked as commands of its own
-            if name in _SHELLS and a in _SHELL_VALUE_OPTS:
+            if name in sp.SCRIPT_RUNNERS and a in _sp_names.SHELL_VALUE_OPTS:
                 if a in ("-o", "+o") and i + 1 < len(args) and (args[i + 1] or "") == "noexec":
                     noexec = a == "-o"
                 i += 2
                 continue
-            if name in _SHELLS and len(a) > 1 and a[0] in "-+" and not a.startswith("--"):
+            if name in sp.SCRIPT_RUNNERS and len(a) > 1 and a[0] in "-+" and not a.startswith("--"):
                 if "n" in a[1:]:
                     noexec = a[0] == "-"  # `-n` reads without running; a later `+n` runs
                 i += 1
                 continue
-            if name not in _SHELLS and _INLINE_FLAGS.fullmatch(a):
+            if name not in sp.SCRIPT_RUNNERS and _INLINE_FLAGS.fullmatch(a):
                 if i + 1 < len(args):
                     inline.append(texts[i + 1] if args[i + 1] is None else args[i + 1])
                 break
@@ -1306,12 +1315,12 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
                 return f"-m {module} from the harness hooks directory"
             continue
         if operand not in (None, "-"):
-            if noexec and name in _SHELLS and name not in ("source", "."):
+            if noexec and name in sp.SCRIPT_RUNNERS and name not in sp.SOURCE_BUILTINS:
                 continue  # a syntax check (`bash -n`) runs nothing
             if _hook_entry_path(operand, dirs):
                 return operand
             continue
-        if name in _SHELLS:
+        if name in sp.SCRIPT_RUNNERS:
             continue  # a shell's code is walked as commands of its own
         if operand == "-" or not inline:
             for red in site.cmd.redirects:
@@ -1325,14 +1334,15 @@ def _runs_hook_code(command: str, cwd: str) -> str | None:
             hit = _inline_runs_hook(name, code or "", dirs)
             if hit:
                 return hit
-            if pythonpath_hooks and name.startswith(("python", "pypy")):
+            if pythonpath_hooks and name.startswith(_sp_names.PYTHON_NAMES):
                 return "PYTHONPATH on the harness hooks directory"
     return None
 
 
 def _check_hook_replay(role, tool_name: str, tool_input: dict, data: dict) -> None:
     """Exit 2 on the main agent's Bash call that runs the harness's own hook code by hand (above)."""
-    if data.get("agent_id") or tool_name != "Bash" or not isinstance(tool_input, dict):
+    from lib.subagent import is_subagent
+    if is_subagent(data) or tool_name != "Bash" or not isinstance(tool_input, dict):
         return
     command = tool_input.get("command")
     if not isinstance(command, str) or not command:
@@ -1510,8 +1520,8 @@ def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, tran
 
 
 def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True):
-    """The role's denials on the declaring dispatch's own write: its tool
-    lists, deny prefixes and an unreadable policy, never its allow prefixes."""
+    """The role's denials on the declaring dispatch's own write: its tool lists (and
+    declared_artifact_tools), deny prefixes and an unreadable policy, never its allow prefixes."""
     from lib import policy_registry
 
     if policy_registry.load_policy() is None:
@@ -1519,7 +1529,7 @@ def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True
     role_pol = policy_registry.get_role_policy(role)
     if role_pol.get("_unknown_role"):
         return is_allowed(role, tool, target, carveouts)
-    tool_check = policy_registry._check_tool_lists(role_pol, tool)
+    tool_check = policy_registry._check_tool_lists(role_pol, tool, own=True)
     if tool_check is not None:
         return tool_check
     denial = policy_registry._write_denial(role_pol, target, carveouts)
@@ -1623,6 +1633,7 @@ def _clean_holds(data: dict, project: str) -> list:
     """[(role, call id, prompt, paths written, paths removed)] of each producer
     dispatch of the active span when a human-typed /clean opened it, else []."""
     from lib import claude_home, command_span, obligation
+    from lib.subagent import DISPATCH_TOOLS
 
     transcript = _session_transcript(data)
     span = command_span.active_span(transcript) if transcript else None
@@ -1632,7 +1643,7 @@ def _clean_holds(data: dict, project: str) -> list:
     home = os.path.normpath(str(home)) if home else None
     root = (frozenset(f for name in _CLEAN_ROOT_DOCS for f in _clean_forms(name, project)), frozenset())
     holds, answered, approvals, read = [], False, {}, {}
-    for use in span.uses("Agent", "Task", "AskUserQuestion", "Write"):
+    for use in span.uses(*DISPATCH_TOOLS, "AskUserQuestion", "Write"):
         if use.name == "AskUserQuestion":
             answered = answered or use.ok
             continue
@@ -1770,9 +1781,6 @@ def _approved_write_allowed(role: str, tool: str, target):
     return (True, "ok")
 
 
-_STAGING_MODES = ("link", "copy-dest", "move-dest")
-
-
 def _restaged_targets(tool_name: str, tool_input: dict) -> "set | None":
     """The Bash write targets a write carve-out may not admit: each path that
     another operation of the same command first makes as a link, copy or move
@@ -1790,8 +1798,8 @@ def _restaged_targets(tool_name: str, tool_input: dict) -> "set | None":
         from lib import policy_registry
 
         command = tool_input.get("command") or ""
-        found = [(bwt._render(t, command), t.mode) for t in bwt.extract_bash_write_targets_with_modes(command)]
-        staged = [(i, os.path.abspath(p)) for i, (p, mode) in enumerate(found) if p and mode in _STAGING_MODES]
+        found = [(p, t.mode) for t in bwt.extract_bash_write_targets_with_modes(command) for p in bwt._placed(t, command)]
+        staged = [(i, os.path.abspath(p)) for i, (p, mode) in enumerate(found) if p and mode in _DEST_MODES]
         out = set()
         for j, (path, _) in enumerate(found):
             if path and any(i != j and policy_registry._path_is_prefix(s, os.path.abspath(path))
@@ -1819,6 +1827,8 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     check_tool = "Write" if tool_name == "Bash" else tool_name
     restaged = _restaged_targets(tool_name, data.get("tool_input"))
     for target in targets:
+        if check_tool in WRITE_TOOLS and locations.is_sink(target):
+            continue  # the null device, the caller's own streams, terminal or descriptor: no file is written
         carveouts = restaged is not None and target not in restaged
         if check_tool in WRITE_TOOLS and target in approved and target not in own:
             allowed, reason = _approved_write_allowed(role, check_tool, target)
@@ -1830,6 +1840,12 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
             _emit_block(role, check_tool, target, reason)
             if tool_name == "Bash":
                 _note_bash_write_target(data, target)
+            if check_tool in WRITE_TOOLS:
+                _note_own_scratch(role, data, target)
+            elif tool_name == "Monitor":  # the CLI's sleep guard names it: name a wait the role may run
+                sys.stderr.write("tool-policy.v1 note: to wait for a condition, run the loop in a foreground Bash call "
+                                 "(timeout up to 600000 ms): until <check>; do sleep 2; done; "
+                                 "to wait for a command you started, run it with run_in_background: true.\n")
             _note_inflight_token_route(role, tool_name, target)
             sys.exit(2)
         if check_tool in WRITE_TOOLS:
@@ -1838,6 +1854,7 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
                 _emit_block(role, check_tool, target, reason)
                 if tool_name == "Bash":
                     _note_bash_write_target(data, target)
+                _note_own_scratch(role, data, target)
                 sys.exit(2)
 
 
@@ -1866,15 +1883,16 @@ def _home_git_files(home) -> list:
     held = [(dot, "the harness home's .git file")]
     import subprocess
 
-    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE")}
+    env = {k: v for k, v in os.environ.items() if k not in _sp_names.GIT_REDIRECT_ENV_VARS}
     try:
         out = subprocess.run(["git", "-C", home, "rev-parse", "--path-format=absolute", "--git-dir",
                               "--git-common-dir"], capture_output=True, text=True, timeout=10, env=env)
         git_dir, common = out.stdout.splitlines()[:2] if out.returncode == 0 else ("", "")
     except (OSError, subprocess.SubprocessError, ValueError):
         git_dir = common = ""
-    for root, names, label in ((common, ("config", "hooks"), "git common dir's"),
-                               (git_dir, ("config", "config.worktree"), "git dir's")):
+    from lib.git_facts import GIT_COMMON_DIR_PROTECTED, GIT_DIR_CONFIG_FILES
+    for root, names, label in ((common, GIT_COMMON_DIR_PROTECTED, "git common dir's"),
+                               (git_dir, GIT_DIR_CONFIG_FILES, "git dir's")):
         held += [(os.path.join(root, n), f"the harness home's {label} {n}") for n in names if root]
     return held
 
@@ -1926,15 +1944,19 @@ def _protected(path: str, removed: bool, home, config: str, state: str, git_file
 
     if HOOK_OWNED.search(path.replace(os.sep, "/")):
         return "an owner's answer, which only the PostToolUse AskUserQuestion hook writes"
-    if _below(path, os.path.join(os.path.dirname(config), "logs")) in ("lifecycle.jsonl", "lifecycle.jsonl.lock"):
+    from lib.score_log import log_path  # the writer's own definition
+
+    if _below(path, str(log_path().parent)) in ("lifecycle.jsonl", "lifecycle.jsonl.lock"):
         return "the score log or its lock, which only hooks write"
     if _below(path, config) and kept(name):
         return "a session transcript or its subagent meta"
     if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
         return "a /do task sidecar"
     provenance = os.path.join(state, "report-provenance")  # lib/report_provenance.ledger_dir
-    if _below(path, provenance) or (removed and _below(provenance, path)):
+    if _below(path, provenance):
         return "the QA report provenance ledger, which only hooks write (CD-6)"
+    if removed and _below(provenance, path):
+        return "a directory holding the QA report provenance ledger, which only hooks write (CD-6)"
     push = _push_input(path, state)
     if push:
         return push
@@ -2064,22 +2086,88 @@ def _check_scheduled_prompt(role, tool_name: str, tool_input: dict, data: dict) 
         sys.exit(2)
 
 
+def _check_dispatch_writes(tool_name: str, tool_input: dict, data: dict) -> None:
+    """A dispatch whose obligation declares a file its subagent cannot write -> exit 2, so no
+    subagent is started into a stop gate (G2) it cannot pass. Each declared file is put to this
+    hook's own decision (_decide) as that subagent's Write of it, its dispatch recorded as the CLI
+    records one (the call, the child's first record and meta) in a store of its own."""
+    prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
+    if not isinstance(prompt, str) or "<obligation" not in prompt or '"path"' not in prompt:
+        return  # no block, or one declaring no file: a file artifact's fields hold its path
+    import contextlib
+    import io
+    import shutil
+    import tempfile
+    from lib import obligation
+    from lib.subagent import DISPATCH_TOOLS
+
+    if tool_name not in DISPATCH_TOOLS:
+        return
+
+    parsed = obligation.parse_obligation(prompt)
+    arts = parsed.obligation.get("artifacts") or [] if isinstance(parsed, obligation.ParsedObligation) else []
+    paths = [a["path"] for a in arts if obligation.FRESHNESS_SLACK_SECONDS_BY_KIND.get(a.get("kind")) is not None]
+    role, call = tool_input.get("subagent_type") or "general-purpose", data.get("tool_use_id") or "toolu_dispatch"
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd()
+    if not paths:
+        return
+    root = tempfile.mkdtemp(prefix="dispatch-writes-")
+    try:
+        for name, record in (("s/subagents/agent-dispatch.jsonl", {"type": "user", "message": {"role": "user",
+                             "content": prompt}}), ("s/subagents/agent-dispatch.meta.json", {"agentType": role,
+                             "toolUseId": call}), ("s.jsonl", {"type": "assistant", "message": {"role": "assistant",
+                             "content": [{"type": "tool_use", "id": call, "name": tool_name, "input": tool_input}]}})):
+            os.makedirs(os.path.dirname(os.path.join(root, name)), exist_ok=True)
+            with open(os.path.join(root, name), "w") as fh:
+                fh.write(json.dumps(record) + "\n")
+        for path in paths:
+            target, saved, sys.stderr, code = os.path.join(project, path), sys.stderr, io.StringIO(), 0
+            try:
+                _decide({**data, "transcript_path": os.path.join(root, "s.jsonl"), "tool_name": "Write",
+                         "agent_id": "dispatch", "agent_type": role, "tool_input": {"file_path": target}})
+            except SystemExit as stop:
+                code = stop.code
+            finally:
+                refusal, sys.stderr = sys.stderr.getvalue(), saved
+            if code != 2:
+                continue
+            with contextlib.suppress(ValueError, KeyError, TypeError):
+                refusal = json.loads(refusal.partition("\n")[0].partition(": ")[2])["deny_reason"]
+            _emit_block("main", tool_name, path, f"this dispatch declares {path} for its {role} subagent, and "
+                        f"tool-policy.v1 (hooks/pretool-tool-policy.py) would refuse that subagent's Write of "
+                        f"{target}: {refusal.strip()}; its stop gate would demand a file it may not write, so no "
+                        "subagent is started")
+            sys.exit(2)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main() -> None:
     # Bootstrap the deny-logic FIRST, fail-closed (exit 2) on import error.
     _bootstrap_security()
     data = _read_payload()
-    if not data:
+    if not data or not isinstance(data.get("tool_name"), str):
         sys.exit(0)
-    tool_name = data.get("tool_name")
-    if not isinstance(tool_name, str):
-        sys.exit(0)
-    tool_input = data.get("tool_input") or {}
     _observe_reports(data)
+    _decide(data)
+
+
+def _decide(data: dict) -> None:
+    """The decision on one call (exit 2 refuses it, exit 0 lets it through)."""
+    tool_name, tool_input = data["tool_name"], data.get("tool_input") or {}
     role = resolve_agent_type(data)
     _check_hook_replay(role, tool_name, tool_input, data)
     targets = _extract_targets(tool_name, tool_input)
     _check_protected(role, tool_name, tool_input, targets, data)
     _check_scheduled_prompt(role, tool_name, tool_input, data)
+    if tool_name == "AskUserQuestion":  # only the kinds requirement_round.KEPT keeps reach the owner
+        from lib import requirement_round
+
+        why = requirement_round.question_refusal(data)
+        if why:
+            _emit_block(_caller_label(role, data), tool_name, "the owner", why)
+            sys.exit(2)
+    _check_dispatch_writes(tool_name, tool_input, data)
     own = _check_declared_writes(role, tool_name, targets, data)
     approved = _check_clean_writes(role, tool_name, targets, data)
     _check_grant_writes(role, tool_name, targets, data)

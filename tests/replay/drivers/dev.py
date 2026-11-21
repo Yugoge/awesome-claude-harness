@@ -1126,8 +1126,11 @@ class DevCycle:
                  f"docs/dev/ba-panel-{sid}-r1.json": json.dumps(doc, indent=2) + "\n",
                  f"docs/dev/requirement-answers-{sid}-r1.json": json.dumps(
                      {"task_id": sid, "round": 1, "answers": answers}, indent=2) + "\n"}
-        for rel, text in files.items():  # the panel file is /spec's panel QA's (commands/spec.md declares it for qa)
-            with self.rp.acting("agent:qa" if "/ba-panel-" in rel else "driver"):
+        # each as its writer wrote it: the panel file is /spec's panel QA's (commands/spec.md declares it for qa), the
+        # answers the PostToolUse AskUserQuestion hook's (requirement_round.handle, their one writer)
+        writers = {"/ba-panel-": "agent:qa", "/requirement-answers-": "hooks/lib/requirement_round.py"}
+        for rel, text in files.items():
+            with self.rp.acting(next((w for k, w in writers.items() if k in rel), "driver")):
                 os.makedirs(os.path.dirname(os.path.join(project, rel)), exist_ok=True)
                 with open(os.path.join(project, rel), "w") as fh:
                     fh.write(text)

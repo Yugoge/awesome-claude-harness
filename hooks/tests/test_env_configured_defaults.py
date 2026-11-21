@@ -55,7 +55,7 @@ def sandbox(tmp_path):
         "HOME": str(tmp_path / "home"),
         "CLAUDE_CONFIG_DIR": str(tmp_path / "config"),
         "CLAUDE_STATE_DIR": str(tmp_path / "state"),
-        "CLAUDE_DAEMON_RESTART_GRANT_DIR": str(tmp_path / "grants"),
+        "CLAUDE_DAEMON_RESTART_SENTINEL_DIR": str(tmp_path / "grants"),
         "CLAUDE_PROTECTED_RUNTIME_FILE": str(runtime),
     })
     return tmp_path, env
@@ -166,10 +166,11 @@ def test_unset_grant_helper_guidance_reads_sensibly(sandbox):
 def test_process_family_rules(sandbox):
     _, env = sandbox
     assert hook(env, "docker restart demo-prod").returncode == 0
+    # every kill by name or pattern is refused, with or without the family configured (one verdict for the act)
     r = hook(env, "killall claude")
-    assert r.returncode == 2 and "Killing claude/docker processes" in r.stderr
+    assert r.returncode == 2 and "Killing processes by name or pattern" in r.stderr
     r = hook(env, "pkill -f demo-daemon")
-    assert "Killing" not in r.stderr
+    assert r.returncode == 2 and "Killing processes by name or pattern" in r.stderr
 
     env = {**env, **STAND_INS}
     # The family's docker stop/restart/rm rule is deleted (owner decision): a family container is not refused
@@ -178,7 +179,7 @@ def test_process_family_rules(sandbox):
         assert hook(env, command).returncode == 0, command
     assert "Bash(docker rm:*)" in json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
     r = hook(env, "killall demo-daemon")
-    assert r.returncode == 2 and "Killing demo/claude/docker processes" in r.stderr
+    assert r.returncode == 2 and "Killing processes by name or pattern" in r.stderr
 
 
 # Default hard bans (CLAUDE_HARD_BANNED_SCRIPTS unset or empty): the generic names, bare or as NAME.sh, match only
@@ -253,8 +254,11 @@ def test_default_hard_bans_block_running_the_scripts(sandbox, command, name):
 
 
 # An explicit value (e.g. one the migration wrote from the previous built-in rules) keeps the old meaning:
-# each '|'-separated ERE is its own rule `echo "$COMMAND" | grep -qE '<ERE>'`, matched anywhere.
+# each '|'-separated ERE is its own rule `echo "$COMMAND" | grep -qE '<ERE>'`, matched anywhere, in every command
+# that is not read-only as a whole: a search, listing or print of the script's file runs nothing.
 OLD_STYLE_BANS = "acct-test-123-recovery|acct-test-123-restart"
+ONLY_READS = ("cat docs/acct-test-123-recovery.md", "grep -rn 'acct-test-123-restart' .", "echo acct-test-123-restart",
+              "cat scripts/acct-test-123-recovery.sh")
 
 
 @pytest.mark.parametrize("command", (
@@ -266,23 +270,26 @@ OLD_STYLE_BANS = "acct-test-123-recovery|acct-test-123-restart"
     "ls notes",
     "bash scripts/session-recovery.sh",  # a set value replaces the default names
     "cat docs/session-recovery.md",
-    "cat scripts/acct-test-123-recovery.sh",  # unlike the default, a set value also matches a mention
-    'git commit -m "remove acct-test-123-restart.sh"',
+    "cat scripts/acct-test-123-recovery.sh",  # a read of the script's file: runs nothing
+    'git commit -m "remove acct-test-123-restart.sh"',  # unlike the default, a set value also matches a mention
+    "cat scripts/acct-test-123-recovery.sh | sh",
+    "grep -l x scripts/acct-test-123-restart.sh > /tmp/found.txt",
 ))
 def test_explicit_hard_ban_value_keeps_match_anywhere_semantics(sandbox, command):
     _, env = sandbox
     old_rules = [subprocess.run(["grep", "-qE", "--", ere], input=command + "\n", text=True).returncode == 0
                  for ere in OLD_STYLE_BANS.split("|")]
+    refused = any(old_rules) and command not in ONLY_READS
     r = hook(env, command, CLAUDE_HARD_BANNED_SCRIPTS=OLD_STYLE_BANS)
-    assert r.returncode == (2 if any(old_rules) else 0), r.stderr
-    assert ("hard-banned script 'acct-test-123-" in r.stderr) == any(old_rules)
+    assert r.returncode == (2 if refused else 0), r.stderr
+    assert ("hard-banned script 'acct-test-123-" in r.stderr) == refused
 
 
 def test_hard_ban_empty_entries_never_match_and_session_dirs_ban_stays(sandbox):
     _, env = sandbox
     for value in ("demo-recovery|demo-restart||", "|", "||"):
         assert hook(env, "ls notes.txt", CLAUDE_HARD_BANNED_SCRIPTS=value).returncode == 0, value
-    r = hook(env, "ls demo-restart.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery|demo-restart||")
+    r = hook(env, "bash demo-restart.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery|demo-restart||")
     assert r.returncode == 2 and "hard-banned script 'demo-restart'" in r.stderr
     # The session_dirs.txt ban is settings.json's permissions.deny: Read and Edit refuse the file, and since OB-L16
     # per-command Bash entries refuse a command that reads, writes or runs it (a search or commit mention passes).
@@ -350,8 +357,10 @@ def _prune_checkout(tmp_path, env):
     (home / "scripts").mkdir(parents=True)
     shutil.copy2(PRUNE, home / "scripts" / PRUNE.name)
     subprocess.run(["git", "init", "-q", str(home)], env=env, check=True)
+    project = tmp_path / "demo project.y"
+    (project / ".claude").mkdir(parents=True)
     sid = "0f0e0d0c-1234-4abc-8def-acct00000001"
-    (home / f"workflow-{sid}.json").write_text("{}\n")
+    (project / ".claude" / f"workflow-{sid}.json").write_text("{}\n")
     return home, sid
 
 
@@ -359,28 +368,31 @@ def test_prune_without_accounts_dir_refuses_and_never_scans_root(sandbox):
     tmp_path, env = sandbox
     home, _ = _prune_checkout(tmp_path, env)
     r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], env=env, text=True,
-                       capture_output=True, timeout=60)
+                       capture_output=True, timeout=60, cwd=tmp_path / "demo project.y")
     assert r.returncode == 1
     assert "WORKFLOW_PRUNE_ACCOUNTS_DIR" in r.stderr
     assert "Accounts checked" not in r.stdout
 
 
-def test_prune_project_dirname_derives_from_the_harness_home(sandbox):
+def test_prune_reads_the_bookmarks_where_the_hook_writes_them(sandbox):
+    """P01: the bookmark is <project>/.claude/workflow-<sid>.json (hooks/prompt-workflow.py, project =
+    CLAUDE_PROJECT_DIR else the cwd); its transcript folder is that project's Claude Code folder name."""
     tmp_path, env = sandbox
     home, sid = _prune_checkout(tmp_path, env)
-    derived = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(home))
+    project = tmp_path / "demo project.y"
+    derived = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(project))
     transcript = tmp_path / "accounts" / "acct-a" / "claude" / "projects" / derived / f"{sid}.jsonl"
     transcript.parent.mkdir(parents=True)
     transcript.write_text("{}\n")
     (tmp_path / "accounts" / "acct-b").mkdir()
     env = {**env, "WORKFLOW_PRUNE_ACCOUNTS_DIR": str(tmp_path / "accounts")}
-    r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], env=env, text=True,
-                       capture_output=True, timeout=60)
-    assert r.returncode == 0, r.stderr
-    assert f"Project dirname: {derived}" in r.stdout
-    assert "transcript found under account: acct-a" in r.stdout
-    r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], text=True,
-                       env={**env, "WORKFLOW_PRUNE_PROJECT_DIRNAME": "-opt-demo"},
-                       capture_output=True, timeout=60)
-    assert "Project dirname: -opt-demo" in r.stdout
+    for extra, cwd in (({"CLAUDE_PROJECT_DIR": str(project)}, home), ({}, project)):
+        r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], env={**env, **extra}, text=True,
+                           capture_output=True, timeout=60, cwd=cwd)
+        assert r.returncode == 0, r.stderr
+        assert f"Project dirname: {derived}" in r.stdout
+        assert "transcript found under account: acct-a" in r.stdout
+    transcript.unlink()
+    r = subprocess.run(["bash", str(home / "scripts" / PRUNE.name)], text=True, env=env,
+                       capture_output=True, timeout=60, cwd=project)
     assert "CANDIDATE" in r.stdout or "ORPHAN(young)" in r.stdout

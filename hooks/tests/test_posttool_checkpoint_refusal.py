@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -34,8 +35,8 @@ def _git(env: dict, repo: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def harness(tmp_path: Path) -> tuple[Path, dict]:
-    home = tmp_path / "harness"
+def harness(tmp_path: Path, request) -> tuple[Path, dict]:
+    home = tmp_path / getattr(request, "param", "harness")  # a parametrized name may hold a space
     shutil.copytree(
         ROOT / "hooks", home / "hooks", ignore=shutil.ignore_patterns("tests", "__pycache__")
     )
@@ -99,6 +100,9 @@ def _machine_form(home: Path, env: dict) -> None:
     (home / "settings.json").write_bytes(rendered)
 
 
+LEFT_OUT = "left out 1 file(s) holding a private literal: leak.txt"
+
+
 @pytest.mark.parametrize("case, rule", [("literal", LITERAL_RULE), ("settings", SETTINGS_CHECK)])
 @pytest.mark.parametrize("silent", ["0", "1"])
 def test_refused_threshold_snapshot_prints_its_notice_as_the_whole_stdout(
@@ -117,7 +121,12 @@ def test_refused_threshold_snapshot_prints_its_notice_as_the_whole_stdout(
     proc = _post_tool_use(home, env, written)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    notice = f"Checkpoint snapshot refused by {rule}: nothing written, see logs/checkpoint.log"
+    head = f"refused by {rule}: nothing written" if case == "settings" else LEFT_OUT
+    notice = json.loads(proc.stdout)["systemMessage"]
+    assert re.fullmatch(re.escape(f"Checkpoint snapshot {head}, see logs/checkpoint.log;")
+                        + r" no complete snapshot of refs/checkpoints/main since \S+ \S+ \(1 in a row\)",
+                        notice), notice
+    log = (Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / "checkpoint.log").read_text()
     assert json.loads(proc.stdout) == {
         "systemMessage": notice,
         "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": notice},
@@ -126,8 +135,8 @@ def test_refused_threshold_snapshot_prints_its_notice_as_the_whole_stdout(
     assert "Checkpoint failed" not in proc.stdout + proc.stderr
     assert STANDIN not in proc.stdout + proc.stderr
     assert _git(env, home, "for-each-ref", "refs/checkpoints") == ""
-    log = (Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / "checkpoint.log").read_text()
-    assert f"snapshot refused by {rule}: nothing written" in log and STANDIN not in log
+    assert (f"snapshot refused by {rule}: nothing written" if case == "settings" else LEFT_OUT) in log
+    assert STANDIN not in log
 
 
 def test_ordinary_threshold_snapshot_says_nothing(harness) -> None:
@@ -164,9 +173,11 @@ def test_refusal_free_failure_is_silent_in_silent_mode(harness) -> None:
     assert (proc.returncode, proc.stdout) == (0, "")
 
 
+@pytest.mark.parametrize("harness", ["harness", "my harness"], indirect=True)
 def test_a_file_in_an_agent_worktree_is_checkpointed_in_that_worktree(harness) -> None:
     """The payload's file_path selects the worktree (audit 5.3-2: the branch read TOOL_INPUT,
-    which the CLI never sets, so it always checkpointed the main repository)."""
+    which the CLI never sets, so it always checkpointed the main repository). A worktree whose path
+    holds a space counted its changes as one word too, `git -C <path>`, and is snapshotted alike."""
     home, env = harness
     (home / ".gitignore").write_text("/settings.machine.json\n/private-literals.txt\n/.claude/\n")
     _git(env, home, "commit", "-q", "-am", "ignore worktrees")

@@ -44,13 +44,6 @@
     },
     {
       "path": "docs/ENFORCEMENT-LEDGER.md",
-      "fingerprint": "1835cb91f5954c57",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "H-027 ledger row quoting, verbatim, the synthetic local-file-URL commands the bash-safety sensitive-name tests feed the hook; prose, never read as a path at runtime."
-    },
-    {
-      "path": "docs/ENFORCEMENT-LEDGER.md",
       "fingerprint": "e86641f04513251f",
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
@@ -190,13 +183,6 @@
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# only if it is itself a structural sentinel. Never fabricate a <author-path> default.\""
     },
     {
-      "path": "hooks/lib/closeout.py",
-      "fingerprint": "be6e14f3b6aaba80",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# WS1: resolve via the shared claude_home resolver, never the literal <author-path>.\""
-    },
-    {
       "path": "hooks/lib/policy_registry.py",
       "fingerprint": "4ad2cf1d12440999",
       "ordinal": 1,
@@ -274,11 +260,32 @@
       "rationale": "Docstring/heredoc example illustrating path handling; never evaluated as a path. Line: \"may be safely suppressed (`find <author-path> -path /tmp/unrelated -delete`). Returns\""
     },
     {
-      "path": "hooks/lib/runtime_guard/config.py",
-      "fingerprint": "011a7a24d90bc55c",
+      "path": "hooks/lib/locations.py",
+      "fingerprint": "0f925b7d4f47c87a",
       "ordinal": 1,
       "class": "system_path_constant_enumeration",
-      "rationale": "Element of an enumeration of bare absolute system directories (a protected-root table). Carries no author identity -- a path with a user component cannot qualify. Line: \"\"/\", \"<author-path>\", \"/home\", \"/etc\", \"/usr\", \"/var\", \"/tmp\", \"/opt\", \"/bin\",\""
+      "rationale": "Element of an enumeration of bare absolute system directories (the broad-root table, moved here from hooks/lib/runtime_guard/config.py: the one file that names system directories). Carries no author identity -- a path with a user component cannot qualify."
+    },
+    {
+      "path": "hooks/tests/test_locations_relocation.py",
+      "fingerprint": "23cac71da4f7e069",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic location of the relocation matrix: a project or a home that is never created, under the superuser's home or a fictional user's home, given to the hooks as a path to judge (hooks/tests/test_locations_relocation.py). Carries no author identity."
+    },
+    {
+      "path": "hooks/tests/test_locations_relocation.py",
+      "fingerprint": "aa8cacd67ed47410",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic location of the relocation matrix: a project or a home that is never created, under the superuser's home or a fictional user's home, given to the hooks as a path to judge (hooks/tests/test_locations_relocation.py). Carries no author identity."
+    },
+    {
+      "path": "hooks/tests/test_locations_relocation.py",
+      "fingerprint": "0bc651827e8f80f4",
+      "ordinal": 1,
+      "class": "test_fixture",
+      "rationale": "Synthetic location of the relocation matrix: a project or a home that is never created, under the superuser's home or a fictional user's home, given to the hooks as a path to judge (hooks/tests/test_locations_relocation.py). Carries no author identity."
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
@@ -310,7 +317,7 @@
     },
     {
       "path": "hooks/lib/runtime_guard/config.py",
-      "fingerprint": "8efae8045d4a288a",
+      "fingerprint": "3d4ad66a4c6628a8",
       "ordinal": 1,
       "class": "doctest_or_docstring_example",
       "rationale": "def _config_ancestor_dirs() — illustrative literal inside documentation/usage text; not executed as a path."
@@ -454,13 +461,6 @@
       "ordinal": 1,
       "class": "comment_or_narrative_doc",
       "rationale": "Prose/comment text documenting the residue policy; never read as a path at runtime. Line: \"# repo-hash) instead of the author literal <author-path> on a fresh non-root clone.\""
-    },
-    {
-      "path": "hooks/session-promote-hook.sh",
-      "fingerprint": "623f2626cd6b576b",
-      "ordinal": 1,
-      "class": "comment_or_narrative_doc",
-      "rationale": "Comment or prose naming the path shape (a policy, example or explanation); never read as a path at runtime."
     },
     {
       "path": "hooks/stop.sh",

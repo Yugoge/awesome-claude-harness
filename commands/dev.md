@@ -16,7 +16,7 @@ Track the steps with TodoWrite: mark a step `in_progress` before any dispatch un
 
 The orchestrator does no analysis, context building or implementation: BA asks the owner first (the requirement round, Step 4), then analyses (all clarification goes through BA) into a Markdown spec plus a JSON context under `docs/dev/`, dev implements, QA verifies. A BA or dev question artifact is relayed to the owner with one AskUserQuestion (Step 5), only for a real, specific decision that the request, the code or a sensible default cannot settle; a question never stops or ends the cycle.
 
-**Hook rejection (a process step, never a terminal):** neither the orchestrator nor any subagent retries, disguises or circumvents a hook-rejected operation (no other tool, wrapper or script for it). The subagent reports the rejected command and the hook's output (in its report, or in its producer question artifact when the operation needs the owner's decision). When the operation is needed, the orchestrator asks the owner one specific AskUserQuestion inside the turn that names the operation and the exact command: that is the pause, and it releases no gate. The answer authorizes no retry. An operation refused by a hook that reads `/allow` grants (`hooks/pretool-git-privilege-guard.py`, `hooks/pretool-block-branch-pr-worktree.py`) runs again only after the owner's `/allow` grant for it, typed as their own prompt (an AskUserQuestion answer writes no grant), which lets it through once; one refused by a hook that reads none (`hooks/pretool-tool-policy.py`) is not run again in this session: it is withdrawn. The orchestrator then re-dispatches that lane's role (same subagent_type, task_id, lane and obligation template, a fresh dispatched_at) with the outcome: it runs the granted command once, or, when the owner declines or the operation is withdrawn, goes on without it, which Subagent Hook Discipline #4 allows only while every acceptance criterion stays achievable without it (the question names any criterion that needs the operation, and the owner's answer decides that criterion, not the operation). A decline never ends the cycle: it continues to completion.
+**Hook rejection (a process step, never a terminal):** neither the orchestrator nor any subagent retries, disguises or circumvents a hook-rejected operation (no other tool, wrapper or script for it), and nobody asks the owner about it (Subagent Hook Discipline). The subagent goes on with the rest of its work and reports the rejected command and the hook's output in its report, as refused; a producer question asks only what the owner wants, never about a refusal. When the subagent ended on it, the orchestrator re-dispatches that lane's role (same subagent_type, task_id, lane and obligation template, a fresh dispatched_at) with the refusal named, and it goes on without the operation, which Subagent Hook Discipline #4 allows while every acceptance criterion stays achievable without it; a criterion that needs the operation is reported as not met, naming the refusal. An operation refused by a hook that reads `/allow` grants (`hooks/pretool-git-privilege-guard.py`, `hooks/pretool-block-branch-pr-worktree.py`) runs again only on the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses, which lets it through once; no agent asks for one. One refused by a hook that reads none (`hooks/pretool-tool-policy.py`) is not run again in this session: it is withdrawn. A refusal never ends the cycle: it continues to completion. When the pending step itself cannot go on because a hook refused that step's own dispatch or call (its role's dispatch, or for a step with no subagent, its call), end the turn with one line `REFUSED: Step <n>: <the refused call>` followed by the hook's output: the Stop gate (`stop-command-gate.py`, `step_refused_end`) lets the turn end exactly then, reading the refusal from the transcript, and the step stays open; the owner's next prompt resumes it. `/redev` and `/dev-command` follow this text.
 
 ## Requirement Decomposition & Fan-Out
 
@@ -42,7 +42,7 @@ A single `/dev` cycle may carry more than one requirement. The orchestrator fans
 
 ### Step 1: Parse Development Requirement
 
-An empty `$ARGUMENTS` is asked for with one AskUserQuestion (the pause; the cycle stays open).
+An empty `$ARGUMENTS` ends the command with one line `NO_TARGET: /dev was given no requirement; /dev <what to build or fix> starts a cycle`. Nobody is asked; the Stop gate (`no_target_end`) lets a run that dispatched nothing end on it.
 
 **`--codex`.** If `$ARGUMENTS` contains the literal token `--codex`, strip it and set `codex_required = true`, else `false`. When true, every BA, QA and dev dispatch carries the literal line `codex_required: true` (it activates the subagent's codex consultation, `templates/prompt-includes/codex-consultation.md`); when false, omit it. `codex_consult` is the subagent's output: pre-filling it in a prompt silently suppresses the consultation, so never do.
 
@@ -51,7 +51,7 @@ An empty `$ARGUMENTS` is asked for with one AskUserQuestion (the pause; the cycl
 **Views.** With `spec_path` set, run the spec resolver once; it alone derives the artifact id, views folder, split marker and cp-state folder (a hand-derived name silently drops a de-prefixed spec to monolith mode):
 
 ```bash
-[ -z "$spec_path" ] || python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
+[ -z "$spec_path" ] || python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$PWD}"
 ```
 
 Its stdout JSON carries `artifact_id` (`SPEC_ID` below), `views_available`, `manifest_path`, `split_marker`, `views_dir` and `cp_dir`; keep them in your notes (a Bash call carries no variable to the next). A non-zero exit is an invalid, mismatched, ambiguous or stale split: have `/spec` re-finalized, never fall back to the monolith; `views_available=false` with exit 0 is a legacy spec (monolith `spec_path`, no checkpoint enforcement). When `views_available` is true, pass `view_paths.ba`, `.qa`, `.dev` (from `manifest_path`) beside, never in place of, `spec_path`; BEFORE composing any dispatch read `<views_dir>/orchestrator.md` and the spec's Section 5 (User's Acceptance Criterion) and quote Section 5 verbatim into every dispatch prompt.
@@ -479,8 +479,8 @@ After the test-writer subagent completes, verify on disk that both `tests/genera
 Before the dev dispatch, once per stage, capture the baseline dev's report is measured against (`agents/dev.md` gives its point-in-time semantics); the value goes into the dev dispatch, `baseline_head_sha` as the empty string (never omitted) in a repository with no commits yet:
 
 ```bash
-baseline_head_sha=$(git -C "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" rev-parse HEAD 2>/dev/null || echo "")
-baseline_dirty_snapshot=$(git -C "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" status --porcelain 2>/dev/null || echo "")
+baseline_head_sha=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse HEAD 2>/dev/null || echo "")
+baseline_dirty_snapshot=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" status --porcelain 2>/dev/null || echo "")
 ```
 
 Dispatch dev with file paths only:
@@ -634,7 +634,7 @@ Before `/dev` or `/redev` is complete, run the shared read-only resolver from th
 
 ```bash
 ARTIFACT_CHAIN="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-artifact-chain.py" \
-  --task-id "<TASK_ID>" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}")" || exit 2
+  --task-id "<TASK_ID>" --project-dir "${CLAUDE_PROJECT_DIR:-$PWD}")" || exit 2
 ```
 
 The fixed entrypoint contract is

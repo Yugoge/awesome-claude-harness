@@ -30,6 +30,7 @@ try:
     from lib.hook_launch import Rule, main
 except Exception:  # the hooks still run, each as its own process
     from lib.hook_launch_fallback import Rule, main
+from lib.subagent import DISPATCH_TOOLS  # the dispatch tool names, one list for every reader
 
 EVENT = "PreToolUse"
 RULES = (
@@ -46,9 +47,8 @@ RULES = (
     Rule('attribution-pre', 'pretool-attribution-pre.py', ('Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'), timeout=30),
     Rule('todo-validate', 'pretool-todo-validate.py', ('TodoWrite',)),
     Rule('block-branch-pr-worktree', 'pretool-block-branch-pr-worktree.py', ('Bash',)),
-    Rule('dispatch-gate', 'pretool-dispatch-gate.py', ('Agent',)),
+    Rule('dispatch-gate', 'pretool-dispatch-gate.py', DISPATCH_TOOLS),
     Rule('runcode-watchdog', 'pretool-runcode-watchdog.py', ('mcp__playwright__browser_run_code',)),
-    Rule('bulk-commit-detector', 'pretool-bulk-commit-detector.py', ('Bash',), timeout=5),
     Rule('git-privilege-guard', 'pretool-git-privilege-guard.py', ('Bash',)),
     Rule('monitor-command', 'pretool-monitor-command.py', ('Monitor',), timeout=360),
 )

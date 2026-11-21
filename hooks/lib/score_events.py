@@ -8,8 +8,10 @@ from datetime import datetime, timezone
 
 try:  # as hooks.lib.score_events, or from hooks/lib on the path
     from . import command_span, obligation, requirement_round, score_log
+    from .subagent import DISPATCH_TOOLS
 except ImportError:
     import command_span, obligation, requirement_round, score_log  # noqa: E401
+    from subagent import DISPATCH_TOOLS
 
 
 def _event(ctx, d, event, role, why, key=None, ref=None):  # a rule's event dict: the result's time, a one-line why without task id, ref (default: d's report)
@@ -19,7 +21,7 @@ def _event(ctx, d, event, role, why, key=None, ref=None):  # a rule's event dict
 
 
 def _dispatches(span, tp):  # ok dispatches with an obligation: id, who (scored identity), task (canonical), lane, ob, path (lane QA's
-    uses, ds = {u.id: u for u in span.uses("Agent", "Task")}, []  # report), at (the result's time), sub (its own transcript)
+    uses, ds = {u.id: u for u in span.uses(*DISPATCH_TOOLS)}, []  # report), at (the result's time), sub (its own transcript)
     with open(tp, "rb") as handle:
         for call, ob in span.obligations():
             handle.seek(uses[call.id].result_at)
@@ -33,8 +35,7 @@ def _dispatches(span, tp):  # ok dispatches with an obligation: id, who (scored 
 
 def _walk(d):  # the content blocks of dispatch d's own transcript, in order
     for _, record in command_span._records(d["sub"]):
-        content = (record.get("message") or {}).get("content")
-        yield from (b for b in content if isinstance(b, dict)) if isinstance(content, list) else ()
+        yield from command_span._blocks(record, sidechain=True)
 
 
 def _once(ctx, fn, *args):  # fn(*args), answered once per sweep (the store and transcript reads behind it are slow)
@@ -179,5 +180,5 @@ def sweep(transcript_path, cwd):  # all ok dispatches of the span, every run: fi
 
 
 def observe(payload):  # the PostToolUse hook's entry: the main agent's dispatches only
-    if isinstance(payload, dict) and not payload.get("agent_id") and payload.get("tool_name") in ("Agent", "Task"):
+    if isinstance(payload, dict) and not payload.get("agent_id") and payload.get("tool_name") in DISPATCH_TOOLS:
         sweep(payload.get("transcript_path"), payload.get("cwd"))

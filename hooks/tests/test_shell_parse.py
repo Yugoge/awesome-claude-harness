@@ -1,8 +1,6 @@
 """Unit tests of hooks/lib/shell_parse.py: one class per node type and view."""
 
-import json
 import os
-import subprocess
 import sys
 
 import pytest
@@ -31,7 +29,17 @@ class TestNeverRaises:
     def test_garbage_gives_a_script(self, text):
         s = sp.parse(text)
         assert isinstance(s, sp.Script)
-        sp.facts(text if isinstance(text, str) else "")
+        text = text if isinstance(text, str) else ""
+        script = sp.parse(text)  # every view reads it without raising
+        for site in sp.walk(script):
+            res = sp.resolve(site.cmd)
+            site.cmd.argv(), res.name, res.argv(), [w[0] for w in res.wrappers], sorted(site.fed)
+            [a.static_value() for a in site.cmd.assignments]
+            [r.target.value() for r in site.cmd.redirects if r.target is not None]
+        [e.as_dict() for e in script.errors()]
+        [t.as_dict() for t in sp.write_targets(script)]
+        [g.as_dict() for g in sp.git_invocations(script)]
+        sp.executable_view(text)
 
     def test_error_keeps_commands_before_it(self):
         s = sp.parse("ls; echo 'open")
@@ -366,17 +374,6 @@ class TestArgvSplit:
         assert sp.argv_split("a 'b c' \"d\\\"e\" f\\ g") == ["a", "b c", 'd"e', "f g"]
 
 
-class TestCli:
-    def test_facts(self):
-        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git push > /tmp/x"}})
-        out = subprocess.run([sys.executable, os.path.join(LIB, "shell_parse.py"), "--facts"],
-                             input=payload, text=True, capture_output=True, check=True).stdout
-        facts = json.loads(out)
-        assert facts["error"] is None
-        assert facts["git_invocations"][0]["subcommand"] == "push"
-        assert facts["write_targets"][0]["path"] == "/tmp/x"
-
-
 class TestConsumerDefects:
     """Each row is a reading a consumer lane found missing; the commands bash runs are all reached."""
 
@@ -573,3 +570,28 @@ class TestComputedShellOptions:
         site = cmds('env $O -S "rm d"')[0]
         r = sp.resolve(site)
         assert (r.name, r.unresolved) == ("rm", "computed-env-option")
+
+
+def test_a_long_open_subscript_in_a_heredoc_is_lexed_in_linear_time():
+    """A word in assignment position whose subscript stays open runs across blanks to its `]`; the lexer
+    rechecked the whole word at every blank, so a long one in a here-document fed to a shell cost the square
+    of its length (seconds per hook on 13-25 KB commands). Compared in CPU seconds, two sizes against each
+    other, because no fixed bound holds on every runner: twice the text costs about twice, never four times."""
+    import time
+
+    def cost(n):
+        word = "v[k]=[\n" + "".join("  w%d, x,\n" % k for k in range(n)) + "]"
+        text = "bash <<'E'\n" + word + "\nE\n"
+        best = None
+        for _ in range(3):
+            sp._PAYLOAD_MEMO.clear()
+            started = time.process_time()
+            sites = list(sp.walk(sp.parse(text)))
+            spent = time.process_time() - started
+            best = spent if best is None else min(best, spent)
+        assert [s.context for s in sites] == [("top",), ("top", "heredoc_shell")]
+        assert [a.word.raw.text for a in sites[1].cmd.assignments] == [word]  # one word, read to its `]`
+        return best
+
+    small, large = cost(600), cost(1200)
+    assert large < 3 * small, (small, large)

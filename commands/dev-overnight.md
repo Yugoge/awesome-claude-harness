@@ -81,7 +81,7 @@ SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 [ -n "$STATE_FILE" ] && [ -n "$PROJECT_DIR" ] || exit 1
 export CLAUDE_PROJECT_DIR="$PROJECT_DIR"
 DEV_SESSION_ID="$SID"
-REGISTRY_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}/.claude/dev-registry/$DEV_SESSION_ID"
+REGISTRY_DIR="${CLAUDE_PROJECT_DIR:-$PWD}/.claude/dev-registry/$DEV_SESSION_ID"
 bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-init.sh" --verify-only --state-file "$STATE_FILE" --project-dir "$PROJECT_DIR"
 ```
 

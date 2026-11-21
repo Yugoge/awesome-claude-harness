@@ -36,12 +36,12 @@ def run_adapter(*args):
 
 
 # paseo is an optional module (D13): the adapter runs on node, and the live run
-# reads the paseo config the adapter itself resolves (PASEO_CONFIG_DIR or
+# reads the paseo config the adapter itself resolves (PASEO_HOME or
 # $HOME/.paseo); each case skips when the dependency it uses is absent.
 needs_node = pytest.mark.skipif(shutil.which("node") is None,
                                 reason="paseo optional module: node not on PATH")
 needs_paseo_config = pytest.mark.skipif(
-    not (Path(os.environ.get("PASEO_CONFIG_DIR") or Path.home() / ".paseo")
+    not (Path(os.environ.get("PASEO_HOME") or Path.home() / ".paseo")
          / "config.json").is_file(),
     reason="paseo optional module: no paseo config under $HOME")
 

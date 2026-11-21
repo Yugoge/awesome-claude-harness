@@ -6,7 +6,7 @@ Stub registrations (P10 R1-R3). A harness home landed by init (tests/replay/test
 file writes, a Stop the registered Stop hook, whose auto_commit phase runs the landing) is upgraded
 the way P10 reached it: a revision that still tracks a harness hook P10 deleted
 (hooks/pretool-overwrite-guard.py, R4, its content from this checkout's history), whose overlay the
-owner had register that hook and a stub HEAD tracks (hooks/stop-completion-gate.py, `# STUB:`),
+owner had register that hook and a stub HEAD tracks (hooks/pretool-subagent-code-block.py, `# STUB:`),
 beside a registration of his own; then /pull (hooks/pull.sh) brings the deletion.
   * The landing is the overlay's producer: `render-settings check` fails on both (the stub named, the
     deleted file, which HEAD does not track, counted under its event: R1 echoes no possibly personal
@@ -71,7 +71,7 @@ from tests.replay.test_regressions import (TREE_UNDER_TEST, _harness_stop, _home
 from tests.test_landing import env, git, landing_log, run  # noqa: F401  (env: the scratch-HOME fixture)
 
 DELETED = "hooks/pretool-overwrite-guard.py"  # a harness hook P10 R4 deleted (whole, with its tests)
-STUB = "hooks/stop-completion-gate.py"  # a `# STUB:` file HEAD tracks, which the clean form does not register
+STUB = "hooks/pretool-subagent-code-block.py"  # a `# STUB:` file HEAD tracks, which the clean form does not register
 OWN = "hooks/session-info.sh"  # a live harness hook, registered by the owner at an event nothing runs it at
 OVERLAY = "settings.machine.json"
 

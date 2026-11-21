@@ -10,7 +10,6 @@ caller once per audience and artifact state.
 import hashlib
 import json
 import os
-import re
 import sys
 import tempfile
 from pathlib import Path
@@ -33,9 +32,6 @@ TRUNCATION_SUFFIX = '...'
 # The relay hook (userprompt-doc-sync-check.py) keeps its own copy of this prefix because it
 # must not import doc_sync; a test pins the two together.
 INDEX_NOTICE_PREFIX = 'doc-sync: INDEX not regenerated'
-# session_id becomes a path component of the state directory, so it gets the same
-# charset guard as hooks/session-scratch-init.sh (no separators, no traversal).
-SESSION_ID_PATTERN = re.compile(r'[A-Za-z0-9_.-]{1,128}')
 STATE_FILE_TEMPLATE = 'doc-sync-notices-{audience}.json'
 AGENT_AUDIENCE_HASH_CHARS = 16
 # Test seam, never set in production: tempfile.gettempdir() raises under RLIMIT_FSIZE=0
@@ -238,16 +234,28 @@ def _state_root():
     override = os.environ.get(STATE_ROOT_ENV, '')
     if override and os.path.isabs(override):
         return override
-    return tempfile.gettempdir()
+    _lib_path()
+    from lib import locations  # hooks/session-scratch-init.sh's root, as the one location answer gives it
+    return locations.session_scratch_root()
+
+
+def _lib_path():
+    """hooks/ on sys.path, for hooks/lib; a harness copy without hooks/lib then raises at the import."""
+    hooks_dir = str(Path(__file__).resolve().parent.parent)
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+
+
+def _scratch_owner():
+    """hooks/lib/scratch_owner.py; raises when a harness copy has no hooks/lib."""
+    _lib_path()
+    from lib import scratch_owner
+    return scratch_owner
 
 
 def _owns_scratch_dir(session_dir, session_id):
     """hooks/lib/scratch_owner.py's decision; raises when a harness copy has no hooks/lib."""
-    hooks_dir = str(Path(__file__).resolve().parent.parent)
-    if hooks_dir not in sys.path:
-        sys.path.insert(0, hooks_dir)
-    from lib.scratch_owner import owns_scratch_dir
-    return owns_scratch_dir(session_dir, session_id)
+    return _scratch_owner().owns_scratch_dir(session_dir, session_id)
 
 
 def state_path_for(payload):
@@ -259,9 +267,7 @@ def state_path_for(payload):
     """
     try:
         session_id = payload.get('session_id')
-        if not isinstance(session_id, str) or session_id in ('.', '..'):
-            return None
-        if not SESSION_ID_PATTERN.fullmatch(session_id):
+        if not _scratch_owner().is_safe_session_dir_name(session_id):
             return None
         session_dir = os.path.join(_state_root(), session_id)
         if os.path.islink(session_dir) or not os.path.isdir(session_dir):

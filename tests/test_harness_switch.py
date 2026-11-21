@@ -13,11 +13,11 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import resource
 import shlex
 import shutil
 import subprocess
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -787,9 +787,15 @@ def rule_budget(name: str) -> float:
 
 
 def timed_gate(home, proj, command, actor="main"):
-    start = time.monotonic()
+    """The gate's result and the CPU seconds its run used (the process and its children): what the run costs, apart
+    from how busy the runner is. Wall time under xdist was 10.49 s on the slowest CI runner for a run of 3 s here
+    (2026-11-20)."""
+    def used():
+        r = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return r.ru_utime + r.ru_stime
+    start = used()
     proc = gate(home, proj, "Bash", {"command": command}, actor)
-    return proc, time.monotonic() - start
+    return proc, used() - start
 
 
 @pytest.mark.parametrize("pads", [300, 1000, 5000])
@@ -800,7 +806,7 @@ def test_a_padded_settings_write_is_refused_within_the_budget(guard_home, proj, 
     assert proc.returncode == 2 and "harness-switch: this Bash command" in proc.stderr, proc.stderr
     assert "Claude Code settings file" in proc.stderr and "budget" not in proc.stderr, proc.stderr  # its own refusal
     # The gate enforces the rule budget itself (no "budget" line above); the whole gate process also
-    # starts Python and runs the other rules, which a shared CI runner slows (5.08 s on 3.11, 2026-11-18).
+    # starts Python and runs the other rules: its CPU seconds are held, not its wall time on a shared runner.
     assert took < rule_budget("harness-switch") + 5.0, took  # the whole gate, the rule's run inside it
 
 
@@ -812,7 +818,7 @@ def test_a_padded_ordinary_write_is_still_allowed(guard_home, proj, pads, target
     proc, took = timed_gate(guard_home, proj, "cd . && " * pads + "echo '{\"env\": {}}' > " + target)
     assert proc.returncode == 0 and "harness-switch" not in proc.stderr and "budget" not in proc.stderr, proc.stderr
     # The gate enforces the rule budget itself (no "budget" line above); the whole gate process also
-    # starts Python and runs the other rules, which a shared CI runner slows (5.08 s on 3.11, 2026-11-18).
+    # starts Python and runs the other rules: its CPU seconds are held, not its wall time on a shared runner.
     assert took < rule_budget("harness-switch") + 5.0, took
 
 

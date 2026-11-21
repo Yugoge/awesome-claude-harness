@@ -32,6 +32,30 @@ FIXTURE_SHA256 = "142c584a99a370d3093811aa412b4161c2c066616ad8911221f57874cd9492
 BASELINE_MEDIAN_ROW_SECONDS = 0.62
 LATENCY_BUDGET_SECONDS = 1.24
 
+# Rows the fixture pins at exit 2 that the owner's rule of 2026-11-19 lets run: the analyzer cannot prove them
+# (UNRESOLVED) and the text that can become the command they leave unresolved (the analyzer's unresolved_scopes)
+# holds no removal word by lib/pol_degraded_removal_reference.ere, so the removal policy hands them to the record
+# instead of refusing them. The fixture's bytes stay as pinned (FIXTURE_SHA256); the expectation changes here, row by
+# row. hooks/tests/test_removal_policy_unproven_rule.py checks that this is exactly the set the rule names: 8
+# spellings of a removal program that name it nowhere (`${R}${M}`, `/bin/r?`), 5 malformed or dynamic commands
+# (`bash -c`, `env -S`, `echo >`, `$UNKNOWN x`, `command $UNKNOWN x`), an unclosed here-document, a git call with a
+# dynamic subcommand, and `source /tmp/rm` / `. /tmp/rm` (a file path, which is no command). The ANSI-C spellings
+# (`$'\x72m'`) and the names joined across an empty variable (`r${EMPTY}m`) are refused again: their words read rm.
+OWNER_RULE_LET_THROUGH = frozenset((
+    "POL-I5-QA-0084-914770c8959f", "POL-I5-QA-0085-a0c10bf1a26d",
+    "POL-I5-QA-0098-93d772555372", "POL-I5-QA-0099-81a09f252f22",
+    "POL-I5-QA-0100-a12dd130c0ba", "POL-I5-QA-0101-a670c8644aea", "POL-I5-QA-0105-86303ae06b6f",
+    "POL-I5-QA-0108-a8492862a7e5", "POL-I5-QA-0230-bbc5e6185472", "POL-I5-QA-0231-4d6b7b3bcc1a",
+    "POL-I5-QA-0276-86818c50ffad",
+    "POL-I5-QA-0324-28ac7559ff6a", "POL-I5-QA-0431-ee907a2944eb", "POL-I5-QA-0432-e640ec8c4c88",
+    "POL-I5-QA-0433-328ae02d0ce8", "POL-I5-QA-0435-0bf3eb9e0d1c", "POL-I5-QA-0436-97b1f355417c",
+))
+
+
+def expected_exit(row) -> int:
+    """The exit code a fixture row is held to: its pinned one, or 0 where the owner's rule lets the row run."""
+    return 0 if row["id"] in OWNER_RULE_LET_THROUGH else row["expected_hook_exit_code"]
+
 
 def fixture_digest() -> str:
     h = hashlib.sha256()
@@ -77,7 +101,7 @@ def replay_all():
             "id": row["id"],
             "category": row["category"],
             "expected_class": row["expected_class"],
-            "expected": row["expected_hook_exit_code"],
+            "expected": expected_exit(row),
             "actual": code,
             "stderr": err,
             "seconds": time.monotonic() - started,

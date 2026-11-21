@@ -156,6 +156,14 @@ resolve_optional_file() {
   return 1
 }
 
+# claude_config_home -- twin of claude_home.py config_home(): ${CLAUDE_CONFIG_DIR:-$HOME/.claude} as
+# written; when its settings.json is a link, the directory that link resolves into.
+claude_config_home() {
+  local cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" s
+  s="$(readlink -m -- "$cfg/settings.json")"
+  if [ "$s" = "$(readlink -m -- "$cfg")/settings.json" ]; then printf '%s\n' "$cfg"; else dirname -- "$s"; fi
+}
+
 # When executed directly (not sourced), act as a tiny CLI so other languages /
 # tests can shell out:  claude_home.sh resolve | require <rel> | optional <rel>
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then

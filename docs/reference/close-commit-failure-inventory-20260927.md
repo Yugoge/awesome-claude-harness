@@ -175,7 +175,7 @@ dev 侧:同一解析器被 /spec 与 /dev* 消费方使用(RSA:2-3)。
 124. 巡检员 3 次重试仍瞬时失败 → findings 记空 — CL:415, 506 — ADV — (d)
 125. 连续 >5 次 Bash 无 Agent 派发 — pretool-orchestrator-gate.py:63, 172-184 — HOOK — (e)
 126. 编排器读 >600 行文件 — pretool-read-size-guard.py:77-90 — HOOK — (e)
-127. workflow 因顺序/计数违规锁死 — pretool-workflow-gate.py:1171-1191;posttool-todo-sequence.py:145;posttool-todo-count.py:49 — HOOK — (e)
+127. workflow 因顺序/计数违规锁死 — pretool-workflow-gate.py:1171-1191;另两处所在的两个 PostToolUse 钩子(2026-11-20 起移除)— HOOK — (e)
 128. 常规路径 TodoWrite 前用任何工具 — pretool-workflow-gate.py:1185-1191 — HOOK — (e)
 
 ### J. Step 2 registry 写入(CL:430-437,exit 1)
@@ -255,7 +255,7 @@ dev 侧:同一解析器被 /spec 与 /dev* 消费方使用(RSA:2-3)。
 190. 资源预检错误(仅 trust 环境设置时)— :238-259 — HOOK — (d)
 191. auto_commit checkpoint 失败 — auto-commit.sh:52-54;coordinator:272-280 — HOOK — (d)。同时跳过 cleanup phase → /do consent 旗标残留 → 触发第 123 项
 192. phase 超时(30s;auto_commit 120s)— coordinator:155-156 — HOOK — (d)
-193. overnight 时间锁 — stop-overnight-timelock.py:231-254 — HOOK(仅 overnight)— (d)
+193. overnight 时间锁 — 原 Stop 时间锁钩子(2026-11-20 起移除)— HOOK(仅 overnight)— (d)
 194. 资源终结器失败 — coordinator:292-318 — HOOK — (d)
 195. do-report 门 — stop-do-report-gate.py:200-227 — ADV(仅 block 模式拦)— (b)
 
@@ -263,7 +263,7 @@ dev 侧:同一解析器被 /spec 与 /dev* 消费方使用(RSA:2-3)。
 196. 钩子拒绝中止整批 — CL:810-815 — ABORT — (d/e)
 197. list-actionable 扫描崩溃(DLC:946-950 无 handler,unverified)— (d)
 198. 多父任务对 3 步 todo 清单可能触发顺序锁(第 127 项)(推断,无代码路径确证)— (e)
-199. (实际属于 /commit)close-report 24h 过期 — commands/commit.md:114 — 2026-09-26 起 ADV — (c)
+199. (实际属于 /commit)close-report 24h 过期 — commands/commit.md:114 — 2026-09-26 起 ADV,2026-11-20 起移除 — (c)
 
 /close 未验证项:36、79、100、197、198。
 
@@ -296,7 +296,7 @@ a 类仅 4 项:#7(close-report 末行非 CLOSE: YES)、#33(dev.status≠complete
   同一 session/branch 槽位第二个 push-gate token 被 write-guard(:149-156)拦 [INFERRED];
   changelog-analyst 的 tool-policy 不允许 /tmp/commit-msg-* 与 /tmp/agentic-commit/
   写入(角色解析后才生效)[CONDITIONAL]。
-- 已 advisory:Step 3 检查 3(close-report >24h)对所有调用仅告警;检查 2 仅在
+- 已 advisory:Step 3 检查 3(close-report >24h)对所有调用仅告警(2026-11-20 起移除);检查 2 仅在
   --dry-run 时放松;task-id 从会话上下文推断,歧义时硬失败。
 
 ### A. commands/commit.md Steps 1–4
@@ -308,7 +308,7 @@ a 类仅 4 项:#7(close-report 末行非 CLOSE: YES)、#33(dev.status≠complete
 6. close-report 缺失 — commit.md:94;resolve-close-report.sh:39-41 — 硬中止 — (b)
 7. 末行非 CLOSE: YES — commit.md:95-101(--dry-run 时放松,:102-106)— **(a)**
 8. close-report 文件名与 task-id 不匹配 — commit.md:115 — (e)/(b)
-9. [ADVISORY] close-report >24h — commit.md:114 — (d)
+9. [ADVISORY] close-report >24h — commit.md:114 — (d)(2026-11-20 起移除)
 10. bulk 能力缺失(sentinel 未铸造)— commit.md:153;userprompt-bulk-commit-capability.py:83-97 — (d)
 
 ### B. Step 5 late-repair 检查(State C 拒绝;commit.md:209-212 exit 2;源 late-repair-controller.py;(b)/(c);dev 侧=/close --late-repair)
@@ -606,7 +606,7 @@ a 类仅 4 项:#7(close-report 末行非 CLOSE: YES)、#33(dev.status≠complete
 267. 读取尺寸卫兵拦主代理读 >600 行(如大 close-report)— pretool-read-size-guard.py:90 (d)
 268. [CONDITIONAL] /commit QA 代理若被登记进 dev registry,SubagentStop E2E 检查拦 — subagentstop-e2e-enforce.py:230-280 (b)
 269. [CONDITIONAL] 版本化报告未过 schema 时 SubagentStop artifact-contract 拦 — subagentstop-artifact-contract-enforce.py:308-318 (b)
-270. [ADVISORY] bulk-commit 探测器 — pretool-bulk-commit-detector.py:135-163 (c)
+270. [ADVISORY] bulk-commit 探测器 — (c)(2026-11-20 起移除)
 
 ### L. git 原生钩子
 271. commands/dev*.md 被 staged 时 sentinel-lint 失败 — .git/keystone-hooks/preserved/pre-commit:20-27;hooks/sentinel-lint.sh:74-84 (c)

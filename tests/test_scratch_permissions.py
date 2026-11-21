@@ -207,13 +207,18 @@ def test_no_single_slash_path_rule():
     source, so an allow would grant, and a deny would guard, a path under the harness home instead of the
     absolute path it spells (the old `Read(/tmp/**)`).
 
-    `ask` is exempt: OB-L08 ships one `Edit(/<entry>)` ask per top-level harness-home entry, anchored at the
+    The two HOME_ANCHORED_DENY entries are exempt, and `ask` was: OB-L08 shipped one `Edit(/<entry>)` ask per top-level harness-home entry, anchored at the
     settings source on purpose (tests/test_project_write_permissions.py). Ask is checked after deny and
     before allow, so an anchored ask narrows and never grants."""
     perms = SHIPPED["permissions"]
     bad = [f"{t}({s})" for kind in ("allow", "deny") for t in ("Read", "Edit")
            for s in _specifiers(perms, t, kind) if re.match(r"/[^/]", s)]
-    assert bad == []
+    assert sorted(bad) == sorted(HOME_ANCHORED_DENY)
+
+
+# Deny entries anchored at the settings source on purpose: the harness home's venv, whose interpreter the hooks
+# run (tests/test_project_write_permissions.py). A deny narrows and never grants, as the ask entries they replace did.
+HOME_ANCHORED_DENY = ["Edit(/venv/**)", "Edit(/.venv/**)"]
 
 
 def test_old_entry_never_reached_tmp():
@@ -455,7 +460,7 @@ def test_source_scan_is_not_vacuous():
     assert any(n.startswith("claude-allow-daemon-restart-") for n in tmp), tmp
     # The daemon-restart grant and its lock are found in the Python source, not only in LISTED_TMPDIR_NAMES.
     assert {"claude-allow-daemon-restart-{target}.flag", "claude-allow-daemon-restart-{target}.flag.lock"} <= py, py
-    assert any(n.startswith("claude-git-blessed") for n in tmp), tmp
+    assert any(n.startswith("checkpoint-result") for n in tmp), tmp  # S31 removed the blessed-token grants
     assert not [n for n in state if n.split("/")[0] == "claude-scratch"], "state under the role root"
 
 

@@ -22,8 +22,8 @@ such declaration, gets no advice.
     analysis has no git_bisect_result.
 - PostToolUse (the dev returned):
   - layer match: the report's fix_layer differs from the context's diagnosis_layer;
-  - guard integrity: the working tree's diff against HEAD removes a guard the context
-    marks removal_authorized=false;
+  - guard integrity: a guard the context marks removal_authorized=false was in its file when
+    the dispatch started (the checkpoint before it, else HEAD) and is in it no more;
   - minimum diff: more than 30 inserted lines in the files the report names, with no
     dev.diff_stats.justification_for_overage or dev.scope_review_requested. Checkpoints
     never move HEAD (lib/checkpoint-core.sh), so the old HEAD~5..HEAD window counted the
@@ -62,8 +62,8 @@ def _load(path: str):
     return value if isinstance(value, dict) else None
 
 
-def _task_suffix(prompt) -> str | None:
-    """X of the docs/dev/dev-report-<X>.json the dispatch's obligation declares, or None."""
+def _task_suffix(prompt) -> tuple[str, str] | None:
+    """(X, dispatched_at) of the docs/dev/dev-report-<X>.json the dispatch's obligation declares, or None."""
     from lib.obligation import ExtractedBlock, extract_obligation_block
     block = extract_obligation_block(prompt)
     if not isinstance(block, ExtractedBlock):
@@ -78,7 +78,7 @@ def _task_suffix(prompt) -> str | None:
         path = artifact.get("path") if isinstance(artifact, dict) else None
         match = REPORT_RE.search(path) if isinstance(path, str) else None
         if match:
-            return match.group(1)
+            return match.group(1), str(doc.get("dispatched_at") or "")
     return None
 
 
@@ -142,17 +142,16 @@ def _git(project: str, *args: str) -> str:
         return ""
 
 
-def guard_integrity(ctx: dict, project: str, ctx_rel: str) -> list[str]:
+def guard_integrity(ctx: dict, project: str, ctx_rel: str, since: str = "") -> list[str]:
     guards = [g for g in ctx.get("pre_existing_guards") or []
               if isinstance(g, dict) and g.get("removal_authorized") is False and g.get("code_snippet")]
-    if not guards:
-        return []
-    removed = [line for line in _git(project, "diff", "HEAD").splitlines()
-               if line.startswith("-") and not line.startswith("---")]
+    ref = "refs/checkpoints/" + _git(project, "rev-parse", "--abbrev-ref", "HEAD").strip().replace("/", "-")
+    base = since and _git(project, "log", "-1", f"--before={since}", "--format=%H", ref).strip() or "HEAD"
     out = []
     for g in guards:
-        snippet = str(g["code_snippet"])
-        if any(snippet in line for line in removed):
+        snippet, full = str(g["code_snippet"]), os.path.join(project, str(g.get("file")))
+        now = open(full, encoding="utf-8", errors="replace").read() if os.path.isfile(full) else ""
+        if snippet in _git(project, "show", f"{base}:{g.get('file')}") and snippet not in now:
             out.append(f"UNAUTHORIZED GUARD REMOVAL\nFile: {g.get('file', 'unknown')}\nGuard: {snippet}\n"
                        f"Purpose: {g.get('purpose', 'unspecified')}\n"
                        "This guard has removal_authorized=false. Removing it requires BA authorization.\n"
@@ -181,12 +180,13 @@ def minimum_diff(report: dict, project: str, rep_rel: str) -> list[str]:
 
 def advice(payload: dict) -> list[str]:
     """The advice for this Agent call, by its event; [] when there is none."""
-    if payload.get("tool_name") not in ("Agent", "Task"):
+    from lib.subagent import DISPATCH_TOOLS
+    if payload.get("tool_name") not in DISPATCH_TOOLS:
         return []
     tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
     if tool_input.get("subagent_type") != "dev":
         return []
-    suffix = _task_suffix(tool_input.get("prompt"))
+    suffix, since = _task_suffix(tool_input.get("prompt")) or (None, "")
     if suffix is None:
         return []
     project = _project_dir(payload)
@@ -199,7 +199,7 @@ def advice(payload: dict) -> list[str]:
         return layer_escalation(ctx, ctx_rel) + bisect(ctx, ctx_rel)
     if event == "PostToolUse":
         report = _load(os.path.join(project, rep_rel)) or {}
-        return (layer_match(ctx, report, ctx_rel, rep_rel) + guard_integrity(ctx, project, ctx_rel)
+        return (layer_match(ctx, report, ctx_rel, rep_rel) + guard_integrity(ctx, project, ctx_rel, since)
                 + (minimum_diff(report, project, rep_rel) if report else []))
     return []
 

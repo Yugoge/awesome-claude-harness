@@ -60,12 +60,13 @@ from typing import Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+import locations  # noqa: E402
 
 # Relative path of the tool policy under the resolved harness home. The absolute
 # path is resolved at load time via claude_home so a fresh non-root clone (whose
 # home is NOT /root/.claude) still finds its own policy.
 POLICY_RELPATH = "policies/tool-policy.v1.json"
-WRITE_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
+from harness_vocabulary import WRITE_TOOLS  # noqa: E402,F401 -- the tools that write a file
 # On policy load failure (missing/unparseable policy) the dev role gets a
 # fail-safe ALLOW (historical baseline behavior); every other role fails CLOSED.
 # The policy PATH is resolved portably via claude_home (the de-hardcode), but the
@@ -272,10 +273,10 @@ def _path_in_prefixes(target: Optional[str], prefixes: list) -> bool:
     return False
 
 
-def _check_tool_lists(role_pol: dict, tool_name: str) -> Optional[Tuple[bool, str]]:
+def _check_tool_lists(role_pol: dict, tool_name: str, own: bool = False) -> Optional[Tuple[bool, str]]:
     if _tool_in_list(tool_name, role_pol.get("denied_tools", [])):
         return (False, f"tool {tool_name} explicitly denied")
-    allowed = role_pol.get("allowed_tools", [])
+    allowed = role_pol.get("allowed_tools", []) + (role_pol.get("declared_artifact_tools", []) if own else [])
     if allowed and not _tool_in_list(tool_name, allowed):
         return (False, f"tool {tool_name} not in allowed_tools")
     return None
@@ -292,7 +293,7 @@ def _carveout_entries(role_pol: dict) -> list:
         if not (entry.startswith("/") and entry.endswith("/")):
             continue
         parts = entry.strip("/").split("/")
-        if any(part in ("", ".", "..") for part in parts):
+        if any(part in locations.NAMELESS_PARTS for part in parts):
             continue
         out.append(entry)
     return out

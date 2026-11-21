@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""PreToolUse (a rule of hooks/pretool-write-gate.py, every tool): only the owner switches the harness.
+"""PreToolUse (a rule of hooks/pretool-write-gate.py, for Bash, the file-writing tools, Skill and
+SlashCommand): only the owner switches the harness.
 
 The owner's typed /harness off|on reaches hooks/userprompt-harness-switch.sh, a UserPromptSubmit
 hook: the one event an agent cannot produce. This rule refuses, for the main agent and every
@@ -16,9 +17,8 @@ subagent, each other path by which an agent call could switch the harness or fak
                         a file under <H>/.harness-switch/; the home's settings files; any
                         settings*.json that would set disableAllHooks; a script outside a harness
                         checkout that names the switch's state
-  CronCreate / ScheduleWakeup / SendMessage
-                        a prompt or message that types /harness (a scheduled prompt reaches
-                        UserPromptSubmit as if typed)
+  every other tool      hooks/pretool-harness-switch-prompt.py's: a string of its input that types
+                        /harness (the text matching of both is hooks/lib/switch_prompt.py)
 
 A Claude Code settings file's env, hooks, disableAllHooks and permissions decide which hooks run,
 with what environment, and what is asked (an env value reaches every hook), so they are the
@@ -56,23 +56,24 @@ harness_switch.exit_if_off()
 
 import json  # noqa: E402
 import re  # noqa: E402
+import shlex  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
 from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
 import shell_parse  # noqa: E402 -- the one reading of a Bash command
+import bash_read_only  # noqa: E402 -- the one list of the programs that only read
+import git_facts  # noqa: E402 -- what git's subcommands do to the files they name
+from harness_vocabulary import WRITE_TOOLS  # noqa: E402 -- the tools that write a file
+from bash_read_only import _git as _git_reads  # noqa: E402 -- the one proof that a git command only reads
+from switch_prompt import TYPED, refuse  # noqa: E402 -- what types /harness, and the rule's refusal
 sys.path.pop(0)
 
 HOME = harness_switch.harness_home()
 STATE_DIR = os.path.join(HOME, harness_switch.DIR_NAME)
 SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json")
 SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
-READ_ONLY = {"cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "rg", "wc", "ls", "stat",
-             "file", "jq", "diff", "cmp", "md5sum", "sha256sum", "test", "[", "echo", "printf", "realpath",
-             "readlink", "basename", "dirname", "find"}
-GIT_READ_ONLY = {"add", "diff", "log", "show", "status", "blame", "ls-files", "check-attr", "cat-file",
-                 "grep", "rev-parse", "stash"}
+GIT_READ_ONLY = git_facts.GIT_KEEPS_NAMED_FILES  # git calls that write no file they name
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
-TYPED = re.compile(r"(?:^|[\s\"'`(])/harness(?:\s+(?:on|off|status)\b|\s*$|[\s\"'`)])", re.M)
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
 SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
 NAMES_SETTINGS = re.compile(r"(?:^|[/'\"=>])" + SETTINGS_ANY.pattern + r"(?![\w-])")  # a word that names one
@@ -83,16 +84,9 @@ INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|deno|bun|ruby|perl|php|ba
 LITERAL_ECHO = re.compile(r"echo((?:\s+-[nE]+)*)\s+'([^']*)'\s*(>>?|>\|)\s*([\w./~+-]+)")
 FALLBACK_REDIRECT = re.compile(r"(?:\d*|&)>>?\|?(.*)\Z", re.S)  # a redirection in text the parser cannot read
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-OWNER_SWITCHES = ("Only the owner switches the harness, by typing /harness off or /harness on; nothing an "
-                  "agent runs, writes or schedules does")
 OWNER_SETTINGS = ("Only the owner changes them: edit the file yourself, or type /allow for this one call "
                   "(/allow <the command> for Bash; /allow Write <path>, or /allow <tool> for Edit, MultiEdit "
                   "or NotebookEdit, for the main agent's call)")
-
-
-def refuse(what: str, owner: str = OWNER_SWITCHES) -> int:
-    sys.stderr.write("BLOCKED: harness-switch: %s. %s.\n" % (what, owner))
-    return 2
 
 
 def _resolve(path: str, cwd: str) -> str:
@@ -127,7 +121,7 @@ def _in_harness_checkout(path: str) -> bool:
 def _text(word, env: dict) -> str:
     """A parsed word as text: its static parts, a $NAME `env` holds as its value, any other
     expansion as ${...} (no file name is read from what the shell computes)."""
-    return "".join(p.text if p.kind in ("lit", "glob", "brace") else env[p.text] if p.text in env and p.kind == "param"
+    return "".join(p.text if p.kind in shell_parse.LITERAL_PART_KINDS else env[p.text] if p.text in env and p.kind == "param"
                    else "${%s}" % (p.text if p.kind == "param" else "") for p in word.parts)
 
 
@@ -172,27 +166,44 @@ def _commands(command: str, bodies: str, every_word: bool = False, depth: int = 
         yield words, [m.group(1) or nxt for w, nxt in zip(words, words[1:] + [""]) for m in [FALLBACK_REDIRECT.match(w)] if m]
 
 
+REDIRECT_OP = re.compile(r"(?:\d*|&|\{\w+\})[<>][<>&|-]*\Z")  # an operator _commands appends with its target
+
+
 def _read_only(words: list) -> bool:
-    words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+    """The command writes no file a word of it names: a reader of hooks/lib/bash_read_only.py
+    (its pagers included) whose arguments pass that program's check, or a reading git call."""
+    while words and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        words = words[1:]  # the command's prefix assignments (`-c a=b` keeps its value word)
     if not words:
         return True
     head = os.path.basename(words[0])
     if head == "git":
-        sub = next((w for w in words[1:] if not w.startswith("-")), "")
-        return sub in GIT_READ_ONLY and "-delete" not in words
-    return head in READ_ONLY and "-delete" not in words and "-exec" not in words
+        k = shell_parse.git_subcommand_index(words[1:])
+        sub = "" if k is None else words[1 + k]
+        return (sub in GIT_READ_ONLY or _git_reads(words[1:])) and "-delete" not in words
+    args, it = [], iter(words[1:])
+    for w in it:
+        if REDIRECT_OP.match(w):
+            next(it, None)  # a redirection's target is a written path of its own (write_targets)
+        else:
+            args.append(w)
+    return bash_read_only.reads_only(head, args, pagers=True)
 
 
 def _written_words(words: list, written: list, everything=None) -> list:
     """The words of one simple command that name what it writes: the paths it writes, and, for a
     command that is not read-only (cp, mv, tee, sed -i, python, ...), every word (`everything`
-    False: the paths alone)."""
-    plain = [w for w in words if not ASSIGNMENT.match(w)]
+    False: the paths alone). The command is judged at its command word as hooks/lib/shell_parse.py
+    resolves it: of a reader behind wrappers (command, timeout, env ...) only the wrappers' words."""
+    own = plain = [w for w in words if not ASSIGNMENT.match(w)]
     if everything is None:
-        everything = bool(plain) and not _read_only(plain)
-    if everything and os.path.basename(plain[0]) == "sed":
-        everything = any(re.fullmatch(r"-[A-Za-z]*i.*|--in-place.*", w) for w in plain[1:])
-    return written + (words if everything else [])
+        cmd = next(shell_parse.iter_commands(shell_parse.parse(shlex.join(plain)), into=()), None)
+        head = shell_parse.resolve(cmd).head
+        own = plain[cmd.words.index(head):] if cmd is not None and head in cmd.words else plain
+        everything = bool(own) and not _read_only(own)
+    if everything and os.path.basename(own[0]) == "sed":
+        everything = any(re.fullmatch(r"-[A-Za-z]*i.*|--in-place.*", w) for w in own[1:])
+    return written + (words if everything else plain[:len(plain) - len(own)])
 
 
 def writes_settings_file(command: str) -> bool:
@@ -249,7 +260,7 @@ def _message(plain: list) -> bool:
     """A commit, tag or PR command: its words are a message, prose that may name a path."""
     head, sub = os.path.basename(plain[0]), next((w for w in plain[1:] if not w.startswith("-")), "")
     return (head == "git" and sub in ("commit", "tag", "notes", "merge", "revert")) or (
-        head == "gh" and sub in ("pr", "issue", "release"))
+        head == "gh" and sub in git_facts.GH_MESSAGE_SUBCOMMANDS)
 
 
 def _operands(plain: list, moves: bool) -> list:
@@ -257,7 +268,7 @@ def _operands(plain: list, moves: bool) -> list:
     each source (moved away); cp's sources are only read."""
     sources, dest, it = [], None, iter(plain[1:])
     for w in it:
-        if w in ("-t", "--target-directory"):
+        if w in shell_parse.TARGET_DIR_OPTS:
             dest = next(it, None)
         elif w.startswith("--target-directory="):
             dest = w.split("=", 1)[1]
@@ -279,7 +290,7 @@ def settings_writes(command: str, cwd: str) -> list:
     Each directory, and each word with its kind, is read once: a command padded with repeated
     `cd .` costs what its distinct words cost, not their count times its segments'."""
     segments = list(_commands(command, "shell"))
-    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in ("cd", "pushd"))
+    cds = dict.fromkeys(w[1] for w, _ in segments if len(w) > 1 and os.path.basename(w[0]) in shell_parse.CD_TARGET_BUILTINS)
     dirs = list(dict.fromkeys([cwd] + [_resolve(w, cwd) for w in cds]))
     out, seen, home = [], set(), _settings_files()
     for words, written in segments:
@@ -288,7 +299,7 @@ def settings_writes(command: str, cwd: str) -> list:
             continue
         head = os.path.basename(plain[0])
         interpreter = INTERPRETER.match(head) and not any(re.fullmatch(r"-[A-Za-z]*i.*", w) for w in plain[1:])
-        message, moves = _message(plain), head in ("cp", "mv")
+        message, moves = _message(plain), head in shell_parse.CP_MV
         named = [(w, head in ("rm", "rmdir", "rsync")) for w in
                  _written_words(words, written, False if (interpreter or message or moves) else None)]
         named += _operands(plain, head == "mv") if moves else []
@@ -500,14 +511,6 @@ def check_skill(tool: str, ti: dict) -> int:
     return 0
 
 
-def check_prompt(tool: str, ti: dict) -> int:
-    for key in ("prompt", "message", "content"):
-        value = ti.get(key)
-        if isinstance(value, str) and TYPED.search(value):
-            return refuse("this %s carries a prompt that types /harness" % tool)
-    return 0
-
-
 def main() -> int:
     try:
         data = json.loads(sys.stdin.read() or "{}")
@@ -520,13 +523,11 @@ def main() -> int:
     cwd = data.get("cwd") if isinstance(data.get("cwd"), str) and data.get("cwd") else os.getcwd()
     if tool == "Bash":
         return check_bash(str(ti.get("command") or ""), cwd, data)
-    if tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+    if tool in WRITE_TOOLS:
         return check_write(tool, ti, cwd, data)
     if tool in ("Skill", "SlashCommand"):
         return check_skill(tool, ti)
-    if tool in ("CronCreate", "ScheduleWakeup", "SendMessage"):
-        return check_prompt(tool, ti)
-    return 0
+    return 0  # every other tool is hooks/pretool-harness-switch-prompt.py's
 
 
 if __name__ == "__main__":

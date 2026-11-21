@@ -74,11 +74,11 @@ mkdir -p "$CHECKPOINT_LOG_DIR"
 # AC2 (static): the add-all invocation in write_checkpoint() must remain
 # unflagged -- no ignore-bypassing option co-occurring on that logical call.
 # ============================================================================
-add_a_line=$(grep -n '\$git_cmd add -A' "$CORE_LIB" | head -1)
+add_a_line=$(grep -nF '"${git_cmd[@]}" add -A' "$CORE_LIB" | head -1)
 if [ -n "$add_a_line" ] && ! printf '%s' "$add_a_line" | grep -q -- '-f'; then
   _ok "AC2: git add -A in write_checkpoint carries no -f (ignore-bypass) flag"
 else
-  _fail "AC2: expected an unflagged '\$git_cmd add -A' invocation in $CORE_LIB (got: '${add_a_line}')"
+  _fail "AC2: expected an unflagged '\"\${git_cmd[@]}\" add -A' invocation in $CORE_LIB (got: '${add_a_line}')"
 fi
 
 # ============================================================================
@@ -224,7 +224,9 @@ fi
 # ============================================================================
 STANDIN="acct-test-123"   # synthetic stand-in literal / personal value
 log_file="$CHECKPOINT_LOG_FILE"
-fail_count() { local n; n=$(cat "$CHECKPOINT_FAIL_COUNT_FILE" 2>/dev/null | tr -dc '0-9'); printf '%s' "${n:-0}"; }
+# One counter file for every repository below (the override; by default it is per repository/ref).
+CHECKPOINT_FAIL_COUNT_FILE="$WORKDIR/logs/.checkpoint-fail-count"
+fail_count() { local n=""; read -r n _ < "$CHECKPOINT_FAIL_COUNT_FILE" 2>/dev/null; printf '%s' "${n:-0}"; }
 # _snap <label> <lib> <repo>: one write_checkpoint run in a subshell (sourcing
 # <lib>, so the library resolves its harness home from that copy). Sets
 # snap_rc, snap_before, snap_after (the checkpoint ref before/after the run)
@@ -282,14 +284,15 @@ _snap "AC5 ordinary" "$CORE_LIB" "$REPO3"
 _written AC5 "ordinary untracked file with a list present"
 
 printf 'ticket for %s, demo only\n' "$STANDIN" > "$REPO3/leak.txt"
-printf '1\n' > "$CHECKPOINT_FAIL_COUNT_FILE"   # one earlier failure: a refusal neither adds nor resets
+printf '1\n' > "$CHECKPOINT_FAIL_COUNT_FILE"   # one earlier failure: a snapshot left without a file adds one
 count_before=$(fail_count)
 _snap "AC5 literal" "$CORE_LIB" "$REPO3"
-_refused AC5 "untracked file holding a listed literal" "snapshot refused by the private-literal rule"
-if [ "$(fail_count)" -eq "$count_before" ]; then
-  _ok "AC5: the refusal is not counted as a checkpoint failure (counter unchanged)"
+_refused AC5 "untracked file holding a listed literal, nothing else changed" \
+  "left out 1 file(s) holding a private literal: leak.txt" 0
+if [ "$(fail_count)" -eq "$((count_before + 1))" ]; then
+  _ok "AC5: the snapshot without leak.txt is counted as incomplete (counter +1)"
 else
-  _fail "AC5: failure counter changed on a refusal (before='${count_before}', after='$(fail_count)')"
+  _fail "AC5: counter not advanced by an incomplete snapshot (before='${count_before}', after='$(fail_count)')"
 fi
 if printf '%s' "$snap_log" | grep -qF "leak.txt:1"; then
   _ok "AC5: checkpoint.log names the offending file:line"
@@ -355,12 +358,12 @@ fi
 
 { printf '\357\273\277'; cat "$H/settings.json"; } > "$H/settings.json.new" && mv "$H/settings.json.new" "$H/settings.json"
 printf 'second note\n' >> "$H/notes.txt"
-printf '1\n' > "$CHECKPOINT_FAIL_COUNT_FILE"   # one earlier failure: a refusal neither adds nor resets
+printf '1\n' > "$CHECKPOINT_FAIL_COUNT_FILE"   # one earlier failure: a refusal adds one
 _snap "AC6 BOM" "$H_LIB" "$H"
 _refused AC6 "UTF-8 byte order mark in front of the machine form (filter registered)" \
   "snapshot refused by the settings filter (render-settings clean): nothing written"
-if printf '%s' "$snap_log" | grep -qF "byte order mark" && [ "$(fail_count)" = 1 ]; then
-  _ok "AC6: the filter's reason is logged and the BOM refusal leaves the failure counter alone"
+if printf '%s' "$snap_log" | grep -qF "byte order mark" && [ "$(fail_count)" = 2 ]; then
+  _ok "AC6: the filter's reason is logged and the BOM refusal is counted (1 -> 2)"
 else
   _fail "AC6: BOM refusal: reason missing from the log or counter changed (count='$(fail_count)', log: $snap_log)"
 fi
@@ -374,7 +377,7 @@ git -C "$H" config --unset filter.claude-settings.clean
 _snap "AC6 clean unset" "$H_LIB" "$H"
 _refused AC6 "required filter registered without a clean command (broken install)" "add -A failed" 1
 git -C "$H" config filter.claude-settings.clean "python3 scripts/install/render-settings clean"
-[ "$(fail_count)" = 3 ] && _ok "AC6: both broken-install failures are counted (1 -> 3)" \
+[ "$(fail_count)" = 4 ] && _ok "AC6: both broken-install failures are counted (2 -> 4)" \
   || _fail "AC6: broken-install failures not counted (got '$(fail_count)')"
 
 # Outside the harness home a failing filter on a settings.json stays an ordinary failure.

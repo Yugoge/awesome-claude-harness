@@ -77,6 +77,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from lib import command_span
+
 REPORT_GLOB = os.path.join("docs", "dev", "qa-report-*.json")
 MAIN = "main"
 VERSION = 2
@@ -342,12 +344,8 @@ def _session_reading(session_transcript, call=None) -> dict:
                 record = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(record, dict) or record.get("isSidechain"):
-                continue
-            message = record.get("message")
-            content = message.get("content") if isinstance(message, dict) else None
-            for block in content if isinstance(content, list) else ():
-                if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+            for block in command_span._blocks(record):
+                if block.get("type") == "tool_use" and isinstance(block.get("id"), str):
                     tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
                     out["calls"][block["id"]] = (block.get("name"), tool_input, _iso(record.get("timestamp")))
                     out["order"].append(block["id"])
@@ -362,8 +360,9 @@ def _previous_main_call_writes(reading: dict, call, root: str, rel: str) -> bool
         return False
     name, tool_input, _ts = reading["calls"][order[-1]]
     want = os.path.normpath(os.path.join(root, rel))
+    from lib.spec_path import EDIT_TOOLS  # the tools that name their target in file_path
     targets = []
-    if name in ("Write", "Edit", "MultiEdit"):
+    if name in EDIT_TOOLS:
         targets = [tool_input.get("file_path")]
     elif name == "NotebookEdit":
         targets = [tool_input.get("notebook_path")]
@@ -449,7 +448,8 @@ def observe_call(data: dict) -> None:
             return
         info = {}
         declared = ()
-        if actor == MAIN and tool in ("Agent", "Task"):
+        from lib.subagent import DISPATCH_TOOLS
+        if actor == MAIN and tool in DISPATCH_TOOLS:
             declared = declared_in_prompt(tool_input.get("prompt"))
             if declared:
                 info["launch"] = {"bg": tool_input.get("run_in_background") is True,
@@ -688,16 +688,6 @@ def verdict(session_id: str, project_dir, rel: str, session_transcript=None, age
     return None
 
 
-def held_by_main(session_id: str, project_dir, rel: str, session_transcript=None) -> bool:
-    """verdict() == "main"; an untrustworthy ledger counts as the main agent's."""
-    try:
-        return verdict(session_id, project_dir, rel, session_transcript) == MAIN
-    except LedgerError:
-        return True
-    except Exception:
-        return False
-
-
 def own_write(transcript_path, project_dir, rel: str) -> bool:
     """The agent's own transcript shows a Write of ``rel`` with an ok result whose content is
     the report's current content: the agent authored exactly these bytes. A Bash command,
@@ -715,12 +705,8 @@ def own_write(transcript_path, project_dir, rel: str) -> bool:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                message = record.get("message") if isinstance(record, dict) else None
-                content = message.get("content") if isinstance(message, dict) else None
                 cwd = record.get("cwd") or root
-                for block in content if isinstance(content, list) else ():
-                    if not isinstance(block, dict):
-                        continue
+                for block in command_span._blocks(record, sidechain=True):
                     if block.get("type") == "tool_use" and block.get("name") == "Write" \
                             and isinstance(block.get("input"), dict):
                         target = block["input"].get("file_path")

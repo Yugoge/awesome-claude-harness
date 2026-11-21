@@ -21,10 +21,14 @@ import os
 import re
 from typing import Optional
 
+# The characters that open a quoted string. Defined here, in this stdlib-only leaf, because the
+# installer loads this file by path with no other harness module beside it; shell_parse reads it.
+QUOTE_CHARS = ("'", '"')
+
 
 def _strip_quotes(tok: str) -> str:
     """`tok` without one pair of enclosing single or double quotes."""
-    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ("'", '"'):
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in QUOTE_CHARS:
         return tok[1:-1]
     return tok
 

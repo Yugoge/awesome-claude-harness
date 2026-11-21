@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 112
+- **Total files**: 107
 - **Subdirectories**: 8
 - **Naming convention**: kebab
 
@@ -28,7 +28,6 @@ Organization and usage documentation for `scripts/`.
 - `check-overnight-reports.sh` - STUB: each specialist's dispatch obligation declares its report and schema, and G2
 - `check-public-core.sh` - Description: Public/private boundary gate, the one privacy engine. Recomputes the top-level
 - `check-readme-freshness.sh` - Check README.md freshness for all major folders
-- `checkpoint-prune.sh` - checkpoint-prune.sh — trim refs/checkpoints/* to the most recent N commits
 - `cleanup-tests-folder.sh` - Description: Remove validators that don't match git edge cases, preserving reports/
 - `cli-fixture-record.sh` - Description: Record the installed Claude Code CLI's hook records and hook stdin as test fixtures.
 - `close-report-append.py` - Description: Deterministic read-append-reread-verify helper for the
@@ -55,14 +54,11 @@ Organization and usage documentation for `scripts/`.
 - `graphify-query.py` - graphify-query.py — deterministic pre-BA graph hydrator (runs between Step 1 and Step 2)
 - `graphify_lib.py` - graphify_lib.py — shared library for Graphify knowledge-graph integration
 - `harness-switch` - harness-switch file
-- `install-checkpoint-refspec.sh` - install-checkpoint-refspec.sh — idempotently add refs/checkpoints/* to
 - `install-git-keystone.sh` - install-git-keystone.sh — wire the git-native reference-transaction keystone
-- `iterate-failed-pipelines.py` - COMPATIBILITY CODE (live landing, D15/D25), kept like the old permission spellings of D14:
 - `late-repair-controller.py` - Owns the run-record lifecycle for the deliberately-invoked ``/close
 - `lint-spec-id-centralization.py` - markdown from re-deriving a spec-id / views_dir / split_marker / cp_dir from a
 - `measure-hero-fold.py` - Description: Renders the document that holds the hero, docs/status.md, LOCALLY from the
 - `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
-- `mint-git-blessed-token.sh` - mint-git-blessed-token.sh — issuer of the keystone blessed token (M12).
 - `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
 - `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
 - `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
@@ -81,9 +77,8 @@ Organization and usage documentation for `scripts/`.
 - `qa-report-stale-iter-lint.py` - lacks an explicit resolution marker
 - `rating-view.py` - Behind /rating: print the score log's per-agent view of the current project. Reads only; exit 0 even for a log it cannot read.
 - `readme_facts.py` - Description: One function per fact (FACTS below), one source per function, nothing the pages do not
-- `refine-context.sh` - STUB: the QA-fail loop re-dispatches dev with the QA report path; no context is merged any more.
+- `refusals` - refusals file
 - `regen-folder-docs.py` - doc-sync regenerates a folder's INDEX.md and README.md AUTO regions only when a live harness
-- `repair-venv.sh` - repair-venv.sh — durably restore a Python venv when its bin/python3 symlink target is missing.
 - `resolve-close-report.sh` - Resolve the close-report path for a given TASK_ID using subproject path-walk.
 - `resolve-commit-repos.py` - The normal ``/commit`` workflow uses this helper before it writes any commit
 - `resolve-dev-artifact-chain.py` - The resolver never creates, refreshes, or rewrites artifacts.  It validates the

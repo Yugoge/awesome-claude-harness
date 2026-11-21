@@ -182,7 +182,7 @@ def _bad_targets(s: Session):
         ("scratch dir itself", h, None),
         ("state dir inside scratch", h / "notes.md", {"CLAUDE_STATE_DIR": str(h / "state")}),
         ("project inside scratch", c / "notes.md", {"CLAUDE_PROJECT_DIR": str(c / "proj")}),
-        ("grant dir is the scratch", h / "claude-allow-daemon-restart-x", {"CLAUDE_DAEMON_RESTART_GRANT_DIR": str(h)}),
+        ("grant dir is the scratch", h / "claude-allow-daemon-restart-x", {"CLAUDE_DAEMON_RESTART_SENTINEL_DIR": str(h)}),
     ]
 
 

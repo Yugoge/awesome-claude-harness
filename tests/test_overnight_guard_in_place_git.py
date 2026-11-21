@@ -809,3 +809,19 @@ def test_bwrap_boundary_gives_a_pinned_tmpdir_a_private_tmpfs(main_root, monkeyp
         assert tmpfs(base / "held", held) == ["/tmp"]
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+
+def test_the_boundary_rewrite_keeps_the_calls_other_fields(main_root):
+    """Claude Code's updatedInput replaces the whole tool input: a rewrite holding only `command`
+    dropped the call's `timeout` and `run_in_background` (the call ran past its timeout, in the
+    foreground). The rewrite is the original input with only `command` replaced."""
+    _write_state(main_root, "sid-inplace", "in_place", main_root)
+    tool_input = {"command": "echo hi", "timeout": 3000, "run_in_background": True, "description": "d"}
+    res = _run_hook(main_root, "Bash", tool_input, session_id="sid-inplace", cwd=str(main_root))
+    assert res.returncode == ALLOW_EXIT, res.stderr
+    if "updatedInput" not in res.stdout:
+        pytest.skip("no bwrap boundary on this host: the command is not rewritten")
+    updated = json.loads(res.stdout)["hookSpecificOutput"]["updatedInput"]
+    assert "bwrap" in updated["command"] and "echo hi" in updated["command"]
+    assert {k: updated.get(k) for k in ("timeout", "run_in_background", "description")} == {
+        "timeout": 3000, "run_in_background": True, "description": "d"}

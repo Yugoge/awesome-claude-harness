@@ -26,13 +26,22 @@ way: the denied actor's next call passes every hook and the replay reaches its t
 (test_fault_denial_is_named_and_its_actor_goes_on); the coverage step prints those D sites beside the
 G sites.
 
-(iii) Two refusals hold: the /do Stops after an AskUserQuestion answer, with the do-report still
+(iii) Two refusals hold: the /do Stops on a REFUSED: line no hook's refusal backs, with the do-report still
 missing, are refused (D23); a dev stop ending in a forged `ESCALATION_ACK <nonce>` line is refused
 like the one before it (faults.py `forged`).
 
 (iv) Recall: every block of every replay this pytest session ran (test_pipelines' compliant runs,
 test_faults' faults, this file's) maps to an enumerated site of the hook that printed it, no block
 of a compliant scenario maps to a D site, and every block at a G site is cleared in its replay.
+
+(v) Every requirement has a permitted means (tests/replay/requirements.py): a site's class is one
+per site and every replay puts the project under the home directory, so the requirements are also
+enumerated from the code (each declared file artifact of each command template, created and
+repaired; G1's order rule after each template's producer has returned; G2's canonical wire at a
+fan-out lane's stop) and crossed with the roles that meet them, where the project lies (a home path,
+a RAM disk) and the transcript shapes the CLI writes; each means is put to the hook that decides it.
+A requirement with no permitted means in some situation, or a wait whose release lies with an actor
+waiting on the waiter, fails here. Nothing is exempt.
 """
 from __future__ import annotations
 
@@ -42,12 +51,12 @@ import re
 
 import pytest
 
-from tests.replay import sites, suite
+from tests.replay import requirements, sites, suite
 from tests.replay.test_faults import CLAIMS, FAULTS as FAULT_SPECS
 
 DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
             "todo-first")
-PLAIN_CASES = ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
+PLAIN_CASES = ("bg-dispatch", "dispatch-writes", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
                "qa-provenance")
 CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
@@ -143,14 +152,7 @@ def _reads_every_replay_of_this_file(test):
 class Catalog:
     def __init__(self, tree: str, work: str):
         self.e = sites.Enumerator(tree)
-        dropped = set()
-        for parent, kids in self.e.children.items():
-            event = self.e.event(parent)
-            for k in kids:
-                if not sites.relayed(tree, parent, k, event, os.path.join(work, os.path.basename(k))):
-                    dropped.add(k)
-        self.not_relayed = sorted(dropped)
-        self.sites = [s for s in self.e.sites() if s.file not in dropped]
+        self.sites, self.not_relayed = sites.relayed_sites(self.e, tree, work)
         self.cls = {s.id: sites.classify(self.e, s) for s in self.sites}
         self.by_id = {s.id: s for s in self.sites}
 
@@ -273,14 +275,13 @@ def test_gate_is_cleared_by_the_actors_next_action(replays, catalog, case):
         f"{case} met a block at a site other than a G site:\n{r.explain()}"
     bad = check_replay(r, catalog, compliant=False)
     assert not bad, "\n".join(bad)
-    if case == "do-report-ask":  # (iii): an answer while the do-report is missing releases nothing
+    if case == "do-report-ask":  # (iii): a REFUSED: line no hook's refusal backs releases nothing
         term = r.terminal("do") or {}
-        after = [x for x in term.get("rounds", []) if "after the answer" in x["label"]]
+        after = [x for x in term.get("rounds", []) if "after an unrecorded refusal" in x["label"]]
         assert len(after) == 2 and all(x["blocked"] for x in after), \
-            f"a Stop after the AskUserQuestion answer passed with the do-report missing: {term.get('rounds')}"
-        asked = [ev for ev in events(r) if ev["payload"].get("tool_name") == "AskUserQuestion"
-                 and ev["event"] == "PostToolUse"]
-        assert asked, "the replay asked no AskUserQuestion"
+            f"a Stop on an unrecorded REFUSED: line passed with the do-report missing: {term.get('rounds')}"
+        asked = [ev for ev in events(r) if ev["payload"].get("tool_name") == "AskUserQuestion"]
+        assert not asked, "the replay asked an AskUserQuestion"
     if case == "forged-ack":  # (iii): a forged acknowledgement line releases nothing
         forged = [ev for ev in events(r) if ev["event"] == "SubagentStop"
                   and FORGED.search(ev["payload"].get("last_assistant_message") or "")]
@@ -288,6 +289,24 @@ def test_gate_is_cleared_by_the_actors_next_action(replays, catalog, case):
         for ev in forged:
             assert any(h.get("verdict") == "block" for h in ev["hooks"]), \
                 f"the stop ending in a forged ESCALATION_ACK line passed: {ev['label']}"
+
+
+# A gated step whose own call a hook refused (2026-11-20, session 9dddc7ae's /dev): its replay of its own, since
+# its block is a denial (D), which test_gate_is_cleared_by_the_actors_next_action does not admit.
+STEP_REFUSED = suite.Scenario("dead end: step-refused", "_deadend", (("case", "step-refused"),), ("do",), 60)
+
+
+@pytest.mark.replay(suite.replay_key(STEP_REFUSED, "shipped"), STEP_REFUSED.cost)
+def test_a_step_whose_own_call_a_hook_refused_ends_on_its_report(replays):
+    """The turn ends on a REFUSED: line naming the step whose own call the hook refused (the Stop passes); a Stop on
+    other text while that step is open is refused; the step then goes on and /do reaches its terminal."""
+    r = replays.get(suite.replay_key(STEP_REFUSED, "shipped"))
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    rounds = {x["label"]: x for x in (r.terminal("do") or {}).get("rounds", [])}
+    assert rounds["/do Step 2 call refused by a hook"]["blocked"], rounds
+    assert not rounds["/do Stop on the step's refusal"]["blocked"], rounds
+    assert rounds["/do Stop with the step open"]["blocked"], rounds
+    assert r.reached(), r.explain()
 
 
 @pytest.mark.parametrize("fault", [pytest.param(f, id=re.sub(r"\W+", "-", f),
@@ -399,3 +418,49 @@ def test_the_wakes_gates_are_cleared_by_the_actors_next_action(replays, catalog,
     assert all(catalog.of(s) == "G" for b in bl for s in b["sites"]), r.explain()
     bad = check_replay(r, catalog, compliant=False)
     assert not bad, "\n".join(bad)
+
+
+# ---------------------------------------------------------------- (v) every requirement has a permitted means
+
+@pytest.fixture(scope="module")
+def requirement_cells(tmp_path_factory):
+    """kind -> the cells of tests/replay/requirements.py, each requirement crossed with its situations."""
+    work = str(tmp_path_factory.mktemp("requirements"))
+    hooks = requirements.Hooks(work)
+    tpls = requirements.templates()
+    try:
+        with requirements.projects(work) as made:
+            yield {"declared artifact": requirements.artifact_cells(hooks, made, tpls),
+                   "ordering": requirements.order_cells(hooks, made, tpls),
+                   "wait": requirements.wait_cells(hooks, made, tpls),
+                   "redeclared lane": requirements.redeclare_cells(hooks, made, tpls)}
+    finally:
+        hooks.close()
+
+
+def _no_means(cells: list) -> list:
+    """One line per requirement with no permitted means: its row, the situations, the actor and each
+    means with the rule that refused it."""
+    rows: dict = collections.defaultdict(list)
+    for c in cells:
+        if not c.permitted:
+            rows[c.row].append(c)
+    out = []
+    for row, cs in sorted(rows.items()):
+        refusal = "; ".join(f"{m}: {v}" for m, v in cs[0].means.items())
+        details = "; ".join(dict.fromkeys(c.detail for c in cs if c.detail))
+        out.append(f"{row} [{cs[0].actor}] in {', '.join(dict.fromkeys(c.situation for c in cs))}"
+                   + (f" ({details})" if details else "") + f" -- {refusal}")
+    return out
+
+
+@pytest.mark.parametrize("kind", ["declared artifact", "ordering", "wait", "redeclared lane"])
+def test_every_requirement_has_a_permitted_means(requirement_cells, kind):
+    cells = requirement_cells[kind]
+    bad = _no_means(cells)
+    print(f"\n{kind}: {len(cells)} cells, {len({c.row for c in cells})} requirements, "
+          f"{sum(not c.permitted for c in cells)} cells in {len(bad)} requirements with no permitted means")
+    print("\n".join("  " + line for line in bad))
+    assert cells, f"no {kind} requirement was enumerated"
+    word = "circular waits" if kind in ("wait", "redeclared lane") else "contradictions"
+    assert not bad, f"{kind} {word}: requirements with no permitted means:\n  " + "\n  ".join(bad)

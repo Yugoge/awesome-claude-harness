@@ -70,17 +70,16 @@ def _resolve(project_dir, agent_id, monkeypatch):
 
 # -------------------- STALE-1: the reproduced bug + its fix ---------------------
 
-def test_stale_dangling_entry_does_not_misattribute(tmp_path, monkeypatch):
-    """A brand-new session must NOT inherit the role of a long-abandoned
-    is_running=true entry it never checked into, just because its agent_id
-    happens to coincide with the dangling entry's stored agent_id."""
+def test_stale_dangling_entry_is_honoured_with_a_warning(tmp_path, monkeypatch, capsys):
+    """Pinned the age cut-off until the owner's ruling of 2026-11-20: a 5-day-old
+    running entry is now the last step before None, honoured with a warning that
+    names it and its age (entries are keyed by agent_id alone; see _stale_role)."""
     _write_cp_state(tmp_path, "old-abandoned-spec", "architect",
                      agent_id="reused-agent-id",
-                     checked_in_at=_iso_ago(24 * 5))  # 5 days old, well past the 8h threshold
+                     checked_in_at=_iso_ago(24 * 5))
     role = _resolve(tmp_path, "reused-agent-id", monkeypatch)
-    assert role is None, (
-        f"STALE-1 regression: stale dangling entry misattributed role {role!r}"
-    )
+    assert role == "architect"
+    assert "checked in 120.0 h ago" in capsys.readouterr().err
 
 
 def test_fresh_active_entry_still_resolves_no_false_negative(tmp_path, monkeypatch):

@@ -28,6 +28,10 @@
 #  10. The dispatched agent type cannot write: policies/tool-policy.v1.json
 #      declares it (under "roles" or "built_in_agents") with no Write, Edit,
 #      MultiEdit or NotebookEdit tool. See E7 below.
+#  11. E8 (2026-11-20): a dev dispatch (its obligation's role) reads another task's report it cites
+#      (dev_task). E9: tests/generated/, which docs/reference/generated-tests-policy.md keeps out of
+#      git, holds no deliverable. E10: the report's own task's (or a lane's, or its parent's) /codex
+#      transcript is provenance. E11: .claude/scratch (ignores itself). Coverage: hooks/tests/test_gitignore_preflight_reads.py.
 #
 # Blocking condition (exits 2):
 #   Any path in dev.files_modified or dev.files_created is matched by .gitignore
@@ -415,7 +419,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib import claude_home, obligation, policy_registry, schema_registry  # noqa: E402
+from lib import claude_home, codex_transcript, locations, obligation, policy_registry, schema_registry  # noqa: E402
 
 DEV_REPORT_PATTERN = re.compile(r'docs/dev/dev-report-[A-Za-z0-9._-]+\.json')
 
@@ -647,6 +651,11 @@ def parent_task_id(src_task_id, repo_root):
     return '-'.join(segments[:-1]) if len(segments) > 1 else None
 
 
+def is_own_transcript(path, src_task_id, repo_root):  # E10: lib/codex_transcript's path of the task, a lane, its parent
+    task = codex_transcript.transcript_task(path)
+    return bool(task) and (is_lane_of_cycle(task, src_task_id) or task == parent_task_id(src_task_id, repo_root))
+
+
 def is_contract_deliverable(path, src_task_id, repo_root=None, project_dir=None):
     """E2: True only for a harness artifact the cycle declares: a path that a
     dispatch of src_task_id, or of the one parent task-id it is a lane of
@@ -662,7 +671,7 @@ def is_contract_deliverable(path, src_task_id, repo_root=None, project_dir=None)
         if not task:
             continue
         try:
-            owner = obligation.declaring_dispatch(task, path, project)
+            owner = obligation.declaring_dispatch(task, path, project, writer=False)  # a writer is no declaration
         except Exception:
             owner = None
         if owner and owner.get('source') != 'writer':
@@ -732,9 +741,9 @@ def is_report_of_task(report_rel, task_id, repo_root):
 
 
 def get_repo_root():
-    """The project the dispatch works in (CLAUDE_PROJECT_DIR), whose docs/dev reports and .gitignore
-    the rule reads; this file's own repository (hooks/ is one level below its root) without one."""
-    return os.environ.get('CLAUDE_PROJECT_DIR') or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    """The project the dispatch works in (CLAUDE_PROJECT_DIR, else the cwd), whose docs/dev reports and
+    .gitignore the rule reads."""
+    return str(locations.project_root(bash=True))
 
 
 def is_gitignored(path, repo_root):
@@ -779,14 +788,16 @@ def gitignored_deliverables(prompt):
     # E6 (P1c X6): a report the dispatch's own obligation declares is what it
     # writes: its producer dispatched again (the round this rule's refusal
     # names) rewrites it, so it is no manifest of work the dispatch ships.
-    own = {a.get('path') for a in own_obligation(prompt).get('artifacts') or [] if isinstance(a, dict)}
+    doc = own_obligation(prompt)
+    own = {a.get('path') for a in doc.get('artifacts') or [] if isinstance(a, dict)}
+    dev_task = obligation.canonical_task_id(doc.get('task_id')) if doc.get('role') == 'dev' else None
 
     for match in matches:
         if _in_any_span(match.start(), audit_spans):
             continue
 
         report_rel = match.group(0)
-        if report_rel in own:
+        if report_rel in own or dev_task and source_task_id(report_rel) != dev_task:
             continue
 
         if (cycle_task_id is not None
@@ -824,7 +835,10 @@ def gitignored_deliverables(prompt):
         report_blocked = []
 
         for path in all_paths:
-            if not (isinstance(path, str) and path):
+            if not (isinstance(path, str) and path) or path.startswith('tests/generated/') \
+                    or is_own_transcript(path, src_task_id, repo_root) \
+                    or tuple(os.path.relpath(os.path.join(repo_root, path), repo_root).split(os.sep)[:2]) \
+                    == locations.SCRATCH_PARTS:  # E9, E10, E11: the scratch root ignores itself
                 continue
             if not is_gitignored(path, repo_root):
                 continue
@@ -900,7 +914,8 @@ def main():
         sys.exit(0)
 
     tool_input = data.get('tool_input') or data.get('toolInput') or {}
-    findings = gitignored_deliverables(tool_input.get('prompt', ''))
+    with obligation.transcript_scan():  # each transcript read once for every path, not once per path
+        findings = gitignored_deliverables(tool_input.get('prompt', ''))
     # E7: a dispatch whose agent type has no write tool ships no deliverable.
     if findings and not agent_can_write(tool_input.get('subagent_type')):
         sys.exit(0)

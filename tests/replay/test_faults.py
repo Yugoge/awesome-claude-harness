@@ -58,7 +58,7 @@ F8c's and F8r's commits land.
 What /close does where no agent can produce a gap's artifact (P4's review, findings 1 and 2): F8n, BA's
 ticket missing in a /close whose task's /dev session is gone from the store while an earlier /close's
 re-dispatch survives: the reader names no owner for it (never /close's own rating step, which runs no
-dispatch, D8), Routes asks the owner (header Request), and nothing writes BA's artifact; F8a, `/close
+dispatch, D8), Routes reports it on a NO_OWNER: line, nobody asked, the Stop passes, and nothing writes BA's artifact; F8a, `/close
 --auto` over the cycle and an old task docs/dev holds with no record of its dispatches: the discovery passes
 the old task over, its reason on stderr and in the batch line, and the cycle lands (D25).
 """
@@ -676,8 +676,9 @@ def test_f8n_a_ticket_nobody_owes_goes_to_the_owner_never_to_the_rating_step(rep
     assert [ticket, "MISSING_ARTIFACT"] in gaps, gaps
     owing = [f["value"] for f in r.facts if f["key"] == "owing dispatch" and f["value"]["path"] == ticket]
     assert owing and all(o["answer"] is None for o in owing), owing
-    asked = [f["value"] for f in r.facts if f["key"] == "close Request question"]
-    assert asked == [{"artifact": "docs/dev/ticket-<task>.md", "header": "Request", "ok": True, "blocked": False}], asked
+    reported = [f["value"] for f in r.facts if f["key"] == "close Request report"]
+    assert reported == [{"artifact": "docs/dev/ticket-<task>.md"}], reported  # reported, nobody asked
+    assert r.fact("close Request stop") == {"still_blocked": False}, r.explain()  # the Stop passes on the report
     assert not [p for _sid, p in routing.main_writes(r.run_dir) if p.endswith("/" + ticket)], \
         "the /close orchestrator wrote BA's ticket"
 

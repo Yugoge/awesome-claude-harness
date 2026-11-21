@@ -1,12 +1,19 @@
-"""The removal policy's degraded fallback (lib/bash_safety_rules.py::removal_policy) on a line ending in an option.
+"""The removal policy's degraded path (lib/bash_safety_rules.py::removal_policy): the analyzer gave no verdict.
 
-When the execution-boundary analyzer gives no verdict (timeout, memory ceiling, crash) the fallback once refused every
-line ending on an option, which refused 143 of the everyday commands below (`git status --short`, `date -u`,
-`python3 --version`). A trailing option is now plain unless a command of that line names a shell, an interpreter, an
-exec wrapper or a removal program (degraded_trailing_option_is_plain). Every form whose missing operand is the danger,
-every removal and every assembly channel stays refused. The refusal set is read from the analyzer's own tables, and
-a generated differential pins that the fallback is never laxer than the live analyzer. All hook runs use a throwaway
-HOME and global git config.
+Until 2026-11-19 a command passed the degraded path only when it was provably plain: no removal reference, no
+assembly channel (expansion, substitution, glob, brace, heredoc), balanced quoting, and, once any command ended on an
+option, every head on an allowlist of some sixty programs. Ten review rounds grew that proof and the lists below.
+
+The owner's rule replaced the proof with one question, the one the primary path asks of a command the analyzer
+leaves UNRESOLVED: does the command text hold a removal word, by lib/pol_degraded_removal_reference.ere? If it does,
+the command is refused; if not, it runs and is handed to the record. So the two paths give an unproven command the
+same answer.
+
+Every list of the earlier rounds is kept as input, with the rule's answer in place of the old one: a command of
+those lists is refused by the removal policy when, and only when, its text holds a removal word. Most hold none (they
+spell a removal with quotes, hand it to a shell through an option, or name no removal at all), so on the degraded
+path they now run; with the analyzer available, a removal it finds is refused as before (FORBIDDEN_REMOVAL). All
+hook runs use a throwaway HOME and global git config. No command is ever executed.
 """
 import json
 import os
@@ -29,15 +36,15 @@ import bash_execution_boundary as eb  # noqa: E402
 import bash_safety_rules as R  # noqa: E402
 
 # bash_safety_rules takes its hooks directory from sys.argv[1], which under plain pytest is a test path: point it at
-# this checkout's hooks explicitly, and drop tables another module may have loaded from the wrong place.
+# this checkout's hooks explicitly.
 R.HOOKS, R.LIB = HOOKS_DIR, os.path.join(HOOKS_DIR, "lib")
-R._DG_TABLES = None
 from shell_parse import WRAPPERS  # noqa: E402
 
 DEGRADED = "removal-policy FAIL-CLOSED"
 MODES = {"timeout": {"CLAUDE_HOOK_BOUNDARY_TIMEOUT": "0.001s"}, "memory": {"CLAUDE_HOOK_BOUNDARY_MEM_KB": "4096"}}
 
-# Everyday commands ending on an ordinary option, none naming a removal or an assembly channel.
+# Everyday commands ending on an ordinary option, none naming a removal or an assembly channel: allowed before the
+# rule and after it.
 EVERYDAY_TRAILING_OPTION = [
     "git status --short", "git status -s", "git status -sb", "git log --oneline", "git log --oneline -5",
     "git log -1", "git log --graph --oneline --all", "git log -n 3 --stat", "git diff --stat", "git diff --cached",
@@ -65,16 +72,17 @@ EVERYDAY_TRAILING_OPTION = [
     "bc -l",
 ]
 
-# Everyday commands the allowlist refuses in degraded mode on purpose: they run code the repository holds (a test
-# suite, a Makefile, build scripts, a compose file's containers, a cargo alias in the repository's config).
+# Everyday commands the old allowlist refused in degraded mode because they run code the repository holds (a test
+# suite, a Makefile, build scripts). None holds a removal word: they run.
 ALLOWLIST_REFUSED_EVERYDAY = [
     "cargo build --release", "cargo fmt --check", "docker compose up -d", "make -j4", "make -n",
     "pytest --co -q", "pytest -q", "pytest -v", "pytest -x", "python3 -m pytest -q", "python3 -m pytest -x",
     "python3 -m pytest tests -v",
 ]
 
-# Forms the degraded fallback must keep refusing: removals, assembly channels, and the structurally incomplete forms
-# whose missing operand is the danger, each also behind a wrapper, an assignment, a path, quoting or another command.
+# Round 1's "must keep refusing" list: removals, assembly channels, and structurally incomplete forms, each also
+# behind a wrapper, an assignment, a path, quoting or another command. Thirteen hold a removal word and are refused;
+# three more meet another rule of the hook (destructive git clean, destructive disk operation); the rest run.
 STILL_REFUSED = [
     "rm -rf build", "rm build -rf", "rm -rf", "/bin/rm x -f", "unlink -x", "rmdir d -p", "shred x -u",
     "git clean -fdx", "git clean -n", "git -C . clean -f", "git rm -r --cached x -f", "rsync -a src/ dst/ --delete",
@@ -90,8 +98,7 @@ STILL_REFUSED = [
     "ls * -l", "bash -c 'echo' -x", "grep foo 'unterminated -n",
 ]
 
-
-# Refused by the live analyzer (missing_option_value) and, before the table-derived rule, allowed by the fallback.
+# Refused by the live analyzer as UNRESOLVED (missing_option_value). No removal word: they run on both paths.
 ANALYZER_REFUSED_EXEC_OPTIONS = [
     "sg wheel -c", "chpst -u", "man -P", "man --pager", "man -B", "man -H", "man --browser", "man --html",
     "rg --pre", "rg --hostname-bin", "ack --pager", "ag --pager", "apropos -P", "apropos --pager", "whatis -P",
@@ -101,7 +108,7 @@ ANALYZER_REFUSED_EXEC_OPTIONS = [
 ]
 
 # A quoted or escaped word holding a space (a head that is a command line, or an argument some program runs as one),
-# and an option that ends a command before a redirection, a comment or a parenthesis.
+# and an option that ends a command before a redirection, a comment or a parenthesis. No removal word.
 SHELL_STRING_WORDS = [
     "docker create -l 2>/dev/null", "xargs -d >x", "/usr/bin/docker --host # c", "(xargs -d)", "rg x --max-count''",
     "hyperfine 'grep -f' -N 2>/dev/null",
@@ -112,8 +119,9 @@ SHELL_STRING_WORDS = [
     "PAGER=/bin/sh man ls -a",
 ]
 
-
-# A non-plain line beside a line ending on an ordinary option (\n is a real newline).
+# A removal spelled with quotes (`r''m`, `-de''lete`) beside a line ending on an ordinary option (\n is a real
+# newline). The raw text names no removal, so the degraded path lets them run; the analyzer, when it answers, finds
+# the removal and refuses it (test_removals_the_text_does_not_name_are_found_by_the_analyzer).
 MULTILINE_NEIGHBOURS = [
     "r''m -rf x\nls -l", "ls -l\nr''m -rf x", "\"r\"m -rf x\ngit status --short", "r\\m -rf x\ndate -u",
     "un''link x\nls -l", "sh''red x\nls -l", "python3 -c 'import os; getattr(os,\"un\"+\"link\")(\"x\")'\nls -l",
@@ -124,9 +132,8 @@ MULTILINE_NEIGHBOURS = [
     "kubectl x -- kubectl y -- find /dev/shm/vtest/sub -de''lete -print", "kubectl -- ssh h find /x -de''lete -v",
 ]
 
-
 # git text that runs a command: an ext:: remote (and the settings that enable or alias it), git grep's -O pager
-# and the fetchers' upload-pack options, also behind kubectl `--`.
+# and the fetchers' upload-pack options, also behind kubectl `--`. No removal word.
 GIT_COMMAND_TEXT = [
     "git -c protocol.ext.allow=always ls-remote 'ext::r''m -rf /dev/shm/v/s' -q",
     "git -c protocol.ext.allow=always clone 'ext::r''m -rf /dev/shm/v/s' d -q",
@@ -145,9 +152,9 @@ MENTIONS = [
     "git push -u origin main", "ls src/ -la", "cp a out/ -v", "git log --grep=ssh --oneline -5",
 ]
 
-
-# Degraded-only refusals the live analyzer does not make: unmodelled shells, interpreters and wrappers, a `-c
-# key=value` or `--to-command=` naming a shell, g-prefixed removal programs, and python -m on a code-running package.
+# Round 5's degraded-only refusals: unmodelled shells, interpreters and wrappers, a `-c key=value` or
+# `--to-command=` naming a shell, g-prefixed removal programs, python -m on a code-running package. One holds a
+# removal word (`cmake -E remove x -v`).
 DEGRADED_ONLY_REFUSED = [
     "pwsh -c", "oksh -c", "osh -c", "ysh -c", "xonsh -c", "elvish -c", "nu -c", "rc -c", "R -e", "vim -c",
     "nvim -c", "ex -c", "emacs --eval", "guile -c", "racket -e", "sbcl --eval", "elixir -e", "erl -eval", "qjs -e",
@@ -233,130 +240,12 @@ def analyzer_corpus():
     return sorted(cmds)
 
 
-def _rmref():
-    with open(os.path.join(HOOKS_DIR, "lib", "pol_degraded_removal_reference.ere"), encoding="utf-8") as fh:
-        return next(ln.strip() for ln in fh if ln.strip() and not ln.startswith("#"))
-
-
-def test_degraded_fallback_is_never_laxer_than_the_live_analyzer():
-    rmref = _rmref()
-    corpus = analyzer_corpus()
-    refused = [c for c in corpus if not eb.analyze(c)["allowed"]]
-    assert len(corpus) > 80000 and len(refused) > 1000, (len(corpus), len(refused))
-    laxer = [c for c in refused if not R.degraded_refuses(c, rmref)]
-    assert not laxer, "%d analyzer-refused forms pass the degraded fallback: %r" % (len(laxer), laxer[:20])
-
-
-@pytest.mark.parametrize("command", ANALYZER_REFUSED_EXEC_OPTIONS + DEGRADED_ONLY_REFUSED + SHELL_STRING_WORDS
-                         + MULTILINE_NEIGHBOURS + GIT_COMMAND_TEXT)
-def test_exec_option_and_unmodelled_program_forms_refuse_in_degraded_mode(command):
-    assert R.degraded_refuses(command, _rmref()), command
-
-
-@pytest.mark.parametrize("mode", sorted(MODES))
-def test_analyzer_refused_exec_options_refuse_end_to_end(mode):
-    with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])),
-                              ANALYZER_REFUSED_EXEC_OPTIONS + SHELL_STRING_WORDS))
-    allowed = [c for c, code, _err in results if code != 2]
-    assert not allowed, (mode, allowed)
-
-
-@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
-def test_multiline_neighbours_refuse_end_to_end(mode, tmp_path):
-    hook = None
-    env = MODES.get(mode, {})
-    if mode == "crash":
-        dst = tmp_path / "hooks"
-        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
-        analyzer = dst / "lib" / "bash_execution_boundary.py"
-        src = analyzer.read_text(encoding="utf-8")
-        # The tables stay importable; only running the analyzer crashes.
-        analyzer.write_text(src.replace('if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'),
-                            encoding="utf-8")
-        hook = str(dst / "pretool-bash-safety.sh")
-    with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **env)), MULTILINE_NEIGHBOURS + GIT_COMMAND_TEXT))
-    allowed = [c for c, code, _err in results if code != 2]
-    assert not allowed, (mode, allowed)
-
-
-@pytest.mark.parametrize("body", [None, "import sys\nsys.exit(0)\n", "raise RuntimeError('x')\n",
-                                  "import time\ntime.sleep(30)\n"])
-def test_unimportable_analyzer_tables_refuse_every_trailing_option(tmp_path, body):
-    """No tables, no proof: an analyzer module that is absent, exits, raises or hangs on import refuses the line."""
-    dst = tmp_path / "hooks"
-    shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
-    target = dst / "lib" / "bash_execution_boundary.py"
-    if body is None:
-        target.unlink()
-    else:
-        target.write_text(body, encoding="utf-8")
-    code, err = run_hook("git status --short", hook=str(dst / "pretool-bash-safety.sh"),
-                         CLAUDE_HOOK_BOUNDARY_TIMEOUT="1s")
-    assert code == 2 and DEGRADED in err, err
-
-
-def child_cpu():
-    """CPU seconds of every finished child process: what a hook run costs, apart from how busy the runner is."""
-    r = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return r.ru_utime + r.ru_stime
-
-
-def run_hook(command, hook=None, timeout=None, **env_extra):
-    home = tempfile.mkdtemp(prefix="degraded-home-")
-    gitconfig = os.path.join(home, "gitconfig")
-    open(gitconfig, "w").close()
-    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
-    env.update(HOME=home, GIT_CONFIG_GLOBAL=gitconfig, **env_extra)
-    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
-    p = subprocess.run(["bash", hook or HOOK], input=payload, capture_output=True, text=True, cwd=home, env=env,
-                       timeout=timeout)
-    return p.returncode, p.stderr
-
-
-@pytest.mark.parametrize("mode", sorted(MODES))
-def test_everyday_trailing_options_pass_the_degraded_fallback(mode):
-    with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])), EVERYDAY_TRAILING_OPTION))
-    refused = [(c, err.splitlines()[:1]) for c, code, err in results if code != 0]
-    assert not refused, "%d of %d refused under %s: %r" % (len(refused), len(results), mode, refused[:10])
-
-
-@pytest.mark.parametrize("mode", sorted(MODES))
-@pytest.mark.parametrize("command", STILL_REFUSED)
-def test_dangerous_neighbours_stay_refused_in_degraded_mode(mode, command):
-    code, err = run_hook(command, **MODES[mode])
-    assert code == 2, "%s allowed %r" % (mode, command)
-    assert err.strip()
-
-
-def test_the_lifted_corpus_is_exactly_what_question_3_refused():
-    """Every corpus line ends on an option, so the old rule refused each one; only the new predicate admits it."""
-    for command in EVERYDAY_TRAILING_OPTION:
-        assert R.DEGRADED_TRAILING_OPTION.search(command), command
-        assert R.degraded_trailing_option_is_plain(command), command
-
-
-@pytest.mark.parametrize("line", [
-    "bash -c", "env -S", "nice bash -c", "xargs -0", "python3 -c", "git clean -f", "find . -exec", "sudo -i",
-    "ls -la; sh -s", "grep 'x -n", "ls -l >", "rm -f",
-])
-def test_predicate_refuses_sensitive_lines(line):
-    assert not R.degraded_trailing_option_is_plain(line)
-
-
+# Lines the old predicate admitted, and everyday multi-line scripts.
 PLAIN_LINES = [
     "git commit -m 'fix the bug' --amend", "grep -n 'foo bar' file -r", "bash --version", "grep -rn find src -i",
     "ls src/ -la", "cp a out/ -v", "git log --grep=ssh --oneline -5", "python3 -m pip list -v", "python3 -V",
     "git status --short", "ls -la | grep x -i", "date -u 2>&1 -R",
 ]
-
-
-@pytest.mark.parametrize("line", PLAIN_LINES)
-def test_predicate_admits_plain_lines(line):
-    assert R.degraded_trailing_option_is_plain(line)
-
 
 MULTILINE_EVERYDAY = [
     "kubectl get pods -A\nkubectl get svc -n x", "git status --short\ngit log --oneline -5", "ls -la\n\ndate -u",
@@ -364,12 +253,7 @@ MULTILINE_EVERYDAY = [
 ]
 
 
-@pytest.mark.parametrize("command", MULTILINE_EVERYDAY)
-def test_multiline_everyday_scripts_stay_allowed(command):
-    assert not R.degraded_refuses(command, _rmref()), command
-
-
-# Real deletions the denylist layers missed (round 6): a program reading code from stdin, or a second `=` value.
+# Round 6: a program reading code from stdin, or a second `=` value. No removal word (`%s%s ... r m`).
 STDIN_CODE_AND_NESTED_VALUES = [
     "printf '%s%s -rf /dev/shm/v/s' r m | tar -cf /dev/null /etc/hostname --checkpoint=1 "
     "--checkpoint-action=exec=sh -v",
@@ -384,60 +268,18 @@ STDIN_CODE_AND_NESTED_VALUES = [
     "printf '.system %s%s -rf /dev/shm/v/s' r m | sqlite3 -batch", "kubectl x -- ls -la",
 ]
 
-# Heads that run code they read (an interpreter, a REPL, a database shell, a macro processor) are not on the
-# allowlist; any of them ending a command on an option refuses, stdin-fed or not.
+# Heads that run code they read (an interpreter, a REPL, a database shell, a macro processor).
 REPL_HEADS = ["python3 -m asyncio", "m4", "sqlite3", "duckdb", "psql", "mysql", "dc", "ed", "awk", "perl", "ruby",
               "lua", "tclsh", "jshell", "ghci", "node", "make -f -", "gawk", "php", "Rscript", "osascript"]
 
-
-@pytest.mark.parametrize("head", REPL_HEADS)
-@pytest.mark.parametrize("shape", ["{h} -q", "printf x | {h} -s", "ls -l; {h} -batch", "{h} -v\nls -l",
-                                   "ls -l\nprintf x | {h}"])
-def test_code_reading_heads_refuse(head, shape):
-    assert R.degraded_refuses(shape.format(h=head), _rmref()), shape.format(h=head)
-
-
-@pytest.mark.parametrize("command", ALLOWLIST_REFUSED_EVERYDAY)
-def test_everyday_code_runners_refuse_in_degraded_mode(command):
-    assert R.degraded_refuses(command, _rmref()), command
+REPL_SHAPES = ["{h} -q", "printf x | {h} -s", "ls -l; {h} -batch", "{h} -v\nls -l", "ls -l\nprintf x | {h}"]
+SENSITIVE_LINES = [
+    "bash -c", "env -S", "nice bash -c", "xargs -0", "python3 -c", "git clean -f", "find . -exec", "sudo -i",
+    "ls -la; sh -s", "grep 'x -n", "ls -l >", "rm -f",
+]
 
 
-def test_allowlist_holds_no_program_the_analyzer_models_as_running_code():
-    """Every allowlisted head is outside the analyzer's shells, interpreters, awks, wrappers and removal programs; the
-    handler-owned ones (git, docker, kubectl, find, hash, ssh) and python are read through their own narrow entry."""
-    narrow = {"git", "docker", "kubectl", "find", "hash", "ssh", "python", "python3", "python2", "node", "deno",
-              "bun", "set"}
-    t = R._degraded_tables()
-    for head in R._DG_ALLOW:
-        if head in narrow:
-            continue
-        assert not (head in t["shells"] or head in t["interps"] or head in t["awks"] or head in t["wrappers"]
-                    or head in t["removal"] or R._dg_handler(t, head)), head
-
-
-@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
-def test_stdin_code_and_nested_values_refuse_end_to_end(mode, tmp_path):
-    hook = None
-    if mode == "crash":
-        dst = tmp_path / "hooks"
-        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
-        analyzer = dst / "lib" / "bash_execution_boundary.py"
-        analyzer.write_text(analyzer.read_text(encoding="utf-8").replace(
-            'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
-        hook = str(dst / "pretool-bash-safety.sh")
-    with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))),
-                              STDIN_CODE_AND_NESTED_VALUES))
-    assert not [c for c, code, _err in results if code != 2], (mode, results)
-
-
-@pytest.mark.parametrize("mode", sorted(MODES))
-def test_read_handler_mentions_stay_allowed_end_to_end(mode):
-    with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])), MENTIONS))
-    assert not [c for c, code, _err in results if code != 0], (mode, results)
-
-
+# 100 KB commands: read in bounded time.
 ADVERSARIAL_LONG = {
     "read_handler_words": "ls " + "find " * 250 + "-q\nr''m -rf /dev/shm/v/s",
     "read_handler_words_100kb": "ls " + "find git ssh " * 8000 + "-q\nr''m -rf /dev/shm/v/s",
@@ -447,113 +289,8 @@ ADVERSARIAL_LONG = {
 }
 
 
-@pytest.mark.parametrize("name", sorted(ADVERSARIAL_LONG))
-def test_adversarial_long_lines_are_read_in_bounded_time(name):
-    command = ADVERSARIAL_LONG[name]
-    started = time.process_time()  # CPU time: a busy runner slows the wall clock, not the work
-    refused = R.degraded_refuses(command, _rmref())
-    assert time.process_time() - started < 2.0, name
-    if "r''m" in command or "-de''lete" in command:
-        assert refused, name
-
-
-@pytest.mark.parametrize("mode", sorted(MODES))
-def test_adversarial_long_line_refuses_through_the_hook_in_bounded_time(mode):
-    # No `find` word: the runtime guard's own find scan is slow on 100 KB of them on the base branch too.
-    command = "ls " + "git ssh hash kubectl " * 5000 + "-q\nr''m -rf /dev/shm/v/s"
-    assert len(command) > 100_000
-    started = child_cpu()
-    code, err = run_hook(command, timeout=120, **MODES[mode])
-    assert code == 2 and DEGRADED in err
-    # Bounded, not fast: the whole PreToolUse pipeline reads 100 KB here. CPU seconds, not wall time: a shared CI
-    # runner under xdist took 15.1-31.3 s of wall time (2026-11-18), while the hook's CPU time stays about 4.7 s idle
-    # and 4.8 s beside 8 CPU-bound processes on 4 cores (whose wall time went to 11.3 s). The timeout catches a hang.
-    assert child_cpu() - started < 15.0
-
-
-def test_a_degraded_reading_past_its_time_bound_refuses(monkeypatch):
-    """The fallback's own reading is time-bounded, and running out of time refuses."""
-    monkeypatch.setenv("CLAUDE_HOOK_BOUNDARY_TIMEOUT", "0.001s")
-    monkeypatch.setattr(R, "_DG_TIME_LIMIT", 0.05)
-    monkeypatch.setattr(R, "degraded_refuses", lambda command, rmref: time.sleep(5) or False)
-    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status --short"}})
-    started = time.monotonic()
-    with pytest.raises(SystemExit) as exit_info:
-        R.removal_policy(payload, "git status --short")
-    assert exit_info.value.code == 2 and time.monotonic() - started < 3.0
-
-
-def test_analyzer_timeout_default_leaves_headroom_under_load():
-    """15 s: the analyzer peaked at 3.4 s with 25 concurrent runs beside 25 CPU-bound processes on 4 cores, and at
-    6.0 s (18 of 486 past 5 s) at 50 concurrent runs; the old 5 s default sent those calls to the fallback."""
-    assert R.duration("", "15s") == 15.0
-    src = open(os.path.join(HOOKS_DIR, "lib", "bash_safety_rules.py"), encoding="utf-8").read()
-    assert 'duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "15s")' in src
-
-
-# ── Round 7: every spelling of every refused option ──
-
-# Where each allowlisted head's refused options are tried, and the same command without them (which must pass).
-SPELLING_CONTEXT = {
-    "kubectl": "kubectl get pods {} -A", "helm": "helm list {} -A", "pip": "pip list {} -v", "pip3": "pip3 list {} -v",
-    "npm": "npm ls {} -a", "pnpm": "pnpm ls {} -r", "apt": "apt show x {} -a", "apt-cache": "apt-cache show x {} -a",
-    "ruff": "ruff check {} -q", "less": "less {} f -n", "more": "more {} f -n", "hostname": "hostname {} -v",
-    "man": "man ls {} -a", "info": "info ls {} -a", "go": "go version {} -m", "tsc": "tsc --noEmit {} --strict",
-    "whatis": "whatis ls {} -l", "apropos": "apropos ls {} -l", "sort": "sort {} x -n", "tree": "tree {} x -a",
-    "rg": "rg {} foo -i", "fd": "fd {} x -H", "date": "date {} -u", "ss": "ss {} -t",
-}
-
-# Letters that take a value but whose parser keeps scanning the rest of the cluster (tree hands -P/-I/-T/-H/-o the
-# NEXT word; less, ss and apt are read letter by letter here): a refused letter after one of them still refuses.
-SCANNED_VALUE_LETTERS = {"tree": "LPITHo", "less": "bhjxyz#", "ss": "fAFN", "apt": "ta", "rg": "", "fd": ""}
-
-
-def _spellings(option, values, refused, fold=False, scanned=""):
-    """Exact, `=value`, every abbreviation (and its case variants where the program folds case), in a cluster, with
-    an attached value, and after a value letter whose parser keeps scanning."""
-    if option.startswith("--"):
-        out = [option, option + "=v"] + ["--" + option[2:k] for k in range(3, len(option))]
-        if fold:
-            out += [o.upper() for o in out] + ["--" + o[2:].capitalize() for o in out]
-        return out
-    if len(option) == 2 and option[0] == "-":
-        filler = next(c for c in "uqvayzw" if c not in values and "-" + c not in refused)
-        return [option, option + "val", "-" + filler + option[1], "-" + filler + option[1] + "val"] + [
-            "-" + v + option[1] for v in scanned if v != option[1]]
-    return [option]
-
-
-def refused_spellings():
-    cases = []
-    for head, (refused, values, *fold) in sorted(R._DG_REFUSED_OPTS.items()):
-        context = SPELLING_CONTEXT.get(head, head + " {} x -q")
-        for option in refused:
-            cases += [(context, context.format(sp)) for sp in _spellings(
-                option, values, refused, bool(fold and fold[0]), SCANNED_VALUE_LETTERS.get(head, ""))]
-    for sub, (options, words) in sorted(R._DG_GIT_SUB.items()):
-        refused = R._DG_GIT_ALL + options
-        for option in refused:
-            cases += [(None, "git %s %s -q" % (sub, sp)) for sp in _spellings(option, "", refused)]
-        cases += [(None, "git %s %s -q" % (sub, w)) for w in words]
-    return cases
-
-
-def test_every_spelling_of_every_refused_option_refuses():
-    rmref, failures, contexts = _rmref(), [], set()
-    cases = refused_spellings()
-    assert len(cases) > 500, len(cases)
-    for context, command in cases:
-        if not R.degraded_refuses(command, rmref):
-            failures.append(command)
-        if context:
-            contexts.add(context.format("").replace("  ", " "))
-    assert not failures, failures[:20]
-    # The refusal comes from the option: each context without it passes.
-    assert not [c for c in contexts if R.degraded_refuses(c, rmref)], sorted(
-        c for c in contexts if R.degraded_refuses(c, rmref))
-
-
-# The verifier's round-7 inputs: abbreviations, clusters and attached values of options that run a program.
+# Round 7: abbreviations, clusters and attached values of options that run a program; writes outside the operands
+# or code from a file through a formerly allowlisted head.
 R7_OPTION_SPELLINGS = [
     "git grep -iOsh PWNED\nls -l", "git grep -iOsh -e PWNED --", "git grep -lOsh zzz -n",
     "git grep --open=/dev/shm/v7/x PWNED\nls -l", "git ls-remote --upload=/dev/shm/v7/x /dev/shm/v7/repo -q",
@@ -564,7 +301,6 @@ R7_OPTION_SPELLINGS = [
     "pnpm ls --pnpmfile=/dev/shm/v/p.cjs -r", "ss -K dst 1.2.3.4 -n",
 ]
 
-# Writes outside the operands, or code from a file, through an allowlisted head.
 R7_WRITES = [
     "sort -o out f -n", "sort --output=out -n", "uniq a b -c", "xxd -r a b -g", "info -o out ls -a",
     "info --dribble=x ls -a", "git log --output=x -1", "git diff --out=x --stat", "git show --output x -q",
@@ -588,8 +324,7 @@ R8_SPELLINGS = [
     "tsc --NOEMIT --GENERATETRACE /dev/shm/ts/t -q", "man ./foo.1 -a", "go env -w GOFLAGS=x -json",
 ]
 
-
-# Local forms restored after round 7 (they run nothing beyond what commit and pull already do).
+# Local forms round 7 restored. (`git commit --no-verify` meets the commit-hook-bypass rule, not this policy.)
 R7_ALLOWED = [
     "ls -la | less", "git log -5 | less", "git switch main -q", "git checkout -b x -q", "git restore --staged x -q",
     "git merge --ff-only -q", "git stash pop -q", "bc -l", "tsc --noEmit", "date -Iseconds", "rg --pretty foo -i",
@@ -597,35 +332,8 @@ R7_ALLOWED = [
     "git worktree list -v",
 ]
 
-
-@pytest.mark.parametrize("command", R7_OPTION_SPELLINGS + R7_WRITES + R8_SPELLINGS)
-def test_round7_forms_refuse(command):
-    assert R.degraded_refuses(command, _rmref()), command
-
-
-@pytest.mark.parametrize("command", R7_ALLOWED)
-def test_round7_local_forms_stay_allowed(command):
-    assert not R.degraded_refuses(command, _rmref()), command
-
-
-@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
-def test_round7_option_spellings_refuse_end_to_end(mode, tmp_path):
-    hook = None
-    if mode == "crash":
-        dst = tmp_path / "hooks"
-        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
-        analyzer = dst / "lib" / "bash_execution_boundary.py"
-        analyzer.write_text(analyzer.read_text(encoding="utf-8").replace(
-            'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
-        hook = str(dst / "pretool-bash-safety.sh")
-    with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))),
-                              R7_OPTION_SPELLINGS + R8_SPELLINGS))
-    assert not [c for c, code, _err in results if code != 2], (mode, results)
-
-
-# ── Round 9: the allowlist pruned to the heads the everyday lists need ──
-
+# Round 9: options of formerly allowlisted heads that write a file or load code. One holds a removal word
+# (`git remote -v remove origin -q`).
 R9_REFUSED = [
     "apt-cache policy -p /dev/shm/x/victim -q", "apt-cache policy --pkg-cache /dev/shm/x/victim -q",
     "apt-cache show -s /dev/shm/x/victim coreutils -q", "apt policy --pkg-cache /dev/shm/x/victim -q",
@@ -646,51 +354,7 @@ R9_REFUSED = [
     "pip list --cache-dir /dev/shm/x/c -v",
 ]
 
-
-@pytest.mark.parametrize("command", R9_REFUSED)
-def test_round9_forms_refuse(command):
-    assert R.degraded_refuses(command, _rmref()), command
-
-
-@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
-def test_round9_forms_refuse_end_to_end(mode, tmp_path):
-    hook = None
-    if mode == "crash":
-        dst = tmp_path / "hooks"
-        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
-        analyzer = dst / "lib" / "bash_execution_boundary.py"
-        analyzer.write_text(analyzer.read_text(encoding="utf-8").replace(
-            'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
-        hook = str(dst / "pretool-bash-safety.sh")
-    with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))), R9_REFUSED))
-    assert not [c for c, code, _err in results if code != 2], (mode, results)
-
-
-def test_every_allowlisted_head_is_used_by_an_everyday_list():
-    """The allowlist holds only heads an everyday fixture needs on a line where a command ends on an option."""
-    t = R._degraded_tables()
-    used = set()
-    for command in (EVERYDAY_TRAILING_OPTION + MENTIONS + R7_ALLOWED + MULTILINE_EVERYDAY + PLAIN_LINES
-                    + PIPE_EVERYDAY):
-        for line in R.lines_of(command):
-            parsed = R._dg_commands(line)
-            for words in (parsed[0] if parsed else []):
-                words = [w for w in words if w not in t["drop"]]
-                if words:
-                    used.add(words[0])
-    assert not sorted(set(R._DG_ALLOW) - used), sorted(set(R._DG_ALLOW) - used)
-    assert set(R._DG_REFUSED_OPTS) <= set(R._DG_ALLOW), sorted(set(R._DG_REFUSED_OPTS) - set(R._DG_ALLOW))
-
-
-@pytest.mark.parametrize("head", ["apt-cache", "yq", "helm", "info", "whatis", "apropos", "npm", "node", "pnpm",
-                                  "yarn", "go", "openssl", "file", "more", "xxd", "printf", "cat", "mv", "ln"])
-def test_pruned_heads_refuse_on_a_trailing_option(head):
-    assert R.degraded_refuses(head + " x -q", _rmref()), head
-
-
-# ── Round 10: positive option lists ──
-
+# Round 10: cat as a pipe sink, positive option lists.
 PIPE_EVERYDAY = ["git diff --stat | cat", "git log --oneline -5 | cat -n"]
 
 R10_REFUSED = [
@@ -707,33 +371,7 @@ R10_REFUSED = [
     "base64 -i /dev/shm/v/a -o /dev/shm/v/b -D",
 ]
 
-
-@pytest.mark.parametrize("command", PIPE_EVERYDAY)
-def test_cat_as_a_pipe_sink_stays_allowed(command):
-    assert not R.degraded_refuses(command, _rmref()), command
-
-
-@pytest.mark.parametrize("command", R10_REFUSED)
-def test_round10_forms_refuse(command):
-    assert R.degraded_refuses(command, _rmref()), command
-
-
-@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
-def test_round10_forms_refuse_end_to_end(mode, tmp_path):
-    hook = None
-    if mode == "crash":
-        dst = tmp_path / "hooks"
-        shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
-        analyzer = dst / "lib" / "bash_execution_boundary.py"
-        analyzer.write_text(analyzer.read_text(encoding="utf-8").replace(
-            'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
-        hook = str(dst / "pretool-bash-safety.sh")
-    with ThreadPoolExecutor(8) as ex:
-        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))), R10_REFUSED))
-    assert not [c for c, code, _err in results if code != 2], (mode, results)
-
-
-# Each positive-list head in an allowed form, and the same form with one unknown option (long, short, `_`-spelt).
+# Each positive-list head in a form the old lists allowed; each was refused with one unknown option added.
 POSITIVE_FORMS = {
     "kubectl": "kubectl get pods {} -A", "pip": "pip list {} -v", "python3": "python3 -m pip list {} -v",
     "set": "set {} -e", "date": "date {} -u", "apt": "apt show git {} -a", "docker": "docker ps {} -a",
@@ -743,10 +381,272 @@ POSITIVE_FORMS = {
     "cat": "git diff | cat {} -n", "base64": "base64 {} -d",
 }
 
+UNKNOWN_OPTIONS = ("--zz-unknown", "--zz-unknown=1", "-Y", "-%", "--log_file=x")
+PRUNED_HEADS = ["apt-cache", "yq", "helm", "info", "whatis", "apropos", "npm", "node", "pnpm", "yarn", "go", "openssl",
+                "file", "more", "xxd", "printf", "cat", "mv", "ln"]
 
-@pytest.mark.parametrize("head", sorted(POSITIVE_FORMS))
-def test_positive_list_heads_refuse_an_unknown_option(head):
-    form, rmref = POSITIVE_FORMS[head], _rmref()
-    assert not R.degraded_refuses(form.format("").replace("  ", " "), rmref), form
-    for unknown in ("--zz-unknown", "--zz-unknown=1", "-Y", "-%", "--log_file=x"):
-        assert R.degraded_refuses(form.format(unknown), rmref), form.format(unknown)
+# Every command the earlier rounds fed to the degraded reading, by the list that held it.
+ROUNDS = {
+    "EVERYDAY_TRAILING_OPTION": EVERYDAY_TRAILING_OPTION, "ALLOWLIST_REFUSED_EVERYDAY": ALLOWLIST_REFUSED_EVERYDAY,
+    "STILL_REFUSED": STILL_REFUSED, "ANALYZER_REFUSED_EXEC_OPTIONS": ANALYZER_REFUSED_EXEC_OPTIONS,
+    "SHELL_STRING_WORDS": SHELL_STRING_WORDS, "MULTILINE_NEIGHBOURS": MULTILINE_NEIGHBOURS,
+    "GIT_COMMAND_TEXT": GIT_COMMAND_TEXT, "MENTIONS": MENTIONS, "DEGRADED_ONLY_REFUSED": DEGRADED_ONLY_REFUSED,
+    "PLAIN_LINES": PLAIN_LINES, "MULTILINE_EVERYDAY": MULTILINE_EVERYDAY,
+    "STDIN_CODE_AND_NESTED_VALUES": STDIN_CODE_AND_NESTED_VALUES, "SENSITIVE_LINES": SENSITIVE_LINES,
+    "REPL_HEADS": [shape.format(h=head) for head in REPL_HEADS for shape in REPL_SHAPES],
+    "R7_OPTION_SPELLINGS": R7_OPTION_SPELLINGS, "R7_WRITES": R7_WRITES, "R8_SPELLINGS": R8_SPELLINGS,
+    "R7_ALLOWED": R7_ALLOWED, "R9_REFUSED": R9_REFUSED, "PIPE_EVERYDAY": PIPE_EVERYDAY, "R10_REFUSED": R10_REFUSED,
+    "POSITIVE_FORMS": [form.format(opt).replace("  ", " ") for form in POSITIVE_FORMS.values()
+                       for opt in ("",) + UNKNOWN_OPTIONS],
+    "PRUNED_HEADS": [head + " x -q" for head in PRUNED_HEADS],
+}
+# Other rules of the hook that refuse some commands of those lists whatever the removal policy answers: a destructive
+# git clean or disk operation, a commit that skips its hooks, a write of a keystone git setting, and the runtime
+# guard's own fail-closed refusal of package and build tools while no protected-runtime file is configured (these
+# runs carry none).
+# The hook's other rules, which may refuse a command before the removal policy reads it. "reads, but" is the
+# read-made-to-run rule (outward_rule, ec3af2f5b, 2026-11-19): `rg --pre`, `git -c core.pager=sh log`.
+OTHER_RULES = ("git clean", "Destructive disk operation", "commit-hook-bypass", "config-keystone-write",
+               "protected-runtime-guard", " reads, but ")
+
+
+def _rmref():
+    with open(os.path.join(HOOKS_DIR, "lib", "pol_degraded_removal_reference.ere"), encoding="utf-8") as fh:
+        return next(ln.strip() for ln in fh if ln.strip() and not ln.startswith("#"))
+
+
+def holds_removal_word(command):
+    """The single definition, read from its file, asked of each line as the hook asks it."""
+    return R.grep(_rmref(), command)
+
+
+def child_cpu():
+    """CPU seconds of every finished child process: what a hook run costs, apart from how busy the runner is."""
+    r = resource.getrusage(resource.RUSAGE_CHILDREN)
+    return r.ru_utime + r.ru_stime
+
+
+def run_hook(command, hook=None, timeout=None, **env_extra):
+    home = tempfile.mkdtemp(prefix="degraded-home-")
+    gitconfig = os.path.join(home, "gitconfig")
+    open(gitconfig, "w").close()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    env.update(HOME=home, GIT_CONFIG_GLOBAL=gitconfig, **env_extra)
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+    p = subprocess.run(["bash", hook or HOOK], input=payload, capture_output=True, text=True, cwd=home, env=env,
+                       timeout=timeout)
+    return p.returncode, p.stderr
+
+
+def no_analyzer(monkeypatch):
+    """Make removal_policy()'s analyzer process fail at once: the degraded path, without starting a process."""
+    def run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, 0.001)
+    monkeypatch.setattr(R.subprocess, "run", run)
+
+
+def answer(command):
+    """removal_policy() in this process: (refused, the entry for the record or None, the refusal's text)."""
+    import io
+    real, sys.stderr = sys.stderr, io.StringIO()
+    try:
+        return False, R.removal_policy(json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+                                       command), ""
+    except SystemExit as exc:
+        assert exc.code == 2, exc.code
+        return True, None, sys.stderr.getvalue()
+    finally:
+        sys.stderr = real
+
+
+def _crashing_hook(tmp_path):
+    """A copy of the hooks whose analyzer exits 3 when run (its tables stay importable)."""
+    dst = tmp_path / "hooks"
+    shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    analyzer = dst / "lib" / "bash_execution_boundary.py"
+    analyzer.write_text(analyzer.read_text(encoding="utf-8").replace(
+        'if __name__ == "__main__":', 'if __name__ == "__main__":\n    sys.exit(3)'), encoding="utf-8")
+    return str(dst / "pretool-bash-safety.sh")
+
+
+# ── The degraded path asks the one question ──────────────────────────────────
+
+@pytest.mark.parametrize("name", sorted(ROUNDS))
+def test_the_degraded_path_refuses_exactly_the_commands_whose_text_holds_a_removal_word(monkeypatch, name):
+    no_analyzer(monkeypatch)
+    for command in ROUNDS[name]:
+        refused, entry, err = answer(command)
+        assert refused == holds_removal_word(command), (name, command, err)
+        if refused:
+            assert "BLOCKED: " + DEGRADED in err, err
+        else:
+            assert entry == {"rule": "removal-policy", "kind": "let_through_unproven", "path": "degraded",
+                             "reason": "NO_VERDICT analyzer unavailable or gave no usable verdict"}, (command, entry)
+
+
+def test_the_lists_hold_both_answers():
+    """Twenty-three lists of the earlier rounds; the rule refuses the few commands in them that name a removal."""
+    every = [c for commands in ROUNDS.values() for c in commands]
+    named = sorted({c for c in every if holds_removal_word(c)})
+    assert len(every) > 700 and len(ROUNDS) == 23
+    assert named == sorted({
+        "rm -rf build", "rm build -rf", "rm -rf", "/bin/rm x -f", "unlink -x", "rmdir d -p", "shred x -u",
+        "git rm -r --cached x -f", "rsync -a src/ dst/ --delete", "find . -name x -delete", "x=rm; $x -r",
+        "$(echo rm) -rf", "`echo rm` -rf", "rm -f", "cmake -E remove x -v", "git remote -v remove origin -q",
+    }), named
+
+
+@pytest.mark.parametrize("mode", ["timeout", "memory", "crash"])
+@pytest.mark.parametrize("names", [
+    ("STILL_REFUSED",), ("ANALYZER_REFUSED_EXEC_OPTIONS", "SHELL_STRING_WORDS"), ("MULTILINE_NEIGHBOURS", "GIT_COMMAND_TEXT"),
+    ("STDIN_CODE_AND_NESTED_VALUES", "DEGRADED_ONLY_REFUSED"), ("R7_OPTION_SPELLINGS", "R8_SPELLINGS"),
+    ("R9_REFUSED",), ("R10_REFUSED", "R7_ALLOWED"),
+], ids=lambda names: "+".join(names))
+def test_through_the_hook_the_degraded_path_gives_the_rule_s_answer(mode, names, tmp_path):
+    hook = _crashing_hook(tmp_path) if mode == "crash" else None
+    commands = [c for name in names for c in ROUNDS[name]]
+    with ThreadPoolExecutor(4) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, hook=hook, **MODES.get(mode, {}))), commands))
+    wrong, unnamed, ran = [], 0, 0
+    for command, code, err in results:
+        other = any(rule in err for rule in OTHER_RULES) and "removal-policy" not in err
+        if holds_removal_word(command):
+            # Refused: by the removal policy on the degraded path, unless an earlier rule refuses the command first.
+            ok = code == 2 and (DEGRADED in err or other)
+        else:
+            # Never refused by the removal policy; it runs unless another rule of the hook refuses it.
+            unnamed += 1
+            ran += code == 0
+            ok = "removal-policy" not in err and (code == 0 or (code == 2 and other))
+        if not ok:
+            wrong.append((command, code, err.splitlines()[:1]))
+    assert not wrong, (mode, wrong[:10])
+    assert ran * 3 >= unnamed * 2, (mode, names, ran, unnamed)
+
+
+@pytest.mark.parametrize("mode", sorted(MODES))
+def test_everyday_trailing_options_pass_the_degraded_fallback(mode):
+    with ThreadPoolExecutor(4) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])),
+                              EVERYDAY_TRAILING_OPTION + ALLOWLIST_REFUSED_EVERYDAY + MULTILINE_EVERYDAY + PIPE_EVERYDAY))
+    refused = [(c, err.splitlines()[:1]) for c, code, err in results if code != 0]
+    assert not refused, "%d of %d refused under %s: %r" % (len(refused), len(results), mode, refused[:10])
+
+
+@pytest.mark.parametrize("mode", sorted(MODES))
+def test_read_handler_mentions_stay_allowed_end_to_end(mode):
+    with ThreadPoolExecutor(4) as ex:
+        results = list(ex.map(lambda c: (c, *run_hook(c, **MODES[mode])), MENTIONS))
+    assert not [c for c, code, _err in results if code != 0], (mode, results)
+
+
+@pytest.mark.parametrize("body", [None, "import sys\nsys.exit(0)\n", "raise RuntimeError('x')\n",
+                                  "import time\ntime.sleep(30)\n"])
+def test_an_analyzer_module_that_is_absent_exits_raises_or_hangs_leaves_the_rule_s_answer(tmp_path, body):
+    dst = tmp_path / "hooks"
+    shutil.copytree(HOOKS_DIR, str(dst), ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    target = dst / "lib" / "bash_execution_boundary.py"
+    if body is None:
+        target.unlink()
+    else:
+        target.write_text(body, encoding="utf-8")
+    hook = str(dst / "pretool-bash-safety.sh")
+    code, err = run_hook("git status --short", hook=hook, CLAUDE_HOOK_BOUNDARY_TIMEOUT="1s")
+    assert code == 0 and "removal-policy" not in err, err
+    code, err = run_hook("rm -rf build", hook=hook, CLAUDE_HOOK_BOUNDARY_TIMEOUT="1s")
+    assert code == 2 and DEGRADED in err, err
+    code, err = run_hook("man rm", hook=hook, CLAUDE_HOOK_BOUNDARY_TIMEOUT="1s")
+    assert code == 2 and DEGRADED in err, err
+
+
+# ── What the degraded path cannot see, the analyzer finds ────────────────────
+
+QUOTED_REMOVALS = [c for c in MULTILINE_NEIGHBOURS + GIT_COMMAND_TEXT
+                   if eb.analyze(c)["verdict"] == eb.FORBIDDEN_REMOVAL and not R.grep(_rmref(), c)]
+
+
+def test_most_of_the_quoted_removals_are_found_by_the_analyzer():
+    assert len(QUOTED_REMOVALS) >= 14, QUOTED_REMOVALS
+
+
+@pytest.mark.parametrize("command", QUOTED_REMOVALS)
+def test_removals_the_text_does_not_name_are_found_by_the_analyzer(command):
+    """The named prohibition does not rest on the text: with its analyzer, the hook refuses these as removals."""
+    # The analyzer is given time: past its 15 s default on a loaded host, the hook is on the degraded path.
+    code, err = run_hook(command, CLAUDE_HOOK_BOUNDARY_TIMEOUT="120s")
+    assert code == 2 and ("removal-policy — FORBIDDEN_REMOVAL" in err or any(rule in err for rule in OTHER_RULES)), err
+
+
+# ── The generated corpus ─────────────────────────────────────────────────────
+
+def test_over_the_generated_corpus_the_two_paths_agree_on_every_unproven_command(monkeypatch):
+    """Was: the degraded fallback is never laxer than the live analyzer. Over the same 80,000 generated forms, with
+    the policy run in this process on both paths: every command the analyzer leaves UNRESOLVED gets the same answer
+    with and without it; a command holding a removal word is never let through unproven; and the only commands
+    refused with the analyzer and run without it are removals the analyzer found whose text names none."""
+    corpus = analyzer_corpus()
+    verdicts = {}
+
+    def answered(argv, **kwargs):
+        result = eb.analyze(kwargs["env"]["CMD_INPUT"])
+        verdicts[kwargs["env"]["CMD_INPUT"]] = result["verdict"]
+        return subprocess.CompletedProcess(argv, 0, json.dumps(result), "")
+
+    monkeypatch.setattr(R.subprocess, "run", answered)
+    primary = {c: answer(c)[:2] for c in corpus}
+    no_analyzer(monkeypatch)
+    degraded = {c: answer(c)[:2] for c in corpus}
+    unresolved = [c for c in corpus if verdicts[c] == eb.UNRESOLVED]
+    assert len(corpus) > 80000 and len(unresolved) > 1000, (len(corpus), len(unresolved))
+    differing = [c for c in unresolved if not primary[c][0] == degraded[c][0] == holds_removal_word(c)]
+    assert not differing, "%d unproven forms answered differently: %r" % (len(differing), differing[:20])
+    let_through_named = [c for c in corpus if holds_removal_word(c) and (primary[c][1] or degraded[c][1])]
+    assert not let_through_named, let_through_named[:20]
+    assert not [c for c in corpus if holds_removal_word(c) and not degraded[c][0]]
+    laxer = [c for c in corpus if primary[c][0] and not degraded[c][0]]
+    assert laxer and all(verdicts[c] == eb.FORBIDDEN_REMOVAL and not holds_removal_word(c) for c in laxer), [
+        (c, verdicts[c]) for c in laxer if verdicts[c] != eb.FORBIDDEN_REMOVAL][:20]
+
+
+# ── Bounded reading ──────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("name", sorted(ADVERSARIAL_LONG))
+def test_adversarial_long_lines_are_read_in_bounded_time(monkeypatch, name):
+    command = ADVERSARIAL_LONG[name]
+    no_analyzer(monkeypatch)
+    started = time.process_time()  # CPU time: a busy runner slows the wall clock, not the work
+    refused, _entry, _err = answer(command)
+    assert time.process_time() - started < 2.0, name
+    assert refused is False and not holds_removal_word(command), name
+    assert answer(command + "\nrm -rf /dev/shm/v/s")[0] is True
+
+
+@pytest.mark.parametrize("mode", sorted(MODES))
+def test_adversarial_long_line_is_answered_through_the_hook_in_bounded_time(mode):
+    def cost(words):
+        # No `find` word: the runtime guard's own find scan is slow on 100 KB of them on the base branch too.
+        quoted = "ls " + "git ssh hash kubectl " * words + "-q\nr''m -rf /dev/shm/v/s"
+        named = "ls " + "git ssh hash kubectl " * words + "-q\nrm -rf /dev/shm/v/s"
+        started = child_cpu()
+        code, err = run_hook(quoted, timeout=240, **MODES[mode])
+        assert code == 0 and "removal-policy" not in err, err[:300]
+        code, err = run_hook(named, timeout=240, **MODES[mode])
+        assert code == 2 and DEGRADED in err
+        return child_cpu() - started, len(quoted)
+
+    (fixed, _), (half, _), (full, size) = cost(1), cost(2500), cost(5000)
+    assert size > 100_000
+    # Bounded, not fast: the whole PreToolUse pipeline reads the line twice per pair. Above the pipeline's fixed cost
+    # (every hook's own start) the cost grows with the line's length: twice the line costs about twice as much, never
+    # four times. The pairs are compared with each other, in CPU seconds, because no fixed bound holds on every
+    # runner: the 100 KB pair took about 15 s here and 31 s on the slowest CI runner (2026-11-20). Each run also
+    # ends within its own 240 s.
+    assert full - fixed < 3 * (half - fixed), (fixed, half, full)
+
+
+def test_analyzer_timeout_default_leaves_headroom_under_load():
+    """15 s: the analyzer peaked at 3.4 s with 25 concurrent runs beside 25 CPU-bound processes on 4 cores, and at
+    6.0 s (18 of 486 past 5 s) at 50 concurrent runs; the old 5 s default sent those calls to the fallback."""
+    assert R.duration("", "15s") == 15.0
+    src = open(os.path.join(HOOKS_DIR, "lib", "bash_safety_rules.py"), encoding="utf-8").read()
+    assert 'duration(os.environ.get("CLAUDE_HOOK_BOUNDARY_TIMEOUT", ""), "15s")' in src

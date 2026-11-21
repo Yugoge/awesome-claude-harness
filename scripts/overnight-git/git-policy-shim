@@ -218,9 +218,6 @@ _OBP_SET=""            # newline-delimited protected names
 
 _obp_subdirs() {
   printf '%s\n' '.claude'
-  if [ -n "${OVERNIGHT_STATE_SUBDIR:-}" ] && [ "${OVERNIGHT_STATE_SUBDIR}" != ".claude" ]; then
-    printf '%s\n' "${OVERNIGHT_STATE_SUBDIR}"
-  fi
 }
 # Each record is read by its one function, hooks/lib/overnight.py, run as a
 # script: a record contributes its protected_branch unless the function's
@@ -356,20 +353,6 @@ _obp_operand_names() {
     esac
     [ -n "$part" ] && printf '%s\n' "$part"
   done
-}
-
-# True iff any argv token denotes a branch in the RESOLVED protected set.
-_mentions_protected() {
-  local a name
-  for a in "$@"; do
-    while IFS= read -r name; do
-      [ -n "$name" ] || continue
-      _obp_is_protected "$name" && return 0
-    done <<EOF
-$(_obp_operand_names "$a")
-EOF
-  done
-  return 1
 }
 
 # The single branch-protection decision seam. Emits the structured denial and

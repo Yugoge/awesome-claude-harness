@@ -262,7 +262,7 @@ def test_prompt_workflow_hands_over_restart_md_for_the_wake_in_its_span(night):
 # ---------------------------------------------------------------- a human /restart or a plain prompt in an open span
 
 CARRY_ON = ("CARRY ON: carry on with /dev Step 8; this turn cannot end until its checklist is complete; "
-            "pause only with AskUserQuestion; /stop is the exit.")
+            "a refusal is reported, never asked about; /stop is the exit.")
 
 
 def _usage_limit(s):
@@ -533,3 +533,10 @@ def test_the_command_texts_carry_the_wake_and_its_deletions():
     assert spec["prompt"] == WAKE and spec["recurring"] is True
     assert "CronDelete" in cmdtext.section(night, "Step 21") and "Delete the wake" in night
     assert "CronDelete" in cmdtext.section((ROOT / "commands" / "stop.md").read_text(), "Implementation")
+
+
+def test_the_wake_prepares_no_recovery_set_its_procedure_runs_prepare(night):
+    # A typed /restart's issuer prepares the set; the wake's recovery runs the helper itself.
+    p = night.hook("userprompt-restart-authorize.py", "UserPromptSubmit", prompt=WAKE)
+    assert _issued(p) and "RECOVERY SET" not in p.stdout
+    assert not list((night.home / ".claude" / "restart-state").glob("*.json"))

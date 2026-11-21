@@ -46,6 +46,17 @@ def _command_sets() -> tuple[tuple, tuple]:
 # The commands a Stop gate guards, and the commands that never open a span.
 GATED_COMMANDS, CONTROL_COMMANDS = _command_sets()
 
+# The transcript record types that are conversation turns (the others: attachments, summaries,
+# meta, api-request blobs); only they hold a turn's calls and results.
+TURN_RECORD_TYPES = ("user", "assistant")
+# The markdown files of a folder that are its folder documents (doc-sync writes them), never its
+# content: not a command, an agent, a spec, a template or a todo script's command. Defined here,
+# in a standard-library module every loader reaches (hooks/stop-launch.py loads this file by its
+# path alone), and imported from here by every other reader.
+FOLDER_DOCUMENTS = ("INDEX.md", "README.md")
+# The line scripts/spec-write.py prints for each write: the rest of the line is the absolute path,
+# which may hold a space (a project directory can). Read by lib/spec_path.py and the Stop command gate.
+SPEC_WRITER_LINE = re.compile(r"^spec-write: (?:create|append) (/\S.*)$", re.M)
 # Markers a typed prompt never carries: a Skill-tool expansion (isMeta,
 # sourceToolUseID), a subagent's own records (isSidechain), a tool result, a
 # compaction's summary (isCompactSummary; no isMeta or origin).
@@ -65,9 +76,9 @@ _SLASH_RE = re.compile(r"\s*/([A-Za-z0-9:_-]+)(?:\s+(.*))?\Z", re.S)
 
 
 def harness_commands() -> frozenset:
-    """commands/*.md stems of this harness, INDEX and README excluded."""
+    """commands/*.md stems of this harness, the folder documents (INDEX, README) excluded."""
     try:
-        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.stem not in ("INDEX", "README"))
+        return frozenset(p.stem for p in COMMANDS_DIR.glob("*.md") if p.name not in FOLDER_DOCUMENTS)
     except OSError:
         return frozenset()
 
@@ -308,8 +319,13 @@ def _decode(raw: bytes) -> dict | None:
     return record if isinstance(record, dict) else None
 
 
-def _blocks(record: dict | None):
-    if not record or record.get("isSidechain"):  # a subagent's own record
+def _blocks(record: dict | None, sidechain: bool = False):
+    """The content blocks of a user or assistant record, the one reading of a transcript's calls and
+    results. Any other record holds none, whatever it carries (CLI 2.1.322's api-request-blob repeats
+    each message of a model request, its tool_use and tool_result blocks too: a call read twice). A
+    subagent's own record (isSidechain) only with ``sidechain``."""
+    if not isinstance(record, dict) or record.get("type") not in TURN_RECORD_TYPES \
+            or (record.get("isSidechain") and not sidechain):
         return ()
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
@@ -488,20 +504,24 @@ class Span:
                 todos = call.input["todos"]
         return todos
 
-    def last_text(self) -> str:
-        """The text of the main session's last assistant record in the span that holds text ('' when none):
-        what the Stop gate reads where the Stop payload carries no last_assistant_message."""
+    def texts(self) -> list:
+        """The text of each assistant record in the span that holds text, in order."""
         try:
             lines, floor = self._lines()
         except (OSError, TypeError, ValueError):
-            return ""
-        last = ""
+            return []
+        out = []
         for begin, end in lines.offsets((b'"text"',), floor):
             record = _decode(lines.data[begin:end])
             texts = [b.get("text") for b in _blocks(record) if b.get("type") == "text" and isinstance(b.get("text"), str)]
             if texts and record.get("type") == "assistant":
-                last = "\n".join(texts)
-        return last
+                out.append("\n".join(texts))
+        return out
+
+    def last_text(self) -> str:
+        """The text of the main session's last assistant record in the span that holds text ('' when none):
+        what the Stop gate reads where the Stop payload carries no last_assistant_message."""
+        return (self.texts() or [""])[-1]
 
     def result_text(self, ident: str) -> str:
         """The text of call ``ident``'s tool_result in the span ('' while none came back); an Agent
@@ -576,11 +596,20 @@ class Span:
                     ends.append(AgentEnd(number, fields["task-id"], fields["tool-use-id"], fields["status"], result))
         return ends
 
+    def dispatch_calls(self, before: str | None = None):
+        """The span's Agent/Task calls (iter_calls, ``before`` as there) but those a hook refused (refused_calls):
+        a call that never ran is no dispatch. Every reader of dispatches reads them here."""
+        try:  # from the span's own bytes: the file is not read again for this
+            refused = refused_calls(self.transcript_path, data=self._lines()[0].data)
+        except (OSError, TypeError, ValueError):
+            refused = frozenset()
+        return (c for c in self.iter_calls(*_subagent().DISPATCH_TOOLS, before=before) if c.id not in refused)
+
     def dispatches(self) -> list:
-        """(call, obligation) of each Agent/Task dispatch whose prompt parses to an obligation, in span order,
+        """(call, obligation) of each dispatch_calls() call whose prompt parses to an obligation, in span order,
         however its call came back: whether and when its agent stopped is agent_returns.Returns' reading."""
         ob = _obligation()
-        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.calls("Agent", "Task"))
+        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.dispatch_calls())
         return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
 
     def obligations(self) -> list:
@@ -741,6 +770,11 @@ def _obligation():  # imported when first asked: a reader that needs none loads 
     return importlib.import_module(f"{__package__}.obligation" if __package__ else "obligation")
 
 
+def _subagent():
+    import importlib
+    return importlib.import_module(f"{__package__}.subagent" if __package__ else "subagent")
+
+
 def _found(lines: _Lines, floor: int, names, newest_first: bool, before: str | None):
     """(begin, end, block) of each main-session tool_use block from offset
     ``floor`` on (only ``names`` when given), in the order Span.iter_calls
@@ -892,6 +926,79 @@ def transcript_span(transcript_path) -> Span:
     return Span("", "", 0, str(transcript_path))
 
 
+def _refusal_record_files(now: float | None = None) -> list:
+    """Every day file lib/refusal_record.py's record keeps (its directory(), its day_file() names; KEEP_DAYS of
+    them), oldest first, with `now`'s (UTC) day there or not: a session's refusal is found whatever day it was
+    written (the owner's ruling of 2026-11-20; the two newest days only was a window)."""
+    import time, zlib  # noqa: E401
+    home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+    key = f"{home.rsplit(os.sep, 1)[-1].lstrip('.')}-{zlib.crc32(os.fsencode(home)):08x}"
+    folder = os.path.join(os.path.expanduser("~"), ".local/state/claude-harness", key, "refusals")
+    today = time.strftime("refusals-%Y-%m-%d.jsonl", time.gmtime(time.time() if now is None else now))
+    try:
+        names = {n for n in os.listdir(folder) if n.startswith("refusals-") and n.endswith(".jsonl")}
+    except OSError:
+        names = set()
+    return [os.path.join(folder, n) for n in sorted(names | {today})]
+
+
+_ONCE: dict = {}
+
+
+def _refusals_in(path, session: str) -> frozenset:
+    """The tool_use ids of ``session``'s PreToolUse refusals in one refusal record file, read once per process while
+    its size and mtime stay (nothing when it cannot be read): every reader of refused_calls in one hook run shares
+    one read, one entry per file, holding the ids and not the bytes (the record keeps KEEP_DAYS files)."""
+    try:
+        info = os.stat(path)
+        key = (info.st_size, info.st_mtime_ns, session)
+        if _ONCE.get(path, (None,))[0] != key:
+            with open(path, "rb") as handle:
+                data = handle.read()
+            found = set()
+            for begin, end in _Lines(data).offsets((session.encode(),)):
+                r = _decode(data[begin:end]) or {}
+                if (r.get("kind"), r.get("event"), r.get("session")) == ("refusal", "PreToolUse", session):
+                    found.add(r.get("tool_use_id"))
+            _ONCE[path] = (key, frozenset(i for i in found if isinstance(i, str) and i))
+        return _ONCE[path][1]
+    except (OSError, TypeError, ValueError):
+        return frozenset()
+
+
+def hook_refused(record) -> list:
+    """The tool_use ids whose result this transcript record is, when the record says a PreToolUse hook refused
+    them: permissionDecision reject by a hook (CLI 2.1.322; a call cut off mid-run has none). The one test of a
+    transcript record; a reader that already holds the records asks it of each one."""
+    d = record.get("permissionDecision") if isinstance(record, dict) else None
+    if not isinstance(d, dict) or (d.get("decision"), d.get("source")) != ("reject", "hook"):
+        return []
+    return [b.get("tool_use_id") for b in _blocks(record) if b.get("type") == "tool_result"]
+
+
+def recorded_refusals(session: str) -> frozenset:
+    """The tool_use ids the refusal record (lib/refusal_record.py, every day file it keeps, each read once per
+    process) holds a PreToolUse refusal of for ``session``: the refusing hook writes it before it exits, so before
+    the CLI writes the result (a sibling call of the same message)."""
+    return frozenset().union(*(_refusals_in(path, session) for path in _refusal_record_files())) if session \
+        else frozenset()
+
+
+def refused_calls(transcript_path, session_id: str | None = None, data: bytes | None = None) -> frozenset:
+    """The ids of the session's tool calls a PreToolUse hook refused (they never ran): hook_refused of the
+    transcript's records (``data``, its bytes when the caller holds them, else the file read) and
+    recorded_refusals of the session (``session_id``, default the transcript's name). A source that cannot be read
+    adds nothing."""
+    session = session_id or (Path(str(transcript_path)).stem if transcript_path else "")
+    try:
+        data = _read(transcript_path) if data is None else data
+    except (OSError, TypeError, ValueError):
+        data = b""
+    found = {i for begin, end in _Lines(data).offsets((b'"source":"hook"', b'"source": "hook"'))
+             for i in hook_refused(_decode(data[begin:end]))}
+    return frozenset(i for i in found if isinstance(i, str) and i) | recorded_refusals(session)
+
+
 def recorded_result(transcript_path, use) -> dict:
     """The toolUseResult the CLI recorded beside ``use``'s tool_result (a CronCreate's job id),
     {} while none came back or it holds none."""
@@ -934,7 +1041,7 @@ def _bash_named(command: str, cwd: str, root: str) -> set[str]:
     # is a file inside the project now, or has a directory part and a dotted name.
     named = set()
     for token in _PATH_RUN.findall(command):
-        if token in (".", "..") or token.startswith("-"):
+        if token in (os.curdir, os.pardir) or token.startswith("-"):
             continue
         rel = _project_relative(token, cwd, root)
         if rel is None:
@@ -959,15 +1066,11 @@ def write_set(transcript_path: str | Path, project_dir: str | Path, start_line: 
         return None
     uses, ok = [], set()
     for number, record in records:
-        if number <= start_line or (main_only and record.get("isSidechain")):
+        if number <= start_line:
             continue
         if stop_line is not None and number >= stop_line:
             break
-        message = record.get("message")
-        content = message.get("content") if isinstance(message, dict) else None
-        for block in content if isinstance(content, list) else ():
-            if not isinstance(block, dict):
-                continue
+        for block in _blocks(record, sidechain=not main_only):
             if block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
                 uses.append((block.get("id"), block.get("name"), block["input"], record.get("cwd") or root))
             elif block.get("type") == "tool_result" and not block.get("is_error"):

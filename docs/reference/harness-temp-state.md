@@ -22,7 +22,7 @@ module yet; `hooks/tests/test_harness_temp_state.py` pins every row.
   the values of `TMPDIR`, `CLAUDE_TMPDIR`, `CLAUDE_CODE_TMPDIR`, `TMP`, `TEMP`
   (`tempfile.gettempdir()` honours the last two, `hooks/doc_sync/notice.py:241`),
   `CLAUDE_USERINTENT_SENTINEL_DIR` (`hooks/pretool-wrapper-userintent.py:82`),
-  `CLAUDE_DAEMON_RESTART_GRANT_DIR` (`hooks/pretool-bash-safety.sh:25`) and
+  `CLAUDE_DAEMON_RESTART_SENTINEL_DIR` (`hooks/lib/bash_safety_rules.py` environment()) and
   `CLAUDE_DOC_SYNC_STATE_ROOT` (`hooks/doc_sync/notice.py:238`). A relative value is joined to
   the cwd (the `cwd=` argument, else the process cwd), as a hook using it would, and `/` is kept:
   `TMPDIR=/` makes `/claude-git-blessed/<tok>.grant` state without making `/` temp.
@@ -55,10 +55,10 @@ module yet; `hooks/tests/test_harness_temp_state.py` pins every row.
 | tmpfs-pressure-counter | `claude-pressure-warn-<sid>` (and `.lock`) | `hooks/userprompt-tmpfs-pressure.sh:66` |
 | checkpoint-push-stamp | `.checkpoint-push-<hash>.ts` | `hooks/lib/checkpoint-core.sh:362` |
 | capability-state | `claude-capability-<euid>/` | `hooks/lib/capability_state.py:206` |
-| git-blessed-grants | `claude-git-blessed/<tok>.grant` (under `${TMPDIR:-/tmp}`) | `hooks/git-keystone/reference-transaction:54`, `scripts/mint-git-blessed-token.sh:39` |
+| git-blessed-grants | `claude-git-blessed/<tok>.grant` (under `${TMPDIR:-/tmp}`) | none since the minter, which nothing called, and the keystone's exemption were removed (S31); still classified |
 | daemon-restart-grant | `claude-allow-daemon-restart-<target>.flag` (under `CLAUDE_TMPDIR`) | `hooks/pretool-bash-safety.sh:25`, `:544` |
 | scratch-owner | `<sid>/.owner` (and `.owner.<pid>.tmp`) in the session scratch root | `hooks/session-scratch-init.sh:27`, `:73`, `hooks/lib/scratch_owner.py:17` |
-| doc-sync-notices | `<sid>/doc-sync-notices-<audience>.json` under `tempfile.gettempdir()` | `hooks/doc_sync/notice.py:39`, `:241`, `:266`, `:294` |
+| doc-sync-notices | `<sid>/doc-sync-notices-<audience>.json` in the session scratch root (`locations.session_scratch_root`) | `hooks/doc_sync/notice.py:39`, `:232`, `:266`, `:294` |
 
 ## Harness-managed scratch
 

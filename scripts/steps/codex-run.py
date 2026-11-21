@@ -20,7 +20,8 @@ are set and each matches [A-Za-z0-9._-]+ and is neither "." nor ".."; otherwise
 
 stdout: `out=<path>` first (then the wrapper's output, for review and exec), and for detach also
 `pid=<pid>` of the detached run. The wrapper's stdout and stderr are merged into the file and its stdin
-is /dev/null. Exit: the wrapper's own status (detach: 0 once launched); 64 usage; 73 output directory
+is /dev/null. A finished foreground call updates the codex-unavailable state (hooks/lib/codex_transcript.py
+observe). Exit: the wrapper's own status (detach: 0 once launched); 64 usage; 73 output directory
 not creatable; 127 wrapper unavailable.
 """
 from __future__ import annotations
@@ -34,11 +35,13 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from hooks.lib import codex_transcript  # noqa: E402  (the transcript path's one definition)
+
 DEFAULT_MODEL = "gpt-5.6-sol"
 EFFORT_KEY = "model_reasoning_effort"  # the Codex CLI key; without the model_ prefix it is silently ignored
 REASONING_EFFORT = "xhigh"
 FALLBACK_DIR = Path("/var/tmp/codex-outputs")
-SAFE_NAME = re.compile(r"[A-Za-z0-9._-]+")
 SAFE_MODEL = re.compile(r"[A-Za-z0-9._:/-]+")
 MODES = ("review", "exec", "detach")
 
@@ -47,10 +50,6 @@ class Refusal(Exception):
     def __init__(self, message: str, code: int):
         super().__init__(message)
         self.code = code
-
-
-def _safe_name(value: str) -> bool:
-    return SAFE_NAME.fullmatch(value) is not None and value not in (".", "..")
 
 
 def resolve_wrapper(env) -> str:
@@ -64,22 +63,24 @@ def resolve_wrapper(env) -> str:
 
 
 def _project_root(env) -> str:
+    """CLAUDE_PROJECT_DIR, else the cwd (the hooks' root, R1) inside a repository; elsewhere "" (the fallback)."""
     if env.get("CLAUDE_PROJECT_DIR"):
         return env["CLAUDE_PROJECT_DIR"]
     try:
-        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                             check=False, env=env).stdout.strip()
+        inside = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True,
+                                check=False, env=env).stdout.strip() == "true"
     except OSError:
-        top = ""
-    return top
+        inside = False
+    return os.getcwd() if inside else ""
 
 
 def resolve_output_path(env) -> Path:
     """Create the output directory and return the file to write (no file is created yet)."""
     task, role = env.get("CODEX_OUT_TASK_ID", ""), env.get("CODEX_OUT_ROLE", "")
-    root = _project_root(env) if task and role and _safe_name(task) and _safe_name(role) else ""
+    rel = codex_transcript.transcript_rel(task, role)
+    root = _project_root(env) if rel else ""
     if root:
-        directory, name = Path(root) / "docs" / "codex" / task, role + ".txt"
+        directory, name = (Path(root) / rel).parent, Path(rel).name
     else:
         if task or role:
             print(f"codex-run: warning: CODEX_OUT_TASK_ID/CODEX_OUT_ROLE unsafe or incomplete, or no "
@@ -165,7 +166,9 @@ def main(argv: list[str] | None = None) -> int:
             if mode == "detach":
                 print(f"pid={run_detached(command, sink)}", flush=True)
                 return 0
-            return run_foreground(command, sink)
+            code = run_foreground(command, sink)
+        codex_transcript.observe(code, out)  # the machine's codex-unavailable knowledge, from this call's outcome
+        return code
     except Refusal as refusal:
         print(f"codex-run: {refusal}", file=sys.stderr)
         return refusal.code

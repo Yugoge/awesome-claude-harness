@@ -12,7 +12,8 @@ needs of both questions:
 
   * temp_roots() / temp_root_of() / is_in_temp_root(): /tmp, /var/tmp, $TMPDIR,
     $CLAUDE_TMPDIR, $CLAUDE_CODE_TMPDIR (absolute values only), realpath'd and
-    deduplicated, so /tmp and an alias such as /private/tmp are one root.
+    deduplicated, so /tmp and an alias such as /private/tmp are one root. The
+    roots, the resolved views and the containment test are lib/locations' own.
   * classify() / is_harness_state(): the LOCATIONS entry a path is, or None.
 
 Matching is symlink-safe. A path is judged in two resolved views: its full
@@ -51,20 +52,22 @@ _LIB = os.path.dirname(os.path.abspath(__file__))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 from harness_state_dir import harness_state_dir  # noqa: E402
+import locations  # noqa: E402
+from locations import _abs_var, _dedupe, _real, below as _below, resolved_views  # noqa: E402,F401
 
 CONTROL = "control"
 SCRATCH = "scratch"
 
-SYSTEM_TEMP_ROOTS: Tuple[str, ...] = ("/tmp", "/var/tmp")
+SYSTEM_TEMP_ROOTS: Tuple[str, ...] = locations.SYSTEM_TEMP_DIRS
 # Variables naming a temp root (a scratch root mktemp and its callers honour).
-TEMP_ROOT_VARS: Tuple[str, ...] = ("TMPDIR", "CLAUDE_TMPDIR", "CLAUDE_CODE_TMPDIR")
+TEMP_ROOT_VARS: Tuple[str, ...] = locations.TEMP_ROOT_VARS
 # Override variables naming a directory that holds state NAMES (matched like a temp root).
 # A relative value is resolved against the cwd for state detection only; it never
 # becomes a temp root.
 NAME_ROOT_VARS: Tuple[str, ...] = (
     "TMP", "TEMP",                      # tempfile.gettempdir(): hooks/doc_sync/notice.py:241
     "CLAUDE_USERINTENT_SENTINEL_DIR",   # hooks/pretool-wrapper-userintent.py:82
-    "CLAUDE_DAEMON_RESTART_GRANT_DIR",  # hooks/pretool-bash-safety.sh:25
+    "CLAUDE_DAEMON_RESTART_SENTINEL_DIR",  # hooks/lib/bash_safety_rules.py environment()
     "CLAUDE_DOC_SYNC_STATE_ROOT",       # hooks/doc_sync/notice.py:238
 )
 
@@ -146,28 +149,6 @@ LOCATIONS: Tuple[Location, ...] = (
 _CAPABILITY = next(loc for loc in LOCATIONS if loc.name == "capability-state")
 
 
-def _real(path: str) -> Optional[str]:
-    try:
-        return os.path.realpath(path)
-    except (OSError, ValueError):
-        return None
-
-
-def _dedupe(paths) -> Tuple[str, ...]:
-    out = []
-    for path in paths:
-        real = _real(path) if path else None
-        if real and real not in out:
-            out.append(real)
-    return tuple(out)
-
-
-def _abs_var(name: str) -> Optional[str]:
-    """The variable's value when it is an absolute path, else None."""
-    value = os.environ.get(name) or ""
-    return value if os.path.isabs(value) else None
-
-
 def _var_path(name: str, cwd: Optional[str]) -> Optional[str]:
     """The variable's value as a path a hook would use: absolute as is, relative
     joined to `cwd` (default: the process cwd); None when unset or empty."""
@@ -187,8 +168,7 @@ def temp_roots() -> Tuple[str, ...]:
     absolute TMPDIR / CLAUDE_TMPDIR / CLAUDE_CODE_TMPDIR. Fails closed: unset,
     empty or relative values add nothing, and neither does one resolving to "/"
     (it would make every path temp)."""
-    roots = _dedupe(list(SYSTEM_TEMP_ROOTS) + [_abs_var(v) for v in TEMP_ROOT_VARS])
-    return tuple(root for root in roots if root != os.sep)
+    return locations.temp_roots(SYSTEM_TEMP_ROOTS)
 
 
 def state_dir() -> str:
@@ -217,48 +197,6 @@ def tree_dirs(cwd: Optional[str] = None) -> Tuple[Tuple[str, Location], ...]:
     if xdg:
         out.append((os.path.join(xdg, "claude-capability"), _CAPABILITY))
     return tuple((_real(d), loc) for d, loc in out if d and _real(d))
-
-
-def _as_str(path) -> str:
-    """str of a str, bytes or os.PathLike path (bytes via os.fsdecode); raises
-    TypeError for anything else, so a caller can never mistake it for "not state"."""
-    raw = os.fspath(path)
-    return os.fsdecode(raw) if isinstance(raw, bytes) else raw
-
-
-def resolved_views(path, cwd: Optional[str] = None) -> Tuple[str, ...]:
-    """The resolved views a path is judged in: its full realpath, and its
-    parent's realpath joined with its final component as written (the entry
-    itself; skipped when that component is "." or ".."). A relative path is
-    taken from `cwd` (default: the process cwd). str, bytes and os.PathLike are
-    accepted; any other type raises TypeError. Empty for "" and for a path
-    holding NUL (no file can have that name)."""
-    raw = _as_str(path)
-    if not raw or "\x00" in raw:
-        return ()
-    try:
-        if not os.path.isabs(raw):
-            raw = os.path.join(cwd or os.getcwd(), raw)
-        views = [os.path.realpath(raw)]
-        head, tail = os.path.split(raw.rstrip(os.sep) or os.sep)
-        if tail and tail not in (os.curdir, os.pardir):
-            views.append(os.path.join(os.path.realpath(head), tail))
-    except (OSError, ValueError):
-        return ()
-    return tuple(dict.fromkeys(views))
-
-
-def _below(path: str, root: str, fold: bool = False) -> Optional[Tuple[str, ...]]:
-    """Components of `path` below `root`; () when equal; None when outside.
-    fold=True compares case-insensitively."""
-    if fold:
-        path, root = path.casefold(), root.casefold()
-    if path == root:
-        return ()
-    prefix = root if root.endswith(os.sep) else root + os.sep
-    if not path.startswith(prefix):
-        return None
-    return tuple(c for c in path[len(prefix):].split(os.sep) if c)
 
 
 def _matches(rel: Sequence[str], loc: Location) -> bool:
@@ -308,12 +246,7 @@ def temp_root_of(path, *, cwd: Optional[str] = None) -> Optional[str]:
     """The temp root `path` lies strictly below in either resolved view (the
     deepest when roots nest, e.g. TMPDIR under /var/tmp), else None. A temp
     root itself is not below one; "/" is never a temp root."""
-    best = None
-    for view in resolved_views(path, cwd):
-        for root in temp_roots():
-            if _below(view, root) and (best is None or len(root) > len(best)):
-                best = root
-    return best
+    return locations.temp_root_of(path, cwd, temp_roots())
 
 
 def is_in_temp_root(path, *, cwd: Optional[str] = None) -> bool:

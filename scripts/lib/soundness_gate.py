@@ -20,8 +20,7 @@ and ``None`` issue none.
 
 A passing check is NOT proof of ownership. A failing check is NOT a report of
 a clash with another claimant. The vocabulary below is provably disjoint from
-the ownership namespace, and ``gate_vocabulary()`` derives that vocabulary by
-introspection so the disjointness test cannot drift from the implementation.
+the ownership namespace.
 
 THE WITNESS ADMISSIBILITY RULE (the reason this file exists)
 ------------------------------------------------------------
@@ -152,7 +151,6 @@ REASON_UNSUPPORTED_SCHEMA_DIALECT = "unsupported_schema_dialect"
 REASON_COMPOSER_SUPPLIED_DIGEST = "composer_supplied_content_sha256"
 REASON_UNRESOLVED_EVALUATION = "unresolved_evaluation"
 REASON_ALL_ENTRY_FORMS_NOT_RUN = "all_discovered_entry_forms_not_run"
-REASON_IDENTITY_MISMATCH = "candidate_identity_mismatch"
 
 # The no-blame sentinels. Three, not two: the third closes the branch in which
 # the search terminated under its own bound before any admissible set was
@@ -212,58 +210,6 @@ _BASH_LINE_RE = re.compile(r":\s*line\s+(\d+):")
 # Vocabulary introspection (AC5)
 # ===========================================================================
 
-def gate_vocabulary(records=None):
-    """Every name this module DEFINES, derived by introspection.
-
-    Two sources, both derived rather than maintained by hand: the module's own
-    upper-case string constants, and -- when records are supplied -- every
-    dict KEY those records actually emit. A constant added later is in the set
-    the moment it exists; a field added later is in the set the moment it is
-    emitted. Producer diagnostics and candidate-authored text are values, not
-    keys or declared constants, and are therefore exempt by construction.
-    """
-    vocabulary = set()
-    for name, value in sorted(globals().items()):
-        if not name.isupper():
-            continue
-        vocabulary.add(name.lower())
-        for item in _flatten_strings(value):
-            vocabulary.add(item)
-    for record in (records or []):
-        vocabulary |= _dict_keys_deep(record)
-    return frozenset(vocabulary)
-
-
-def _flatten_strings(value):
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        out = []
-        for key, sub in value.items():
-            out.extend(_flatten_strings(key))
-            out.extend(_flatten_strings(sub))
-        return out
-    if isinstance(value, (list, tuple, set, frozenset)):
-        out = []
-        for sub in value:
-            out.extend(_flatten_strings(sub))
-        return out
-    return []
-
-
-def _dict_keys_deep(value):
-    keys = set()
-    if isinstance(value, dict):
-        for key, sub in value.items():
-            if isinstance(key, str):
-                keys.add(key)
-            keys |= _dict_keys_deep(sub)
-    elif isinstance(value, (list, tuple)):
-        for sub in value:
-            keys |= _dict_keys_deep(sub)
-    return keys
-
-
 # ===========================================================================
 # Discovery adapter -- replaceable, and null by default so the gate is
 # exercisable with synthetic inputs and no repository at all.
@@ -296,46 +242,6 @@ class NullDiscovery:
 
     def anchor_resolution_scheme(self, normalized_path):
         return None
-
-
-class StaticDiscovery(NullDiscovery):
-    """A discovery adapter whose answers are supplied rather than scanned.
-
-    Used by offline exercises and by any caller that has already performed its
-    own tracked-set enumeration. It records the method it was told, so the
-    record still says how the answers were obtained.
-    """
-
-    def __init__(self, method="static-discovery: answers supplied by caller",
-                 role=ROLE_UNKNOWN, callers=(), json_role=JSON_ROLE_UNKNOWN,
-                 json_role_evidence="supplied", bound_schema=None,
-                 required_anchors=None, anchor_scheme=None):
-        self.method = method
-        self._role = role
-        self._callers = list(callers)
-        self._json_role = json_role
-        self._json_role_evidence = json_role_evidence
-        self._bound_schema = bound_schema
-        self._required_anchors = required_anchors
-        self._anchor_scheme = anchor_scheme
-
-    def invocation_role(self, normalized_path):
-        return self._role
-
-    def callers(self, normalized_path):
-        return list(self._callers)
-
-    def json_role(self, normalized_path):
-        return self._json_role, self._json_role_evidence
-
-    def bound_schema(self, normalized_path):
-        return self._bound_schema
-
-    def required_anchors(self, normalized_path):
-        return self._required_anchors
-
-    def anchor_resolution_scheme(self, normalized_path):
-        return self._anchor_scheme
 
 
 class TrackedSetDiscovery(NullDiscovery):
@@ -1970,8 +1876,6 @@ def _record_template(evaluation_cap=DEFAULT_EVALUATION_CAP, discovery=None):
     }
 
 
-RECORD_FIELDS = tuple(sorted(_record_template()))
-
 
 def evaluate(composer, discovery=None, evaluation_cap=DEFAULT_EVALUATION_CAP,
              timeout=DEFAULT_TIMEOUT_SECONDS, observer=None,
@@ -2366,82 +2270,10 @@ def _finish(record, ctx):
     return record
 
 
-# ===========================================================================
-# Identity binding (R10) -- comparison against the OBJECT, never a re-read
-# ===========================================================================
-
-def verify_identity(record, landing_object):
-    """Compare the identity of the EXACT object being handed to landing with
-    the identity the verdict was issued for.
-
-    A re-read of the mutable path is not an acceptable comparison input: that
-    is the time-of-check/time-of-use gap this comparison exists to close, and
-    no lock around repository operations closes it.
-    """
-    issued = (record or {}).get("identity")
-    if issued is None:
-        return REASON_IDENTITY_MISMATCH
-    data = _attr(landing_object, "bytes")
-    if data is None:
-        return REASON_IDENTITY_MISMATCH
-    actual = {
-        "normalized_path": normalize_path(_attr(landing_object, "path")),
-        "content_sha256": hashlib.sha256(bytes(data)).hexdigest(),
-        "git_mode": _attr(landing_object, "mode"),
-    }
-    for field, value in actual.items():
-        if issued.get(field) != value:
-            return REASON_IDENTITY_MISMATCH
-    return None
-
-
-# ===========================================================================
-# Standalone offline entry point
-# ===========================================================================
-
-def _cli(argv=None):
-    import argparse
-    parser = argparse.ArgumentParser(
-        description="Run the two mandatory soundness checks against a "
-                    "candidate image supplied by any producer.")
-    parser.add_argument("--candidate", required=True,
-                        help="file holding the combined candidate bytes")
-    parser.add_argument("--path", required=True,
-                        help="repo-relative path the candidate represents")
-    parser.add_argument("--mode", default="100644")
-    parser.add_argument("--baseline", help="file holding the baseline bytes")
-    parser.add_argument("--git-root",
-                        help="enable tracked-set discovery rooted here")
-    parser.add_argument("--evaluation-cap", type=int,
-                        default=DEFAULT_EVALUATION_CAP)
-    parser.add_argument("--explain", action="store_true",
-                        help="print every evaluation the search performed")
-    args = parser.parse_args(argv)
-
-    with open(args.candidate, "rb") as handle:
-        candidate = handle.read()
-    baseline = b""
-    if args.baseline:
-        with open(args.baseline, "rb") as handle:
-            baseline = handle.read()
-
-    composer = WholeFileComposer(args.path, candidate, baseline, args.mode)
-    discovery = (TrackedSetDiscovery(args.git_root) if args.git_root
-                 else NullDiscovery())
-    record = evaluate(composer, discovery=discovery,
-                      evaluation_cap=args.evaluation_cap)
-    if not args.explain:
-        record.pop("controls", None)
-    json.dump(record, sys.stdout, sort_keys=True, indent=2)
-    sys.stdout.write("\n")
-    return 0 if record["gate_pass"] else (1 if record["gate_pass"] is False
-                                          else 2)
-
-
 class WholeFileComposer:
     """The degenerate D1 producer: one hunk, the whole file.
 
-    Used by the standalone entry point and by the whole-file adoption seam,
+    Used by the whole-file adoption seam,
     where the candidate image IS the file and there is exactly one atomic
     region to attribute to.
     """
@@ -2628,6 +2460,3 @@ def screen_landing(path, image, mode, slices=None, baseline=b"",
                      % (path, record.get("reason")))
     return None
 
-
-if __name__ == "__main__":  # pragma: no cover - CLI
-    sys.exit(_cli())

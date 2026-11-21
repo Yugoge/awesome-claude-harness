@@ -8,7 +8,8 @@ reported at once.
 The rules are the guards' own files, so each decides exactly as it did alone:
 pretool-bash-views-guard.py, pretool-overnight-hook-guard.py, pretool-tool-policy.py,
 pretool-cp-state-write-guard.py, lib/write_gate/overwrite.py (pretool-write-guard.sh's
-checks), pretool-claude-config-guard.py and pretool-harness-switch-guard.py.
+checks), pretool-claude-config-guard.py, pretool-harness-switch-guard.py and
+pretool-harness-switch-prompt.py.
 
 The rules run at the same time, one fork of this process each (lib/rule_fork), as the CLI
 ran the seven guards: the call waits for the slowest rule, not for their sum. No rule writes
@@ -43,10 +44,6 @@ import subprocess
 import sys
 
 HOOKS_DIR = os.path.dirname(os.path.abspath(__file__))
-# The standard-library modules lib/hook_launch.py imports before its forks (its WARM, which says why
-# that changes nothing a hook decides): pkgutil is the runner's own (runpy.run_path imports it for
-# every file), so without it each fork would import it again. Never a harness module.
-WARM = ("pkgutil", "pathlib", "datetime", "shlex")
 # The tools whose rules run one after another even where the gate may fork. Bash: its call waits
 # for pretool-bash-safety.sh (about 470 ms, a shell registration of its own) whatever the gate
 # does, so forking its six rules saved no wait and cost about 30 ms CPU a call (measured with
@@ -67,7 +64,8 @@ def _fallback(raw: bytes) -> int:
     sys.path.insert(0, HOOKS_DIR)
     from lib.write_gate import RULES, combine
     tool = _tool(raw)
-    return _emit(combine([(rule, _own_process(rule, raw)) for rule in RULES if rule.applies(tool)]))
+    results = [(rule, _own_process(rule, raw)) for rule in RULES if rule.applies(tool)]
+    return _emit(_recorded(raw, results, combine))
 
 
 def _own_process(rule, raw: bytes):
@@ -93,7 +91,7 @@ def _runs(rules, raw: bytes, tool=None) -> list:
         try:
             from lib import rule_fork
             at_once = rule_fork.can_fork()
-            for name in WARM if at_once else ():
+            for name in rule_fork.WARM if at_once else ():  # lib/rule_fork.WARM says why
                 __import__(name)
         except Exception:
             at_once = False
@@ -102,6 +100,21 @@ def _runs(rules, raw: bytes, tool=None) -> list:
             runs = rule_fork.run_at_once(jobs, fallback=lambda i: _own_process(rules[i], raw))
             return list(zip(rules, runs))
     return [(rule, run_rule(rule.file, raw, rule.budget)) for rule in rules]
+
+
+def _recorded(raw: bytes, results, combine):
+    """The gate's answer, after a report to the refusal record (lib/refusal_record.py) when it refuses: each
+    refusing rule with its own reason, as ``combine`` reads that rule alone. Nothing here changes the answer."""
+    answer = combine(results)
+    if answer.code == 2:
+        try:
+            from lib import refusal_record
+            rules = [(rule.file, alone.stderr) for rule, run in results
+                     for alone in [combine([(rule, run)])] if alone.code == 2]
+            refusal_record.report(raw, rules, __file__)
+        except Exception:
+            pass
+    return answer
 
 
 def _emit(answer) -> int:
@@ -126,7 +139,7 @@ def main() -> int:
         results = _runs(rules, raw, tool)
     except Exception:
         return _fallback(raw)
-    return _emit(combine(results))
+    return _emit(_recorded(raw, results, combine))
 
 
 if __name__ == "__main__":

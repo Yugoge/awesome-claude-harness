@@ -8,8 +8,8 @@ registers 52 of 51:
   hooks' registrations go (ANTI_LOOP: two on PreToolUse Agent, three on SubagentStop), and their checks,
   hooks/lib/dev_loop_checks.py, are an advise rule of the two dispatch gates below instead of two
   registrations of their own; posttool-git-warn.sh is registered on ``Bash`` (its old matcher was a
-  regex on the tool name, which never matched); the three registered stubs go (STUBS; the files stay,
-  exit 0, for a session that loaded an older list: D15).
+  regex on the tool name, which never matched); the three registered stubs go (STUBS; the files went
+  later, when no running session had loaded an older list).
 - L5: fifteen registrations (DISPATCH) become three gates (GATES), none with a timeout, as none of the
   fifteen had one.
 
@@ -68,8 +68,8 @@ DEV_LOOP = "lib.dev_loop_checks:advice"
 GIT_WARN = "posttool-git-warn.sh"
 # (event, matcher, gate file, the rule name its RULES give dev_loop_checks or None)
 GATES = (
-    ("PreToolUse", "Agent", "pretool-dispatch-gate.py", "dev-loop-before"),
-    ("PostToolUse", "Agent", "posttool-dispatch-record.py", "dev-loop-after"),
+    ("PreToolUse", "Agent|Task", "pretool-dispatch-gate.py", "dev-loop-before"),  # lib/subagent.DISPATCH_TOOLS
+    ("PostToolUse", "Agent|Task", "posttool-dispatch-record.py", "dev-loop-after"),
     ("SubagentStop", "*", "subagentstop-producer-gate.py", None),
 )
 BASE_COUNT = 78

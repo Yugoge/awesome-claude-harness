@@ -34,6 +34,11 @@ label (fnmatch patterns) before and after it, so a later phase can inject a
 fault at any step without editing the driver. Writes the driver performs on an
 agent's behalf run inside Replay.acting(role), which leaves a marker the trace
 uses to attribute them to that role.
+
+The driver argument request_copies=1 writes the CLI's api-request-blob records into every
+transcript (CLI 2.1.322, tests/cli_shapes.py with_request_copies): before the model's message that
+follows a user record, a copy of each message before that user record not yet copied, its tool_use
+and tool_result blocks with them.
 """
 from __future__ import annotations
 
@@ -530,6 +535,7 @@ class Session:
         self.parent = None
         self._agent_parent: dict[str, str | None] = {}
         self._queued = False
+        self._uncopied: dict[str, list] = {}  # request_copies=1: each file's messages not yet copied
         self.main = Actor(self, None)
 
     def agent_tpath(self, agent_id: str) -> str:
@@ -556,6 +562,14 @@ class Session:
         for k, v in (("userType", "external"), ("cwd", self.rp.layout.project), ("sessionId", self.sid),
                      ("version", CLI_VERSION), ("timestamp", now_iso())):
             rec.setdefault(k, v)
+        if getattr(self.rp, "args", {}).get("request_copies") == "1" and rec.get("type") in ("user", "assistant") \
+                and cli_shapes._content(rec) is not None:
+            uncopied = self._uncopied.setdefault(path, [])
+            if rec["type"] == "assistant" and uncopied and uncopied[-1]["type"] == "user":  # a model request
+                for copy in cli_shapes.request_copies(uncopied[:-1]):
+                    self._write(path, copy)
+                del uncopied[:-1]
+            uncopied.append(rec)
         self._write(path, rec)
         return rec
 
@@ -709,7 +723,7 @@ class Actor:
         if self.rp.settle(call.pre, label, step["deviation"]):
             call.blocked = True
             text = "\n".join(hookrun.refusal(b) for b in call.pre.blocks)
-            self._result(tid, f"PreToolUse:{name} hook error: {text}", error=True)
+            self._result(tid, f"PreToolUse:{name} hook error: {text}", error=True, hook=True)
             self.rp.after(step, call)
             return call
         tinput = updated_input(call.pre, tinput)
@@ -740,7 +754,8 @@ class Actor:
         self.rp.after(step, call)
         return call
 
-    def _result(self, tid: str, content, error: bool = False, resp=None, denial: str | None = None) -> None:
+    def _result(self, tid: str, content, error: bool = False, resp=None, denial: str | None = None,
+                hook: bool = False) -> None:
         block = {"type": "tool_result", "tool_use_id": tid, "content": content}
         if error:
             block["is_error"] = True
@@ -749,6 +764,9 @@ class Actor:
             rec["toolUseResult"] = resp
         if denial:
             rec["toolDenialKind"] = denial
+        if hook:  # a PreToolUse hook refused it: the decision the CLI records beside the result (2.1.322)
+            rec["permissionDecision"] = {"decision": "reject", "source": "hook", "reasonType": "hook",
+                                         "reasonCode": "hook:PreToolUse"}
         self.s.append(rec, self.aid)
 
     def bash(self, command: str, description: str = "", label: str | None = None, deviation=None,
@@ -800,7 +818,7 @@ class Actor:
         if self.rp.settle(d.pre, label, step["deviation"]):
             d.blocked = True
             text = "\n".join(hookrun.refusal(b) for b in d.pre.blocks)
-            self._result(tid, f"PreToolUse:Agent hook error: {text}", error=True)
+            self._result(tid, f"PreToolUse:Agent hook error: {text}", error=True, hook=True)
             self.rp.after(step, d)
             return d
         d.agent_id = aid = "a" + uuid.uuid4().hex[:16]

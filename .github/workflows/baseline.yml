@@ -565,7 +565,9 @@ jobs:
     # Each untraced replay also runs the launch differential (tests/replay/launchdiff.py): every
     # launcher event's hooks once more on the old path, each as its own process. With it the
     # heaviest shards took 58-59 min on a 4-CPU hosted runner and one ran past 60.
-    timeout-minutes: 90
+    # 120, not 90: on pull request 64 a shard ran 1h29m55s (2026-11-20); the same shard took 1h21m an hour
+    # earlier, so the difference is the runner. A shard cut off at its limit reports nothing.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -626,6 +628,9 @@ jobs:
     runs-on: ubuntu-latest
     # Train A (4d1b5458..87731833, 13 merges, 447 ids red then green) took 25 min on 4 CPUs; still
     # inside the replay shards' critical path (about 58 min), so it adds nothing to the run.
+    # --budget 2400 below: a pull request that changes a tests/replay file (hours when run whole,
+    # twice) never finished inside the limit. Once some id is red then green, which fixes the
+    # job's result, no run goes past minute 40 and the summary names what was left unrun.
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -657,7 +662,7 @@ jobs:
           printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
           echo "merge base: $(git merge-base "$BASE_SHA" "$HEAD_SHA")"
           python3 scripts/ci/red-green.py --base "$BASE_SHA" --head "$HEAD_SHA" \
-            --body-file "$RUNNER_TEMP/pr-body.md" --summary "$GITHUB_STEP_SUMMARY"
+            --body-file "$RUNNER_TEMP/pr-body.md" --summary "$GITHUB_STEP_SUMMARY" --budget 2400
 
   diff-mutate:
     # P15 decision (b), lane L13: diff-scoped mutation (scripts/ci/diff-mutate.py). Mutates only the

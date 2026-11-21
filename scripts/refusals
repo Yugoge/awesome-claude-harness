@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""refusals: what the harness refused, read from the refusal record (hooks/lib/refusal_record.py).
+
+    refusals [--since T] [--until T] [--dir DIR] [--json]
+        The period's totals (default: the last 7 days), then the counts by event, rule, hook, role,
+        project, day and provider, and the loops: one actor refused the identical call, stop or prompt
+        more than once. A call the removal policy let through unproven is no refusal: counted apart, and
+        listed with the snapshot taken before it ran (the last 20; --json: all). One that another hook
+        refused (a refusal record of the same session, event and tool-call id) never ran: it is counted
+        apart again, as let through by the removal policy and refused by another hook, and not listed.
+    refusals reconcile [--since T] [--until T] [--dir DIR] [--transcripts DIR ...] [--refusals FILE]
+        The record against the hook refusals the session transcripts hold for the period, by tool-call
+        id; a blocked stop has none and pairs by session, agent and time. Every difference is printed;
+        exit status 1 when there is one. The transcripts are those under --transcripts, by default every
+        account's and this configuration directory's (hooks/lib/subagent_restart.py); --refusals reads
+        the transcript side from a file of extracted rows instead (one JSON object a line: tool_use_id
+        or record_uuid, ts, session_id, agent_id, hook_event). Not compared, and counted: a record of
+        a refused prompt or of a call rejected after it ran that no transcript line shows (neither
+        leaves a tool result or a feedback message), a Codex seat's record, an unproven let-through
+        (apart: one another hook refused, as the summary counts it), and a denial by the CLI's own
+        permission rules (no hook ran).
+
+T is a UTC date or time (2026-11-16, 2026-11-16T08:30). The record is read where refusal_record.py's
+directory() puts it for this harness home, the one definition the hooks write by; --dir reads another.
+"""
+import argparse
+import calendar
+import collections
+import json
+import os
+import re
+import sys
+import time
+
+HOME = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(HOME, "hooks", "lib"))
+import refusal_record as R  # noqa: E402
+
+MARGIN = 300  # seconds a refusal's record and its transcript line may lie apart, across a bound of the period too
+STOPS = ("Stop", "SubagentStop")
+UNSHOWN = ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure")  # no tool result or feedback message shows these
+_HOOK = re.compile(r"(\w+):(\S+) hook error: \[")  # the event is one of the writer's (R.EVENTS), named there only
+_FEEDBACK = re.compile("(%s) hook feedback:" % "|".join(STOPS))
+
+
+def _seconds(stamp) -> float:
+    """A UTC date or time (2026-11-16, 2026-11-16T08:30, a record's ts) as epoch seconds."""
+    text = str(stamp)[:19]
+    return calendar.timegm(time.strptime(text + "T00:00:00"[len(text) - 10:], "%Y-%m-%dT%H:%M:%S"))
+
+
+def _period(text: str) -> str:
+    _seconds(text)  # ValueError: argparse reports the argument
+    return text
+
+
+def _stamp(seconds: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(seconds))
+
+
+def records(folder: str, since: str, until: str) -> tuple[list, int]:
+    """(the records of [since, until), the lines that could not be read). Reports of one call that a writer
+    did not merge (the earlier one lay beyond the tail it searches, or in the day before's file) are joined
+    here, as the writer joins them."""
+    out, at, damaged = [], {}, 0
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else ():
+        if not (name.startswith("refusals-") and name.endswith(".jsonl") and since[:10] <= name[9:19] <= until[:10]):
+            continue
+        with open(os.path.join(folder, name), encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    record = None
+                if not isinstance(record, dict) or not isinstance(record.get("ts"), str):
+                    damaged += bool(line.strip())
+                elif since <= record["ts"] < until:
+                    key = (record.get("kind"), record.get("session"), record.get("event"), record.get("tool_use_id"))
+                    if key[3] and key in at:
+                        out[at[key]] = R.merge(out[at[key]], record)
+                    else:
+                        at[key] = len(out)
+                        out.append(record)
+    return out, damaged
+
+
+def _rules(record: dict) -> list[str]:
+    return [f"{r.get('hook')} {r.get('id') or '-'}" for r in record.get("rules") or []] or ["-"]
+
+
+def _unproven(found: list) -> tuple[list, list]:
+    """(the unproven let-throughs, those of them another hook refused): the removal policy's hook writes its
+    line without seeing the other registrations' verdicts, so a refusal record of the same session, event and
+    tool-call id means the call never ran."""
+    refused = {(r.get("session"), r.get("event"), r["tool_use_id"]) for r in found
+               if r.get("kind") == R.REFUSAL and r.get("tool_use_id")}
+    unproven = [r for r in found if r.get("kind") == R.UNPROVEN]
+    elsewhere = [r for r in unproven if (r.get("session"), r.get("event"), r.get("tool_use_id")) in refused]
+    return [r for r in unproven if not any(r is x for x in elsewhere)], elsewhere
+
+
+def summary(found: list) -> dict:
+    """The counts the owner asked for, most frequent first."""
+    refused = [r for r in found if r.get("kind") == R.REFUSAL]
+    unproven, elsewhere = _unproven(found)
+
+    def count(rows, key) -> list:
+        return sorted(collections.Counter(k for r in rows for k in key(r)).items(), key=lambda kv: (-kv[1], str(kv[0])))
+
+    same = collections.defaultdict(list)
+    for r in refused:
+        same[(r.get("session"), r.get("agent_id"), r.get("event"), r.get("tool"), r.get("refused"), tuple(_rules(r)))].append(r)
+    loops = [{"times": len(rows), "first": rows[0]["ts"], "last": rows[-1]["ts"], "role": rows[0].get("role") or "main",
+              "agent_id": key[1], "session": key[0], "event": key[2], "tool": key[3], "rules": list(key[5]),
+              "refused": str(key[4] or "")[:120]} for key, rows in same.items() if len(rows) > 1]
+    return {
+        "refusals": len(refused), "unproven": len(unproven), "unproven_refused_elsewhere": len(elsewhere),
+        "by_event": count(refused, lambda r: [r.get("event")]), "by_rule": count(refused, _rules),
+        "by_hook": count(refused, lambda r: sorted({x.get("hook") for x in r.get("rules") or []})),
+        "by_role": count(refused, lambda r: [r.get("role") or "main"]),
+        "by_project": count(refused, lambda r: [r.get("project")]),
+        "by_day": sorted(collections.Counter(r["ts"][:10] for r in refused).items()),
+        "by_provider": count(refused, lambda r: [r.get("provider") or "unknown"]),
+        "unproven_by_rule": count(unproven, _rules),
+        "unproven_calls": [{"ts": r["ts"], "refused": str(r.get("refused") or "")[:120],
+                            "snapshot": next((ln for ln in str(r.get("message") or "").splitlines()
+                                              if ln.startswith("snapshot: ")), "snapshot: not recorded")}
+                           for r in unproven],
+        "loops": sorted(loops, key=lambda x: (-x["times"], x["first"])),
+    }
+
+
+def render(s: dict, since: str, until: str, folder: str, damaged: int) -> str:
+    lines = [f"record: {folder}", f"period: {since} .. {until} (UTC)",
+             f"refusals: {s['refusals']}    let through unproven (not refusals): {s['unproven']}    "
+             f"let through by the removal policy, refused by another hook: {s['unproven_refused_elsewhere']}"]
+    if damaged:
+        lines.append(f"unreadable lines: {damaged}")
+    for title, key in (("by event", "by_event"), ("by rule (hook, rule id)", "by_rule"), ("by hook", "by_hook"),
+                       ("by role", "by_role"), ("by project", "by_project"), ("by day", "by_day"),
+                       ("by provider", "by_provider"), ("let through unproven, by rule", "unproven_by_rule")):
+        if s[key]:
+            lines += ["", title] + [f"{n:7d}  {name}" for name, n in s[key]]
+    if s["unproven_calls"]:
+        lines += ["", f"let through unproven, the last {min(20, len(s['unproven_calls']))} (--json: all), each with its snapshot"]
+        lines += [f"  {x['ts']}  {x['refused']!r}\n      {x['snapshot']}" for x in s["unproven_calls"][-20:]]
+    repeats = sum(x["times"] for x in s["loops"])
+    lines += ["", f"loops (one actor, the identical refusal more than once): {len(s['loops'])}, holding {repeats} refusals"]
+    for x in s["loops"]:
+        who = x["role"] + (f" {x['agent_id']}" if x["agent_id"] else "") + f" in {x['session']}"
+        lines.append(f"{x['times']:6d}x  {x['first']} .. {x['last']}  {who}  {x['event']} {x['tool'] or ''}  "
+                     f"{'; '.join(x['rules'])}  {x['refused']!r}")
+    return "\n".join(lines)
+
+
+def transcript_roots() -> list[str]:
+    """Every account's transcript root and this configuration directory's, as /restart finds them
+    (hooks/lib/subagent_restart.py); the accounts root from this home's settings.json where the
+    environment does not name it (a terminal has no session's env)."""
+    import claude_home
+    key = "CLAUDE_RESTART_ACCOUNTS_ROOT"
+    env = (claude_home.load_settings(os.path.join(HOME, "settings.json"))[0] or {}).get("env") or {}
+    if not os.environ.get(key) and isinstance(env.get(key), str):
+        os.environ[key] = env[key]
+    import subagent_restart
+    return [str(p) for p in subagent_restart.account_project_roots()]
+
+
+def transcript_refusals(roots, since: str) -> tuple[list, int]:
+    """(the hook refusals the transcripts under `roots` hold, once each however many accounts keep a copy;
+    the CLI permission-rule denials among them, which no hook made). A tool result whose text is the CLI's
+    "<Event>:<Tool> hook error: [" is a refused call (its id: the tool-call id); a meta user message
+    "Stop hook feedback:" is a blocked stop (its id: the line's uuid): the session's, and in an agent's own
+    transcript, where the CLI writes it under the same words, that agent's (SubagentStop)."""
+    found, denials, oldest = {}, set(), _seconds(since) - 86400
+    for root in roots:
+        for folder, _dirs, names in os.walk(root):
+            for name in names:
+                path = os.path.join(folder, name)
+                try:
+                    handle = open(path, encoding="utf-8", errors="replace") if name.endswith(".jsonl") \
+                        and os.path.getmtime(path) >= oldest else None
+                except OSError:
+                    handle = None
+                if handle is None:
+                    continue
+                agent = name[6:-6] if name.startswith("agent-") else None
+                with handle:
+                    for line in handle:
+                        if "hook error: [" not in line and "hook feedback:" not in line and "has been denied" not in line:
+                            continue
+                        try:
+                            d = json.loads(line)
+                            content = d["message"]["content"]
+                        except (ValueError, KeyError, TypeError):
+                            continue
+                        base = {"ts": d.get("timestamp"), "session": d.get("sessionId"), "agent_id": agent or d.get("agentId")}
+                        for block in content if isinstance(content, list) else ():
+                            if not (isinstance(block, dict) and block.get("type") == "tool_result"):
+                                continue
+                            text = block.get("content")
+                            if isinstance(text, list):
+                                text = "\n".join(x.get("text", "") for x in text if isinstance(x, dict))
+                            hit = _HOOK.match(str(text))
+                            if hit and hit.group(1) in R.EVENTS:
+                                found.setdefault(block.get("tool_use_id"), dict(
+                                    base, id=block.get("tool_use_id"), event=hit.group(1), tool=hit.group(2)))
+                            elif str(text).startswith("Permission to use "):
+                                denials.add(block.get("tool_use_id"))
+                        hit = _FEEDBACK.match(content) if isinstance(content, str) and d.get("isMeta") else None
+                        if hit:
+                            event = STOPS[bool(base["agent_id"]) or hit.group(1) == STOPS[1]]
+                            found.setdefault(d.get("uuid"), dict(base, id=d.get("uuid"), event=event, tool=None))
+    return list(found.values()), len(denials)
+
+
+def extracted_refusals(path: str) -> tuple[list, int]:
+    """The transcript side from a file of extracted rows: one JSON object a line, hook_event empty for a denial
+    by the CLI's own permission rules."""
+    found, denials = [], 0
+    with open(path, encoding="utf-8") as handle:
+        for row in map(json.loads, filter(str.strip, handle)):
+            event, _, tool = str(row.get("hook_event") or "").partition(":")
+            if event:
+                found.append({"ts": row.get("ts"), "session": row.get("session_id"), "agent_id": row.get("agent_id"),
+                              "id": row.get("tool_use_id") or row.get("record_uuid"), "event": event, "tool": tool or None})
+            else:
+                denials += 1
+    return found, denials
+
+
+def reconcile(recorded: list, found: list, since: str, until: str) -> tuple[list, dict]:
+    """(every difference, the counts). A transcript refusal and a record are one refusal when the tool-call id
+    is the same; else, for a blocked stop, when session, agent and event are and they lie within MARGIN
+    seconds, the nearest first. Only a refusal inside [since, until) with no partner is a difference; its
+    partner may lie up to MARGIN outside."""
+    def inside(x) -> bool:
+        return since <= str(x.get("ts")) < until
+
+    compared = [r for r in recorded if r.get("kind") == R.REFUSAL and r.get("provider") != "codex"]
+    by_id = {r["tool_use_id"]: r for r in compared if r.get("tool_use_id")}
+    loose = [r for r in compared if not r.get("tool_use_id")]
+    paired, differences = set(), []
+    for t in sorted(found, key=lambda t: str(t.get("ts"))):
+        partner = by_id.get(t.get("id"))
+        if partner is None and t.get("event") in STOPS:
+            near = [r for r in loose if id(r) not in paired and all(r.get(k) == t.get(k) for k in ("session", "agent_id", "event"))
+                    and abs(_seconds(r["ts"]) - _seconds(t["ts"])) <= MARGIN]
+            partner = min(near, key=lambda r: abs(_seconds(r["ts"]) - _seconds(t["ts"])), default=None)
+        if partner is not None:
+            paired.add(id(partner))
+        elif inside(t):
+            differences.append(("in the transcripts, not in the record", t))
+    alone = [r for r in compared if id(r) not in paired and inside(r)]
+    differences += [("in the record, not in the transcripts", r) for r in alone if r.get("event") not in UNSHOWN]
+    unshown = sum(r.get("event") in UNSHOWN for r in alone)
+    counts = {"transcripts": sum(map(inside, found)), "record": sum(map(inside, compared)) - unshown, "differences": len(differences),
+              "not_compared": {"no transcript line": unshown,
+                               "codex": sum(r.get("provider") == "codex" for r in recorded if inside(r)),
+                               "unproven": sum(map(inside, _unproven(recorded)[0])),
+                               "unproven, refused by another hook": sum(map(inside, _unproven(recorded)[1]))}}
+    return differences, counts
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="refusals", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("mode", nargs="?", choices=("summary", "reconcile"), default="summary")
+    ap.add_argument("--since", type=_period, default=_stamp(time.time() - 7 * 86400))
+    ap.add_argument("--until", type=_period, default=_stamp(time.time() + 60))
+    ap.add_argument("--dir", default=R.directory())
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--transcripts", nargs="+")
+    ap.add_argument("--refusals")
+    a = ap.parse_args(argv)
+    if a.mode == "summary":
+        found, damaged = records(a.dir, a.since, a.until)
+        s = summary(found)
+        print(json.dumps(dict(s, record=a.dir, since=a.since, until=a.until, unreadable_lines=damaged), ensure_ascii=False)
+              if a.json else render(s, a.since, a.until, a.dir, damaged))
+        return 0
+    recorded, damaged = records(a.dir, _stamp(_seconds(a.since) - MARGIN), _stamp(_seconds(a.until) + MARGIN))
+    found, denials = extracted_refusals(a.refusals) if a.refusals else transcript_refusals(a.transcripts or transcript_roots(), a.since)
+    differences, counts = reconcile(recorded, found, a.since, a.until)
+    for what, x in differences:
+        print(f"DIFFERENCE {what}: {x.get('ts')} {x.get('event')} {x.get('tool') or ''} "
+              f"id={x.get('id') or x.get('tool_use_id')} session={x.get('session')} agent={x.get('agent_id')}")
+    print(f"record: {a.dir}\nperiod: {a.since} .. {a.until} (UTC)\n"
+          f"hook refusals in the transcripts: {counts['transcripts']}    in the record: {counts['record']}    "
+          f"differences: {counts['differences']}\nnot compared: {counts['not_compared']}, "
+          f"CLI permission-rule denials {denials}, unreadable record lines {damaged}")
+    return 1 if differences else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

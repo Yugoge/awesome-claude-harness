@@ -7,7 +7,13 @@ prompt's own record is written after it runs (P1c X8). So the wake is recognised
 text and only while a /dev-overnight span is the transcript's active one (never after the
 owner's /stop opened its own); every prompt that starts with /restart keeps the capability. The owner's /stop prompt unlinks a
 capability the wake minted (its recorded origin), so none outlives the overnight run's end.
-The capability's reader in lib/subagent_restart.py stays its one deciding rule."""
+The capability's reader in lib/subagent_restart.py stays its one deciding rule.
+
+On a typed /restart (not the wake) the hook then prepares the recovery set itself: it runs
+scripts/restart-subagents.py prepare, the one definition of that computation, and hands its
+output to the model verbatim between PREPARED_MARKER and PREPARED_END (commands/restart.md step 2
+names both). Past PREPARE_BUDGET_SECONDS or on any failure it prints NOT_PREPARED_MARKER and the
+reason instead; the capability is issued exactly as before either way."""
 
 from __future__ import annotations
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
@@ -22,6 +28,8 @@ finally:
 
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -30,6 +38,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib import command_span, overnight, subagent_restart as restart  # noqa: E402
 
 COMMAND = "/restart"
+# The prepare helper the procedure runs (commands/restart.md step 2); the hook runs that same file
+HELPER = Path(__file__).resolve().parents[1] / "scripts" / "restart-subagents.py"
+# The lines commands/restart.md step 2 names: the helper's stdout sits between the first two
+PREPARED_MARKER = "[/restart] RECOVERY SET PREPARED (the output of restart-subagents.py prepare, verbatim):"
+PREPARED_END = "[/restart] END OF RECOVERY SET"
+NOT_PREPARED_MARKER = "[/restart] RECOVERY SET NOT PREPARED:"
+# Inside this hook's 60 s rule timeout (hooks/userprompt-launch.py), leaving the mint and the
+# guidance write their share; the whole hook took 0.3 s on a constructed 60 MB transcript and
+# 1.2 s on a 300 MB one (2026-11-20)
+PREPARE_BUDGET_SECONDS = 20.0
+# The account-rotation request typed as an option: `/restart --cross-account [guidance]`. The
+# guidance stays the whole argument, verbatim, as it always was.
+CROSS_ACCOUNT_RE = re.compile(r"--cross-account(?:\s|$)")
 
 
 def split_invocation(prompt: object) -> tuple[bool, str]:
@@ -138,6 +159,44 @@ def _persist_guidance(grant: dict, args: str) -> Path | None:
     return path
 
 
+def _not_prepared(reason: str) -> str:
+    return (f"{NOT_PREPARED_MARKER} {reason}. The capability stands; run commands/restart.md "
+            "step 2's prepare command yourself.")
+
+
+def prepare_block(session_id: str, args: str, cwd: object = None,
+                  budget: float | None = None) -> str:
+    """The recovery set for this /restart, as the context block commands/restart.md step 2 reads.
+
+    The helper itself runs (one definition of prepare, its own writes and locking), with this
+    session's id and, when the argument starts with --cross-account, that flag; its cwd is the
+    session's, as the agent's own Bash call would have. It runs as a child so that the budget
+    ends it cleanly (killed, its state lock released with it). A non-zero exit, a timeout or
+    output that is not one JSON object yields the not-prepared line instead, never an error."""
+    budget = PREPARE_BUDGET_SECONDS if budget is None else budget
+    command = [sys.executable, str(HELPER), "prepare", "--session-id", session_id]
+    if CROSS_ACCOUNT_RE.match(args):
+        command.append("--cross-account")
+    workdir = cwd if isinstance(cwd, str) and cwd and os.path.isdir(cwd) else None
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=budget,
+                              cwd=workdir, check=False)
+    except subprocess.TimeoutExpired:
+        return _not_prepared(f"preparing ran past this hook's {budget:g} s budget")
+    except (OSError, ValueError) as exc:
+        return _not_prepared(f"the prepare helper could not start ({type(exc).__name__}: {exc})")
+    if done.returncode != 0:
+        last = (done.stderr.strip().splitlines() or [""])[-1][:400]
+        return _not_prepared(f"the prepare helper exited {done.returncode} ({last})")
+    try:
+        parsed = json.loads(done.stdout)
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        return _not_prepared("the prepare helper printed no JSON object")
+    return "\n".join((PREPARED_MARKER, done.stdout.rstrip("\n"), PREPARED_END))
+
+
 def is_stop(prompt: object) -> bool:
     """The prompt is the owner's /stop (only a human types it: Skill(stop) is denied)."""
     found = command_span.slash_command(prompt) if isinstance(prompt, str) else None
@@ -192,6 +251,8 @@ def main() -> int:
         "[/restart] capability issued for parent session "
         f"{grant['session_id']}; only transcript-discovered interrupted agent ids may be resumed."
     )
+    if grant.get("ttl_warning"):
+        print(f"[/restart] {grant['ttl_warning']}")
     try:
         carried = _persist_guidance(grant, args)
     except restart.RestartError as exc:
@@ -203,11 +264,19 @@ def main() -> int:
         )
     if carried is not None:
         # Size and location only: the argument is data for the recovery lanes to
-        # carry, never text this hook echoes back into the session context.
+        # carry; this hook's own lines never echo it. It reaches the context only
+        # inside the prepared set below, as the helper's output always carried it.
         print(
             f"[/restart] operator argument preserved verbatim ({len(args.encode('utf-8'))} bytes) "
             f"at {carried}; recovery lanes read it as data, not as instructions."
         )
+    if invoked:  # the wake's recovery runs prepare itself (commands/dev-overnight.md Step 0)
+        # Last, after the guidance it reads is on disk. Its own output carries the guidance (in
+        # operator_guidance and every resume_message), as the agent's prepare call showed it.
+        try:
+            print(prepare_block(grant["session_id"], args, payload.get("cwd")))
+        except Exception as exc:  # noqa: BLE001 -- the capability above must never be lost
+            print(_not_prepared(f"the hook failed while preparing ({type(exc).__name__}: {exc})"))
     return 0
 
 

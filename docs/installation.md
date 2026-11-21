@@ -191,7 +191,9 @@ default location.
   `(`, `!`, `&`) — inside quotes that is only text, unless a word outside the quotes can run
   text (a shell, `eval`, `ssh`, an interpreter, a `-c` or `-e` option) — and a script piped into
   a shell or run by `find -exec` or an unlisted wrapper (`watch`) is not seen. A set value
-  replaces them with `|`-separated EREs, each matched anywhere in the command.
+  replaces them with `|`-separated EREs, each matched anywhere in the command, unless the whole
+  command provably only reads (a search, listing or print such as `grep`, `cat` or `ls`, piped
+  only into such readers and writing no file).
 - **The filter.** [`.gitattributes`](../.gitattributes) declares
   `/settings.json filter=claude-settings`; init registers its clean and smudge commands
   (`scripts/install/render-settings`) in the clone's local git config, with `required = true`.
@@ -317,13 +319,22 @@ environment cannot tell the two sessions apart: Claude Code sets `CLAUDECODE` an
 `CLAUDE_CODE_CHILD_SESSION` in a top-level session's hooks too. The owner's terminal, desktop app
 or IDE session has one Claude Code process in its ancestry and switches as before.
 
-**Known limits.** The agent guard covers the tools the harness names. An MCP tool that schedules a
-prompt (a remote `send_later` or trigger tool, for example) is not covered: the prompt it fires
-reaches UserPromptSubmit like a typed one, and the hook cannot tell them apart
+A prompt an agent's tool delivers is refused where it is sent. The guard reads every tool's input,
+whatever the tool is called (`CronCreate`, `ScheduleWakeup`, `SendMessage`, an MCP tool that sends
+or schedules a prompt, a tool a later CLI adds): a string in it that types `/harness` refuses the
+call. Only the CLI's own tools that deliver no prompt are named, and pass: the readers and
+searchers (`Read`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `ToolSearch`), the caller's own todo
+and task lists and background-task tools, `AskUserQuestion`, `PushNotification`, `ExitPlanMode`,
+and `Monitor`, whose command meets the Bash rule; an `Agent` or `Task` prompt, prose that may
+quote the command, is refused only when it is the command.
+
+**Known limits.** The guard sees a tool's input, in a session whose harness is on. A prompt put
+together elsewhere (a Bash command that has another program send it, a service that fires text it
+already holds) reaches UserPromptSubmit like a typed one, and the hook cannot tell them apart
 (`hooks/userprompt-restart-authorize.py` documents the same limit). The nested-session check names
-a Claude Code process by its executable (`claude`, the installer's `claude/versions/` copy, or
-node/bun running the npm package's `claude`): a copy of the binary under another name is not
-recognized.
+a Claude Code process by its executable (`claude`, or `claude.exe` as the npm package installs it,
+the installer's `claude/versions/` copy, or node/bun running the npm package's `claude`): a copy of
+the binary under another name is not recognized.
 
 **What off does.**
 
@@ -426,7 +437,7 @@ file has to be rewritten. What carries that, and where it stops:
 
 The prompts in `commands/`, `agents/` and `skills/` run harness files through the same
 `${CLAUDE_HOME:-$HOME/.claude}` channel and take the project root as
-`${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}`, so the commands they issue reach a clone
+`${CLAUDE_PROJECT_DIR:-$PWD}`, so the commands they issue reach a clone
 outside `~/.claude`. Not yet portable: `commands/close.md` (its `--force` audit log) and
 `commands/redev.md` (its fallback read of `commands/dev.md`) still name `~/.claude/...`; every
 other mention of `~/.claude` in the prompts only names the default location.
@@ -479,6 +490,6 @@ other mention of `~/.claude` in the prompts only names the default location.
 | **`npm` / `node` / `kill` refused by the runtime guard** | `protected-runtime.json` is missing or invalid (`~/.config/claude/protected-runtime.json`, or `$CLAUDE_PROTECTED_RUNTIME_FILE`); the refusal (`BLOCK STEP1`) names the defect and the repair. `scripts/bootstrap --steps 4` creates it when absent and adds keys a schema-1 file lacks; any other defect is fixed by hand; `scripts/doctor` checks it. |
 | **Helper scripts fail to import** | They expect the venv at `<harness-home>/venv`; re-run init (`scripts/bootstrap`), which creates it when it is missing. |
 | **A commit/push is being refused** | The git privilege guard (`hooks/pretool-git-privilege-guard.py`) exits 2 for an agent `git commit` or `git push` without a live grant from `/commit` or `/push`. As a human, run the git command from your own shell, or `/allow` the exact command; `/do` does not cover `git commit` or `git push`. |
-| **A command is refused and I don't know why** | The hook that refuses it writes its reason to stderr (visible in the Claude Code tool output). Look for `BLOCKED:` or `BLOCKED by` lines — they name the rule or the hook. Check `/tmp/claude-grants/` for any pending structured grants (`/tmp` is the default state directory; `CLAUDE_STATE_DIR` set to an absolute path replaces it). For grant-related refusals, `ls /tmp/claude-push-grant-*.json /tmp/claude-commit-grant-*.json 2>/dev/null` shows any live grant files. |
+| **A command is refused and I don't know why** | The hook that refuses it writes its reason to stderr (visible in the Claude Code tool output). Look for `BLOCKED:` or `BLOCKED by` lines — they name the rule or the hook. Check `/tmp/claude-grants/` for any pending structured grants (`/tmp` is the default state directory; `CLAUDE_STATE_DIR` set to an absolute path replaces it). For grant-related refusals, `ls /tmp/claude-commit-grant-*.json 2>/dev/null` shows any live grant files. |
 | **Bootstrap / venv failure** | Verify Python 3 is installed: `python3 --version`. If the venv creation fails, check disk space and that `python3-venv` is installed (`apt install python3-venv` on Debian/Ubuntu). Init uses the first of `python3`, `python3.12`, `python3.11`, `python3.10` that has a lockfile under `requirements/`. Re-run init with `--force` to back up and recreate the venv: `<harness-home>/scripts/bootstrap --force`. |
 | **Resolver failure / wrong home detected** | Scripts resolve their own home structurally via `hooks/lib/claude_home.{sh,py}`; hook commands use `CLAUDE_HOME` from the overlay, falling back to `$HOME/.claude`. If either points at the wrong directory, check `env.CLAUDE_HOME` in `settings.machine.json` and run `scripts/doctor` for a preflight diagnostics report. |

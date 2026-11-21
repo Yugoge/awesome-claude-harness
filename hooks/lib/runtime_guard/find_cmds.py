@@ -18,10 +18,16 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 
 # find/fd argv parsers key on the quote stripper and the
 # basename-glob matchers. Dual-context import (INV-3; the contract
 # is stated at _core's first import block).
+try:
+    from .. import shell_parse as _sp
+except ImportError:  # executed as a top-level script (no package context)
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    import shell_parse as _sp  # type: ignore[no-redef]
 try:
     from .pathmatch import _strip_quotes
     from .pathmatch import _glob_to_segment_regex, _has_shell_glob
@@ -34,7 +40,7 @@ except ImportError:  # executed under the top-level-script shim (no package)
 # options (`-H`/`-L`/`-P`), the `-D <debugopts>` and `-O<level>` forms. These come
 # BEFORE the paths, so the path scan must skip them (not stop at them). Generic
 # find grammar, no project names.
-_FIND_GLOBAL_NOARG_OPTS = frozenset({"-H", "-L", "-P"})
+_FIND_GLOBAL_NOARG_OPTS = frozenset(_sp.FIND_SYMLINK_OPTS)
 _FIND_GLOBAL_ARG_OPTS = frozenset({"-D"})
 # pre-path POSITION options that take ONE numeric/string arg and may appear before
 # the path on some `find` builds / fd (`-maxdepth N` / `-mindepth N`). Skipped with
@@ -82,7 +88,7 @@ def _fd_positional_roots(tokens: list, fd_idx: int) -> list:
             i += 1
             continue
         # a path-like bareword positional is a search directory.
-        if "/" in st or st in (".", "..") or st.startswith("./") or st.startswith("../") or os.path.isabs(st):
+        if "/" in st or st in (os.curdir, os.pardir) or st.startswith("./") or st.startswith("../") or os.path.isabs(st):
             out.append(st)
         i += 1
     return out
@@ -122,12 +128,12 @@ def _find_path_operands(tokens: list, find_idx: int) -> list:
             if st in _FIND_PREPATH_ARG_OPTS:
                 i += 2  # `-maxdepth N`
                 continue
-            if st.startswith("-") or st in ("(", ")", "!"):
+            if st.startswith("-") or st in _sp.FIND_OPERATORS:
                 # a real predicate / expression begins -> path operands done.
                 break
         else:
             # after `--`: a predicate still terminates the path list.
-            if st.startswith("-") or st in ("(", ")", "!"):
+            if st.startswith("-") or st in _sp.FIND_OPERATORS:
                 break
         if st:
             out.append(st)

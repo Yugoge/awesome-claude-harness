@@ -22,7 +22,8 @@ pushgrant  A main-agent `git push -u origin <branch>` with CLAUDE_PUSH_COMMAND_A
            session's id as CLAUDE_SESSION_ID and the branch and remote push.sh resolves for the toy.
 preflight  /commit's Step 6 and Step 7 changelog-analyst dispatches through the Agent PreToolUse hooks. The
            harness home holds a singular /dev cycle's dev report of a task (no gitignore_waiver, one
-           files_created path the harness's .gitignore matches, under tests/generated/) and its close-report,
+           files_created path the harness's .gitignore matches, a __pycache__/ file: no tests/generated/ path,
+           which the rule does not count as a deliverable) and its close-report,
            as that cycle and its /close left them. The owner types `/commit <task>` (the user-intent sentinel);
            the main agent runs Step 5 as the text spells its pieces: the repository plan
            (resolve-commit-repos.py, the harness home as control root and supported repository), the
@@ -225,7 +226,7 @@ def pushgrant(rp) -> None:
     with rp.acting("driver"):
         with open(os.path.join(lay.harness, "hooks", "push.sh"), encoding="utf-8") as fh:
             text = fh.read()
-    block = text[text.index("# Step 8.5"):text.index("# Step 8.6")]
+    block = text[text.index("# Step 8.5"):text.index("# Step 8.6")] if "# Step 8.5" in text else ""  # S21: removed
     script = (". ~/.claude/hooks/lib/harness_state_dir.sh\n"
               f"BRANCH={shlex.quote(branch)}\nREMOTE=origin\n" + block + 'printf "%s\\n" "$GRANT_PATH"\n')
     rp.step("script", "push.sh Step 8.5", {})
@@ -282,11 +283,11 @@ def preflight(rp) -> None:
     h = lay.harness
     tid = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     rp.task(tid)
-    report_rel, created = f"docs/dev/dev-report-{tid}.json", f"tests/generated/{tid}/test_path_rule.py"
+    report_rel, created = f"docs/dev/dev-report-{tid}.json", f"scripts/__pycache__/path_rule_{tid}.cpython-312.pyc"
     with rp.acting("driver"):  # the harness home as the task's singular /dev cycle and its /close left it
         for rel, body in ((report_rel, json.dumps(_report(tid, created), indent=2) + "\n"),
                           (f"docs/dev/close-report-{tid}.md", f"# Close report {tid}\n\nCLOSE: YES\n"),
-                          (created, "def test_path_rule():\n    assert True\n")):
+                          (created, "")):
             os.makedirs(os.path.dirname(os.path.join(h, rel)), exist_ok=True)
             with open(os.path.join(h, rel), "w") as fh:
                 fh.write(body)

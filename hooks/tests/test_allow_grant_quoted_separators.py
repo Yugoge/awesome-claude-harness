@@ -399,8 +399,7 @@ def dispatch(prompt, subagent_type):
     return agent
 
 
-GUARD_HOOKS = ["pretool-git-privilege-guard.py", "pretool-bash-safety.sh", "pretool-block-branch-pr-worktree.py",
-               "pretool-push-analyst-grant-guard.py"]
+GUARD_HOOKS = ["pretool-git-privilege-guard.py", "pretool-bash-safety.sh", "pretool-block-branch-pr-worktree.py"]
 
 
 def replay(command, repo, role=None):

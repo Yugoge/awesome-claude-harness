@@ -118,8 +118,6 @@ EXIT_CRASH = 9
 
 MODEL_LADDER = ["fable 5", "opus 5", "sonnet 5"]
 TASK_CLASS_BASE_MODEL = {"fast": "sonnet 5", "general": "opus 5", "quality": "fable 5"}
-ACCOUNT_STATES = ["unknown", "eligible", "suspect", "blocked_until", "probation"]
-ERROR_CLASSES = ["hard_usage_limit", "transient", "auth", "model", "unknown"]
 ERROR_CLASS_ACTION = {
     "hard_usage_limit": "account_blocked_until",
     "transient": "retry_backoff_in_place",
@@ -3009,7 +3007,8 @@ def build_parser():
     # pass an explicit --registry-dir pytest tmp_path whenever it declares
     # an eligible teardown, exactly as paseo-daemon-timers.py's own tests
     # always override its --registry-dir.
-    s.add_argument("--registry-dir", default=str(Path.home() / ".paseo" / "schedules"),
+    s.add_argument("--registry-dir",
+                   default=str(Path(os.environ.get("PASEO_HOME") or Path.home() / ".paseo") / "schedules"),
                    help="timer schedule registry dir for the self-heal branch (resume + "
                         "re-arm tick ONLY when the ledger's latest teardown-declare was "
                         "--for-restart with no --keep-down); defaults to the real registry "

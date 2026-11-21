@@ -237,7 +237,17 @@ def _now_iso_z():
 
 
 def _project_dir():
-    return Path(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()))
+    """The hooks' project root: CLAUDE_PROJECT_DIR; a Bash call has none and may `cd` below the root, so
+    the nearest directory from the cwd up to the repository's top holding a .claude directory, else the cwd."""
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        return Path(os.environ["CLAUDE_PROJECT_DIR"])
+    cwd = Path.cwd()
+    for d in (cwd, *cwd.parents):
+        if (d / ".claude").is_dir():
+            return d
+        if (d / ".git").exists():
+            break
+    return cwd
 
 
 def _cp_dir(spec_id):
@@ -612,6 +622,11 @@ def _id_less_target_is_ambiguous(spec_id, agent):
     return None
 
 
+# The operations that change a checkpoint: the closed-lifecycle and ambiguous-target refusals
+# of _resolve_payload_for_actor apply to them.
+CHECKPOINT_CHANGING_OPS = ("mark", "waive")
+
+
 def _resolve_payload_for_actor(spec_id, agent, instance_id, agent_id, op_label):
     """Return (instance_id, payload) for an operation performed by agent_id.
 
@@ -634,7 +649,7 @@ def _resolve_payload_for_actor(spec_id, agent, instance_id, agent_id, op_label):
                 f"{instance_id} belongs to agent_id '{current}', not "
                 f"'{agent_id}'"
             )
-            if op_label in ("mark", "waive") and _closed(payload):
+            if op_label in CHECKPOINT_CHANGING_OPS and _closed(payload):
                 sys.stderr.write(
                     first_line + "\n"
                     f"cp-state lifecycle closed at {payload['checked_out_at']}; refusing mutation.\n"
@@ -658,7 +673,7 @@ def _resolve_payload_for_actor(spec_id, agent, instance_id, agent_id, op_label):
                 f"ERROR: {op_label} ambiguous: agent_id '{agent_id}' "
                 f"matches {len(matches)} cp-state slots for role '{agent}'"
             )
-            if op_label in ("mark", "waive"):
+            if op_label in CHECKPOINT_CHANGING_OPS:
                 lines = [first_line]
                 for m_iid, m_payload in matches:
                     label = "primary" if m_iid is None else f"instance-id={m_iid}"
@@ -678,7 +693,7 @@ def _resolve_payload_for_actor(spec_id, agent, instance_id, agent_id, op_label):
             f"ERROR: {op_label} forbidden: no cp-state slot for role "
             f"'{agent}' is owned by agent_id '{agent_id}'"
         )
-        if op_label in ("mark", "waive"):
+        if op_label in CHECKPOINT_CHANGING_OPS:
             lines = [
                 first_line,
                 "Cause: this id was never registered for this role, or it was "
@@ -704,7 +719,7 @@ def _resolve_payload_for_actor(spec_id, agent, instance_id, agent_id, op_label):
             sys.stderr.write(first_line + "\n")
         return None, None
 
-    why = _id_less_target_is_ambiguous(spec_id, agent) if op_label in ("mark", "waive") else None
+    why = _id_less_target_is_ambiguous(spec_id, agent) if op_label in CHECKPOINT_CHANGING_OPS else None
     if why:
         sys.stderr.write(
             f"ERROR: {op_label} refused: neither --agent-id nor --instance-id was given and {why}, "

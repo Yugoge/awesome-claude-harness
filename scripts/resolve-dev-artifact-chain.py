@@ -21,7 +21,6 @@ import importlib
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -41,6 +40,7 @@ WORKER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
 # ran and passed.  Consumers must treat this as "unevaluated here", never as a
 # pass.
 NOT_APPLICABLE = "not_applicable"
+FULL_COMPLETENESS_ON_DEMAND = False  # hooks/stop-command-gate.py sets it on its own copy (resolve_chain)
 SINGULAR_RELATIONAL_REASON = (
     "relational comparison requiring two or more independent shard artifacts; "
     "a singular chain has no second artifact to compare against, so this check "
@@ -301,7 +301,7 @@ def _dev_report_has_sibling_shards(dev_dir: Path, task_id: str) -> bool:
 
 
 def _safe_task_id(task_id: str) -> bool:
-    return bool(task_id not in {".", ".."} and TASK_ID_RE.fullmatch(task_id))
+    return bool(task_id not in (os.curdir, os.pardir) and TASK_ID_RE.fullmatch(task_id))
 
 
 def _lane_paths(dev_dir: Path, task_id: str, worker: str) -> dict[str, Path]:
@@ -1328,36 +1328,31 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             # against its own rebuild (see aggregate-dev-report.py's
             # COMPLETENESS_GAPS_KEY).  Three properties are load-bearing:
             #
-            #   * RECOMPUTED, never read from the canonical's stored record, so
-            #     neither an outdated nor a forged record can suppress a gap;
-            #   * computed by the producer's OWN `_apply_completeness_check` --
-            #     one implementation with two callers, so the halves cannot
-            #     drift into disagreeing about what a gap is;
-            #   * OUTSIDE the `not shard_errors` guard above, so no gap class
-            #     becomes unreachable behind an unrelated shard error.
+            #   * RECOMPUTED, never read from the canonical's stored record, so neither an
+            #     outdated nor a forged record can suppress a gap;
+            #   * computed by the producer's OWN `_apply_completeness_check` -- one implementation
+            #     with two callers, so the halves cannot drift into disagreeing about a gap;
+            #   * OUTSIDE the `not shard_errors` guard above, so no gap class becomes unreachable.
             #
-            # Design-direction correction (task dev-20260927-135305,
-            # spec-20260914-052140 S5.3): the ERROR that blocks /close is now
-            # computed with `same_cycle_only=True` -- does THIS cycle's own
-            # set of declared lanes/claimants correctly and non-conflictingly
-            # account for the bytes its OWN ledgers claim? That question
-            # never depends on whether some OTHER, possibly still-active,
-            # session has declared its bytes in a shared file yet (the
-            # forbidden shape: an unbounded number of concurrent sessions
-            # must be able to land their own bytes in a shared file, and the
-            # mere fact a file was touched by a peer must never itself
-            # trigger a cross-check EXCLUDE). The full, cross-cycle-aware
-            # call (default `same_cycle_only=False`) keeps running UNCHANGED
-            # -- span accounting, the declared-boundary chain, the
-            # parent_cycle claimant reader, the anti-absorption rule, all of
-            # it -- and its diagnostics are never discarded: they land in
-            # `result["ownership_completeness_informational"]` as non-
-            # blocking forensic information for a human or a later process,
-            # not as an error any gate reads.
-            completeness_gaps = aggregate._apply_completeness_check(
-                canonical, root, loaded_shards
-            )
-            result["ownership_completeness_informational"] = list(completeness_gaps)
+            # Design-direction correction (task dev-20260927-135305, spec-20260914-052140 S5.3): the
+            # ERROR that blocks /close is computed with `same_cycle_only=True` -- does THIS cycle's own
+            # declared lanes/claimants account, without conflict, for the bytes its OWN ledgers claim?
+            # That never depends on whether another, possibly still-active, session has declared its
+            # bytes in a shared file yet (any number of concurrent sessions must be able to land their
+            # own bytes in a shared file; a peer's touch never itself triggers a cross-check EXCLUDE).
+            # The full, cross-cycle-aware call keeps running UNCHANGED; its diagnostics land in
+            # `result["ownership_completeness_informational"]`. On the Stop path
+            # (FULL_COMPLETENESS_ON_DEMAND) only the channel check below reads them, and only a
+            # blocking_issues entry of a diagnostic's form can trip it: without one the full run is
+            # skipped and the key is absent (not run, not "no findings").
+            blockers, owned = canonical.get("blocking_issues"), canonical.get("owned_edits")
+            if not FULL_COMPLETENESS_ON_DEMAND or any(aggregate._is_completeness_diagnostic(entry, owned)
+                                                      for entry in (blockers if isinstance(blockers, list) else ())):
+                completeness_gaps = aggregate._apply_completeness_check(canonical, root, loaded_shards)
+                result["ownership_completeness_informational"] = list(completeness_gaps)
+            else:
+                completeness_gaps = []
+                result.pop("ownership_completeness_informational", None)
             same_cycle_completeness_gaps = aggregate._apply_completeness_check(
                 canonical, root, loaded_shards, same_cycle_only=True
             )
@@ -1722,16 +1717,14 @@ def _print_disposition(project_dir: str, task_id: str, stage: str | None) -> int
 
 
 def _default_project_dir() -> str:
-    """The working directory's git top level, else the working directory: the
-    CLI is run from inside the project, and a Bash call's environment carries
-    no CLAUDE_PROJECT_DIR."""
+    """The hooks' project root: CLAUDE_PROJECT_DIR, else the working directory (a Bash call's
+    environment carries no CLAUDE_PROJECT_DIR; its cwd is the session's directory)."""
     try:
-        top = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=10
-        )
-    except (OSError, subprocess.SubprocessError):
-        return os.getcwd()
-    return top.stdout.strip() if top.returncode == 0 and top.stdout.strip() else os.getcwd()
+        locations = _harness_lib("locations")  # the one project-root resolution, as the other hooks.lib loads
+    except ImportError as exc:
+        raise SystemExit(f"resolve-dev-artifact-chain.py: hooks/lib/locations.py is missing beside this script "
+                         f"({exc}); pass --project-dir") from exc
+    return str(locations.project_root(bash=True))
 
 
 def do_report_gaps(

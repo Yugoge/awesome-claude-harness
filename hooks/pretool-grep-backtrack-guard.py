@@ -113,7 +113,7 @@ _UGREP_ARGV0 = "ugrep"
 # ---------------------------------------------------------------------------
 # Step 1: recover (pattern, mode) pairs from the command's search invocations.
 # ---------------------------------------------------------------------------
-_SEARCH_NAMES = ("grep", "egrep", "fgrep")
+_SEARCH_NAMES = shell_parse.GREP_NAMES
 
 # Wrappers that keep the shell function in play: a search behind them still
 # reaches the embedded engine. Every other wrapper execs the named binary through
@@ -123,29 +123,23 @@ _FUNCTION_PRESERVING_WRAPPERS = {"time"}
 
 # A shell started by bare name inherits the function shadow; one started by path
 # does not, and the search inside it runs the system grep.
-_SHELL_INTERP_NAMES = {"bash", "sh", "zsh", "dash", "ksh"}
+_SHELL_INTERP_NAMES = shell_parse.COMMON_SHELLS
 
 # Only `command`/`builtin` may stand between `eval` or a shell and the payload it runs.
-_PAYLOAD_WRAPPERS = {"command", "builtin"}
+_PAYLOAD_WRAPPERS = set(shell_parse.LOOKUP_BUILTINS)
 
 # Nested code walked as the same shell: substitution bodies.
 _SUBSTITUTIONS = ("cmdsub", "backtick", "procsub")
 
 # Word parts read as written: an unmatched glob or brace stays literal.
-_LITERAL_PARTS = ("lit", "glob", "brace")
+_LITERAL_PARTS = shell_parse.LITERAL_PART_KINDS
 
 # Bound on descents into code a command hands to a shell (`eval`, `-c`, heredoc).
 _MAX_DESCENT = 6
 
 # Flags (for grep/egrep/ugrep) that CONSUME a following value token, so the value
 # is not mistaken for the pattern.
-_VALUE_FLAGS = {
-    "-e", "--regexp", "-f", "--file", "-m", "--max-count", "-A", "--after-context",
-    "-B", "--before-context", "-C", "--context", "--color", "--colour",
-    "-d", "--directories", "--exclude", "--exclude-dir", "--exclude-from",
-    "--include", "--label", "--binary-files", "-D", "--devices", "--group-separator",
-    "--jobs", "-J",
-}
+_VALUE_FLAGS = set(shell_parse.GREP_VALUE_OPTS) | {"--jobs", "-J"}  # and ugrep's --jobs
 
 
 # Short option letters that CONSUME the rest of their cluster (or the next token)
@@ -237,15 +231,15 @@ def _extract_patterns(tokens):
             explicit.append(t.split("=", 1)[1])
             i += 1
             continue
-        if t.startswith("--file=") or t == "-f" or t == "--file":
+        if t.startswith("--file=") or t in shell_parse.GREP_PATTERN_FILE_OPTS:
             # pattern read from a file: cannot statically inspect -> skip this one
             from_file = True
-            if t == "-f" or t == "--file":
+            if t in shell_parse.GREP_PATTERN_FILE_OPTS:
                 i += 2
             else:
                 i += 1
             continue
-        if t in ("-e", "--regexp"):
+        if t in shell_parse.GREP_PATTERN_OPTS:
             if i + 1 < n:
                 explicit.append(tokens[i + 1])
             i += 2
@@ -257,6 +251,9 @@ def _extract_patterns(tokens):
                 i += 1
             else:
                 i += 2
+            continue
+        if t.startswith("--"):  # any other long option is a flag (--color[=WHEN] included), never the pattern
+            i += 1
             continue
         # SHORT option cluster (e.g. -niE, -Ee'PAT', -inef FILE). Walk letters
         # left-to-right; the FIRST value-consuming letter (e/f/m/A/B/C/d/D) takes
@@ -379,7 +376,7 @@ def _heredoc_scripts(cmd):
     if shell_parse.resolve(cmd).name not in _SHELL_INTERP_NAMES:
         return []
     return [shell_parse.parse_src(r.hd.body_src, 1) for r in cmd.redirects
-            if r.op in ("<<", "<<-") and r.hd is not None]
+            if r.op in shell_parse.HERE_DOCUMENT_OPS and r.hd is not None]
 
 
 def _searches_in(script, depth):
@@ -429,39 +426,6 @@ _GAP_RE = re.compile(
     """,
     re.VERBOSE,
 )
-
-
-def _has_top_level_alternation(pattern):
-    """True if an unescaped, top-level (depth-0) `|` exists in the pattern."""
-    depth = 0
-    i = 0
-    n = len(pattern)
-    while i < n:
-        c = pattern[i]
-        if c == "\\":
-            i += 2
-            continue
-        if c == "[":
-            # skip a character class
-            j = i + 1
-            if j < n and pattern[j] == "^":
-                j += 1
-            if j < n and pattern[j] == "]":
-                j += 1
-            while j < n and pattern[j] != "]":
-                if pattern[j] == "\\":
-                    j += 1
-                j += 1
-            i = j + 1
-            continue
-        if c == "(":
-            depth += 1
-        elif c == ")":
-            depth = max(0, depth - 1)
-        elif c == "|" and depth == 0:
-            return True
-        i += 1
-    return False
 
 
 def is_catastrophic_shape(pattern, mode):

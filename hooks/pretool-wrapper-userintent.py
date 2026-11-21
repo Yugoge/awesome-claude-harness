@@ -46,6 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib import locations  # noqa: E402
 try:
     from lib.shell_parse import without_heredoc_bodies
 except Exception:  # pragma: no cover - fail-soft when lib missing
@@ -105,14 +106,15 @@ try:
     from lib import shell_parse as _sp
 except Exception:  # pragma: no cover - fail-soft when lib missing
     _sp = None
+from lib import bash_read_only as _bro  # noqa: E402 -- the programs that only read
 
-# Directory holding the user-intent sentinels (overridable for sandbox tests).
-_SENTINEL_DIR = os.environ.get('CLAUDE_USERINTENT_SENTINEL_DIR', harness_state_dir())
+# Directory holding the user-intent sentinels: where hooks/prompt-workflow.py writes them.
+_SENTINEL_DIR = harness_state_dir()
 
 _PYTHON_RE = re.compile(r'^(?:python[\d.]*|pypy[\d.]*)$')
 _PY_VALUE_OPTS = 'cmWXQ'
-_STDIN_FILES = ('/dev/stdin', '/dev/fd/0', '/proc/self/fd/0')
-_SUBST_KINDS = frozenset(('cmdsub', 'backtick', 'procsub_in', 'procsub_out'))
+_STDIN_FILES = locations.STDIN_DEVICES
+_SUBST_KINDS = frozenset(_sp.SUBST_KINDS if _sp else ())
 _UNSAFE_CONTEXTS = frozenset(('cmdsub', 'backtick', 'procsub', 'pipe_shell'))
 # Builtins and keywords that run no file.
 _NO_EXEC = frozenset((
@@ -122,16 +124,13 @@ _NO_EXEC = frozenset((
     'break', 'continue', 'let', 'getopts', 'umask', 'ulimit', 'jobs', 'fg', 'bg', 'kill',
     'history', 'shopt', 'times', 'trap', 'disown', 'help', 'logout', 'mapfile',
     'readarray', 'compgen', 'complete', 'caller', 'eval', 'which', 'whereis'))
+# Readers that stay readers whatever words xargs appends (no option of theirs runs a program
+# or names one: not find, rg, ag, sort, sed, awk, git, less ...): lib/bash_read_only's
+# readers, and those of its checked ones whose other forms write but run nothing.
+_XARGS_SAFE = _bro.ANY_ARGS | {'file', 'printf', 'test', '[', 'uniq', 'xxd', 'tree', 'shellcheck'}
 # Readers: they never run an operand. Their operands, patterns and strings are
 # harmless while their output goes nowhere that runs.
-_PLAIN_READERS = frozenset((
-    'grep', 'egrep', 'fgrep', 'zgrep', 'rg', 'ag', 'cat', 'tac', 'nl', 'head', 'tail', 'less',
-    'more', 'wc', 'ls', 'stat', 'file', 'du', 'tree', 'sha1sum', 'sha224sum', 'sha256sum',
-    'sha384sum', 'sha512sum', 'md5sum', 'b2sum', 'cksum', 'sum', 'diff', 'cmp', 'comm', 'sort',
-    'uniq', 'cut', 'tr', 'od', 'xxd', 'hexdump', 'strings', 'readlink', 'realpath', 'basename',
-    'dirname', 'column', 'paste', 'fold', 'fmt', 'expand', 'unexpand', 'rev', 'jq', 'echo',
-    'printf', 'true', 'false', 'test', '[', 'shellcheck', 'type', 'which', 'whereis', 'find',
-    'hash', 'pwd', ':'))
+_PLAIN_READERS = _XARGS_SAFE | {'zgrep', 'rg', 'ag', 'less', 'more', 'sort', 'find', 'hash'}
 # Commands that never change a file's content (a run target they name is still
 # the file on disk).
 _CONTENT_KEEPING = frozenset(('chmod', 'chown', 'chgrp', 'touch'))
@@ -171,7 +170,7 @@ _RUBY_BAD = re.compile(
     r'syscall|trap|at_exit|ENV|Dir|Object|BasicObject|Class|Module|Signal)\b|`|%x|\$0|::')
 _AWK_BAD = re.compile(r'\bsystem\b|\|&?|\bgetline\b|@\w+|\b(?:print|printf)\b[^;{}\n]*>|'
                       r'\bENVIRON\b|\bPROCINFO\b')
-_AWK_NAMES = frozenset(('awk', 'gawk', 'mawk', 'nawk'))
+_AWK_NAMES = frozenset(_sp.AWK_NAMES) if _sp is not None else frozenset()
 _SED_SAFE = re.compile(
     r'^\s*(?:(?:\d+|\$|/(?:\\.|[^/])*/)(?:\s*,\s*(?:\d+|\$|/(?:\\.|[^/])*/|[+~]\d+))?\s*!?\s*)?'
     r'(?:[pd=lnq]|s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1[gpiImM0-9]*)?\s*$')
@@ -183,19 +182,19 @@ _CODE_RUNNERS = frozenset(('perl', 'ruby', 'node', 'nodejs', 'php', 'lua', 'tcls
 _STDIN_RUNNERS = frozenset(('at', 'batch', 'crontab'))
 _OTHER_SHELLS = frozenset(('fish', 'tcsh', 'csh', 'elvish', 'nu', 'xonsh', 'rc', 'es'))
 _PY_RUNNERS = frozenset(('pytest', 'py.test', 'coverage', 'ipython', 'ipython3', 'pdb', 'pdb3'))
+# less runs these over each file it opens.
+_LESS_HOOK_VARS = ('LESSOPEN', 'LESSCLOSE')
+_HOME_PARAMS = ('HOME', '{HOME}')  # the parameter texts of $HOME and ${HOME}
 # Variables whose value is a command or a file some program runs.
 _CMD_VAR_RE = re.compile(
     r'^(?:BASH_ENV|ENV|PYTHONSTARTUP|PROMPT_COMMAND|PS[0-4]|SHELL|LESSOPEN|LESSCLOSE|'
     r'PERL5OPT|PERL5DB|RUBYOPT|NODE_OPTIONS|LD_PRELOAD|LD_AUDIT|BROWSER|TERMINAL|FCEDIT|'
     r'GIT_SSH|GIT_EXTERNAL_DIFF|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|SSH_ASKPASS|SUDO_ASKPASS|'
     r'\w*(?:EDITOR|PAGER|_COMMAND|_CMD|ASKPASS|_PROGRAM|_HOOK|_HOOKS))$')
-# git configuration keys whose value runs a command.
-_GIT_RUN_KEY = re.compile(
-    r'^(?:alias\..*|core\.(?:pager|editor|sshcommand|hookspath|fsmonitor|askpass|gitproxy)|'
-    r'pager\..*|sequence\.editor|include\..*|includeif\..*|filter\..*|diff\..*|merge\..*|'
-    r'gpg\..*|credential.*|uploadpack\..*|receive\..*|man\..*|web\..*|browser\..*|'
-    r'sendemail\..*|interactive\..*|.*\.(?:pager|editor|command|cmd|textconv|program|helper|'
-    r'external|path|tool|hook|sshcommand|difffilter|clean|smudge|process))$', re.IGNORECASE)
+# git configuration keys whose value runs a command (lib/git_facts.py).
+from lib.git_facts import GH_MESSAGE_SUBCOMMANDS as _GH_MESSAGE_SUBS  # noqa: E402
+from lib.git_facts import GIT_RUN_CONFIG_KEY_RE as _GIT_RUN_KEY  # noqa: E402
+from lib.git_facts import GIT_BOOLEAN_VALUES as _GIT_BOOLEAN_VALUES  # noqa: E402
 _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 'ls-files',
                             'ls-tree', 'status', 'cat-file', 'rev-parse', 'shortlog', 'describe',
                             'show-ref', 'whatchanged', 'rev-list', 'add', 'commit', 'diff-tree',
@@ -203,9 +202,11 @@ _GIT_READ_SUBS = frozenset(('log', 'show', 'diff', 'blame', 'annotate', 'grep', 
                             'check-attr', 'count-objects', 'reflog', 'stash', 'restore',
                             'branch', 'tag', 'remote', 'fetch', 'push', 'pull', 'switch',
                             'checkout', 'mv', 'rm', 'init', 'clone', 'version', 'help'))
-_GIT_GLOBAL_VALUE = frozenset(('-C', '-c', '--git-dir', '--work-tree', '--namespace',
-                               '--config-env', '--super-prefix', '--exec-path'))
-_GH_MESSAGE_SUBS = frozenset(('pr', 'issue', 'release'))
+_GIT_GLOBAL_VALUE = _sp.GIT_GLOBAL_VALUE_OPTS if _sp is not None else frozenset()  # read by _Scan, which needs _sp
+from lib.git_facts import GIT_CONFIG_READ_OPTIONS as _GIT_CONFIG_READS  # noqa: E402
+from lib.git_facts import GIT_CONFIG_READ_SUBCOMMANDS as _GIT_CONFIG_READ_SUBS  # noqa: E402
+from lib.git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS as _GIT_SHELL_PAYLOAD_SUBS  # noqa: E402
+_DEFAULT_MAKEFILES = ('GNUmakefile', 'makefile', 'Makefile')  # what make reads with no -f, in its order
 _RC_FILES = frozenset(('.bashrc', '.bash_profile', '.bash_login', '.profile', '.bash_logout',
                        '.zshrc', '.zprofile', '.zshenv', '.zlogin', '.kshrc', '.mkshrc',
                        '.cshrc', '.tcshrc', '.inputrc', 'config.fish', 'environment',
@@ -403,7 +404,7 @@ def _writes_file(red) -> bool:
     except Exception:
         return True
     tgt = red.target.value() if red.target is not None else None
-    return tgt not in ('/dev/null', '/dev/stderr', '/dev/stdout', '/dev/tty')
+    return tgt not in locations.TERMINAL_SINKS
 
 
 class _Scan:
@@ -445,6 +446,9 @@ class _Scan:
         self.pager_env = {}        # GIT_PAGER / PAGER the command sets (str or _COMPUTED)
         self.git_config_written = False  # git config the command writes or overrides
         self.computed_targets = []  # run-target words with a part computed at run time
+        self.why = None            # what a fail-closed refusal saw and could not resolve
+        self.loop_unread = False   # a for list item the body runs that the guard cannot read
+        self.waived = None         # a fail-closed reading the wrapper cannot become: let through unproven
         script = _sp.parse(command)
         if script.error is not None:
             self.unsure = True
@@ -475,11 +479,26 @@ class _Scan:
         for site in self.sites:
             self._classify(site)
         self._uncovered()
-        if self.match is None and any(self._names_harness(w) or self._resolves_harness(w)
-                                      for w in self.computed_targets):
-            self.match = 'stop'  # fail closed: a run target computed inside the harness dirs
-        if self.computed_run and self.match is None and self._harness_context():
+        for w in self.computed_targets if self.match is None else ():
+            cands = self._loop_resolved(w)
+            if cands is not None:  # every value the loop list writes out: run only if one is the wrapper
+                if any(self._wrapper_value(c) for c in cands):
+                    self.match = 'stop'
+                continue
+            if self._names_harness(w) or self._resolves_harness(w):
+                self.match = 'stop'  # fail closed: a run target computed inside the harness dirs
+                self.why = 'a run target computed at run time in the harness hooks/ or scripts/ directory: ' + w.text
+        if self.computed_run and self.match is None and self._harness_context(names_only=False):
             self.match = 'stop'  # fail closed: a run built at run time beside the wrapper
+            self.why = 'a run built at run time beside the harness hooks/ or scripts/ directory or a file in one'
+        if self.loop_unread and self.match is None:
+            # a loop list item the guard cannot read: refused only where it can be the wrapper (the list or
+            # the command names the harness directory itself, a glob or a wrapper in it)
+            if self._harness_context():
+                self.match = 'stop'
+                self.why = 'a loop over a list the guard cannot read, beside the harness hooks/ or scripts/ directory'
+            elif self._harness_context(names_only=False):
+                self.waived = 'a loop over a list the guard cannot read; it names harness files, none the wrapper'
 
     # -- structure -----------------------------------------------------------
     def _map_script(self, script, consumer, writes):
@@ -494,7 +513,7 @@ class _Scan:
                     self.feeders[id(pl.stages[k + 1])] = st
                 if isinstance(st, _sp.Compound):
                     w = writes or any(_writes_file(r) for r in st.redirects)
-                    if st.kind in ('for', 'select') and st.header and st.body:
+                    if st.kind in _sp.LOOP_VAR_KINDS and st.header and st.body:
                         var = st.header[0].value()
                         if var and re.match(r'^[A-Za-z_]\w*$', var):
                             self.loops.append((var, list(st.header[1:]), st.body))
@@ -553,7 +572,7 @@ class _Scan:
                 if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
                     t = self.home + t[1:]
                 alts = [(t, glob.escape(t), False)]
-            elif p.kind == 'param' and p.text in ('HOME', '{HOME}') and self.home:
+            elif p.kind == 'param' and p.text in _HOME_PARAMS and self.home:
                 alts = [(self.home, glob.escape(self.home), False)]
             elif p.kind == 'glob':
                 alts = [(p.text, p.text, True)]
@@ -586,8 +605,7 @@ class _Scan:
                 continue
             if v.startswith('PATH=') or v.startswith('PATH+='):
                 self.path_assigned = True
-            if (v.startswith('CDPATH=') and v != 'CDPATH=') and res.name in (
-                    'export', 'declare', 'typeset', 'local', 'readonly'):
+            if (v.startswith('CDPATH=') and v != 'CDPATH=') and res.name in _sp.DECLARATION_BUILTINS:
                 self.cdpath = True
             if not reader:
                 self.others.append((w, v))
@@ -621,7 +639,7 @@ class _Scan:
         words = [w.value() for w in cmd.words]
         if not words:
             return True
-        if words[0] == 'command' and len(words) > 1 and words[1] in ('-v', '-V'):
+        if words[0] == 'command' and len(words) > 1 and words[1] in _sp.COMMAND_LOOKUP_OPTS:
             return True
         res = _sp.resolve(cmd)
         last_open = res.unresolved == 'computed-shell-option' and (
@@ -639,8 +657,7 @@ class _Scan:
         vals = [w.value() for w in res.args]
         sv = [v for v in vals if v is not None]
         if name in _PLAIN_READERS:
-            if name == 'rg' and any((v.startswith('--pre') and not v.startswith('--pre-glob')) or
-                                    v.startswith('--hostname-bin') for v in sv):
+            if name == 'rg' and any(v.split('=', 1)[0] in _sp.RG_PROGRAM_OPTS for v in sv):
                 return False
             if name == 'rg' and '--no-config' not in sv and self._rg_config_progs():
                 return False
@@ -648,8 +665,7 @@ class _Scan:
                 return False
             if name == 'sort' and any(v.startswith('--compress-program') for v in sv):
                 return False
-            if name == 'find' and any(v in ('-exec', '-execdir', '-ok', '-okdir', '-delete',
-                                            '-fprint', '-fprint0', '-fprintf', '-fls') for v in sv):
+            if name == 'find' and any(v in _sp.FIND_ACTIONS for v in sv):
                 return False
             if name == 'hash' and any(v.startswith('-') and 'p' in v for v in sv):
                 return False
@@ -661,7 +677,7 @@ class _Scan:
                                        list(res.args), self._lead_checker(cmd, res, res.args))
         if _PYTHON_RE.match(name):
             return self._py_reader(cmd, vals)
-        if name in ('node', 'nodejs'):
+        if name in _sp.NODE_NAMES:
             return self._code_opt(vals, ('-e', '--eval', '-p', '--print'), _node_inert, ())
         if name in _AWK_NAMES:
             return self._awk_reader(vals)
@@ -710,10 +726,10 @@ class _Scan:
                     if lead_ok is not None and lead_ok(k):
                         return True
                 return noexec and last_open and k == len(vals) - 1
-            if v in ('--', '-'):
+            if v in _sp.OPTION_ENDS:
                 break
             if v.startswith('--'):
-                if v in ('--rcfile', '--init-file'):
+                if v in _sp.SHELL_FILE_OPTS:
                     k += 2
                     continue
                 k += 1
@@ -754,7 +770,7 @@ class _Scan:
         script operand and every later word is an argument of the script; a word that may
         expand to no field passes only as the last word (`bash -n` then reads stdin, still
         under -n). Never with BASH_ENV / ENV set by the command."""
-        if any(a.name in ('BASH_ENV', 'ENV') for a in
+        if any(a.name in _sp.SHELL_STARTUP_VARS for a in
                list(getattr(cmd, 'assignments', ())) + list(getattr(res, 'assignments', ()))):
             return None
         args = list(args)
@@ -788,7 +804,7 @@ class _Scan:
                         if got is None:
                             return False
                         firsts.extend(got)
-                if any(f[:1] in ('-', '+') for f in firsts):
+                if any(f[:1] in _sp.OPTION_SIGNS for f in firsts):
                     return False
             if not empty:
                 return True
@@ -830,7 +846,7 @@ class _Scan:
                     return None
                 out.extend(self._alt_str(alt) for alt in alts)
             return out
-        if p.kind in ('cmdsub', 'backtick'):
+        if p.kind in _sp.CMDSUB_KINDS:
             alts = self._echo_alts(p.text or '', 0)
             if not alts or len(alts) >= self._ALT_CAP:
                 return None
@@ -989,13 +1005,13 @@ class _Scan:
             v = vals[k]
             if v is None:
                 return False
-            if v in ('-f', '--file', '-E', '--exec', '-l', '--load', '-i', '--include') or \
+            if v in _sp.AWK_PROGFILE_OPTS + _sp.AWK_LIB_OPTS or \
                     v.startswith('--file=') or v.startswith('--load='):
                 return False
-            if v in ('-F', '-v', '--assign', '--field-separator'):
+            if v in _sp.AWK_DATA_OPTS:
                 k += 2
                 continue
-            if v in ('-e', '--source'):
+            if v in _sp.AWK_SOURCE_OPTS:
                 if k + 1 >= len(vals) or not _awk_inert(vals[k + 1]):
                     return False
                 prog = vals[k + 1]
@@ -1021,9 +1037,9 @@ class _Scan:
             v = vals[k]
             if v is None:
                 return False
-            if v in ('-n', '--quiet', '--silent'):
+            if v in _sp.SED_QUIET_OPTS:
                 quiet = True
-            elif v in ('-e', '--expression'):
+            elif v in _sp.SED_SCRIPT_OPTS:
                 if k + 1 >= len(vals) or vals[k + 1] is None:
                     return False
                 scripts.append(vals[k + 1])
@@ -1170,7 +1186,7 @@ class _Scan:
         for red in cmd.redirects:
             if red.fd != 0:
                 continue
-            if red.op in ('<', '<>') and red.target is not None:
+            if red.op in _sp.INPUT_REDIRECT_OPS and red.target is not None:
                 self._path_target(red.target)
                 return
             if red.hd is not None or red.op == '<<<':
@@ -1204,7 +1220,7 @@ class _Scan:
                 if self._built(args[k]):
                     self.computed_run = True  # a script operand built at run time
                 return
-            if v in ('--', '-'):
+            if v in _sp.OPTION_ENDS:
                 k += 1
                 break
             if len(v) > 1 and v[0] in '-+' and not v.startswith('--'):
@@ -1219,7 +1235,7 @@ class _Scan:
                 k += 1
                 continue
             if v.startswith('--'):
-                if v in ('--rcfile', '--init-file') and k + 1 < len(args):
+                if v in _sp.SHELL_FILE_OPTS and k + 1 < len(args):
                     self._path_target(args[k + 1])
                     k += 2
                     continue
@@ -1227,7 +1243,7 @@ class _Scan:
                 continue
             break
         for a in res.assignments:
-            if a.name in ('BASH_ENV', 'ENV') and a.value is not None:
+            if a.name in _sp.SHELL_STARTUP_VARS and a.value is not None:
                 self._path_target(a.value)
         if has_c:
             code = args[k] if k < len(args) else None
@@ -1243,7 +1259,7 @@ class _Scan:
 
     def _operand(self, site, res, word, shell):
         v, _g = self._expand(word)
-        if v in _STDIN_FILES or (v and v.startswith('/dev/fd/')):
+        if v in _STDIN_FILES or (v and v.startswith(locations.FD_DIR)):
             self._stdin(site, res, shell)
             return
         if any(p.kind.startswith('procsub') for p in word.parts):
@@ -1362,7 +1378,7 @@ class _Scan:
             self._cwd_changed()
             return
         if self.cdpath and not os.path.isabs(target) and not target.startswith(('./', '../')) \
-                and target not in ('.', '..'):
+                and target not in (os.curdir, os.pardir):
             self.cwd_unknown = True
             self._cwd_changed()
             return
@@ -1399,20 +1415,20 @@ class _Scan:
         """`find ... -exec {}`: the files find hands to a command that may run them."""
         vals = [self._expand(w)[0] for w in args]
         i = 0
-        while i < len(vals) and vals[i] in ('-L', '-H', '-P'):
+        while i < len(vals) and vals[i] in _sp.FIND_SYMLINK_OPTS:
             i += 1
         starts = []
-        while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in ('(', '!', ')'))):
+        while i < len(vals) and (vals[i] is None or not (vals[i].startswith('-') or vals[i] in _sp.FIND_OPERATORS)):
             starts.append(vals[i])
             i += 1
         names, blocks, simple = [], [], True
         j = i
         while j < len(vals):
             p = vals[j]
-            if p in ('-exec', '-execdir', '-ok', '-okdir'):
+            if p in _sp.FIND_EXEC:
                 k = j + 1
                 argv = []
-                while k < len(vals) and vals[k] not in (';', '+'):
+                while k < len(vals) and vals[k] not in _sp.FIND_EXEC_ENDS:
                     argv.append(vals[k])
                     k += 1
                 blocks.append((p, argv))
@@ -1478,7 +1494,7 @@ class _Scan:
                         matches.append(c)
         for kind, argv in risky:
             for m in matches[:200]:
-                if kind in ('-execdir', '-okdir'):
+                if kind in _sp.FIND_EXEC_IN_MATCH_DIR:
                     absm = m if os.path.isabs(m) else os.path.join(sorted(self.cwds)[0], m)
                     rep, cwds = './' + os.path.basename(absm), {os.path.dirname(absm)}
                 else:
@@ -1491,7 +1507,7 @@ class _Scan:
         words = [w.value() for w in cmd.words]
         if words == ['exec']:
             for red in cmd.redirects:
-                if red.fd == 0 and red.op in ('<', '<>') and red.target is not None:
+                if red.fd == 0 and red.op in _sp.INPUT_REDIRECT_OPS and red.target is not None:
                     self.exec_stdin = red.target
         if res.head is None:
             if res.args or (res.unresolved and words):
@@ -1513,10 +1529,10 @@ class _Scan:
             return
         name = os.path.basename(head)
         args = list(res.args)
-        if name in ('cd', 'pushd'):
+        if name in _sp.CD_TARGET_BUILTINS:
             self._cd(args)
             return
-        if name in ('source', '.'):
+        if name in _sp.SOURCE_BUILTINS:
             ops = args[1:] if args and args[0].value() == '--' else args
             if ops:
                 self._operand(site, res, ops[0], shell=True)
@@ -1528,7 +1544,7 @@ class _Scan:
             self._python(site, res, args)
             return
         if name in _OTHER_SHELLS:
-            ops = [w for w in args if not (w.value() or '-').startswith(('-', '+'))]
+            ops = [w for w in args if not (w.value() or '-').startswith(_sp.OPTION_SIGNS)]
             if ops and not any((w.value() or '') in ('-c', '-n') for w in args):
                 self._path_target(ops[0])
         if name in _PY_RUNNERS:
@@ -1573,9 +1589,9 @@ class _Scan:
                 for v in vals[cut + 1:]:
                     if v is None:
                         self.unsure = True
-                    elif v not in (':::', '::::'):
+                    elif v not in _sp.PARALLEL_SEPARATORS:
                         self._sub(v)
-            vals = [v for v in vals if v not in (':::', '::::')]
+            vals = [v for v in vals if v not in _sp.PARALLEL_SEPARATORS]
         if not reader and named:
             if name in _CODE_RUNNERS or name in _STDIN_RUNNERS or _sp._SCRIPT_INTERP_RE.match(name):
                 self.unsure = True
@@ -1621,40 +1637,22 @@ class _Scan:
             break
         sub = vals[k] if k < len(vals) else None
         rest = [x for x in vals[k + 1:] if x is not None]
-        if sub == 'config' and not any(r in ('--get', '--get-all', '--list', '-l', '--get-regexp',
-                                             '--show-origin', '--unset') for r in rest):
+        if sub == 'config' and not (any(r in _GIT_CONFIG_READS for r in rest) or rest[:1] and rest[0] in
+                                    _GIT_CONFIG_READ_SUBS):
             self.git_config_written = True  # it may set the pager git grep -O opens
             if any(_mentions(r) for r in rest):
                 self.persist = True
-        if sub in ('rebase', 'bisect', 'submodule', 'filter-branch', 'difftool', 'mergetool'):
+        if sub in _GIT_SHELL_PAYLOAD_SUBS:
             if any(_mentions(r) for r in rest):
                 self.unsure = True
 
     # -- runs built at run time, rg --pre, sed e, LESSOPEN, loops -----------------
-    # Readers that stay readers whatever words xargs appends (no option of theirs runs
-    # a program or names one: not find, rg, ag, sort, sed, awk, git, less ...).
-    _XARGS_SAFE = frozenset((
-        'grep', 'egrep', 'fgrep', 'cat', 'tac', 'nl', 'head', 'tail', 'wc', 'ls', 'stat',
-        'file', 'du', 'sha1sum', 'sha224sum', 'sha256sum', 'sha384sum', 'sha512sum', 'md5sum',
-        'b2sum', 'cksum', 'sum', 'cmp', 'comm', 'uniq', 'cut', 'tr', 'od', 'xxd', 'hexdump',
-        'strings', 'readlink', 'realpath', 'basename', 'dirname', 'column', 'paste', 'fold',
-        'fmt', 'expand', 'unexpand', 'rev', 'echo', 'printf', 'true', 'false', 'test', '[',
-        'shellcheck', 'type', 'which', 'whereis', 'pwd', ':', 'diff', 'jq', 'tree'))
-    _RG_VALUE_SHORT = 'efgtTmABCMjrEd'
-    _RG_VALUE_LONG = frozenset((
-        '--regexp', '--file', '--glob', '--iglob', '--type', '--type-not', '--max-count',
-        '--after-context', '--before-context', '--context', '--max-columns', '--threads',
-        '--pre', '--pre-glob', '--type-add', '--type-clear', '--replace', '--colors',
-        '--encoding', '--sort', '--sortr', '--max-depth', '--maxdepth', '--max-filesize',
-        '--path-separator', '--ignore-file', '--dfa-size-limit', '--regex-size-limit',
-        '--context-separator', '--field-match-separator', '--field-context-separator',
-        '--engine', '--hostname-bin', '--hyperlink-format', '--color', '--generate'))
 
     @staticmethod
     def _built(word) -> bool:
         """The word is built at run time by a command substitution or backticks."""
         try:
-            return any(p.kind in ('cmdsub', 'backtick') for p in word.parts)
+            return any(p.kind in _sp.CMDSUB_KINDS for p in word.parts)
         except Exception:
             return False
 
@@ -1665,7 +1663,7 @@ class _Scan:
         if hv is None:
             return False
         name = os.path.basename(hv)
-        if name in self._XARGS_SAFE:
+        if name in _XARGS_SAFE:
             return True
         if _PYTHON_RE.match(name):
             vals = [w.value() for w in res.args]
@@ -1676,19 +1674,19 @@ class _Scan:
         cmd = site.cmd
         res = self.res[id(site)]
         for a in tuple(cmd.assignments) + tuple(res.assignments):
-            if a.name in ('LESSOPEN', 'LESSCLOSE'):
+            if a.name in _LESS_HOOK_VARS:
                 self.lessopen = True
         for w in cmd.words:
             t = w.value()
             t = w.text if t is None else t
-            if re.match(r'''^["']?(?:LESSOPEN|LESSCLOSE)\+?=''', t or ''):
+            if re.match(r'''^["']?(?:%s)\+?=''' % '|'.join(_LESS_HOOK_VARS), t or ''):
                 self.lessopen = True
         # RIPGREP_CONFIG_PATH the command sets (prefix, env, export/declare/typeset/readonly)
         for a in tuple(cmd.assignments) + tuple(res.assignments):
             if a.name == 'RIPGREP_CONFIG_PATH':
                 self.rgconf.append(a.value)
             self._pager_assign(a)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+        if res.name in _sp.DECLARATION_BUILTINS:
             for w in res.args:
                 if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''):
                     a = _sp.Assignment(w)
@@ -1717,7 +1715,7 @@ class _Scan:
         cmd = site.cmd
         res = self.res[id(site)]
         assigns = list(cmd.assignments) + list(res.assignments)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+        if res.name in _sp.DECLARATION_BUILTINS:
             assigns.extend(_sp.Assignment(w) for w in res.args
                            if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''))
         for a in assigns:
@@ -1820,17 +1818,17 @@ class _Scan:
                 break
             if v.startswith('--'):
                 name, eq, val = v.partition('=')
-                takes = name in self._RG_VALUE_LONG
+                takes = name in _sp.RG_VALUE_LONG
                 vw = None if eq else (args[k + 1] if takes and k + 1 < len(args) else None)
-                if name in ('--pre', '--hostname-bin'):
+                if name in _sp.RG_PROGRAM_OPTS:
                     progs.append(vw if not eq else val)
-                if name in ('--regexp', '--file'):
+                if name in _sp.GREP_PATTERN_LONG:
                     given = True
                 k += 1 if (eq or not takes) else 2
                 continue
             if v.startswith('-') and len(v) > 1:
                 for j, ch in enumerate(v[1:], 1):
-                    if ch in self._RG_VALUE_SHORT:
+                    if ch in _sp.RG_VALUE_SHORT:
                         if ch in 'ef':
                             given = True
                         k += 1 if v[j + 1:] else 2
@@ -2108,7 +2106,7 @@ class _Scan:
 
     def _less(self, args):
         """less with a LESSOPEN/LESSCLOSE the command sets runs it over each file it opens."""
-        ops = [w for w in args if not (w.value() or 'x').startswith(('-', '+'))]
+        ops = [w for w in args if not (w.value() or 'x').startswith(_sp.OPTION_SIGNS)]
         self._words_hold_wrapper(ops)
 
     def _loop(self, var, items, body):
@@ -2143,7 +2141,7 @@ class _Scan:
             vals = self._values(w)
             if not vals:
                 self.unsure = True
-                self.computed_run = True
+                self.loop_unread = True  # a loop list item the guard cannot read, run by the body
                 continue
             for v, g in vals:
                 for f in self._existing(v, g) or []:
@@ -2158,7 +2156,7 @@ class _Scan:
             parts = list(word.parts)
         except Exception:
             return False
-        if _mentions(''.join(p.text or '' for p in parts if p.kind in ('lit', 'glob', 'brace'))):
+        if _mentions(''.join(p.text or '' for p in parts if p.kind in _sp.LITERAL_PART_KINDS)):
             return True
         dirs = _harness_dirs()
         # the literal prefix, up to the first part that is computed
@@ -2169,7 +2167,7 @@ class _Scan:
                 if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
                     t = self.home + t[1:]
                 prefix += t
-            elif p.kind == 'param' and p.text in ('HOME', '{HOME}') and self.home:
+            elif p.kind == 'param' and p.text in _HOME_PARAMS and self.home:
                 prefix += self.home
             else:
                 break
@@ -2185,7 +2183,7 @@ class _Scan:
         run = ''
         runs = []
         for p in parts:
-            if p.kind in ('lit', 'glob', 'brace'):
+            if p.kind in _sp.LITERAL_PART_KINDS:
                 run += p.text or ''
             else:
                 runs.append(run)
@@ -2212,7 +2210,7 @@ class _Scan:
         for site in self.sites:
             cmd, res = site.cmd, self.res[id(site)]
             assigns = list(cmd.assignments) + list(res.assignments)
-            if res.name in ('export', 'declare', 'typeset', 'local', 'readonly'):
+            if res.name in _sp.DECLARATION_BUILTINS:
                 assigns.extend(_sp.Assignment(w) for w in res.args
                                if _sp._ASSIGN_PARTS_RE.match(w.raw.text or ''))
             for a in assigns:
@@ -2253,7 +2251,7 @@ class _Scan:
                         choices.extend(self._alts(val, depth + 1) if val is not None else [[None]])
                 elif name is None:
                     choices = self._pe_alts(p.text or '', depth)
-            elif p.kind in ('cmdsub', 'backtick'):
+            elif p.kind in _sp.CMDSUB_KINDS:
                 choices = self._echo_alts(p.text or '', depth) or [[None]]
             else:
                 choices = [[None]]
@@ -2622,9 +2620,9 @@ class _Scan:
                         continue
                     lines = [ln for ln in lines if ln and not ln.startswith('#')]
                     for i, ln in enumerate(lines):
-                        if ln in ('--pre', '--hostname-bin'):
+                        if ln in _sp.RG_PROGRAM_OPTS:
                             out.append(lines[i + 1] if i + 1 < len(lines) else None)
-                        elif ln.startswith(('--pre=', '--hostname-bin=')):
+                        elif ln.startswith(tuple(o + '=' for o in _sp.RG_PROGRAM_OPTS)):
                             out.append(ln.split('=', 1)[1])
         self._rgconf_memo = out
         return out
@@ -2770,8 +2768,6 @@ class _Scan:
             return ''
         return out
 
-    _PLAIN_PAGERS = frozenset(('less', 'more', 'cat'))
-
     def _plain_pager(self, prog) -> bool:
         """A pager that only reads the files git hands it: less, more or cat (with options),
         unless the command sets LESSOPEN / LESSCLOSE for less."""
@@ -2779,16 +2775,16 @@ class _Scan:
         if not words or re.search(r'[;&|`$()<>\\\'"\n*?{}\[\]]', prog):
             return False
         head = words[0]
-        if '/' in head and os.path.dirname(head) not in ('/bin', '/usr/bin', '/usr/local/bin'):
+        if '/' in head and os.path.dirname(head) not in locations.SYSTEM_BIN_DIRS:
             return False
         name = os.path.basename(head)
-        if name not in self._PLAIN_PAGERS or (name in ('less', 'more') and (
+        if name not in _bro.PLAIN_PAGERS or (name in ('less', 'more') and (
                 self.lessopen or re.search(r'\b(?:LESS|MORE)\w*\+?=', self.command))):
             return False  # LESS / LESSKEY* / MORE set by the command may hold commands
         return all(w.startswith('-') and 'k' not in w.lstrip('-')[:1] and 'lesskey' not in w
                    for w in words[1:])
 
-    _GIT_BOOL = frozenset(('true', 'false', 'yes', 'no', 'on', 'off', '1', '0', ''))
+    _GIT_BOOL = _GIT_BOOLEAN_VALUES
 
     def _git_pager_setting(self, gvals, dirs):
         """The pager `git grep -O` with no program opens. git takes GIT_PAGER, then
@@ -2950,11 +2946,11 @@ class _Scan:
                         self.match = self.match or 'stop'
                         return
         texts, unreadable, blind = [], shell_unknown, False
-        if not files and any(os.path.basename(ov or '') in ('GNUmakefile', 'makefile', 'Makefile')
+        if not files and any(os.path.basename(ov or '') in _DEFAULT_MAKEFILES
                              for _ow, ov in self.others):
             texts.append(self.command)  # the default makefile is written by this command
             for _ow, ov in self.others:
-                if ov and os.path.basename(ov) not in ('GNUmakefile', 'makefile', 'Makefile'):
+                if ov and os.path.basename(ov) not in _DEFAULT_MAKEFILES:
                     texts.extend(self._file_texts(ov))
         for v, w in files:
             if v is None:
@@ -2964,7 +2960,7 @@ class _Scan:
                     self.unsure = True
                     self.computed_run = True
                 continue
-            if v in ('-',) + _STDIN_FILES or v.startswith('/dev/fd/'):
+            if v in ('-',) + _STDIN_FILES or v.startswith(locations.FD_DIR):
                 got = False
                 for red in cmd.redirects:
                     if red.fd != 0:
@@ -3041,7 +3037,7 @@ class _Scan:
         if head is None or any(v is None for v in vals):
             return None
         name = os.path.basename(head)
-        if name in ('printf', 'echo'):
+        if name in _sp.PRINTERS:
             return ['\n'.join(vals)]
         if name != 'cat':
             return None
@@ -3125,19 +3121,24 @@ class _Scan:
                 continue
         return out
 
-    def _harness_context(self) -> bool:
+    def _harness_context(self, names_only=True) -> bool:
         """The command runs in the harness home's hooks/ or scripts/ directory, names one of
-        them or a name directly in one, or names a file that is a wrapper."""
+        them, a glob or a wrapper's name in one, or names a file that is a wrapper. With
+        names_only False, any non-directory name in one counts too (the reading before the
+        wrapper's name decided: a named file that is not the wrapper cannot become it)."""
         dirs = _harness_dirs()
 
-        def inside(p):
-            """The directory itself, or a non-directory name directly in it. The harness's own eval
+        def inside(p, is_glob=False):
+            """The directory itself, or a glob or the wrapper's name directly in it. The harness's own eval
             emitters (/commit Phase 3's `eval "$(python3 .../session-index.py init ...)"`) print shell
             assignments, not a run: naming one is no context for the wrapper."""
             for q in (os.path.normpath(p), os.path.realpath(p)):
                 if os.path.basename(q) in _EVAL_EMITTERS and os.path.dirname(q) in dirs:
                     return False
-                if q in dirs or (os.path.dirname(q) in dirs and not os.path.isdir(q)):
+                if q in dirs:
+                    return True
+                if os.path.dirname(q) in dirs and not os.path.isdir(q) and (
+                        not names_only or is_glob or os.path.basename(q) in self.by_name):
                     return True
             return False
 
@@ -3156,12 +3157,40 @@ class _Scan:
                 bases = [''] if os.path.isabs(v) else sorted(self.cwds)
                 for base in bases:
                     cand = os.path.join(base, v) if base else v
-                    if inside(cand):
+                    if inside(cand, g):
                         return True
                 for f in self._existing(v, g) or []:
                     if os.path.isfile(f) and self._wrapper_file(f) is not None:
                         return True
         return False
+
+    def _loop_resolved(self, word):
+        """The values a run target takes when every computed part of it is a for-loop variable whose
+        list the guard reads in full (`scripts/todo/$c.py` over `for c in dev close ...`); None otherwise."""
+        loopvals = self._loop_values()
+        out = ['']
+        try:
+            parts = list(word.parts)
+        except Exception:
+            return None
+        for p in parts:
+            if p.kind == 'lit':
+                choices = [p.text or '']
+            elif p.kind == 'param' and isinstance(loopvals.get((p.text or '').strip('{}')), list):
+                choices = loopvals[(p.text or '').strip('{}')]
+            else:
+                return None
+            out = [a + b for a in out for b in choices]
+            if not out or len(out) > self._ALT_CAP:
+                return None
+        return out
+
+    def _wrapper_value(self, value) -> bool:
+        """A value names the wrapper: its basename is a wrapper's, or it is an existing wrapper file."""
+        if os.path.basename(value) in self.by_name:
+            return True
+        return any(os.path.isfile(f) and self._wrapper_file(f) is not None
+                   for f in self._existing(value, False) or [])
 
     # -- mentions ------------------------------------------------------------
     def _transparent(self, word, site) -> bool:
@@ -3185,7 +3214,7 @@ class _Scan:
         res = self.res[id(site)]
         inert = self._inert(cmd)
         assigns = list(cmd.assignments) + list(res.assignments)
-        if res.name in ('export', 'declare', 'typeset', 'local', 'readonly', 'env'):
+        if res.name in _sp.DECLARATION_BUILTINS + ('env',):
             for w in res.args:
                 if _sp._ASSIGN_PARTS_RE.match(w.raw.text):
                     assigns.append(_sp.Assignment(w))
@@ -3255,23 +3284,32 @@ class _Scan:
             self.unproven = True
 
 
-def _matched_wrapper(command: str, cwd: str | None = None) -> str | None:
+def _matched_wrapper(command: str, cwd: str | None = None, seen: list | None = None) -> str | None:
     """Return the sentinel command-name when the command is a RUN decision: it
     runs a guarded wrapper of the harness home, or the base text rule refuses
     it and the guard cannot prove every mention harmless. A command whose
-    mentions are all proven harmless returns None (and keeps the sentinel)."""
+    mentions are all proven harmless returns None (and keeps the sentinel).
+    ``seen``, when given, receives ('refused', what the guard could not resolve)
+    for a fail-closed refusal and ('unproven', why) for a call let through unproven."""
     cwd = cwd or os.getcwd()
+    seen = [] if seen is None else seen
     base = _base_refuses(command)
     if _sp is None:  # pragma: no cover - the parser is part of the harness
         return base
     try:
         s = _Scan(command, cwd)
     except Exception:  # fail closed on a reader failure over a mention
+        seen.append(('refused', 'a command the guard cannot read that mentions the wrapper'))
         return 'stop' if (base or _dequoted_mentions(command)) else None
     if s.match is not None:
+        if s.why:
+            seen.append(('refused', s.why))
         return s.match
     if s.unproven and (s.unsure or s.persist):
+        seen.append(('refused', 'a mention of the wrapper beside a run the guard cannot read'))
         return 'stop'
+    if s.waived:
+        seen.append(('unproven', s.waived))
     if base is not None and s.unproven:
         return base
     return None
@@ -3341,10 +3379,13 @@ def _consume_sentinel(path: Path) -> bool:
         return False
 
 
-def _block(cmd_name: str, command: str) -> None:
+def _block(cmd_name: str, command: str, why: str | None = None) -> None:
+    head = (f'\nUSER-INTENT GUARD: direct invocation of the /{cmd_name} release wrapper is blocked. '
+            if not why else
+            f'\nUSER-INTENT GUARD: this command may run the /{cmd_name} release wrapper and the guard '
+            f'could not resolve it ({why}), so it is blocked. ')
     sys.stderr.write(
-        f'\nUSER-INTENT GUARD: direct invocation of the /{cmd_name} release '
-        'wrapper is blocked. This wrapper (break-overnight-lock.py / stop.sh) '
+        head + 'This wrapper (break-overnight-lock.py / stop.sh) '
         'is the only sanctioned setter of isolation_released_at and may run '
         f'ONLY via the /{cmd_name} slash command, which writes a single-use '
         'user-intent sentinel. No live sentinel was found for this session, so '
@@ -3363,8 +3404,12 @@ def main() -> None:
         sys.exit(0)
     cwd = data.get('cwd') if isinstance(data.get('cwd'), str) and os.path.isabs(data.get('cwd')) \
         else os.getcwd()
-    cmd_name = _matched_wrapper(command, cwd)
+    seen = []
+    cmd_name = _matched_wrapper(command, cwd, seen)
     if cmd_name is None:
+        for kind, why in seen:
+            if kind == 'unproven':
+                _report_unproven(data, why)
         sys.exit(0)
     sid = _get_session_id(data)
     sentinel = _sentinel_path(cmd_name, sid)
@@ -3373,7 +3418,18 @@ def main() -> None:
         # helper can validate it (defense in depth), then allow.
         _mint_helper_auth(cmd_name, sid)
         sys.exit(0)
-    _block(cmd_name, command)
+    _block(cmd_name, command, next((why for kind, why in seen if kind == 'refused'), None))
+
+
+def _report_unproven(data: dict, why: str) -> None:
+    """One line in the refusal record: the call ran although the guard could not read all of it."""
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), 'lib'))
+        import refusal_record
+        refusal_record.report(data, [(__file__, 'USER-INTENT GUARD: let through unproven: ' + why)], __file__,
+                              refusal_record.UNPROVEN)
+    except Exception:  # a record that cannot be written changes nothing
+        pass
 
 
 if __name__ == '__main__':

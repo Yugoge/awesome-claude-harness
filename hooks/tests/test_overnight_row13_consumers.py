@@ -14,7 +14,7 @@
 - scripts/overnight-status.sh reads the record through lib/overnight.py and
   exits non-zero once the window has closed (the TIME CHECK routes on that).
 - scripts/check-overnight-reports.sh stays at its path as an exit-0 stub.
-- The trace hook files a dispatch under the cycle lib/overnight.py's
+- The trace hook files a specialist's yield under the cycle lib/overnight.py's
   cycle_index reads, not under a counter the record no longer holds.
 """
 from __future__ import annotations
@@ -259,7 +259,7 @@ def test_status_without_a_record_exits_nonzero(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# The stubbed shell entry and the trace's cycle.
+# The stubbed shell entry and the yield's cycle.
 # --------------------------------------------------------------------------
 
 def test_check_overnight_reports_is_an_exit_zero_stub(tmp_path):
@@ -273,19 +273,26 @@ def test_check_overnight_reports_is_an_exit_zero_stub(tmp_path):
     assert not (REPO / "scripts" / "check-overnight-reports.py").exists()
 
 
-def test_trace_is_filed_under_the_cycle_index(tmp_path):
+def test_yield_is_filed_under_the_cycle_index(tmp_path):
     _project(tmp_path, _iso(90), cycles_done=1)
     contract = tmp_path / "docs" / "dev" / "overnight" / SID / "cycle-2" / "cycle-contract.json"
     contract.parent.mkdir(parents=True)
     contract.write_text(json.dumps({"cycle_id": 2, "required_calls": []}))
+    report = tmp_path / "docs" / "dev" / "overnight" / SID / "architect-report.json"
+    report.write_text(json.dumps(ARCHITECT))
+    declared = {"task_id": TASK, "lane": None, "lane_set": None, "role": "architect", "pipeline": "dev-overnight",
+                "profile": "overnight", "dispatched_at": _iso(0),
+                "artifacts": [{"kind": "json", "path": f"docs/dev/overnight/{SID}/architect-report.json",
+                               "schema": "specialist-report.v1", "identity": {"task_id": TASK}}]}
     payload = {"session_id": SID, "tool_name": "Agent",
-               "tool_input": {"subagent_type": "ba", "prompt": "analyse"},
-               "tool_response": {"content": [{"type": "text", "text": "done"}]}}
+               "tool_input": {"subagent_type": "architect",
+                              "prompt": f'<obligation v="1">{json.dumps(declared)}</obligation>'},
+               "tool_response": {"output": f"Report written to {report}"}}
+    log = tmp_path / "yield.jsonl"
     run = subprocess.run([sys.executable, str(HOOKS / "posttool-overnight-trace.py")],
                          input=json.dumps(payload), capture_output=True, text=True, timeout=30,
-                         env={**os.environ, "CLAUDE_PROJECT_DIR": str(tmp_path)})
+                         env={**os.environ, "CLAUDE_PROJECT_DIR": str(tmp_path), "SPECIALIST_YIELD_LOG_PATH": str(log)})
     assert run.returncode == 0, run.stderr
-    trace = contract.parent / "trace.jsonl"
-    records = [json.loads(line) for line in trace.read_text().splitlines()]
+    records = [json.loads(line) for line in log.read_text().splitlines()]
     assert [r["cycle_id"] for r in records] == [2]
     assert not (tmp_path / "docs" / "dev" / "overnight" / SID / "cycle-0").exists()

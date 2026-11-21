@@ -40,8 +40,10 @@ agent Reads it and runs its procedure.
                                      prefix) or to an id no candidate has, before the compliant ones;
                                      its refusal is kept in facts.json ("wake refusal").
 
-The owner's /restart turn follows commands/restart.md of the tree under test as written: its
-fenced blocks run as Bash calls (prepare, status, finalize), one SendMessage per pending candidate
+The owner's /restart turn follows commands/restart.md of the tree under test as written: step 2
+reads the recovery set the /restart issuer handed over (prepare runs as a Bash call only when the
+hook output holds none, and always in the wake's recovery), its other fenced blocks run as Bash
+calls (status, finalize), one SendMessage per pending candidate
 with its agent id and its exact resume message, the resumed agent goes on from where it was cut
 (first re-reading what its last call wrote, as the message tells it) and ends with the line the
 message names; the main agent then goes on with the interrupted command where it stopped. No
@@ -251,6 +253,19 @@ def notify(s, aid: str, tool_use_id: str, result: str) -> None:
                                             commandUuid=command, sessionId=s.sid, timestamp=now_iso()))
 
 
+def handed_over(text: str, hook_out: str) -> dict | None:
+    """The recovery set commands/restart.md step 2 says the /restart issuer prints: the JSON between
+    the two quoted lines that open and close it, or None when the hook output holds no such block."""
+    opened = re.search(r"`(\[/restart\] RECOVERY SET PREPARED[^`]*)`", text)
+    closed = re.search(r"`(\[/restart\] END OF RECOVERY SET)`", text)
+    if not (opened and closed) or opened.group(1) + "\n" not in hook_out:
+        return None
+    body = hook_out.split(opened.group(1) + "\n", 1)[1]
+    if "\n" + closed.group(1) not in body:  # cut short: absent, as step 2 says
+        return None
+    return json.loads(body.split("\n" + closed.group(1), 1)[0])
+
+
 def restart_turn(rp, s, cuts: Cuts) -> None:
     """The owner reopens the session (F5, F5f) and types /restart; the main agent runs
     commands/restart.md's procedure, then goes on with the command its subagents were cut in."""
@@ -286,7 +301,13 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
                         + (rp.blocks[-1]["text"] if call.blocked else call.error)[:600])
         return json.loads(call.response.get("stdout") or "{}")
 
-    view = run("prepare", "Prepare the recovery set")
+    # restart.md step 2: a typed /restart's issuer handed the set over between two lines the text
+    # names; prepare runs only without that block (and always in the wake's recovery)
+    view = handed_over(o.text, o.hook_out) if cron is None else None
+    from .drivers.close import fact
+    fact(rp, "restart set", {"handed_over": view is not None})
+    if view is None:
+        view = run("prepare", "Prepare the recovery set")
     pending = [c for c in view.get("candidates") or [] if c.get("status") == "pending"]
     if not pending:
         raise Stuck(f"prepare found no pending candidate: {json.dumps(view)[:600]}")

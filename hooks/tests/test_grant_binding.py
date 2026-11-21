@@ -275,6 +275,8 @@ PLAIN_TMP = "/tmp/plain-p14-message.txt"
 def _decided(result: tuple, path: str) -> tuple:
     """A decision with its target spelled <T>, to compare the decisions on two targets."""
     code, err = result
+    err = "".join(line for line in err.splitlines(True)  # the note names the caller's own (per-agent) directory
+                  if not line.startswith("tool-policy.v1 scratch: your own scratch directory is "))
     return code, err.replace(path, "<T>")
 
 

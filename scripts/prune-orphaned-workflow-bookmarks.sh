@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # scripts/prune-orphaned-workflow-bookmarks.sh
 #
-# Purpose: report (and, only when explicitly asked, delete) root-level
-# workflow-<session-id>.json bookmark files whose owning session no longer
+# Purpose: report (and, only when explicitly asked, delete) the project's
+# .claude/workflow-<session-id>.json bookmarks (hooks/prompt-workflow.py
+# writes them under the project root: CLAUDE_PROJECT_DIR, else the cwd) whose owning session no longer
 # exists anywhere. A bookmark is a deletion candidate ONLY when BOTH hold:
 #   1. no transcript for its session id exists under ANY account directory
 #      (checking fewer than all of them has already produced a false
@@ -23,14 +24,13 @@
 #
 # Exit codes:
 #   0  success (report printed, or delete completed with no errors)
-#   1  environment error (not a git repo, or no account directories found —
+#   1  environment error (no project .claude directory, or no account directories found —
 #      an empty account set can never prove a bookmark orphaned, so this is
 #      a hard failure, not treated as "everything is an orphan")
 #   2  invalid arguments
 #
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'EOF'
@@ -42,7 +42,8 @@ Usage:
 
 Default mode reports only; nothing is deleted without --delete.
 
-A workflow-<session-id>.json file at the repo root is a deletion candidate
+A <project>/.claude/workflow-<session-id>.json file (project: CLAUDE_PROJECT_DIR, else the cwd)
+is a deletion candidate
 ONLY when BOTH hold:
   - no transcript for <session-id> exists under ANY account directory
     (<accounts-dir>/*/claude/projects/<project-dirname>/<session-id>.jsonl)
@@ -50,13 +51,11 @@ ONLY when BOTH hold:
 
 Environment overrides:
   WORKFLOW_PRUNE_ACCOUNTS_DIR     <accounts-dir>; no default (unset = no account scan: refuses)
-  WORKFLOW_PRUNE_PROJECT_DIRNAME  default: the harness home's realpath with every character
-                                  other than ASCII letters and digits turned into "-"
   WORKFLOW_PRUNE_MIN_AGE_DAYS     default: 14
 
 Exit codes:
   0  success
-  1  environment error (not a git repo, or no account directories found)
+  1  environment error (no project .claude directory, or no account directories found)
   2  invalid arguments
 EOF
 }
@@ -79,14 +78,14 @@ case "$MIN_AGE_DAYS" in
   ''|*[!0-9]*) echo "Error: --min-age-days / WORKFLOW_PRUNE_MIN_AGE_DAYS must be a non-negative integer (got: $MIN_AGE_DAYS)" >&2; exit 2 ;;
 esac
 
-REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null)" || {
-  echo "Error: $SCRIPT_DIR is not inside a git repository" >&2
+# The project root as the writing hook finds it, and Claude Code's transcript folder name for it.
+PROJECT_DIR="$(cd "${CLAUDE_PROJECT_DIR:-$PWD}" && pwd -P)" && REPO_ROOT="$(cd "$PROJECT_DIR/.claude" 2>/dev/null && pwd -P)" || {
+  echo "Error: no .claude directory under the project root ${CLAUDE_PROJECT_DIR:-$PWD}" >&2
   exit 1
 }
 
 ACCOUNTS_DIR="${WORKFLOW_PRUNE_ACCOUNTS_DIR:-}"
-PROJECT_DIRNAME="${WORKFLOW_PRUNE_PROJECT_DIRNAME:-}"
-[ -n "$PROJECT_DIRNAME" ] || PROJECT_DIRNAME="$(cd "$SCRIPT_DIR/.." && pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+PROJECT_DIRNAME="$(printf '%s' "$PROJECT_DIR" | sed 's/[^A-Za-z0-9]/-/g')"
 
 ACCOUNT_NAMES=()
 # An empty ACCOUNTS_DIR must never expand to "/*/" (the filesystem root).
@@ -117,7 +116,7 @@ CANDIDATES=()
 echo "Accounts checked (${#ACCOUNT_NAMES[@]}): ${ACCOUNT_NAMES[*]}"
 echo "Project dirname: $PROJECT_DIRNAME"
 echo "Minimum age for a deletion candidate: ${MIN_AGE_DAYS} day(s)"
-echo "Repo root: $REPO_ROOT"
+echo "Bookmark directory: $REPO_ROOT"
 echo ""
 
 shopt -s nullglob
@@ -185,11 +184,10 @@ for f in "${CANDIDATES[@]}"; do
   real="$(realpath -e "$f" 2>/dev/null)" || { echo "SKIP (vanished before delete): $base" >&2; SKIPPED_COUNT=$((SKIPPED_COUNT + 1)); continue; }
   case "$real" in
     "$REPO_ROOT"/*) ;;
-    *) echo "SKIP (resolves outside repo root, refusing): $base" >&2; SKIPPED_COUNT=$((SKIPPED_COUNT + 1)); continue ;;
+    *) echo "SKIP (resolves outside the bookmark directory, refusing): $base" >&2; SKIPPED_COUNT=$((SKIPPED_COUNT + 1)); continue ;;
   esac
 
-  rel="${real#"$REPO_ROOT"/}"
-  if git -C "$REPO_ROOT" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+  if git -C "$REPO_ROOT" ls-files --error-unmatch -- "$real" >/dev/null 2>&1; then
     echo "SKIP (git-tracked, refusing to delete): $base" >&2
     SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
     continue

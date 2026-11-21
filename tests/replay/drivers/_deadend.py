@@ -12,9 +12,11 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
 
   do-report       Step 5's Write of the do-report is not made before the Stop: the Stop gate (P5)
                   refuses the Stop; the main agent's next action is that Write, then it stops again.
-  do-report-ask   as do-report, and between the refused Stop and the Write the main agent asks one
-                  AskUserQuestion and stops twice after the answer (D23: neither the answer nor
-                  stopping again releases the gate, so both Stops are refused too).
+  do-report-ask   as do-report, and between the refused Stop and the Write the main agent ends twice
+                  on a REFUSED: line naming Step 5 with no call a hook refused (neither releases the gate,
+                  so both Stops are refused too; nobody is asked since 2026-11-19).
+  step-refused    Step 2's own call (a dispatch, which /do runs without) is refused by a hook: the turn ends on a REFUSED: line naming Step 2 (the
+                  Stop lets it end); a Stop on other text while the step is open is refused; the step goes on.
   do-dispatch     Step 2's work is first handed to a subagent: /do runs without subagents, so the
                   dispatch is refused; the main agent's next action does Step 2 itself.
   todo-canonical  the first TodoWrite carries the canonical list with one step's text changed: refused;
@@ -116,16 +118,11 @@ import shlex
 import subprocess
 import time
 
+from .. import hookrun
 from .do import DoTurn
 
 PIPELINE = "deadend"
 COST = 60
-
-QUESTION = {"questions": [{"question": "Should the do-report describe the TypeError change as a fix or as a feature?",
-                           "header": "do-report", "multiSelect": False,
-                           "options": [{"label": "fix (Recommended)", "description": "toy.add misbehaved on non-numbers"},
-                                       {"label": "feature", "description": "a new argument check"}]}]}
-
 
 class Turn(DoTurn):
     """A /do turn with one departure (the case); everything else as drivers/do.py plays it."""
@@ -182,6 +179,22 @@ class Turn(DoTurn):
                                 "hooks": [h["hook"] for h in (d.pre.blocks if d.pre else [])]})
         super().step2()
 
+    def step_refused(self) -> None:
+        """Step 2's own call refused by a hook: the turn ends on its REFUSED: line, which the Stop lets through; the
+        step stays open, and a Stop on any other text while it is open is refused. The owner's next prompt resumes
+        it (played here as the same turn going on: the replay types no prompt, which would end /do's consent)."""
+        o = self.o
+        step = o.todos[o.current()]["content"]
+        call = o.s.dispatch("general-purpose", "Make toy.add raise TypeError naming a non-number argument.",
+                            description="Change toy.add", label=self.label("Step 2 call refused by a hook"))
+        self.rounds.append({"label": call.label, "blocked": call.blocked,
+                            "hooks": [h["hook"] for h in (call.pre.blocks if call.pre else [])]})
+        output = "\n".join(hookrun.refusal(b) for b in (call.pre.blocks if call.pre else []))
+        for lab, text in (("/do Stop on the step's refusal", f"REFUSED: {step}: the Agent call was refused:\n{output}"),
+                          ("/do Stop with the step open", "Picked Step 2 up again.")):
+            ev = o.s.stop(text, label=lab)
+            self.rounds.append({"label": lab, "blocked": ev.still_blocked, "hooks": [h["hook"] for h in ev.blocks]})
+
     def run(self) -> str:
         o = self.o
         self.start()
@@ -194,6 +207,8 @@ class Turn(DoTurn):
                 bad[i + 2]["status"] = "in_progress"
                 self.note(o.s.todo(bad, label=self.label("TodoWrite Step 1 and Step 2 done at once")))
             o.advance(label=self.label(f"TodoWrite Step {n - 1} done, Step {n} in_progress"))
+            if n == 2 and self.case == "step-refused":
+                self.step_refused()
             fn()
         o.advance(label=self.label("TodoWrite Step 5 done"))
         text = f"/do {self.tid} done: toy.add rejects non-numbers; do-report {self.report_rel}. Next: /close {self.tid}"
@@ -201,10 +216,11 @@ class Turn(DoTurn):
         self.rounds.append({"label": "/do Stop", "blocked": ev.still_blocked, "hooks": [h["hook"] for h in ev.blocks]})
         if self.withheld:
             if self.case == "do-report-ask":
-                o.s.tool("AskUserQuestion", QUESTION, label=self.label("AskUserQuestion after the refused Stop"))
-                for n in (1, 2):  # the answer, and stopping again and again, release nothing
-                    lab = f"/do Stop after the answer ({n})"
-                    ev = o.s.stop("Stopping after the answer.", label=lab)
+                # nobody is asked (2026-11-19); a REFUSED: line with no call a hook refused, and stopping on it
+                # again and again, release nothing (stop-command-gate.py step_refused_end reads the record)
+                for n in (1, 2):
+                    lab = f"/do Stop after an unrecorded refusal ({n})"
+                    ev = o.s.stop("REFUSED: Step 5: Write do-report: the Write was refused.", label=lab)
                     self.rounds.append({"label": lab, "blocked": ev.still_blocked,
                                         "hooks": [h["hook"] for h in ev.blocks]})
             fn, a, k, label = self.withheld
@@ -288,6 +304,27 @@ def _plain(rp, case: str) -> None:
             d = s.dispatch("dev", block(True), description="Write a note", body=body, result=forged,
                            on_stop_block=again, stop_rounds=3, label="main Agent(dev) forged ESCALATION_ACK")
             rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
+    elif case == "dispatch-writes":
+        # tool-policy's dispatch check (_check_dispatch_writes): a dispatch declaring a file its subagent's
+        # role may not write (QA's rows deny tests/) is refused, naming the file and the role; the main
+        # agent's next call declares the same file for a role that may write it (BA), whose subagent writes it.
+        sid, note_rel = "20990101-000001", "tests/review-20990101-000001.md"
+
+        def declaring(role: str) -> str:
+            doc = {"task_id": sid, "lane": None, "lane_set": None, "role": role, "pipeline": "dev",
+                   "profile": "singular", "dispatched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                   "artifacts": [{"kind": "markdown", "path": note_rel, "identity_anchor": f"task {sid}"}]}
+            return (f"Problem: write {note_rel} naming `task {sid}` once you have read toy/__init__.py.\n"
+                    "DO NOT: modify any other file.\n" '<obligation v="1">' + json.dumps(doc) + "</obligation>")
+
+        def body(sub):
+            sub.read(path, label="agent:ba Read")
+            sub.write(os.path.join(project, note_rel), f"# Review\n\ntask {sid}: toy.add returns a + b.\n",
+                      label=f"agent:ba Write {note_rel}")
+        note(s.dispatch("qa", declaring("qa"), description="Write a review note", result="Wrote the note.",
+                        label="main Agent(qa) declaring a file QA may not write"))
+        note(s.dispatch("ba", declaring("ba"), description="Write a review note", body=body,
+                        result="Wrote the note.", label="main Agent(ba) declaring the same file"))
     elif case in ("codex", "cp-pending"):
         sid = "20990101-000001"
         run = "source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/"
@@ -577,10 +614,10 @@ def run(rp) -> None:
         return _qa_declared(rp)
     if case == "ask-first":
         return _ask_first(rp)
-    if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
+    if case in ("bg-dispatch", "dispatch-writes", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
                 "qa-provenance"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
-                    "checklist-lock"):
+                    "checklist-lock", "step-refused"):
         raise ValueError(f"unknown case {case!r}")
     Turn(rp, case).run()

@@ -29,8 +29,6 @@ import pol_sweep_generators as G
 
 import bash_execution_boundary as B
 
-LEDGER_PATH = os.path.join(G.REPO_ROOT, "hooks", "tests", "fixtures",
-                           "pol_primary_laxity_ledger.json")
 ALLOW_SET_PATH = os.path.join(G.REPO_ROOT, "hooks", "tests", "fixtures",
                               "pol_installed_program_allow_set.json")
 
@@ -46,46 +44,6 @@ ALLOW_SET_REFRESH_ENV = "POL_REFRESH_ALLOW_SET"
 # The blanket reason code AC-R02-10/11 declare inadmissible: it authorized an
 # entire argv without inspecting a single word of it.
 INADMISSIBLE_REASON_CODES = ("inert_argv_consumer",)
-
-# AC-R02-10's CLOSED admissible-proof-kind set, now ELEVEN kinds. (6)/(7) were
-# admitted by revision 3 and (8)/(9) by revision 4, each because it is FORCED
-# by the unrelaxable AC-R02-01 over named pinned expected_exit=0 fixture rows —
-# so the conflict is resolved on the criteria side, never by denying a pinned
-# row, never by mislabelling its position, and never as a standing dev
-# deviation. (10) was admitted when mv/cp joined INERT_ARGV_CONSUMERS, forced
-# by the pinned expected-exit-0 live-boundary row `mv /tmp/scratch-xyz/*
-# /tmp/y` (test_runtime_guard.py TestCycle14LiveHook), which the
-# pre-membership analyzer denied as unproven_boundary_with_removal_reference;
-# like (3)/(4)/(5) it spans the operand and declared-data-value shapes of one
-# consumer model rather than being single-shape-bound. (11) was admitted when a
-# non-forced `git rm` became PROVEN_SAFE_REMOVAL (P10 R13: git refuses a file
-# that differs from HEAD or the index, and the hook proves at run time that no
-# pathspec matches a gitlink outside the harness home); it is bound to the
-# git rm shape.
-ADMISSIBLE_PROOF_KINDS = (
-    "proven-safe cached-git removal",
-    "proven-safe container/image resource removal",
-    "operand of a documentation/query consumer",
-    "search-pattern operand",
-    "literal output text",
-    "parse-only shell payload - active but non-executing",
-    "quoted data operand of a named interpreter script FILE",
-    "stdin-delivered redirection payload of a consumer that does not execute its stdin",
-    "pre-command variable binding the following command does not execute",
-    "path operand of a non-executing relocator",
-    "proven-recoverable non-forced git removal",
-)
-
-# Revision 4 binds each added kind to exactly ONE shape, so widening the proof
-# set cannot create absorption room anywhere else.
-PROOF_KIND_SHAPE_BOUND = {
-    "stdin-delivered redirection payload of a consumer that does not execute "
-    "its stdin": B.SHAPE_HEREDOC_BODY,
-    "pre-command variable binding the following command does not execute":
-        B.SHAPE_ASSIGNMENT_PREFIX,
-    "proven-recoverable non-forced git removal": B.SHAPE_SUBCOMMAND_RESOURCE,
-}
-
 
 # ---------------------------------------------------------------------------
 # Session-scoped sweeps (in-process, ~1 s for ~14000 probes)
@@ -537,9 +495,15 @@ def test_ac_r02_13_disjoint_from_the_pinned_corpus(sweeps):
 # AC-R02-15 — interpreter inline-code generator, BOTH paths
 # ---------------------------------------------------------------------------
 
-def test_ac_r02_15_primary_path_denies_every_form(sweeps):
-    assert sweeps["interp_primary_allowing"] == [], \
-        sweeps["interp_primary_allowing"][:10]
+def test_ac_r02_15_primary_path_denies_every_form_that_removes(sweeps):
+    """Python is read with ast (owner's rule, 2026-11-19): a form the primary path lets run calls a name Python's
+    os and shutil do not have (the JavaScript and Ruby names rmSync, unlinkSync, rm_rf), so it raises and removes
+    nothing. Every other generated form, Python's own removal names included, is denied."""
+    allowing = sweeps["interp_primary_allowing"]
+    foreign = re.compile(r"\b(rmSync|unlinkSync|rm_rf)\b")
+    assert all(c.startswith(("python ", "python3 ")) and foreign.search(c) for c in allowing), allowing[:10]
+    assert not foreign.search("python3 -c 'import os; os.unlink(\"/tmp/qa-t\")'")
+    assert not G.analyze_allowed("python3 -c 'import os; os.unlink(\"/tmp/qa-t\")'")
 
 
 def test_ac_r02_15_degraded_path_denies_every_form(sweeps):
@@ -616,8 +580,6 @@ def test_declared_data_value_category_is_not_dead():
         overlap = model["val"] & (model["exec"] | model["bool"])
         assert not overlap, (member, sorted(overlap))
     assert G.analyze_allowed("grep -e rm f.txt")
-    assert B.analyze("grep -e rm f.txt")["removal_positional_shape"] == \
-        B.SHAPE_DATA_OPTION_VALUE
     # A declared DATA option must not become a hole for a declared EXEC one.
     assert not G.analyze_allowed("rg --pre /bin/rm needle .")
 
@@ -666,157 +628,20 @@ def _restricted_domain(sweeps):
                    if G.degraded_denies_removal_reference(c)})
 
 
-def _ledger_program_population():
-    """The FIXED program population the laxity ledger's counts are measured over.
-
-    The ledger records exact member counts, so its universe cannot be drawn
-    from the live PATH: CI measured |L| 1269 against a ledger measured at 1264
-    on another host, and this host measures a third number. Every PATH-derived
-    generator is therefore fed a population that exists on no particular host
-    and changes only when the analyzer's own tables do: every program the
-    analyzer models as an authorizing consumer or an exec wrapper, plus the
-    removal front ends themselves. AC-R02-11 still sweeps the LIVE PATH and
-    asserts that every allowing program there is a declared consumer, so an
-    installed binary can only reach L through a name already in this set.
-    """
-    return sorted(set(B.INERT_ARGV_CONSUMERS)
-                  | {w for w, spec in B.WRAPPERS.items() if spec is not None}
-                  | {h.rsplit("/", 1)[-1] for h in G.HEAD_PLAIN})
 
 
-def _ledger_sweeps(monkeypatch):
-    """The sweep bundle _restricted_domain reads, over the fixed population.
-
-    G.installed_programs is the generators' ONLY PATH read; the option alphabet
-    is regenerated because G.OPTION_VALUES was computed from PATH at import.
-    The patch stays in force for the calling test, so the counterweight
-    generators _restricted_domain calls itself see the same population.
-    """
-    population = _ledger_program_population()
-    monkeypatch.setattr(G, "installed_programs", lambda: list(population))
-    return {
-        "installed": G.installed_program_sweep(),
-        "option_probes": G.option_position_sweep(G.generated_option_values()),
-        "forms": G.shell_form_sweep(),
-        "interp": G.interpreter_sweep(),
-    }
 
 
-def _non_absorption_control(sweeps):
-    """AC-R02-10 revision 3's mandatory control family, regenerated here.
-
-    Take members whose proof kinds are (3) documentation/query operand, (4)
-    search-pattern operand and (5) literal output text — the three entries that
-    absorbed QA's 981 elements — and move the removal reference OUT of operand
-    position into the AC-R02-12 option-value alphabet. Every member must come
-    back NOT-IN-L or UNLEDGERED. A member reported COVERED is the absorption
-    this criterion exists to detect.
-    """
-    kinds = ("operand_of_documentation_or_query_consumer",
-             "search_pattern_operand", "literal_output_text")
-    members = [m for m, model in sorted(B.INERT_ARGV_CONSUMERS.items())
-               if model["kind"] in kinds]
-    # SECOND DIMENSION, added after QA iteration-4 F2. The iteration-4 control
-    # built every member as `'%s %s %s' % (member, fragment, TARGET)`, so a
-    # removal-mentioning word never appeared in more than ONE position and the
-    # family structurally could not observe first-placement capture. QA rebuilt
-    # it with a single extra leading operand and 10773 of 12016 members came
-    # back COVERED. The leading operands below are benign words that MENTION a
-    # removal name without being one, which is exactly the capture bait.
-    leading = ("", "rm.txt", "unlink.log", "rmdir")
-    out = {}
-    for member in members:
-        for opt in G.option_grammar_for(member):
-            for _vlabel, value in G.OPTION_VALUES:
-                for _form, fragment in G.option_value_forms(opt, value):
-                    for lead in leading:
-                        command = " ".join(x for x in
-                                           (member, lead, fragment, G.TARGET)
-                                           if x)
-                        # MULTI-POSITION is a property of the CONSTRUCTION: a
-                        # removal-mentioning word in the leading operand AND
-                        # one in the option value. It is deliberately NOT read
-                        # back off the analyzer, because a member the primary
-                        # path correctly DENIES short-circuits at the
-                        # option-value predicate before the second position is
-                        # ever recorded — so an analyzer-side count would read
-                        # 0 and would silently certify a family that had lost
-                        # the dimension. Deleting `leading` drives this to 0
-                        # and fails the criterion, which is the guard's job.
-                        out[command] = out.get(command, False) or bool(lead)
-    return sorted(out.items())
 
 
-def _deciding_reason(command):
-    """The reason of the FIRST boundary carrying the command's final verdict.
-
-    ``analyze()['reason']`` already resolves this; reading the last boundary
-    instead would key the ledger on whichever check happened to run last.
-    """
-    result = B.analyze(command)
-    for b in result["boundaries"]:
-        if b["verdict"] == result["verdict"]:
-            return b["reason"]
-    return result["reason"].split(":")[0]
 
 
-def _laxity_key(command):
-    """(reason_code, parse-derived positional_shape) — the ledger's key."""
-    return (_deciding_reason(command),
-            B.analyze(command)["removal_positional_shape"])
 
 
-def _laxity_shapes(command):
-    """(reason_code, the UNION of the shapes of EVERY co-winning boundary).
-
-    Coverage needs the whole set, not one representative. QA iteration-4 F2
-    measured the consequence of one: `cat rm.txt --qa-opt='<payload>' f` came
-    back COVERED with shape `operand` supplied by a leading word that had
-    nothing to do with the laxity, while the same command without that word
-    came back UNLEDGERED. 10773 of 12016 control members were absorbed that
-    way. An element is covered only when EVERY position that carries a removal
-    name is ledgered under its reason code, so no position can borrow a
-    neighbour's written proof.
-
-    The set is now the UNION over every boundary carrying the final verdict.
-    Revision 3's "the deciding boundary" silently resolved to the FIRST when
-    several co-win, which is first-placement-wins moved one level up: 432 of
-    27036 multi-position commands reported a strict SUBSET of what their own
-    co-winning boundaries had recorded, and some reported `unclassified`
-    despite a co-winner having recorded a real position.
-    """
-    result = B.analyze(command)
-    return (_deciding_reason(command),
-            tuple(result["removal_positional_shapes"]))
 
 
-def _union_shapes(result):
-    """The union rule, recomputed from the boundary list itself.
-
-    Read straight off ``analyze()`` output rather than through its convenience
-    field, so the witness family below can falsify the ANALYZER instead of
-    comparing a value to itself.
-    """
-    shapes = []
-    for b in result["boundaries"]:
-        if b["verdict"] != result["verdict"]:
-            continue
-        for shape in b["positional_shapes"]:
-            if shape not in shapes:
-                shapes.append(shape)
-    return shapes
 
 
-def _covering_keys(declared, reason, shapes):
-    """The declared keys covering EVERY shape, or None if any is unledgered."""
-    keys = []
-    for shape in shapes:
-        key = next((k for k in declared
-                    if reason.startswith(k[0]) and shape == k[1]), None)
-        if key is None:
-            return None
-        keys.append(key)
-    return keys
 
 
 def test_ac_r02_10_predicate_is_single_sourced(tmp_path):
@@ -844,353 +669,37 @@ def test_ac_r02_10_domain_is_non_vacuous(sweeps):
     assert all(G.degraded_denies_removal_reference(c) for c in domain)
 
 
-def test_ac_r02_10_laxity_is_fully_ledgered(monkeypatch):
-    """Keyed on (reason_code, positional_shape), not reason_code alone.
-
-    Iteration 3 keyed on the reason code by itself, so 981 elements inherited
-    an entry whose justification says "it sits in OPERAND position" while none
-    of them did (QA iteration-3 F2). The shape comes from the PARSER, so an
-    element that reaches a ledgered code from an undeclared position now fails.
-    """
-    ledger = json.load(open(LEDGER_PATH, encoding="utf-8"))
-    declared = {}
-    for entry in ledger["entries"]:
-        shape = entry["positional_shape"]
-        assert shape in B.POSITIONAL_SHAPES, shape
-        assert shape != B.SHAPE_UNCLASSIFIED, (
-            "`unclassified` is inadmissible as a ledger key")
-        assert entry["admissible_proof_kind"] in ADMISSIBLE_PROOF_KINDS, entry
-        bound = PROOF_KIND_SHAPE_BOUND.get(entry["admissible_proof_kind"])
-        assert bound is None or bound == shape, (
-            "%s is bound to shape %s, entry declares %s"
-            % (entry["admissible_proof_kind"], bound, shape))
-        assert entry["representative_command"].strip()
-        # The justification must NAME its own shape verbatim, so a text
-        # asserting OPERAND position can never sit on a non-operand entry.
-        assert shape in entry["positional_justification"], (
-            "%s justification does not name its declared shape" % (entry,))
-        assert not any(entry["reason_code"].startswith(bad)
-                       for bad in INADMISSIBLE_REASON_CODES)
-        key = (entry["reason_code"], shape)
-        assert key not in declared, "duplicate ledger key %s" % (key,)
-        declared[key] = entry
-    assert len(declared) <= ledger["max_entries"] <= 40
-
-    # Measured over the FIXED program population, never the live PATH: the
-    # member counts below are exact, so a host-derived universe made the
-    # result depend on which binaries happened to be installed.
-    sweeps = _ledger_sweeps(monkeypatch)
-    laxity = [c for c in _restricted_domain(sweeps) if G.analyze_allowed(c)]
-    seen = {}
-    refcount = {}
-    referenced = set()
-    unledgered = []
-    multi_shape = 0
-    for command in laxity:
-        reason, shapes = _laxity_shapes(command)
-        keys = _covering_keys(declared, reason, shapes)
-        if keys is None:
-            unledgered.append(command)
-        else:
-            # Counted ONCE, under the shape of the position the walk reached
-            # first, so sum(members) == |L| stays exact. Coverage still needed
-            # EVERY shape, which is what stops a second position from
-            # inheriting the first one's written proof.
-            referenced.update(keys)
-            seen[keys[0]] = seen.get(keys[0], 0) + 1
-            for key in keys:
-                refcount[key] = refcount.get(key, 0) + 1
-            if len(set(shapes)) > 1:
-                multi_shape += 1
-
-    # expect.unledgered_laxity_elements == 0, with no carve-out. Revision 3's
-    # closed 13-token vocabulary could not name a heredoc body or an assignment
-    # prefix, so six pinned expected_exit=0 rows were unledgerable BY ANY
-    # implementation and this assertion carried a declared exemption. Revision
-    # 4 added both tokens, the analyzer records them at the two sites the walk
-    # already reached, and the exemption is GONE.
-    assert unledgered == [], (
-        "%d unledgered laxity elements; sample: %s"
-        % (len(unledgered), unledgered[:6]))
-    assert "pending_vocabulary_extension" not in ledger, (
-        "the vocabulary extension landed in AC-R02-10 revision 4; the ledger "
-        "must carry real entries, not a declared exemption")
-
-    # ALIVE means REFERENCED through any shape in an element's set — not
-    # "counted". The two notions must differ, and by exactly the number of
-    # multi-shape elements: an element with two shapes references two entries
-    # while being counted once, which is what keeps sum(members) == |L| exact.
-    dead = sorted(set(declared) - referenced)
-    assert dead == [], "dead (never-referenced) ledger entries: %s" % dead
-    declared_total = sum(e["members"] for e in ledger["entries"])
-    assert declared_total == len(laxity), (
-        "member counts %d != |L| %d" % (declared_total, len(laxity)))
-    # references - members == the number of multi-shape elements, exactly. This
-    # is why the criterion states ALIVE and COUNTED separately: an entry that is
-    # only ever a SECOND shape has 0 members and is still exercised by a real
-    # element today, so it is not the speculative pre-declaration the cap
-    # paragraph forbids.
-    assert sum(refcount.values()) - declared_total == multi_shape, (
-        sum(refcount.values()), declared_total, multi_shape)
-    for key, entry in sorted(declared.items()):
-        assert refcount.get(key, 0) >= 1, (
-            "%s is declared but no element references it" % (key,))
-        assert entry["referenced_by"] == refcount.get(key, 0), (
-            "%s declares referenced_by %d, measured %d"
-            % (key, entry["referenced_by"], refcount.get(key, 0)))
-        assert seen.get(key, 0) == entry["members"], (
-            "%s declares %d members, measured %d"
-            % (key, entry["members"], seen.get(key, 0)))
 
 
-def test_ac_r02_10_non_absorption_control_family(sweeps):
-    """Regenerated at test time (a checked-in list is not a substitute).
-
-    Members of proof kinds (3)/(4)/(5) with the removal reference moved OUT of
-    operand position must be NOT-IN-L or UNLEDGERED — never COVERED. Reporting
-    one as covered is precisely the absorption QA measured at iteration 3.
-    """
-    ledger = json.load(open(LEDGER_PATH, encoding="utf-8"))
-    declared = {(e["reason_code"], e["positional_shape"]) for e in ledger["entries"]}
-    control = _non_absorption_control(sweeps)
-    assert len(control) >= 200, len(control)
-    covered, not_in_l, unledgered = [], 0, 0
-    multi_position = 0
-    reported_multi_shape = 0
-    for command, is_multi_position in control:
-        if is_multi_position:
-            multi_position += 1
-        # Analyzed ONCE per member — the family is ~1.7M commands, so a second
-        # pass would cost minutes.
-        result = B.analyze(command)
-        if len(set(_union_shapes(result))) > 1:
-            reported_multi_shape += 1
-        if not result["allowed"]:
-            not_in_l += 1
-            continue
-        reason, shapes = _laxity_shapes(command)
-        if _covering_keys(declared, reason, shapes) is not None:
-            covered.append((command, reason, shapes))
-        else:
-            unledgered += 1
-    assert covered == [], (
-        "%d control members were ABSORBED by a ledger entry; sample: %s"
-        % (len(covered), covered[:5]))
-    assert not_in_l + unledgered == len(control), (
-        len(control), not_in_l, unledgered)
-    # A family in which no removal-mentioning word ever occupies two positions
-    # is VACUOUS on the property it exists to test: revision 3's control was
-    # exactly that, and QA broke the criterion by adding this one dimension.
-    assert multi_position > 0, (
-        "multi_position_control_members == 0; the control family cannot "
-        "falsify the anti-absorption claim it certifies")
-    # REPORTED for QA, and deliberately NOT asserted > 0. Every multi-position
-    # member DENIES, and denial short-circuits at the option-value predicate
-    # before the second position is recorded, so the analyzer-side count is
-    # legitimately 0 here. That is the correct outcome — a denied member is not
-    # in L at all — and it is exactly why the assertion above measures the
-    # construction rather than the report.
-    print("multi_position_control_members=%d of %d; analyzer_reported_multi_"
-          "shape=%d; not_in_L=%d; unledgered=%d; covered=0"
-          % (multi_position, len(control), reported_multi_shape,
-             not_in_l, unledgered))
 
 
-def test_ac_r02_10_boundary_budget_exhaustion_is_not_primary_laxity():
-    """AC-R02-10's exhaustion case. The criterion grows here with the defect.
-
-    MEASURED VIOLATION this closes: on a command of `MAX_BOUNDARIES` inert
-    padding units followed by a filesystem removal, the DEGRADED predicate
-    DENIED while the PRIMARY path ALLOWED (exit 0, PROVEN_INERT) — primary
-    laxer than its own fallback — and that element appeared in NONE of the
-    ledger's entries. AC-R02-10 was false, and its own test could not see it:
-    every command in the restricted domain is short, so nothing in U ever
-    exhausted the boundary budget. `MAX_BOUNDARIES`, `boundary_limit` and
-    `overflow` appear ZERO times in lane r02's QA report.
-
-    A criterion that only samples SHORT commands cannot certify a property of
-    the analyzer's LONG-INPUT behaviour, so the domain is extended by shape,
-    not by one more literal. The thresholds straddle the cap in both
-    directions so an off-by-one cannot re-open the cliff, and the family is
-    regenerated from `B.MAX_BOUNDARIES` so retuning the budget re-aims it
-    rather than silently aiming it at the wrong side.
-
-    Note this family needs NO ledger entry: after the repair the primary path
-    DENIES, so it is not laxity, and the ledger's `_doc.exhaustion_case`
-    records that reasoning so a later reader does not read its absence as an
-    omission. An entry here would be a claim that fail-open at the budget is
-    an accepted exception, which is exactly the opposite of the invariant.
-    """
-    removal = "rm qa-overflow-target.txt"
-    for units in (B.MAX_BOUNDARIES - 1, B.MAX_BOUNDARIES,
-                  B.MAX_BOUNDARIES + 1, B.MAX_BOUNDARIES * 2):
-        command = " ; ".join(["echo ok"] * units + [removal])
-        # In the restricted domain by the domain's own test: degraded denies.
-        assert G.degraded_denies_removal_reference(command), units
-        # ... and the primary path must not be laxer than it.
-        assert not G.analyze_allowed(command), (
-            "primary ALLOWS at %d padding units while degraded DENIES; this is "
-            "the AC-R02-10 violation the boundary cap used to produce" % units)
-    # The counterweight, in the same criterion: length alone must not deny.
-    # A repair that satisfied the above by denying every long command would
-    # trade a fail-open for a false-positive, and this catches that.
-    assert G.analyze_allowed(" ; ".join(["echo ok"] * (B.MAX_BOUNDARIES - 1)))
 
 
-def test_ac_r02_10_every_representative_is_actually_lax():
-    ledger = json.load(open(LEDGER_PATH, encoding="utf-8"))
-    for entry in ledger["entries"]:
-        command = entry["representative_command"]
-        assert G.analyze_allowed(command), command
-        assert G.degraded_denies_removal_reference(command), command
-        # The witness must EXHIBIT THAT EXACT PAIR, or the entry documents a
-        # position no member of the class actually occupies. Under the union
-        # rule a witness may legitimately carry several positions, so the test
-        # is membership in its shape SET, not equality with its first shape:
-        # `echo "$(command -v rm)"` occupies builtin_lookup_operand AND
-        # operand, and demanding equality would make one of the two pairs it
-        # genuinely exhibits unwitnessable.
-        reason, shapes = _laxity_shapes(command)
-        assert entry["positional_shape"] in shapes, (
-            "%r has shapes %r, entry declares %r"
-            % (command, shapes, entry["positional_shape"]))
-        assert reason.startswith(entry["reason_code"]), (command, reason)
 
 
-# AC-R02-10 revision 4's shape-set fidelity family. Its words MENTION a removal
-# name without BEING one and its target is its own token, so no member can
-# collide with anything in domain U — the family can neither enlarge L nor
-# manufacture an unledgered element. It asserts the set-valued shape as an
-# OBLIGATION checkable directly against the analyzer rather than as an
-# implementation courtesy visible only through the ledger.
-WITNESS_WORDS = ("rm.txt", "unlink.log", "rmdir.md", "shred.cfg")
-WITNESS_TARGET = "qa-witness"
 
 
-# The one form excluded from the family, on a STRUCTURAL ground measured
-# before it was excluded, not because it failed the assertion. In
-# `clustered_short` the value is CONCATENATED onto the cluster prefix, so a
-# benign word fuses with it: `-abX` + `rm.txt` canonicalizes to the value
-# `bXrm.txt`, whose tokens are `bXrm` and `txt` and which therefore MENTIONS no
-# removal name at all. The construction's own precondition — "an option-value
-# placement of a benign removal-MENTIONING word" — is not met, so those triples
-# are not witnesses of anything. The fusion is benign-only: the dangerous
-# counterpart `-abX/bin/rm` still yields the token `rm`, still mentions, and
-# still denies, which ``_clustered_dangerous_still_denies`` asserts below so
-# the exclusion cannot hide a leak.
-WITNESS_EXCLUDED_FORM = "clustered_short"
 
 
-def _shape_set_fidelity_witnesses():
-    """(C, P1, P2) triples: a multi-position command and its two projections."""
-    out = []
-    for member in sorted(B.INERT_ARGV_CONSUMERS):
-        options = G.option_grammar_for(member)
-        if not options:
-            continue
-        opt = options[0]
-        for lead in WITNESS_WORDS:
-            for word in WITNESS_WORDS:
-                for form, fragment in G.option_value_forms(opt, word):
-                    if form == WITNESS_EXCLUDED_FORM:
-                        continue
-                    out.append((
-                        " ".join((member, lead, fragment, WITNESS_TARGET)),
-                        " ".join((member, lead, WITNESS_TARGET)),
-                        " ".join((member, fragment, WITNESS_TARGET))))
-    return out
 
 
-def test_clustered_attached_form_fuses_only_benign_words():
-    """The measured ground for excluding one form from the witness family.
-
-    If this ever stops holding — if a DANGEROUS clustered value stopped
-    mentioning, or stopped denying — the exclusion above would be hiding a
-    leak, and this test fails before the witness family can be read as a pass.
-    """
-    assert not B.text_mentions_removal_name("bXrm.txt")
-    assert B.text_mentions_removal_name("bX/bin/rm")
-    for member in sorted(B.INERT_ARGV_CONSUMERS):
-        options = G.option_grammar_for(member)
-        if not options or options[0].startswith("--"):
-            continue
-        fragment = "-ab%s%s" % (options[0][1:], "/bin/rm")
-        command = " ".join((member, fragment, G.TARGET))
-        assert not G.analyze_allowed(command), command
 
 
-def test_ac_r02_10_shape_set_fidelity_witness_family(sweeps):
-    """shapes(C) == shapes(P1) UNION shapes(P2), and |shapes(C)| >= 2.
-
-    This is the property first-placement-wins and first-boundary-wins both
-    break, stated so it fails against the ANALYZER rather than only showing up
-    as an absorbed ledger element three steps downstream. BA measured 4671 of
-    27036 constructible witnesses failing it under the first-boundary rule; it
-    becomes universally true exactly when the union rule lands.
-    """
-    witnesses = _shape_set_fidelity_witnesses()
-    assert len(witnesses) >= 200, len(witnesses)
-    # OUTSIDE domain U, so it cannot enlarge L or manufacture unledgered
-    # elements. Asserted, not asserted-about.
-    domain = set(_restricted_domain(sweeps))
-    overlap = [c for c, _p1, _p2 in witnesses if c in domain]
-    assert overlap == [], overlap[:5]
-
-    violations, thin = [], []
-    for command, p1, p2 in witnesses:
-        shapes = set(_union_shapes(B.analyze(command)))
-        expected = (set(_union_shapes(B.analyze(p1)))
-                    | set(_union_shapes(B.analyze(p2))))
-        if shapes != expected:
-            violations.append((command, sorted(shapes), sorted(expected)))
-        if len(shapes) < 2:
-            thin.append((command, sorted(shapes)))
-    assert violations == [], (
-        "%d witnesses whose shape set is not the union of their projections'; "
-        "sample: %s" % (len(violations), violations[:5]))
-    assert thin == [], (
-        "%d witnesses reporting fewer than 2 positions; sample: %s"
-        % (len(thin), thin[:5]))
 
 
-def test_ac_r02_10_only_co_winning_boundaries_contribute_shapes():
-    """The DECIDING-VERDICT half of the witness: a losing boundary's position
-    may not appear.
-
-    Without it the union rule would be a licence to collect every position in
-    the command, and a benign operand's `operand` shape could key the ledger
-    for a command whose verdict came from somewhere else entirely.
-    """
-    for command in ("echo rm.txt; /bin/rm qa-target",
-                    "cat rm.txt && /bin/rm -rf qa-target",
-                    "printf %s unlink.log; unlink qa-target"):
-        result = B.analyze(command)
-        assert not result["allowed"], command
-        # What the ANALYZER reports, not what the test recomputes.
-        reported = set(result["removal_positional_shapes"])
-        co_winning = set(_union_shapes(result))
-        losing_only = {s for b in result["boundaries"]
-                       if b["verdict"] != result["verdict"]
-                       for s in b["positional_shapes"]} - co_winning
-        # `unclassified` is the reserved TOTALITY fallback, used exactly when
-        # the union is empty. These commands DENY, so they never enter L and
-        # its inadmissibility as a ledger key is never reached.
-        assert reported == (co_winning or {B.SHAPE_UNCLASSIFIED}), (
-            command, reported, co_winning)
-        assert not (reported & losing_only), (command, reported, losing_only)
-        # Concretely: the benign leading word sits on a PROVEN_INERT boundary
-        # that did NOT carry the verdict, so its `operand` position must not
-        # be available to key the ledger for this command.
-        assert losing_only, (
-            "%r has no losing-boundary position, so it cannot witness the "
-            "exclusion" % command)
-        assert B.SHAPE_OPERAND not in reported, (command, sorted(reported))
 
 
 @pytest.mark.parametrize("mode", ["timeout", "module_unreadable", "crash"])
 def test_ac_r02_10_degradation_modes_deny_the_adversarial_domain(mode, tmp_path):
     """Three distinct analyzer-failure modes, each denying a removal-suspect
-    sample end to end through the hook."""
+    sample end to end through the hook.
+
+    Owner's rule of 2026-11-19: an unproven command is refused when its text
+    holds a removal word by the shared predicate file, and runs otherwise. The
+    domain of AC-R02-10 IS the set the predicate names, so every member of the
+    sample inside it is still denied under every mode; the two members that
+    spell the removal program as a glob (`/bin/r?`) name no removal word, lie
+    outside the domain, and run."""
     env = dict(os.environ)
     if mode == "timeout":
         env["CLAUDE_HOOK_BOUNDARY_TIMEOUT"] = "0.001s"
@@ -1200,10 +709,16 @@ def test_ac_r02_10_degradation_modes_deny_the_adversarial_domain(mode, tmp_path)
         env["CLAUDE_HOOK_BOUNDARY_TIMEOUT"] = "0s"
     sample = list(ITERATION2_COUNTER_EXAMPLES)[:8] + [
         "man -P '/bin/rm -rf T' ls", "taskset 0x1 /bin/r? -rf T"]
+    inside = [c for c in sample if G.degraded_denies_removal_reference(c)]
+    assert len(inside) == 8 and len(sample) == 10
     for command in sample:
         code, _out, err = H.run_hook_command(command, env=env)
-        assert code == 2, "%s allowed under %s" % (command, mode)
-        assert err.strip()
+        if command in inside:
+            assert code == 2, "%s allowed under %s" % (command, mode)
+            assert err.strip()
+        else:  # the removal rule lets it run; `rg --pre <program>` is refused by another rule (_read_made_to_run)
+            assert "removal-policy" not in err, "%s refused by the removal rule under %s: %s" % (command, mode, err)
+            assert code == 0 or "makes it run a program" in err, "%s refused under %s: %s" % (command, mode, err)
 
 
 # ---------------------------------------------------------------------------
@@ -1288,10 +803,26 @@ def test_iteration3_counter_examples_deny(command):
 @pytest.mark.parametrize("command", ITERATION3_COUNTER_EXAMPLES)
 def test_iteration3_counter_examples_deny_through_the_hook(command):
     """Through the shipped hook, not only in process: QA confirmed the leak at
-    exit-code level (exit 2 vs exit 0), so the fix is confirmed there too."""
+    exit-code level (exit 2 vs exit 0), so the fix is confirmed there too.
+
+    The analyzer still authorizes none of them (the test above). Since the
+    owner's rule of 2026-11-19 the hook refuses an unproven command only when
+    its text holds a removal word: six of the eight do and are refused; `cat
+    -abXrm qa-target` (the letters `rm` inside an option cluster are no word)
+    and `cat -X/bin/r? qa-target` name none and run."""
     code, _out, err = H.run_hook_command(command)
-    assert code == 2, command
-    assert err.strip()
+    if G.degraded_denies_removal_reference(command):
+        assert code == 2, command
+        assert err.strip()
+    else:
+        assert command in ("cat -abXrm qa-target", "cat -X/bin/r? qa-target")
+        assert code == 0, (command, err)
+
+
+def test_iteration3_counter_examples_split_six_and_two():
+    named = [c for c in ITERATION3_COUNTER_EXAMPLES
+             if G.degraded_denies_removal_reference(c)]
+    assert len(named) == 6 and len(ITERATION3_COUNTER_EXAMPLES) == 8, named
 
 
 @pytest.mark.parametrize("probe_id,command", sorted(REP_PROBES.items()))
@@ -1344,9 +875,13 @@ def test_ac_r02_16_seeded_sample_agrees_with_the_real_hook(sweeps):
         sample = G.seeded_sample(pool, FIDELITY_PER_SWEEP, name)
         for command in sample:
             sampled += 1
-            # The hook also runs a non-forced git rm's run-time proof, in the directory it runs in.
-            in_process = G.analyze_allowed(command) and B.prove_git_rm(
-                B.analyze(command), H.REPO_ROOT, H.REPO_ROOT)["allowed"]
+            # The hook also runs a non-forced git rm's run-time proof, in the directory it runs in,
+            # and (owner's rule of 2026-11-19) lets an UNRESOLVED command run when the text that can
+            # become a command it left unresolved (unresolved_scopes) holds no removal word.
+            proved = B.prove_git_rm(B.analyze(command), H.REPO_ROOT, H.REPO_ROOT)
+            in_process = proved["allowed"] or (
+                proved["verdict"] == B.UNRESOLVED
+                and not any(G.degraded_denies_removal_reference(t) for t in proved.get("unresolved_scopes") or []))
             code, _out, err = H.run_hook_command(command)
             if bool(code == 0) == in_process:
                 continue

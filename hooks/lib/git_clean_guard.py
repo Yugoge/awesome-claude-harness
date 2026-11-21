@@ -67,21 +67,27 @@ import re
 import sys
 
 try:
-    from lib.shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
+    from lib.shell_parse import BODY_PART_KINDS, DYNAMIC_PART_KINDS, GIT_REDIRECT_ENV_VARS
+    from lib.shell_parse import CWD_BUILTINS, GIT_CONFIG_OPTS, GIT_GLOBAL_VALUE_OPTS, HERE_DOCUMENT_OPS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
 except ImportError:  # run as a script: hooks/lib is on sys.path
-    from shell_parse import GIT_GLOBAL_VALUE_OPTS, LexError, Src, _lex_into, ansi_decode, lex
+    from shell_parse import BODY_PART_KINDS, DYNAMIC_PART_KINDS, GIT_REDIRECT_ENV_VARS
+    from shell_parse import CWD_BUILTINS, GIT_CONFIG_OPTS, GIT_GLOBAL_VALUE_OPTS, HERE_DOCUMENT_OPS, GIT_LOCATION_OPTS, PIPE_OPS, SUBST_OPENERS, LexError, Src, _lex_into, ansi_decode, lex
+try:
+    from . import locations
+except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import locations
 
 # git globals that point the invocation at a DIFFERENT repository / work tree.
-_REDIRECT_FLAGS = frozenset({"-C", "--git-dir", "--work-tree"})
+_REDIRECT_FLAGS = GIT_LOCATION_OPTS
 # Environment assignments that redirect the target.
-_REDIRECT_ENV = frozenset({"GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"})
+_REDIRECT_ENV = frozenset(GIT_REDIRECT_ENV_VARS)
 # `-c key=value` config keys that redirect the work tree. `-c` is config, not
 # the `-C` chdir: `-c clean.requireForce=false` is not a redirect.
 _REDIRECT_CONFIG_KEYS = frozenset({"core.worktree", "core.gitdir"})
 
 # Shell builtins that move the effective working directory.
-_CWD_MUTATORS = frozenset({"cd", "pushd", "popd"})
-_SUBST_MARKERS = ("$(", "<(", ">(", "`")
+_SUBST_MARKERS = SUBST_OPENERS + ("`",)
 
 # Reserved words / decorators that never move the target and take no operand.
 _RESERVED_DECORATORS = frozenset({
@@ -115,9 +121,8 @@ _MAX_EMBED_DEPTH = 3
 _QUOTING_RE = re.compile(r"['\"`\\]")
 _SYNTAX_RE = re.compile(r"['\"`\\$()<>]")
 # Word parts with no static text: an expansion the shell computes at run time.
-_DYNAMIC_PARTS = frozenset({"param", "sub", "arith", "procsub"})
 # Parts that run a command (substitutions), whose bodies are commands too.
-_BODY_PARTS = frozenset({"sub", "procsub", "arith"})
+_BODY_PARTS = BODY_PART_KINDS
 
 
 class _Word:
@@ -170,7 +175,7 @@ def _static_word(word):
     for kind, src, _off in word.segs:
         if kind == "ansi":
             out.append(ansi_decode(src.text))
-        elif kind in _DYNAMIC_PARTS:
+        elif kind in DYNAMIC_PART_KINDS:
             dynamic = True
             if kind in _BODY_PARTS:
                 bodies.append(src.text)
@@ -206,7 +211,7 @@ def _commands(text, info):
         at_start, prev = False, None
         if tok[0] == "R":
             redir = tok[1]
-            if redir.op in ("<<", "<<-"):
+            if redir.op in HERE_DOCUMENT_OPS:
                 # hd holds the body, terminated or (read to the end of the
                 # text) not; a `<<` that ends the text has none: empty stdin.
                 if redir.hd is not None:
@@ -342,7 +347,7 @@ def _git_invocation(words, start, ignore_dry_run=False):
             redirect = True
             i += 1
             continue
-        if tok in ("-c", "--config-env"):
+        if tok in GIT_CONFIG_OPTS:
             if i + 1 < n and _is_redirect_config(words[i + 1].text):
                 redirect = True
             i += 2
@@ -509,7 +514,7 @@ def _cwd_indeterminate(words, info, raw: str) -> bool:
     if any(marker in raw for marker in _SUBST_MARKERS):
         return True
     for word in words:
-        if os.path.basename(word.text) in _CWD_MUTATORS:
+        if os.path.basename(word.text) in CWD_BUILTINS:
             return True
     return False
 
@@ -565,7 +570,6 @@ _SHADOWING_WORDS = frozenset({
     "source", "eval",
 })
 _SHADOWING_NAMES = ("PATH", "BASH_ENV", "ENV")
-_PIPE_OPS = ("|", "|&")
 
 
 def _data_head(words):
@@ -597,14 +601,14 @@ def _writes_a_file(command) -> bool:
             continue  # input, here-document, fd duplication or close
         if target is None or target.dynamic:
             return True
-        if target.text == "/dev/null":
+        if target.text == locations.NULL_DEVICE:
             continue
         return True
     words = command["words"]
     i = _data_head(words)
     if i < len(words) and words[i].text in _FILE_WRITING_DATA_COMMANDS:
         operands = [w for w in words[i + 1:] if not w.text.startswith("-")]
-        if any(w.text != "/dev/null" for w in operands):
+        if any(w.text != locations.NULL_DEVICE for w in operands):
             return True
     return False
 
@@ -646,7 +650,7 @@ def _inert_data_commands(commands, info, raw: str):
     if _is_shadowing(info, commands, inert):
         return frozenset()
     for k, command in enumerate(commands):
-        if command["next_op"] in _PIPE_OPS and k + 1 not in inert:
+        if command["next_op"] in PIPE_OPS and k + 1 not in inert:
             return frozenset()
     if any(_writes_a_file(c) for c in commands):
         for k, command in enumerate(commands):

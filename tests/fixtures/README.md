@@ -2,17 +2,20 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 6
-- **Subdirectories**: 3
-- **Naming convention**: lower
+- **Total files**: 9
+- **Subdirectories**: 4
+- **Naming convention**: kebab
 
 ## Files
 - `canary-tool-policy.v1.json` - JSON config: _fixture, _purpose, _contract, policy_version, default_action
 - `paseo-usage-envelope-20260828.json` - JSON config: _comment, type, message
 - `paseo_cron_vendor_vectors.json` - JSON config: _what, provenance, positive, negative, horizon
+- `permissions-ask-until-20261119.json` - JSON config: _comment, ask
+- `post-commit-lfs-auto-push` - post-commit-lfs-auto-push file
 
 ## Subdirectories
 - `cli/`
+- `cli-request-copies/`
 - `cli-todowrite-oldtodos/`
 - `late_repair_golden/`
 <!-- /AUTO:readme-stats -->

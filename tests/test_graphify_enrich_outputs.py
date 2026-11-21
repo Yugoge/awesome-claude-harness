@@ -24,7 +24,6 @@ from hooks.lib.contract_runtime import validate
 ROOT = Path(__file__).resolve().parent.parent
 ENRICH = ROOT / "scripts" / "graphify-enrich.py"
 QUERY = ROOT / "scripts" / "graphify-query.py"
-REFINE = ROOT / "scripts" / "refine-context.sh"
 
 GRAPH = {
     "nodes": [
@@ -241,18 +240,3 @@ def test_a_malformed_pre_query_is_written_as_failed(tmp_path, monkeypatch):
     assert pre["structural_context"] == {} and pre["ambiguity_hypotheses"] == []
     assert pre["error_detail"].startswith("graphify-prequery.v1: structural_context.import_graph_excerpt.0:")
     assert validate(pre, "graphify-prequery.v1")["ok"]
-
-
-def test_refine_context_stub_passes_the_context_through(tmp_path):
-    text = REFINE.read_text(encoding="utf-8")
-    assert any(line.startswith("# STUB:") for line in text.splitlines())
-    assert os.access(REFINE, os.X_OK)
-    ctx = tmp_path / "context.json"
-    ctx.write_text('{"task_id": "T1"}\n', encoding="utf-8")
-    qa = tmp_path / "qa-report.json"
-    qa.write_text('{"qa": {"refined_context": {"x": 1}}}', encoding="utf-8")
-    proc = subprocess.run(["bash", str(REFINE), str(ctx), str(qa), "2"], capture_output=True, text=True)
-    assert proc.returncode == 0
-    assert proc.stdout == ctx.read_text(encoding="utf-8")
-    proc = subprocess.run(["bash", str(REFINE)], capture_output=True, text=True)
-    assert proc.returncode == 0 and proc.stdout == ""

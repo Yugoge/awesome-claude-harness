@@ -25,9 +25,10 @@ Where an invocation is found:
     only cat, tee or another data reader reads runs just its expansion's
     substitutions, unless the text holds a group, a compound command or an
     `exec` with redirections; one written to a file is data only when every
-    other command of the text is inert and writes nothing (cat, ls, grep, ...),
-    the file may land as data (_is_code_file: no hidden or `hooks` component,
-    not under `~`, absolute only under /tmp), and the here-document is in the
+    other command of the text is inert and writes nothing (cat, ls, grep, cut,
+    cd when every written path is absolute, ...), the file may land as data
+    (_is_code_file: no hidden or `hooks` component, not under `~user`, outside
+    the project and temp roots no `bin`, `sbin` or `etc` one), and the here-document is in the
     tool command itself, not in a `-c` string or substitution);
   - every shell `-c` string, every program option's value (`rg --pre`), and
     what echo or printf print into a pipe a shell reads, each read as a
@@ -60,87 +61,25 @@ import shlex
 import sys
 
 try:
-    from lib import shell_parse
+    from lib import bash_execution_boundary as _beb, bash_read_only, shell_parse
 except ImportError:  # run as a script: hooks/lib is on sys.path
+    import bash_execution_boundary as _beb
+    import bash_read_only
     import shell_parse
+try:
+    from . import locations
+except ImportError:  # loaded outside its package (by path, or from hooks/lib): its own directory holds it
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import locations
 
 # One table each, in the parser.
 GIT_GLOBAL_FLAGS = shell_parse.GIT_GLOBAL_FLAGS
+_JOINING_OPS = shell_parse.AND_OR_OPS + shell_parse.PIPE_OPS  # an operator that joins the next line to this one
+_PYTHON_RE = r'(?:%s)[0-9.]*\Z' % '|'.join(shell_parse.PYTHON_NAMES)
 GIT_GLOBAL_VALUE_OPTS = shell_parse.GIT_GLOBAL_VALUE_OPTS
 LexError, Src, ansi_decode, lex = (shell_parse.LexError, shell_parse.Src,
                                    shell_parse.ansi_decode, shell_parse.lex)
 resolve_long_option = shell_parse.resolve_long_option
-
-
-# ---------------------------------------------------------------------------
-# Segment splitter, for the callers that still read segments of their own
-# ---------------------------------------------------------------------------
-
-
-def _segments(c):
-    """Split on shell separators ; \\n | & && || ` ( ) into command segments."""
-    return [seg for seg, _kind, _in_quote in _segments_with_kind(c)]
-
-
-def _segments_with_kind(c):
-    """(segment_text, kind, in_quote) for each segment of c.
-
-    The split ignores quoting. `(` opens a segment after `$`, `<`, `>` or in
-    command position; a `)` closes only a boundary that was opened. kind is
-    'start', 'separator', or 'subst_close' (opened by the `)` of a substitution
-    in command position). in_quote: the boundary that opened the segment fell
-    inside a ' or " string. A backslash-newline outside single quotes joins the
-    lines, as bash does.
-    """
-    out, buf, i, n = [], [], 0, len(c)
-    subshell_stack = []
-    kind = 'start'
-    sq = dq = esc = False
-    in_quote = False
-
-    def _buf_is_cmd_position():
-        return all(ch.isspace() for ch in buf)
-
-    def _flush(next_kind, cmd_pos_close=False):
-        nonlocal buf, kind, in_quote, esc
-        out.append((''.join(buf), kind, in_quote))
-        buf = []
-        kind = 'subst_close' if cmd_pos_close else next_kind
-        in_quote = sq or dq
-        esc = False
-
-    while i < n:
-        two = c[i:i + 2]
-        if two in ('&&', '||'):
-            _flush('separator'); i += 2; continue
-        if two in ('$(', '<(', '>('):
-            subshell_stack.append(_buf_is_cmd_position())
-            _flush('separator'); i += 2; continue
-        ch = c[i]
-        if ch == '\n' and esc:
-            buf.pop()
-            esc = False
-            i += 1
-            continue
-        if ch in ';\n|&`':
-            _flush('separator'); i += 1; continue
-        if ch == '(' and _buf_is_cmd_position():
-            subshell_stack.append(False)
-            _flush('separator'); i += 1; continue
-        if ch == ')' and subshell_stack:
-            was_cmd_position = subshell_stack.pop()
-            _flush('separator', cmd_pos_close=was_cmd_position); i += 1; continue
-        if esc:
-            esc = False
-        elif ch == '\\' and not sq:
-            esc = True
-        elif ch == "'" and not dq:
-            sq = not sq
-        elif ch == '"' and not sq:
-            dq = not dq
-        buf.append(ch); i += 1
-    out.append((''.join(buf), kind, in_quote))
-    return out
 
 
 def _basename(tok):
@@ -150,7 +89,7 @@ def _basename(tok):
 def _unquote_token(tok):
     """Strip balanced surrounding quotes: `"/usr/bin/git"` -> `/usr/bin/git`."""
     t = tok.strip()
-    while len(t) >= 2 and t[0] == t[-1] and t[0] in ('"', "'"):
+    while len(t) >= 2 and t[0] == t[-1] and t[0] in shell_parse.QUOTE_CHARS:
         t = t[1:-1]
     return t
 
@@ -166,20 +105,16 @@ def _unquote_token(tok):
 _WRAPPER_SPECS = {name: entry for table in (shell_parse.WRAPPERS, shell_parse.PEEL)
                   for name, entry in table.items() if entry is not None}
 _WRAPPERS = set(_WRAPPER_SPECS) | {'eval'}
-_WRAPPER_VALUE_FLAGS = {name: spec['val'] for name, (spec, _fixed) in _WRAPPER_SPECS.items()}
+_WRAPPER_VALUE_FLAGS = {name: {o for o in spec['val'] if spec['nargs'].get(o, 1)}
+                        for name, (spec, _fixed) in _WRAPPER_SPECS.items()}
 _WRAPPER_POSITIONALS = {name: fixed for name, (_spec, fixed) in _WRAPPER_SPECS.items() if fixed}
+# The reserved words after which the grammar puts a command word (shell_parse).
+_SHELL_PREFIX_KEYWORDS = shell_parse.COMMAND_PREFIX_WORDS
 
-# Reserved words (and `!`) after which the grammar puts a command word. `for`,
-# `select`, `case`, `in` and `function` are followed by a name, and `fi`,
-# `done`, `esac`, `}`, `]]`, `[[` end a construct, so they are not here.
-_SHELL_PREFIX_KEYWORDS = {
-    'if', 'elif', 'then', 'else', 'while', 'until', 'do', '!', '{', 'coproc',
-}
 
 # Leading redirections, attached (`2>/dev/null`, `{fd}>f`) or bare (`2> f`).
 _REDIRECT_RE = re.compile(
-    r'^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|\d+)?'
-    r'(?:<<<|<<-|<<|>>|&>>|&>|>&|<&|>\||<>|>|<)'
+    r'^(?:\{[A-Za-z_][A-Za-z0-9_]*\}|\d+)?(?:%s)' % '|'.join(map(re.escape, shell_parse.REDIRECT_OPS))
 )
 
 _ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?\+?=')
@@ -228,19 +163,7 @@ def _command_token_index(toks):
     return None
 
 
-def _git_subcommand_index(args):
-    """Index of the subcommand among git's args (global options skipped), or None."""
-    i = 0
-    while i < len(args):
-        a = args[i]
-        if a in GIT_GLOBAL_VALUE_OPTS:
-            i += 2
-            continue
-        if a.startswith('-'):
-            i += 1
-            continue
-        return i
-    return None
+_git_subcommand_index = shell_parse.git_subcommand_index
 
 
 def _git_subcommand(args):
@@ -307,15 +230,14 @@ _RUNTIME = '\x00'  # stands for text the shell computes at run time
 _RUNTIME_PLACEHOLDER = '${__runtime__}'
 _RUNTIME_PLACEHOLDER_RE = re.compile(re.escape(_RUNTIME_PLACEHOLDER))
 # Word parts the shell computes at run time, and those that run commands.
-_DYNAMIC_PARTS = frozenset({'param', 'sub', 'arith', 'procsub'})
-_BODY_PARTS = frozenset({'sub', 'arith', 'procsub'})
+_BODY_PARTS = shell_parse.BODY_PART_KINDS
+_DYNAMIC_PARTS = shell_parse.DYNAMIC_PART_KINDS
 # Text the lexer cannot read is read again with its quoting, then all its shell
 # syntax, removed: the words survive.
 _DEGRADE = (re.compile(r'[\'"`\\]'), re.compile(r'[\'"`\\$()<>]'))
 _MAX_DATA_DEPTH = 16
 # Characters without which quoted text holds no command after a separator.
 _DATA_HINT_RE = re.compile(r'[;\n|&`(]')
-_NOT_DROPPABLE_RE = re.compile(r'\n|\$\(|<\(|>\(|`')
 
 
 class _Cmd:
@@ -355,7 +277,7 @@ def _group(toks):
                 cmds.append(_Cmd(words, redirs, opener))
                 words, redirs = [], []
                 opener = tok[1]
-            elif tok[1] != '(' and not (tok[1] == '\n' and opener in ('|', '|&', '&&', '||')):
+            elif tok[1] != '(' and not (tok[1] == '\n' and opener in _JOINING_OPS):
                 # A group opened after a pipe is fed by it; a line ending in
                 # an operator goes on to the next line's command.
                 opener = tok[1]
@@ -419,8 +341,6 @@ _COMPOUND_WORDS = frozenset({
     'for', 'select', 'while', 'until', 'if', 'then', 'elif', 'else', 'fi',
     'do', 'done', 'case', 'esac', 'function', 'coproc', '{', '}',
 })
-# Redirections that write a file.
-_WRITE_REDIRS = frozenset({'>', '>>', '>|', '&>', '&>>'})
 
 
 def _opens_compound(cmd):
@@ -438,30 +358,33 @@ def _opens_compound(cmd):
 # many ways to run a file (`sh < x.sh`, `cat x.sh | sh`, `sh x.*`, `cp x.sh y
 # && sh y`, `xargs`, `find -exec`, `make`) need no list of their own.
 #
-# Inert commands print, count, list, test or make directories, run nothing
+# Inert commands print, count, cut, list, test or make directories, run nothing
 # they are given and, as _is_inert requires, write nothing. chmod is absent
-# (its +x is the step to running a file), cd (it moves the written file's
-# relative path into `.git/` or a home directory), git (its config and
+# (its +x is the step to running a file), cd unless every written path is
+# absolute (it moves a relative one into `.git/` or a home directory), git (its config and
 # attributes run programs: `core.fsmonitor`, `diff.external`), cp, mv, xargs,
 # find, make, tee and every shell and interpreter.
 _INERT_COMMANDS = frozenset({
     'cat', 'head', 'tail', 'wc', 'ls', 'echo', 'printf', 'test', '[',
-    'true', 'false', 'mkdir', 'pwd',
+    'true', 'false', 'mkdir', 'pwd', 'cut', 'tr',
 })
 # grep and rg are inert as text owners (_is_text_only).
 _INERT_TEXT_OWNERS = frozenset({'grep', 'rg'})
 # Where a written here-document may land as data. The rule is closed: a path
 # with a hidden component (`.git/`, `.bashrc`, `.claude/`, `.vscode/`,
-# `.config/`, and `..`, which leaves the tree), one under the home directory
-# (`~`), one with a `hooks` component (`core.hooksPath`), an absolute one
-# outside /tmp and /var/tmp, and one of these names (any case, files a tool
-# runs by name) is code. Names a tool runs that need no dot:
+# `.config/`, and `..`, which leaves the tree), one with a `hooks` component
+# (`core.hooksPath`), one under `~user`, a device or /proc name, an absolute
+# one outside the project and the temp roots (lib/locations.data_parts: the
+# project wherever it is checked out; its managed scratch `.claude/scratch/`
+# counts from below that folder) with a `bin`, `sbin` or `etc` component, as
+# written or resolved, and one of these names (any case, files a tool runs by
+# name) is code. Names a tool runs that need no dot:
 _CODE_FILES = frozenset({'makefile', 'gnumakefile', 'gitconfig'})
 _CODE_DIRS = frozenset({'hooks'})
-_DATA_ROOTS = ('/tmp/', '/var/tmp/')
+_SYSTEM_CODE_DIRS = _CODE_DIRS | {'bin', 'sbin', 'etc'}
 # Commands that copy their input to a file a word of theirs names.
 _FILE_COPIERS = frozenset({'cp', 'mv', 'ln', 'install', 'truncate', 'dd'})
-_NULL_FILES = frozenset({'/dev/null', '/dev/stdout', '/dev/stderr'})
+_NULL_FILES = locations.STD_SINKS
 
 
 def _writes_file(redir):
@@ -470,7 +393,7 @@ def _writes_file(redir):
     `>`, `>>`, `>|`, `&>`, `&>>`, `<>` (read-write), and `>&` with a word
     that is no descriptor number or `-` (`>& file` writes the file).
     """
-    if redir.op in _WRITE_REDIRS or redir.op == '<>':
+    if redir.op in shell_parse.WRITE_REDIRECT_OPS:
         return True
     if redir.op == '>&':
         target = _value(redir.target)[0]
@@ -506,14 +429,19 @@ def _written_paths(cmds, k, end):
 
 def _is_code_file(path):
     """True iff a here-document written to path may be run or read as code by a tool (see _CODE_FILES)."""
-    if path.startswith('~') or (path.startswith('/') and not path.startswith(_DATA_ROOTS)):
-        return True
-    parts = [part.lower() for part in path.split('/') if part and part != '.']
+    rel, dirs = locations.data_parts(path), _CODE_DIRS
+    if rel is None:
+        full = os.path.expanduser(path); real = os.path.realpath(full)  # noqa: E702
+        if not os.path.isabs(full) or any(locations.is_device(p) or locations.below(locations.absolute(p), locations.PROC_DIR)
+                                          is not None for p in (full, real)):  # as written and resolved
+            return True
+        rel, dirs = os.path.normpath(full).split('/')[1:] + real.split('/')[1:], _SYSTEM_CODE_DIRS
+    parts = [part.lower() for part in rel]
     return (not parts or parts[-1] in _CODE_FILES
-            or any(p.startswith('.') or p in _CODE_DIRS for p in parts))
+            or any(p.startswith('.') or p in dirs for p in parts))
 
 
-def _is_inert(cmd, written):
+def _is_inert(cmd, written, absolute=False):
     """True iff the simple command cmd is inert (_INERT_COMMANDS and the rest), as written.
 
     It stands alone: no assignment, wrapper or reserved word before its
@@ -527,8 +455,8 @@ def _is_inert(cmd, written):
             return False
     for r in cmd.redirs:
         target = None if r.target is None else _value(r.target)[0]
-        if r.op in _WRITE_REDIRS or r.op == '<>':
-            if target != '/dev/null':
+        if r.op in shell_parse.WRITE_REDIRECT_OPS:
+            if target != locations.NULL_DEVICE:
                 return False
         elif r.op == '>&' and not (target is not None and (target.isdigit() or target == '-')):
             return False
@@ -542,7 +470,7 @@ def _is_inert(cmd, written):
         return False
     if name == 'printf' and any(v == '-v' or v.startswith('-v') for v in values[1:2]):
         return False  # `printf -v PATH .` assigns a variable
-    if name in _INERT_COMMANDS:
+    if name in _INERT_COMMANDS or (name == 'cd' and absolute):
         return True
     return name in _INERT_TEXT_OWNERS and _is_text_only(cmd.words)
 
@@ -568,20 +496,28 @@ def _here_docs_are_data(toks, cmds, k, nested=False):
         return False
     if any(cmd.redirs and _values(cmd.words)[:1] == ['exec'] for cmd in cmds):
         return False
-    j = k
-    while True:
-        if not _reads_input_as_data(cmds[j]):
-            return False
+    j = _pipe_end(cmds, k)
+    return all(map(_reads_input_as_data, cmds[k:j])) and _written_file_is_data(cmds, k, j, nested)
+
+
+def _pipe_end(cmds, k):
+    """The index past the last command of the pipe cmds[k] starts."""
+    j = k + 1
+    while j < len(cmds) and cmds[j].opener in shell_parse.PIPE_OPS:
         j += 1
-        if j >= len(cmds) or cmds[j].opener not in ('|', '|&'):
-            break
+    return j
+
+
+def _written_file_is_data(cmds, k, j, nested=False):
+    """True iff no command may run what the pipe cmds[k:j] writes: one answer for every reader of the text."""
     paths, unknown = _written_paths(cmds, k, j)
     if not (paths or unknown):
         return True
     if nested or unknown or any(map(_is_code_file, paths)):
         return False
     written = {_basename(p) for p in paths}
-    return all(_is_inert(cmd, written) for n, cmd in enumerate(cmds) if not k <= n < j)
+    absolute = all(os.path.isabs(os.path.expanduser(p)) for p in paths)
+    return all(_is_inert(cmd, written, absolute) for n, cmd in enumerate(cmds) if not k <= n < j)
 
 
 def _code_commands(text, depth=0, captured=False, nested=False):
@@ -679,7 +615,7 @@ def _invocations(words, aliases=None, depth=0, seen=frozenset()):
     i = 0
     while i < k:
         opt = gvals[i]
-        pair = gvals[i + 1] if opt in ('-c', '--config-env') and i + 1 < k else (
+        pair = gvals[i + 1] if opt in GIT_CONFIG_OPTS and i + 1 < k else (
             opt[len('--config-env='):] if opt.startswith('--config-env=') else '')
         key, eq, val = pair.partition('=')
         if eq and key.lower().startswith('alias.'):
@@ -710,10 +646,10 @@ _TEXT_ONLY_GIT_SUBCOMMANDS = frozenset({'commit'})
 # `git grep` without `-O`/`--open-files-in-pager` (that option runs a pager),
 # and `git log` reading a `--grep` pattern.
 _TEXT_SEARCH_GIT_SUBCOMMANDS = frozenset({'grep', 'log'})
-_GIT_CONFIG_OPTS = ('-c', '--config-env')
-# rg reads its pattern as text, unless a preprocessor runs (`--pre`,
-# `--pre-glob`) or a config file it is pointed at may add one.
-_RG_PROGRAM_OPTS = ('--pre', '--pre-glob')
+_GIT_CONFIG_OPTS = GIT_CONFIG_OPTS = shell_parse.GIT_CONFIG_OPTS
+# rg reads its pattern as text, unless it runs a program (shell_parse.RG_RUN_OPTS:
+# `--pre`, `--hostname-bin`, `--search-zip`) or a config file it is pointed at may add one.
+_RG_PROGRAM_OPTS = shell_parse.RG_RUN_OPTS
 # Commands that read what a pipe feeds them as text and never run it. They are
 # not text-only: their own arguments may name a program (`sort
 # --compress-program`), and one given such an option (_PROGRAM_OPTIONS) is no
@@ -721,9 +657,7 @@ _RG_PROGRAM_OPTS = ('--pre', '--pre-glob')
 # absent: LESSOPEN and LESSCLOSE name an input preprocessor (`|-sh %s` runs
 # what it reads), and they may come from the inherited environment, which the
 # command line cannot show.
-_STDIN_CONSUMERS = frozenset({
-    'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'column', 'nl',
-})
+_STDIN_CONSUMERS = bash_read_only.FILTERS  # the one list of text filters
 
 
 def _long_opt_named(value, names):
@@ -808,7 +742,7 @@ def _reads_input_as_data(cmd):
             return False
     for r in cmd.redirs:
         if r.op in ('>&', '<&', '&>', '&>>') and r.target is not None:
-            if _value(r.target)[0] not in ('1', '2', '-') and r.op in ('>&', '<&'):
+            if _value(r.target)[0] not in ('1', '2', '-') and r.op in shell_parse.DUP_OPS:
                 return False
     if not cmd.words:
         return True
@@ -867,9 +801,12 @@ def _segment_invocations(command_text, tagged=False, nested=False):
     read from quoted text a command is given.
     """
     cmds, exact = _code_commands(command_text, nested=nested)
-    droppable = (exact and not _NOT_DROPPABLE_RE.search(command_text)
-                 and not any(cmd.opener in ('|', '|&') and not _is_text_only(cmd.words)
-                             and not _is_stdin_consumer(cmd.words) for cmd in cmds))
+    # One line with no substitution, as the shell reads it (a newline or a
+    # backquote inside quoted text is text), and no file it writes may be run.
+    droppable = (exact and not any(cmd.opener == '\n' or _subst_bodies(cmd) for cmd in cmds)
+                 and not any(cmd.opener in shell_parse.PIPE_OPS and not _is_text_only(cmd.words)
+                             and not _is_stdin_consumer(cmd.words) for cmd in cmds)
+                 and all(_written_file_is_data(cmds, k, _pipe_end(cmds, k), nested) for k in range(len(cmds))))
     for cmd in cmds:
         for inv in _invocations(cmd.words):
             yield (inv, False) if tagged else inv
@@ -967,7 +904,7 @@ def _dynamic_only_in_directory(word):
         return False
     directory, slash, name = ''.join(p.text for p in tail).rpartition('/')
     lowered = name.lower()
-    return (bool(slash) and name not in ('', '.', '..')
+    return (bool(slash) and name not in locations.NAMELESS_PARTS
             and not lowered.startswith(_GIT_LIKE_PREFIX) and lowered not in _GIT_LIKE_NAMES)
 
 
@@ -987,7 +924,8 @@ def _dynamic_only_in_directory(word):
 # Text whose quoting the scan cannot follow is a residual when what follows its
 # shell `-c` is git-shaped; a string nested deeper than _MAX_SHELL_DEPTH always
 # is. A here-document is shell text only when a shell may read it
-# (_reads_as_shell); for any other reader it runs only the substitutions the
+# (_reads_as_shell) or a command of the text may run the file it is written to
+# (_written_file_is_data); otherwise it runs only the substitutions the
 # outer shell performs to expand it, and none when its delimiter is quoted.
 #
 # _runs_runtime_code fails closed: a list of dangerous programs can never be
@@ -1060,12 +998,7 @@ _CURL_CODE_SHORT_OPTS = frozenset({'K'})
 # load code: locale names select a compiled locale, TZ/TERM name a data file,
 # the rest are numbers, flags or plain strings. HOME is absent: the Python user
 # site, `~/.node_modules` and `~/.ssh/config` live under it.
-_SAFE_ENV_VARS = frozenset({
-    'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'LC_COLLATE', 'LC_MESSAGES',
-    'LC_NUMERIC', 'LC_TIME', 'TZ', 'TERM', 'COLUMNS', 'LINES', 'PWD',
-    'OLDPWD', 'USER', 'LOGNAME', 'HOSTNAME', 'TMPDIR', 'DISPLAY', 'NO_COLOR',
-    'FORCE_COLOR', 'CLICOLOR', 'CLICOLOR_FORCE',
-})
+_SAFE_ENV_VARS = shell_parse.INERT_ENV_VARS
 # A shell named among another command's words (`find -exec sh -c`), by name:
 # the shape _SHELL_NAME_RE reads also matches `push`.
 _EMBEDDED_SHELL_RE = re.compile(r'(?:ba|rba|da|a|z|k|mk|c|tc|fi|y|pw)?sh[0-9.]*\Z')
@@ -1083,29 +1016,9 @@ _OPAQUE_INTERPRETERS = frozenset({
 # standard input. stop: an option naming the program ends the options.
 _Interpreter = collections.namedtuple(
     '_Interpreter', 'program value attached long_program long_value data stdin stop')
-_NODE_VALUE_OPTIONS = frozenset({  # `node --help`, v22: the options shown with `=...`
-    '--allow-fs-read', '--allow-fs-write', '--build-snapshot-config', '--conditions',
-    '--cpu-prof-dir', '--cpu-prof-interval', '--cpu-prof-name', '--diagnostic-dir',
-    '--disable-proto', '--disable-warning', '--dns-result-order', '--env-file',
-    '--env-file-if-exists', '--experimental-config-file', '--experimental-default-type',
-    '--experimental-loader', '--experimental-sea-config', '--experimental-test-isolation',
-    '--heap-prof-dir', '--heap-prof-interval', '--heap-prof-name',
-    '--heapsnapshot-near-heap-limit', '--heapsnapshot-signal', '--icu-data-dir', '--import',
-    '--input-type', '--inspect-publish-uid', '--loader', '--localstorage-file',
-    '--max-http-header-size', '--max-old-space-size-percentage',
-    '--network-family-autoselection-attempt-timeout', '--openssl-config',
-    '--redirect-warnings', '--report-filename', '--report-signal', '--require',
-    '--secure-heap', '--secure-heap-min', '--snapshot-blob', '--test-concurrency',
-    '--test-coverage-branches', '--test-coverage-exclude', '--test-coverage-functions',
-    '--test-coverage-include', '--test-coverage-lines', '--test-name-pattern',
-    '--test-reporter', '--test-reporter-destination', '--test-shard', '--test-skip-pattern',
-    '--test-timeout', '--title', '--tls-cipher-list', '--tls-keylog',
-    '--trace-event-categories', '--trace-event-file-pattern', '--trace-require-module',
-    '--unhandled-rejections', '--use-largepages', '--v8-pool-size', '--watch-kill-signal',
-    '--watch-path',
-})
+_NODE_VALUE_OPTIONS = shell_parse.NODE_VALUE_OPTIONS
 _INTERPRETERS = (
-    (re.compile(r'(?:python|pypy)[0-9.]*\Z'),
+    (re.compile(_PYTHON_RE),
      _Interpreter('cm', 'QWX', '', (), ('--check-hash-based-pycs',), (), True, True)),
     (re.compile(r'perl[0-9.]*\Z'),
      _Interpreter('Ee', 'IMm', '0CDFVdilx', (), (), (), True, False)),
@@ -1124,11 +1037,11 @@ _INTERPRETERS = (
     (re.compile(r'Rscript\Z'), _Interpreter('e', '', '', (), (), (), False, False)),
 )
 # Paths that name standard input as a program or script.
-_STDIN_PATHS = frozenset({'-', '/dev/stdin', '/dev/fd/0', '/proc/self/fd/0'})
+_STDIN_PATHS = frozenset(('-',) + locations.STDIN_DEVICES)
 _MAX_CODE_DEPTH = 64
 
 
-def _shell_words(text, info=None):
+def _shell_words(text, info=None, nested=False):
     """Split shell text into simple commands of words, as the shell reads them.
 
     Returns (commands, bodies). A command is a list of (value, runtime) words,
@@ -1136,7 +1049,7 @@ def _shell_words(text, info=None):
     run-time part _RUNTIME; runtime is True when it holds one. bodies are the
     texts that run as commands of their own: substitution bodies, then what
     here-documents run (_here_doc_texts). Raises LexError on text the lexer
-    cannot read.
+    cannot read. nested: text is not the tool command itself (_written_file_is_data).
 
     info, a dict, receives what may feed run-time text to each command's
     standard input: info['feeds'] holds a set per command, of 'pipe' (a pipe,
@@ -1159,7 +1072,7 @@ def _shell_words(text, info=None):
         if not (words or redirs):
             return False
         k = len(cmds)
-        fed = opener in ('|', '|&') or any(groups)
+        fed = opener in shell_parse.PIPE_OPS or any(groups)
         for word in words + [r.target for r in redirs if r.target is not None]:
             for kind, src, off in word.segs:
                 if kind in _BODY_PARTS:
@@ -1186,7 +1099,7 @@ def _shell_words(text, info=None):
         ended = end_cmd()
         if op == '\n':
             # A line ending in `|`, `&&` or `||` goes on past its here-documents.
-            dangling = sep in ('|', '|&', '&&', '||')
+            dangling = sep in _JOINING_OPS
             stop = len(cmds) + (1 if dangling else 0)
             for k in range(line_start, len(cmds)):
                 docs.extend((r.heredoc[2].text, r.heredoc[1], k, stop)
@@ -1196,15 +1109,17 @@ def _shell_words(text, info=None):
                 opener = None
             continue
         if op == '(':
-            groups.append(opener in ('|', '|&') and not ended)
+            groups.append(opener in shell_parse.PIPE_OPS and not ended)
         elif op == ')' and groups:
             groups.pop()
         sep = opener = op
     end_cmd()
     doc_fed = [False] * len(cmds)
     n_subst = len(bodies)
+    grouped = _group(toks) if docs else []
     for body, quoted, owner, stop in docs:
-        texts = _here_doc_texts(body, quoted, any(map(_reads_as_shell, cmds[owner:stop])))
+        texts = _here_doc_texts(body, quoted, any(map(_reads_as_shell, cmds[owner:stop])) or not
+                                _written_file_is_data(grouped, owner, _pipe_end(grouped, owner), nested))
         bodies.extend(texts)
         runtime = info is not None and _here_doc_is_runtime(body, quoted)
         for k in range(owner, min(stop, len(cmds))):
@@ -1221,7 +1136,7 @@ def _shell_words(text, info=None):
                     continue
                 if r.op == '<<<':
                     kinds.add('here-string')
-                elif r.op in ('<', '<>') and r.io in (None, '0'):
+                elif r.op in shell_parse.INPUT_REDIRECT_OPS and r.io in (None, '0'):
                     kinds.add('file')
             feeds.append(kinds)
         info['feeds'] = feeds
@@ -1304,11 +1219,11 @@ def _shell_c_operand(words, i):
             maybe_c = True  # an unknown word may be any option, -c included
             i += 1
             continue
-        if value in ('--', '-'):
+        if value in shell_parse.OPTION_ENDS:
             i += 1
             break
         if value.startswith('--'):
-            i += 2 if value in ('--rcfile', '--init-file') else 1
+            i += 2 if value in shell_parse.SHELL_FILE_OPTS else 1
         elif len(value) > 1 and value[0] in '-+':
             seen_c = seen_c or 'c' in value[1:]
             i += 1 + value[1:].count('o') + value[1:].count('O')  # -o / -O take a name
@@ -1336,7 +1251,7 @@ def _eval_payload(words, idx):
     return None
 
 
-def _shell_c_strings(text, fed=False):
+def _shell_c_strings(text, fed=False, nested=False):
     """Yield (kind, string, fed, built_by_code) for each shell `-c` string text runs.
 
     kind 'text': a string the scan resolved. 'runtime': one holding a value the
@@ -1350,7 +1265,7 @@ def _shell_c_strings(text, fed=False):
         return
     info = {}
     try:
-        cmds, bodies = _shell_words(text, info)
+        cmds, bodies = _shell_words(text, info, nested)
     except Exception:  # text the lexer cannot read, or nesting past the interpreter's limit
         if _SHELL_C_SHAPE_RE.search(text):
             yield 'unlexable', text, fed, False
@@ -1383,14 +1298,14 @@ def _shell_c_strings(text, fed=False):
             for j in range(n_subst))
         yield ('runtime' if runtime else 'text'), value, fed or bool(feeds), built_by_code
     for body, body_fed in zip(bodies, info['body_fed']):
-        yield from _shell_c_strings(body, fed or body_fed)
+        yield from _shell_c_strings(body, fed or body_fed, True)
 
 
 # Options whose value is a program the command runs, read as a command line of
 # its own: rg's preprocessor, ag's and ack's pager (run by a shell), and
 # sort's compressor. A long option may be abbreviated.
 _PROGRAM_OPTIONS = {
-    'rg': ('--pre',),
+    'rg': shell_parse.RG_PROGRAM_OPTS,
     'ag': ('--pager',),
     'ack': ('--pager',),
     'sort': ('--compress-program',),
@@ -1398,7 +1313,7 @@ _PROGRAM_OPTIONS = {
 _PROGRAM_HINT_RE = re.compile(r'(?:\A|[\s/;&|(`\'"])(?:rg|ag|ack|sort|git)\b')
 # Commands that print their arguments, and the shell reads what they print
 # when a pipe feeds it (`echo "git push" | sh`).
-_PRINTERS = frozenset({'echo', 'printf'})
+_PRINTERS = shell_parse.PRINTERS
 # The backslash escapes printf and `echo -e` print as characters: `\xHH`, an
 # octal `\NNN` or `\0NNN`, and the letters. Read whatever the options say.
 _ESCAPE_RE = re.compile(r'\\(x[0-9A-Fa-f]{1,2}|0?[0-7]{1,3}|[abefnrtv\\])')
@@ -1619,7 +1534,7 @@ def _command_runs_runtime_code(words, fed):
     name = _basename(values[idx])
     if name in _TEXT_ONLY_COMMANDS:
         return False
-    if name in ('source', '.'):
+    if name in shell_parse.SOURCE_BUILTINS:
         if args and args[0][0] == '--':
             args = args[1:]
         return bool(fed or (args and args[0][1]))
@@ -1715,11 +1630,11 @@ def _shell_args_run_runtime(args, as_command):
         value, runtime = args[i]
         if runtime:
             return True
-        if value in ('--', '-'):
+        if value in shell_parse.OPTION_ENDS:
             i += 1
             break
         if value.startswith('--'):
-            n = 1 if value in ('--rcfile', '--init-file') else 0
+            n = 1 if value in shell_parse.SHELL_FILE_OPTS else 0
         elif len(value) > 1 and value[0] in '-+':
             seen_c = seen_c or 'c' in value[1:]
             seen_s = seen_s or 's' in value[1:]
@@ -1813,7 +1728,7 @@ def _shell_layers(command_text):
     def visit(text, depth, fed=False):
         texts.append(text.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
         codes.append((text, fed))
-        for kind, value, value_fed, built_by_code in _shell_c_strings(text, fed):
+        for kind, value, value_fed, built_by_code in _shell_c_strings(text, fed, depth > 0):
             if depth >= _MAX_SHELL_DEPTH:
                 unresolved.append(value.replace(_RUNTIME, _RUNTIME_PLACEHOLDER))
             elif kind == 'unlexable':
@@ -1874,6 +1789,7 @@ def iter_git_invocations(command_text):
     """
     layers = [list(_segment_invocations(text, tagged=True, nested=k > 0))
               for k, text in enumerate(iter_shell_texts(command_text))]
+    seen = collections.Counter()
     for k, layer in enumerate(layers):
         later = collections.Counter(_bare_invocation(inv) for rest in layers[k + 1:] for inv, _q in rest)
         for inv, quoted in layer:
@@ -1881,7 +1797,40 @@ def iter_git_invocations(command_text):
             if quoted and later[key]:
                 later[key] -= 1
                 continue
+            seen[key] += 1
             yield inv
+    # The shared parser's reading of the same text (shell_parse.git_invocations):
+    # the commands a wrapper, a payload option or a shell definition runs
+    # (`env -S`, `su -c`, `find -exec`, `xargs -i`, alias, trap, function) are
+    # split by the one definition of how a command line splits, and an
+    # invocation this scan did not reach is yielded after its own.
+    for inv in _parser_invocations(command_text):
+        key = _bare_invocation(inv)
+        if seen[key]:
+            seen[key] -= 1
+            continue
+        yield inv
+
+
+def _parser_invocations(command_text):
+    """GitInvocation for each git invocation shell_parse.git_invocations reads in command_text
+    that names a subcommand (a git alias whose value is computed reads as git with none)."""
+    try:
+        script = shell_parse.parse(command_text)
+        found = shell_parse.git_invocations(script)
+        # a variable whose value the command it prefixes runs (`GIT_PAGER='...' git -p log`)
+        for site in shell_parse.walk(script):
+            for a in site.cmd.assignments + shell_parse.resolve(site.cmd).assignments:
+                value = a.static_value() if a.name in shell_parse.EXEC_ASSIGNMENT_VARS else None
+                if value:
+                    found.extend(shell_parse.git_invocations(value))
+    except Exception:  # never let the second reading cost the first its verdict
+        return []
+    # as _invocations writes them: an option as git receives it, an operand as written
+    return [GitInvocation(inv.word.raw.text, inv.path_qualified, inv.subcommand,
+                          [a if a is not None and _is_option_word(a) else w.raw.text
+                           for a, w in zip(inv.args, inv.arg_words)])
+            for inv in found if inv.word is not None and inv.subcommand is not None]
 
 
 def _bare_invocation(inv):
@@ -1912,10 +1861,10 @@ def classify_git_command(command_text):
 # command runs (`bash push.sh`) is not shell text it sees. hidden_git_texts
 # yields, for each, shell text the caller judges as it judges a command:
 #   - inline code (python/pypy -c, perl -e/-E, ruby -e, node -e/-p/--eval/
-#     --print): the token `git`, then words separated only by blanks, quotes,
+#     --print, php -r/-B/-R/-E, lua -e, Rscript -e): the token `git`, then words separated only by blanks, quotes,
 #     commas, `[` or backquotes, whose subcommand is in _HIDDEN_GIT_SUBCOMMANDS,
-#     read as `git <words>`. Lexical and conservative: `print("git push")` reads
-#     as a push.
+#     read as `git <words>` (lexical: `perl -e 'print "git push"'` is a push). Python (-c, or a
+#     here-document or here-string on stdin) is code to the removal analyzer: what it starts counts.
 #   - a script file named by a literal path that exists and is readable at hook
 #     time, relative to cwd, under _HIDDEN_SCRIPT_MAX bytes and not binary:
 #     `bash|sh|dash|zsh|ksh FILE`, `source FILE`, `. FILE`, and a command word
@@ -1935,13 +1884,16 @@ _HIDDEN_GIT_SUBCOMMANDS = frozenset({
     'revert', 'am', 'replace', 'fetch', 'checkout', 'switch', 'worktree',
 })
 _HIDDEN_CODE_OPTIONS = (
-    (re.compile(r'(?:python|pypy)[0-9.]*\Z'), 'c', ()),
+    (re.compile(_PYTHON_RE), 'c', ()),
     (re.compile(r'perl[0-9.]*\Z'), 'eE', ()),
     (re.compile(r'ruby[0-9.]*\Z'), 'e', ()),
     (re.compile(r'node(?:js)?[0-9.]*\Z'), 'ep', ('--eval', '--print')),
+    # the code options _INTERPRETERS reads for these too (php -r/-B/-R/-E, lua -e, Rscript -e)
+    (re.compile(r'php[0-9.]*\Z'), 'rBRE', ()),
+    (re.compile(r'lua(?:jit)?[0-9.]*\Z'), 'e', ()),
+    (re.compile(r'Rscript\Z'), 'e', ()),
 )
-_HIDDEN_SHELLS = frozenset({'bash', 'sh', 'dash', 'zsh', 'ksh', 'source', '.'})
-_HIDDEN_SHELL_VALUE_OPTS = frozenset({'-o', '+o', '-O', '+O', '--rcfile', '--init-file'})
+_HIDDEN_SHELLS = shell_parse.SCRIPT_RUNNERS
 _HIDDEN_SCRIPT_MAX = 256 * 1024
 _HIDDEN_GIT_RE = re.compile(r'(?<![\w.-])git(?![\w.-])')
 _HIDDEN_WORD_RE = re.compile(r'[\w.:/+@^~=%-]+')
@@ -1974,7 +1926,7 @@ def _hidden_inline_code(name, argv):
     codes = []
     for i, arg in enumerate(argv):
         nxt = argv[i + 1] if i + 1 < len(argv) else None
-        if arg is None or not arg.startswith('-') or arg in ('-', '--'):
+        if arg is None or not arg.startswith('-') or arg in shell_parse.OPTION_ENDS:
             continue
         if arg.startswith('--'):
             opt, eq, val = arg.partition('=')
@@ -1997,9 +1949,9 @@ def _hidden_script_path(name, head, argv):
                 return None
             if skip:
                 skip = False
-            elif arg in _HIDDEN_SHELL_VALUE_OPTS:
+            elif arg in shell_parse.SHELL_VALUE_OPTS:
                 skip = True
-            elif name in ('source', '.') or not arg.startswith(('-', '+')):
+            elif name in shell_parse.SOURCE_BUILTINS or not arg.startswith(shell_parse.OPTION_SIGNS):
                 return (arg, True) if arg not in _STDIN_PATHS else None
             elif 'c' in arg[1:] and not arg.startswith('--') or arg == '-s':
                 return None
@@ -2027,6 +1979,13 @@ def _hidden_script_text(path, cwd, trusted):
     return data.decode('utf-8', 'replace')
 
 
+def _stdin_body(redir):
+    """The program a here-document (quoted, or with nothing the shell expands) or a literal here-string feeds."""
+    text = redir.hd.body_src.text if redir.hd is not None and redir.op in shell_parse.HERE_DOCUMENT_OPS else None
+    text = text if text is None or redir.hd.quoted or not set('$`\\') & set(text) else None
+    return (text if redir.op != '<<<' else redir.target and redir.target.value()) if redir.io in (None, '0') else None
+
+
 def hidden_git_texts(command_text, cwd=None, trusted=(), _depth=0):
     """Yield (origin, shell_text) for git the command runs out of the shell's sight.
 
@@ -2041,9 +2000,13 @@ def hidden_git_texts(command_text, cwd=None, trusted=(), _depth=0):
         name = resolved.name
         argv = resolved.argv()
         codes = _hidden_inline_code(name, argv)
+        python = re.match(_PYTHON_RE, name or '') and _beb
+        if python and not codes and _beb._reads_program_on_stdin(argv):
+            codes = [b for b in map(_stdin_body, site.cmd.redirects) if b is not None]
         if codes is not None:
             for code in codes:
-                for text in _hidden_code_git_texts(code):
+                started = _beb.python_started_commands(code) if python else None
+                for text in _hidden_code_git_texts(code) if started is None else filter(None, started):
                     yield '%s inline code' % name, text
             continue
         if _depth:

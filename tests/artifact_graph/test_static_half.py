@@ -435,6 +435,23 @@ def test_state_dir_versus_fixed_tmp_differ(tmp_path):
     assert not rels(r, op="read", path="<state>/claude-grant.json")
 
 
+def test_a_root_variable_with_a_fallback_names_the_root_in_every_spelling(tmp_path):
+    """`get(ROOT) or lit` is the twin of the shell's `${ROOT:-lit}` (unset and empty both take lit),
+    `get(ROOT, lit)` of `${ROOT-lit}`: each names the root alone. A variable that names no root keeps
+    its fallback literal."""
+    root = make_tree(tmp_path, {
+        "hooks/w.sh": '#!/usr/bin/env bash\necho x > "${TMPDIR:-/var/tmp/cs}/a.json"\n',
+        "hooks/r1.py": 'import os\nopen(os.path.join(os.environ.get("TMPDIR") or "/var/tmp/cs", "a.json")).read()\n',
+        "hooks/r2.py": 'import os\nopen(os.path.join(os.environ.get("TMPDIR", "/var/tmp/cs"), "a.json")).read()\n',
+        "hooks/r3.py": 'import os\nopen(os.path.join(os.environ.get("FOO_DIR") or "/var/tmp/cs", "b.json")).read()\n',
+    })
+    r = derive(root)
+    assert rels(r, op="write", path="<tmpdir>/a.json", component="hooks/w.sh")
+    for comp in ("hooks/r1.py", "hooks/r2.py"):
+        assert {x["path"] for x in rels(r, op="read", component=comp)} == {"<tmpdir>/a.json"}, comp
+    assert {x["path"] for x in rels(r, op="read", component="hooks/r3.py")} == {"/var/tmp/cs/b.json"}
+
+
 def test_tests_directories_are_out_of_scope(tmp_path):
     root = make_tree(tmp_path, {
         "hooks/tests/test_x.py": 'open("/tmp/x").read()\n',

@@ -16,7 +16,7 @@ Take the mode from your delegation prompt and BA context:
 - **DESIGN_MODE** if the context has `workflow_type="ui_development"`, a `design-handoff.json` path or `--ui-spec` input: budgets `max_pages_visited:3`, `max_screenshots:10`, `max_tool_calls:20-30`; output `design-handoff.json`; the Quality Gates do not apply.
 - **AUDIT_MODE** otherwise: the Quality Gates apply.
 
-Record `mode: "DESIGN_MODE"|"AUDIT_MODE"` in your output report so trace and PM-Retro can attribute findings.
+Record `mode: "DESIGN_MODE"|"AUDIT_MODE"` in your output report so PM-Retro can attribute findings.
 
 **Obstacles:** when an obstacle blocks a check you were asked to make, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/anti-give-up.md` and follow it before you report anything about that check.
 

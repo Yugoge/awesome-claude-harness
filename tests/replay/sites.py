@@ -281,6 +281,8 @@ class PyModule:
                 for a in node.names:
                     if node.level:
                         pkg = os.path.dirname(self.rel)
+                        for _ in range(node.level - 1):  # `from ..x import y`: one package up per extra dot
+                            pkg = os.path.dirname(pkg)
                         modname = node.module.split(".") if node.module else []
                         sub = os.path.join(pkg, *modname, a.name) + ".py"
                         mod = os.path.join(pkg, *modname) + ".py"
@@ -377,11 +379,19 @@ class PyModule:
                         isinstance(t, ast.Name) and t.id == node.id
                         for t in (st.targets if isinstance(st, ast.Assign) else [st.target])):
                     return self._tools(st.value)
+            mod, attr = self.imports.get(node.id, (None, None))
+            if mod and attr:  # a constant one library holds (lib/subagent.DISPATCH_TOOLS)
+                return PyModule(self.tree, mod)._tools(ast.Name(id=attr))
             return None
         if isinstance(node, ast.Call) and _call_name(node.func)[1] in ("frozenset", "set") and node.args:
             return self._tools(node.args[0])
         if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
-            return frozenset(e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+            out = frozenset(e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+            for e in node.elts:
+                if isinstance(e, ast.Starred):
+                    more = self._tools(e.value)
+                    out = out | more if more is not None else out
+            return out
         return None
 
     def imported_files(self) -> list[str]:
@@ -591,18 +601,35 @@ def _guard(mod: "PyModule", node, as_main: bool, argv: list) -> bool:
     return True
 
 
-def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
+def _imported_func(mod: PyModule, func) -> tuple[str, str] | None:
+    """(file, function) of another module a called name stands for (`refuse` from-imported, `lib_mod.refuse`)."""
+    if isinstance(func, ast.Name):
+        rel, attr = mod.imports.get(func.id, (None, None))
+        return (rel, attr) if rel and attr and rel != mod.rel else None
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        rel, attr = mod.imports.get(func.value.id, (None, None))
+        return (rel, func.attr) if rel and attr is None and rel != mod.rel else None
+    return None
+
+
+def _py_primitives(mod: PyModule, argv: list, extra: dict | None = None, cross: dict | None = None) -> list[_Prim]:
     """Every exit-2 / return-2 / decision node of one module (return-2 only in exit-reaching
-    functions), each with whether it is reachable as the hook's process and as an import."""
+    functions), each with whether it is reachable as the hook's process and as an import. `extra` names
+    this module's functions whose return value another module's exit reaches; `cross` collects, keyed
+    (file, function), those of other modules this one's exits reach."""
     prims: list[_Prim] = []
-    rc_funcs: dict[str, list] = {}
+    rc_funcs: dict[str, list] = {k: list(v) for k, v in (extra or {}).items()}
 
     def flags(node):
         return _guard(mod, node, True, argv), _guard(mod, node, False, argv)
 
-    def seed(name, fl):
+    def seed(name, fl, func=None):
         cur = rc_funcs.get(name, [False, False])
         rc_funcs[name] = [cur[0] or fl[0], cur[1] or fl[1]]
+        target = _imported_func(mod, func) if func is not None and cross is not None else None
+        if target:  # the other module runs it as an import: reached when this caller is, either way
+            cur = cross.get(target, [False, False])
+            cross[target] = [cur[0], cur[1] or fl[0] or fl[1]]
 
     def exit_arg(call):
         if isinstance(call, ast.Call):
@@ -621,7 +648,7 @@ def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
                 if mod.value_is(arg, 2, None):
                     prims.append(_Prim(node, "exit2", *fl))
                 elif isinstance(arg, ast.Call):
-                    seed(_call_name(arg.func)[1], fl)
+                    seed(_call_name(arg.func)[1], fl, arg.func)
                 elif isinstance(arg, ast.Name):
                     func = mod.enclosing_func(node)
                     for n in ast.walk(func or mod.ast):
@@ -630,7 +657,7 @@ def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
                             if mod.value_is(n.value, 2, func):
                                 prims.append(_Prim(n, "exit2", *fl))
                             elif isinstance(n.value, ast.Call):
-                                seed(_call_name(n.value.func)[1], fl)
+                                seed(_call_name(n.value.func)[1], fl, n.value.func)
                             elif isinstance(n.value, ast.IfExp):
                                 for b in (n.value.body, n.value.orelse):
                                     if mod.value_is(b, 2, func):
@@ -668,8 +695,10 @@ def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
                 for b in (v.body, v.orelse):
                     if mod.value_is(b, 2, f):
                         prims.append(_Prim(b, "return2", *fl))
+                    elif isinstance(b, ast.Call):  # `return refuse(why) if why else 0`
+                        seed(_call_name(b.func)[1], fl, b.func)
             elif isinstance(v, ast.Call):
-                seed(_call_name(v.func)[1], fl)
+                seed(_call_name(v.func)[1], fl, v.func)
             elif isinstance(v, ast.Name):
                 for a in ast.walk(f):
                     if not isinstance(a, ast.Assign):
@@ -679,7 +708,7 @@ def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
                         if not any(isinstance(x, ast.Name) and x.id == v.id for x in names):
                             continue
                         if isinstance(a.value, ast.Call):
-                            seed(_call_name(a.value.func)[1], fl)
+                            seed(_call_name(a.value.func)[1], fl, a.value.func)
                         elif mod.value_is(a.value, 2, f):
                             prims.append(_Prim(a, "return2", *fl))
     uniq: dict[tuple, _Prim] = {}
@@ -1181,9 +1210,30 @@ class Enumerator:
                         unconditional=func is not None and mod.top_level(node, func))
 
         mods = {rel: self.py[rel] for rel in files if rel in self.py}
+        # a function another module's exit returns through (`return lib_mod.refuse(why)` under sys.exit(main()))
+        # is exit-reaching in its own module: carried across until nothing new is found
+        extra: dict[str, dict] = {rel: {} for rel in mods}
+        prims: dict[str, list] = {}
+        todo = set(mods)
+        while todo:
+            rel = todo.pop()
+            cross: dict = {}
+            prims[rel] = _py_primitives(mods[rel], argv, extra[rel], cross)
+            for (trel, name), fl in cross.items():
+                if trel in extra:
+                    cur = extra[trel].get(name, [False, False])
+                    new_fl = [cur[0] or fl[0], cur[1] or fl[1]]
+                    if new_fl != cur:
+                        extra[trel][name] = new_fl
+                        todo.add(trel)
         for rel, mod in mods.items():
-            for p in _py_primitives(mod, argv):
+            own = {(p.node.lineno, p.kind) for p in _py_primitives(mod, argv)} if extra[rel] else None
+            for p in prims[rel]:
                 s = as_site(mod, p.node, p.kind)
+                # found only through another module's exit: a site where it composes a refusal of its own; a
+                # return that relays the text its callers' rules wrote (a merged gate's runner) is theirs
+                if own is not None and (p.node.lineno, p.kind) not in own and not any(t.strip() for t in s.text):
+                    continue
                 func = mod.enclosing_func(p.node)
                 if s.unconditional and func is not None and func.name != "main" and p.kind != "return2":
                     helpers.setdefault((rel, func.name), []).append(s)
@@ -1393,9 +1443,14 @@ TOOLS = re.compile(r"[\"']([A-Z][A-Za-z]+)[\"']")
 OBLIGATION_TOOLS = {"TodoWrite", "Agent", "Task"}
 
 
-def _site_tools(s: Site) -> set[str] | None:
+CONST_NAME = re.compile(r"\b([A-Z][A-Z0-9_]+)\b")
+
+
+def _site_tools(s: Site, e: "Enumerator | None" = None) -> set[str] | None:
     """The tools a PreToolUse site can refuse: its hooks' matchers, narrowed by a tool-name test in its
-    guard; None when nothing narrows it (every tool)."""
+    guard; None when nothing narrows it (every tool). A test against a named constant
+    (`tool_name in DISPATCH_TOOLS`, held in the site's module or a library it imports) is read through
+    that constant's value."""
     tools: set[str] | None = set()
     for _, ev, m in s.regs:
         if ev != "PreToolUse":
@@ -1409,6 +1464,11 @@ def _site_tools(s: Site) -> set[str] | None:
             continue
         for mt in TOOL_TEST.finditer(c):
             named = set(TOOLS.findall(mt.group(1)))
+            if not named and e is not None:
+                m = e.module(s.file)
+                if isinstance(m, PyModule):
+                    for const in CONST_NAME.findall(mt.group(1)):
+                        named |= set(m._tools(ast.Name(id=const)) or ())
             if named:
                 tools = named if tools is None else (tools & named or named)
     return tools
@@ -1437,6 +1497,10 @@ def unreachable(e: "Enumerator", s: Site) -> str:
         if s.func not in ("<module>", "main") and s.func in m.funcs:
             named = any(isinstance(n, ast.Name) and n.id == s.func or isinstance(n, ast.Attribute) and n.attr == s.func
                         for n in ast.walk(m.ast))
+            # or a module that imports it calls it (`from switch_prompt import refuse`, `switch_prompt.refuse`)
+            named = named or any(_imported_func(o, n.func) == (s.file, s.func)
+                                 for o in list(e.py.values()) if isinstance(o, PyModule) and o.rel != s.file
+                                 for n in ast.walk(o.ast) if isinstance(n, ast.Call))
             if not named:
                 return f"nothing in {s.file} names {s.func}() (it is no entry point)"
     return ""
@@ -1466,7 +1530,7 @@ def classify(e: "Enumerator", s: Site) -> tuple[str, str]:
     if events <= {"PostToolUse", "PostToolUseFailure"}:
         return "G", "after the call ran: the block returns its text to the same actor, whose next call is the next round"
     if "PreToolUse" in events:
-        tools = _site_tools(s)
+        tools = _site_tools(s, e)
         if tools and tools <= OBLIGATION_TOOLS:
             return "G", f"refuses the actor's own {'/'.join(sorted(tools))} (its todo record or its dispatch); its next compliant call clears it"
         # a tool named as an event's matcher (`PreToolUse:Agent`, the event a hook runs on) is no call the
@@ -1514,6 +1578,32 @@ def relayed(tree: str, parent: str, child: str, event: str, work: str) -> bool:
         return p.returncode == 2
     finally:
         os.replace(orig, stub)
+
+
+def relayed_sites(e: "Enumerator", tree: str, work: str, event=None) -> tuple[list[Site], list[str]]:
+    """(the sites a block can come from, the child files no parent relays). A child process (Enumerator.children)
+    blocks only through a parent that relays its exit 2 (relayed()); a parent that does not (one answering by
+    JSON, as permissionrequest-answer.py does) gives the child's sites no registration of its own. So a child's
+    site keeps the registrations of the parents that relay it and is dropped only when none does: one parent
+    that does not relay never takes a child away from the parents that do. `event(parent)` names the event a
+    parent's relay is tried at (default: e.event)."""
+    quiet: dict[str, set] = {}  # child file -> the parents that do not relay it
+    relaying: dict[str, set] = {}
+    for parent, kids in e.children.items():
+        ev = event(parent) if event else e.event(parent)
+        for k in kids:
+            ok = relayed(tree, parent, k, ev, os.path.join(work, os.path.basename(k)))
+            (relaying if ok else quiet).setdefault(k, set()).add(parent)
+    out = []
+    for s in e.sites():
+        gone = quiet.get(s.file, set()) - relaying.get(s.file, set())
+        if not gone:
+            out.append(s)
+            continue
+        s.regs = [r for r in s.regs if r[0] not in gone]
+        if s.file in relaying and s.regs:
+            out.append(s)
+    return out, sorted(k for k in quiet if k not in relaying)
 
 
 _SPLIT = re.compile(r"\{[^{}]*\}|%[-#0-9.]*[sdrfix]|\$\{?\w+\}?|\\n|\n|\t")

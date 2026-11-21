@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
-    from . import roster
+    from . import locations, roster
     from .subagent_restart import (
         AGENT_RE,
         SESSION_RE,
@@ -55,6 +55,7 @@ try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
         project_slug,
     )
 except ImportError:  # hooks/lib placed directly on sys.path
+    import locations  # type: ignore[no-redef]
     import roster  # type: ignore[no-redef]
     from subagent_restart import (  # type: ignore[no-redef]
         AGENT_RE,
@@ -744,7 +745,7 @@ def registry_dir_named(project_dir: str | Path, name: Any) -> Path | None:
     today, but the artifact check reads the two spellings as two artifacts:
     the writer at ``dev-<ts>``, its readers at the name. None for a name that
     is not one plain path component."""
-    if not isinstance(name, str) or name in ("", ".", "..") or Path(name).name != name:
+    if not isinstance(name, str) or name in locations.NAMELESS_PARTS or Path(name).name != name:
         return None
     return _registry_root(project_dir) / name
 
@@ -790,7 +791,7 @@ def _first_line_record(path):
         candidate = json.loads(line.decode("utf-8", "replace"))
     except ValueError:
         return None
-    if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+    if isinstance(candidate, dict) and candidate.get("type") in _lib_module("command_span").TURN_RECORD_TYPES:
         return candidate
     return _READ_ON
 
@@ -824,7 +825,8 @@ def read_first_record_prompt(transcript_path: str | Path) -> str | None:
                         candidate = json.loads(line)
                     except ValueError:
                         return None
-                    if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+                    turns = _lib_module("command_span").TURN_RECORD_TYPES
+                    if isinstance(candidate, dict) and candidate.get("type") in turns:
                         record = candidate
                         break
     except OSError:
@@ -843,27 +845,6 @@ def read_first_record_prompt(transcript_path: str | Path) -> str | None:
         )
         return text or None
     return None
-
-
-def candidate_transcript_paths(
-    session_id: str,
-    agent_id: str,
-    project_dir: str | Path,
-    roots: Iterable[str | Path] | None = None,
-) -> list[Path]:
-    """Session-scoped candidate paths across every account root (design
-    §1.3-G2 L1): ``<root>/<slug>/<session_id>/subagents/agent-<agent_id>.jsonl``.
-
-    Reuses ``project_slug`` / ``account_project_roots``
-    (subagent_restart.py:551-577). Session scoping kills the observed
-    cross-session agent-id reuse (agent_resolver.py:23-29). Multi-root copies
-    are split views of the SAME child (design :196-199)."""
-    resolved_roots = list(roots) if roots is not None else account_project_roots()
-    slug = project_slug(project_dir)
-    return [
-        Path(root) / slug / session_id / "subagents" / f"agent-{agent_id}.jsonl"
-        for root in resolved_roots
-    ]
 
 
 def _meta_path(transcript_path: Path) -> Path:
@@ -1053,11 +1034,13 @@ def dispatch_obligations(
     contributes nothing.
     """
     try:
-        calls, _results, _notifications = _read_parent_calls(Path(transcript_path))
+        calls, results, _notifications = _read_parent_calls(Path(transcript_path))
+        refused = {i for i, found in results.items() if any(r.get("_hook_refused") for r in found)} \
+            | _lib_module("command_span").recorded_refusals(Path(transcript_path).stem)  # a call a hook refused never ran
     except Exception:
         return []
     found: list[dict] = []
-    for call in sorted(calls.values(), key=lambda c: c.get("line", 0)):
+    for call in sorted((c for c in calls.values() if c.get("tool_use_id") not in refused), key=lambda c: c.get("line", 0)):
         tool_input = call.get("input")
         prompt = tool_input.get("prompt") if isinstance(tool_input, Mapping) else None
         if not isinstance(prompt, str) or not prompt:
@@ -1103,7 +1086,7 @@ def _lib_module(name: str):
 
 def _session_transcripts(project_dir: str | Path, roots: Iterable[str | Path] | None) -> list[Path]:
     """Every top-level session transcript the CLI keeps for the project, in
-    every account root (the store candidate_transcript_paths walks)."""
+    every account root."""
     slug = project_slug(project_dir)
     found: list[Path] = []
     for root in (list(roots) if roots is not None else account_project_roots()):
@@ -1521,7 +1504,7 @@ def declaring_dispatch(
     task_id: str,
     path: str | Path,
     project_dir: str | Path,
-    roots: Iterable[str | Path] | None = None,
+    roots: Iterable[str | Path] | None = None, writer: bool = True,
 ) -> dict | None:
     """Who owes ``path`` for the task ``task_id``, read from the task's
     dispatch records in every session the project's transcript store holds
@@ -1541,20 +1524,20 @@ def declaring_dispatch(
       main agent's own step) and the template that declares the path, bound
       to its values (None when the step declares the path itself);
     - ``{"source": "writer", ...}``: a file no declaration names (a product
-      file): the dispatch whose own tool calls wrote it;
+      file): the dispatch whose own tool calls wrote it (not sought with writer=False);
     - None: nothing names an owner.
 
     Read-only; judges nothing on disk. Inside an open transcript_scan each
     answer is read once (each caller gets its own copy)."""
     if _SCAN is None or not isinstance(task_id, str):
-        return _declaring_dispatch(task_id, path, project_dir, roots)
+        return _declaring_dispatch(task_id, path, project_dir, roots, writer)
     roots = None if roots is None else tuple(roots)
-    key = ("owner", task_id, str(path), str(Path(project_dir).resolve()), roots)
-    return copy.deepcopy(_scan_memo(key, lambda: _declaring_dispatch(task_id, path, project_dir, roots)))
+    key = ("owner", task_id, str(path), str(Path(project_dir).resolve()), roots, writer)
+    return copy.deepcopy(_scan_memo(key, lambda: _declaring_dispatch(task_id, path, project_dir, roots, writer)))
 
 
 def _declaring_dispatch(task_id: str, path: str | Path, project_dir: str | Path,
-                        roots: Iterable[str | Path] | None) -> dict | None:
+                        roots: Iterable[str | Path] | None, writer: bool = True) -> dict | None:
     """declaring_dispatch's answer, read from the store."""
     root = Path(project_dir)
     rel = Path(path)
@@ -1581,7 +1564,7 @@ def _declaring_dispatch(task_id: str, path: str | Path, project_dir: str | Path,
     step = _canonical_step(family, wanted, spans, pipelines) if family else None
     if step is not None:
         return step
-    return _writer(records, wanted, project_dir)
+    return _writer(records, wanted, project_dir) if writer else None
 
 
 def first_declared_at(

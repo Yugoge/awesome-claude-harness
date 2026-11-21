@@ -31,16 +31,12 @@ fi
 GIT_DIR="${GIT_CHECKPOINT_DIR:-$GIT_DIR}"
 
 # Build git command for counting only (no commit is issued here; the lib handles commits)
-if [ -n "$GIT_DIR" ]; then
-  GIT_CMD="git -C $GIT_DIR"
-else
-  GIT_CMD="git"
-fi
+if [ -n "$GIT_DIR" ]; then GIT_CMD=(git -C "$GIT_DIR"); else GIT_CMD=(git); fi
 
 # Count changes (threshold gating)
-STAGED=$($GIT_CMD diff --cached --name-only 2>/dev/null | wc -l)
-MODIFIED=$($GIT_CMD diff --name-only 2>/dev/null | wc -l)
-UNTRACKED=$($GIT_CMD ls-files --others --exclude-standard 2>/dev/null | wc -l)
+STAGED=$("${GIT_CMD[@]}" diff --cached --name-only 2>/dev/null | wc -l)
+MODIFIED=$("${GIT_CMD[@]}" diff --name-only 2>/dev/null | wc -l)
+UNTRACKED=$("${GIT_CMD[@]}" ls-files --others --exclude-standard 2>/dev/null | wc -l)
 TOTAL=$((STAGED + MODIFIED + UNTRACKED))
 
 # Exit if no changes
@@ -61,10 +57,10 @@ if [ "$TOTAL" -ge "$CHECKPOINT_THRESHOLD" ]; then
   # PostToolUse stdout reaches neither (code.claude.com/docs/en/hooks). A snapshot that
   # was written says nothing.
   NOTICE=""
-  if [ "$RC" -eq 3 ]; then
-    NOTICE="Checkpoint snapshot refused by $checkpoint_refused_by: nothing written, see logs/checkpoint.log"
+  if [ -n "$checkpoint_notice" ]; then  # refused, or written without a file: the library's line
+    NOTICE="$checkpoint_notice"
   elif [ "$RC" -ne 0 ] && [ "$SILENT_MODE" != "1" ]; then
-    NOTICE="Checkpoint failed (${TOTAL} files pending); see ~/.claude/logs/checkpoint.log"
+    NOTICE="Checkpoint failed (${TOTAL} files pending); see ~/.claude/logs/checkpoint.log${checkpoint_streak:+; $checkpoint_streak}"
   fi
   if [ -n "$NOTICE" ]; then
     printf '{"systemMessage": "%s", "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "%s"}}\n' \

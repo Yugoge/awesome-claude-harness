@@ -156,7 +156,6 @@ AUTHORED_ROW_FIELDS = ["row_id", "mode/precondition", "behavior", "exercise_stat
 
 # Values recorded at the revision named below. Any drift from them is a FAILURE, not an update:
 # the published claim must break loudly rather than silently describe a boundary that moved.
-RECORDED_AT = "4c33f2f5"
 
 # Re-recorded 2026-09-03: _command_token_index() was taught the shell reserved
 # words, leading redirections and wrapper option flags it never handled, so the
@@ -175,7 +174,7 @@ RECORDED_REDIRECTION_OPS = ["2>/dev/null", ">", ">>", "<", "2>&1", "&>", "1>"]
 # adding '/' to the class would change the residual class, so the published table must fail.
 RECORDED_PY_ANCHOR = "(?:^|[\\s;&|()`])git"
 
-# Gate-architecture census, counted at RECORDED_AT.
+# Gate-architecture census, counted at 4c33f2f5.
 #   A = classifier-primary with a MUTUALLY EXCLUSIVE regex fallback guarded by
 #       [ "$CLASSIFIER_STATUS" != "ok" ]. This is the shape where a successful-but-empty parse
 #       suppresses the backstop.

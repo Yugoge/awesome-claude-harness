@@ -7,10 +7,10 @@ reboot. This copies:
   * every session journal  -> <dest>/journals/<session>.jsonl   (atomic replace)
   * every blob referenced by any event's pre_sha/post_sha
                            -> <dest>/objects.git  (bare repo, same blob ids)
-Default dest: $CLAUDE_CONFIG_DIR/attribution-seals when that directory is
-outside the harness tree, else attribution-seals/ beside the journal's own
-state dir (<harness>/state/attribution-seals, ignored like the rest of state/)
--- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
+Default dest: $CLAUDE_CONFIG_DIR/attribution-seals (taken through its settings.json
+link, claude_home.config_home) when that directory is outside the harness tree, else
+attribution-seals/ beside the journal's own state dir (<harness>/state/attribution-seals,
+ignored like the rest of state/) -- override with $ATTRIBUTION_SEAL_DEST or --dest. Refuses a RAM-backed
 destination unless --allow-volatile.
 
 Idempotent; safe to re-run (journals are append-only, blobs content-addressed).
@@ -30,6 +30,7 @@ Usage: seal-attribution-journal.py [--dest DIR] [--allow-volatile] [--json]
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import shutil
@@ -65,10 +66,14 @@ def default_dest() -> Path:
     if env:
         return Path(env)
     # A config dir apart from the harness tree keeps the seals off a volatile checkout (a tree on
-    # tmpfs); else beside the journal's state, which the harness .gitignore ignores.
-    config = os.environ.get("CLAUDE_CONFIG_DIR")
-    if config and not Path(config).resolve().is_relative_to(aj.harness_root().resolve()):
-        return Path(config) / "attribution-seals"
+    # tmpfs); else beside the journal's state, which the harness .gitignore ignores. The config dir
+    # is taken through its settings.json link (claude_home.config_home): configuration directories
+    # linking to one harness home share one store.
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        from lib.locations import config_home
+        config = config_home()
+        if not config.resolve().is_relative_to(aj.harness_root().resolve()):
+            return config / "attribution-seals"
     return aj.state_dir().parent / "attribution-seals"
 
 
@@ -105,9 +110,8 @@ def seal(dest: Path, allow_volatile=False) -> dict:
         copied += 1
     new_blobs, missing = 0, []
     src = aj.git_dir()
-    for sha in sorted(shas):
-        if _git(odb, "cat-file", "-e", sha).returncode == 0:
-            continue
+    have = _git(odb, "cat-file", "--batch-check", inp="".join(x + "\n" for x in sorted(shas)).encode()).stdout.decode()
+    for sha in sorted(shas - {ln.split()[0] for ln in have.splitlines() if not ln.endswith(" missing")}):
         r = _git(src, "cat-file", "blob", sha)
         if r.returncode != 0:
             missing.append(sha)
@@ -178,6 +182,10 @@ def autoseal_if_due(dest: Optional[Path] = None, interval: Optional[float] = Non
     refusal, is itself recorded as an error evidence entry."""
     dest = dest if dest is not None else default_dest()
     interval = DEFAULT_AUTOSEAL_INTERVAL_SECONDS if interval is None else interval
+    try:  # one seal at a time, the others skip; the lock ends with its holder (return, or killed)
+        dest.mkdir(parents=True, exist_ok=True); lock = open(dest / "seal.lock", "a"); fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return None
     now = time.time()
     last = read_last_evidence(dest)
     if last is not None and (now - last.get("ts", 0)) < interval:

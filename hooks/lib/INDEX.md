@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:34:23Z*
-**Total entries**: 79
+*Last updated: 2026-11-20T07:46:42Z*
+**Total entries**: 85
 **Convention**: kebab
 
 ## Tree
@@ -37,7 +37,7 @@ lib/
 ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
 ├── `close_rating.py` - The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports.
-├── `closeout.py` - CLI:
+├── `codex_transcript.py` - written by scripts/steps/codex-run.py, read by the gitignore preflight as its task's provenance. ...
 ├── `command_span.py` - rule of which transcript record is a prompt the human typed
 ├── `commit_journal.py` - WHY THIS EXISTS
 ├── `commit_pipeline.py` - ONE home for the two questions the commit-authorization chain could not
@@ -51,20 +51,25 @@ lib/
 ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - classify_git_command(text) returns (invocations, residuals). Callers that
+├── `git_facts.py` - (How a git command line parses, which word is the subcommand, lives in lib/shell_parse.py.)"""
 ├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
 ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
 ├── `harness_switch.sh` - harness_switch.sh — the harness switch's one question for shell hooks and jobs: is this
 ├── `harness_temp_state.py` - Is a resolved path harness temp state, and which temp root is it in: the one definition
+├── `harness_vocabulary.py` - Plain data, standard library only: a hook imports it before it reads its payload
 ├── `hook_launch.py` - Claude Code starts every hook registered on an event as its own process, so one
 ├── `hook_launch_fallback.py` - A dispatcher (hooks/<event>-launch.py) uses this when its own code cannot run:
 ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
 ├── `launch_settings.py` - A launcher (hooks/<event>-launch.py, lib/hook_launch.py) is one registration that runs an
+├── `locations.py` - What is a device or system temp, where the harness's roots are, what lies in which directory
 ├── `merge_grant.py` - The merge-analyst writes its grant with the Write tool at
 ├── `obligation.py` - Rollout step S2 of the converged zero-failure design
 ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 ├── `pol_degraded_removal_reference.ere` - ere file
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+├── `refusal_record.py` - The gates' advisory logs had no reader and were deleted (P1b); since then nothing could say what
+├── `refusal_record.sh` - refusal_record.sh -- a shell hook's report to the refusal record (hooks/lib/refusal_record.py).
 ├── `report_provenance.py` - hooks/subagentstop-e2e-enforce.py judges the ``e2e_enforcement.status`` of the qa-report.v2
 ├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
 ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
@@ -84,8 +89,9 @@ lib/
 ├── `specialist_yield.py` - Public API:
 ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS, ASK_COMMANDS
 ├── `stop_contract.py` - is a prompt the human typed (TC-4)
-├── `subagent.py` - is_subagent_context() and supporting helpers, for the hooks that import it
+├── `subagent.py` - is_subagent(): whether the calling agent is a subagent, the one predicate of that fact (a
 ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
+├── `switch_prompt.py` - A delivered or scheduled prompt reaches UserPromptSubmit as if the owner had typed it, so a promp...
 └── `todo_canonical.py` - Shared canonical todo validation utilities
 ```
 <!-- /AUTO:index-stats -->

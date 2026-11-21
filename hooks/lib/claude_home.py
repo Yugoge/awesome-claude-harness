@@ -231,6 +231,18 @@ def project_dir() -> Path:
     return Path.cwd()
 
 
+def config_home() -> Path:
+    """Where harness records that must not split by configuration directory live (score log, logs,
+    restart state). The configuration directory (CLAUDE_CONFIG_DIR, else ~/.claude) as written; when
+    its settings.json is a link, the directory that link resolves into, so configuration directories
+    linking to one harness home share its records. Shell twin: claude_config_home.
+    Path arithmetic alone, no test of the file: settings.json is a link exactly when its real path is not
+    its name below the configuration directory's real path."""
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    real = os.path.realpath(config / _SENTINEL_FILE)
+    return config if real == os.path.join(os.path.realpath(config), _SENTINEL_FILE) else Path(os.path.dirname(real))
+
+
 def settings_env(*keys: str, any_session: bool = False) -> dict[str, str]:
     """P7b R7: a Claude Code process (CLAUDECODE or CLAUDE_PROJECT_DIR set) whose env lacks
     CLAUDE_HOME started before its settings carried the overlay: the keys it lacks come from the
@@ -255,6 +267,29 @@ def settings_switch(key: str, default: str) -> str:
     harness home's settings.json env at run time (settings_env, any_session), stripped and
     lowercased; `default` when that env does not set it either (P1b E4)."""
     return settings_env(key, any_session=True).get(key, default).strip().lower()
+
+
+CLAUDE_HOME_SPELLING = "${CLAUDE_HOME:-$HOME/.claude}"  # the harness home as hooks and commands spell it
+PROJECT_ROOT_SPELLING = "${CLAUDE_PROJECT_DIR:-$PWD}"  # the project root as commands spell it for the Bash tool
+
+
+def known_text(text: str, cwd: Optional[str] = None, project: Optional[str] = None) -> Optional[str]:
+    """``text`` (a shell word as written) with ~, $HOME, $CLAUDE_PROJECT_DIR, ${CLAUDE_HOME:-$HOME/.claude}, (at the call's
+    start) $PWD and, given the Bash call's ``project``, its spelling expanded; quotes dropped; None when one stays."""
+    text = text.replace(PROJECT_ROOT_SPELLING, project) if project else text
+    home = os.environ.get("HOME") or os.path.expanduser("~")
+    known = {"HOME": home}
+    if cwd:
+        known["PWD"] = cwd
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        known["CLAUDE_PROJECT_DIR"] = os.environ["CLAUDE_PROJECT_DIR"]
+    text = text.replace(CLAUDE_HOME_SPELLING, os.environ.get("CLAUDE_HOME") or os.path.join(home, ".claude"))
+    for name, value in known.items():
+        text = text.replace("${%s}" % name, value).replace("$" + name, value)
+    text = text.replace('"', "").replace("'", "")
+    if any(c in text for c in "$`*?["):
+        return None
+    return os.path.expanduser(text) if text.startswith("~") else text
 
 
 def _main(argv: list[str]) -> int:

@@ -16,6 +16,8 @@ import sys
 import time
 
 HOOKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# The hook events whose payload names a tool (the dispatchers select their rules by it); defined
+# here, the standard-library-only module, and read by lib/hook_launch.py.
 TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest")
 
 
@@ -113,6 +115,13 @@ def run(event, rules, raw, record_fd=None) -> int:
         _write(record_fd, lines)
     _write(1, out)
     _write(2, err)
+    if code == 2:  # a report to the refusal record (lib/refusal_record.py); it never changes the answer
+        try:
+            from lib import refusal_record
+            refusal_record.report(raw, [(r.rule.file, minimal([r])[2]) for r in results if minimal([r])[0] == 2],
+                                  os.path.join(HOOKS, os.path.basename(sys.argv[0])))
+        except Exception:
+            pass
     return code
 
 

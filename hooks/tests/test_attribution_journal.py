@@ -457,6 +457,46 @@ def test_autoseal_forced_repeat_is_idempotent_and_logs_both_attempts(tmp_path, m
     assert len(lines) == 2 and all(json.loads(l)["status"] == "ok" for l in lines)
 
 
+def test_reseal_checks_held_blobs_in_one_git_call_not_one_per_blob(tmp_path, monkeypatch):
+    """The seal runs inside the 30 s post hook: a `git cat-file -e` per referenced blob took ~26 s
+    at the 11,551 blobs of 2026-11-18, so every due call ran past its timeout. A re-seal of N
+    already-held blobs starts a constant number of git processes, and still adds the new one."""
+    _env(tmp_path, monkeypatch)
+    paths = [tmp_path / f"b{i}.txt" for i in range(60)]
+    for i, p in enumerate(paths):
+        p.write_text("a%d" % i)
+    for i, p in enumerate(paths):
+        _run("Edit", {"file_path": str(p)}, "s1", str(i), lambda p=p, i=i: p.write_text("b%d" % i), tmp_path)
+    dest = tmp_path / "seal"
+    assert seal.seal(dest, allow_volatile=True)["blobs_added"] == 120
+    paths[0].write_text("new")
+    _run("Edit", {"file_path": str(paths[0])}, "s1", "x", lambda: paths[0].write_text("newer"), tmp_path)
+    calls = []
+    real = seal._git
+    monkeypatch.setattr(seal, "_git", lambda *a, **k: calls.append(a) or real(*a, **k))
+    res = seal.seal(dest, allow_volatile=True)
+    assert res["blobs_referenced"] == 122 and res["blobs_added"] == 2 and not res["blobs_missing_in_source"]
+    assert len(calls) <= 5, len(calls)          # 1 batch check + 2 per new blob; was 1 per held blob
+
+
+def test_autoseal_skips_while_another_seal_holds_the_lock(tmp_path, monkeypatch):
+    """Concurrent post hooks of one account must not each start a seal (the evidence entry is only
+    written at the end, so every call during a running seal saw it due): one seals, the rest skip."""
+    import fcntl
+    _env(tmp_path, monkeypatch)
+    dest = _autoseal_env(tmp_path, monkeypatch)
+    f = tmp_path / "a.txt"
+    f.write_text("1")
+    _run("Edit", {"file_path": str(f)}, "s1", "1", lambda: f.write_text("2"), tmp_path)
+    dest.mkdir(parents=True)
+    with open(dest / "seal.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert seal.autoseal_if_due(dest, interval=0, allow_volatile=True) is None
+        assert not seal.evidence_log_path(dest).exists() and not (dest / "objects.git").exists()
+    entry = seal.autoseal_if_due(dest, interval=0, allow_volatile=True)   # lock released: it seals
+    assert entry["status"] == "ok" and entry["result"]["blobs_added"] == 2
+
+
 def test_autoseal_refuses_volatile_dest_records_error_evidence(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
     ram = Path("/dev/shm/attr-autoseal-refuse-test")

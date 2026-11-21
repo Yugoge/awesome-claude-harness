@@ -34,7 +34,8 @@ PROVENANCE, UNTRUSTED = TT.PROVENANCE, TT.UNTRUSTED
 
 @pytest.fixture()
 def world(tmp_path):
-    return TT.World(tmp_path)
+    with TT.base.project_outside_temp() as project:
+        yield TT.World(tmp_path, project)
 
 
 def _main(world, command: str) -> None:

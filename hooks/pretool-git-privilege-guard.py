@@ -9,7 +9,8 @@ Refused for an agent:
   - git commit, unless a /commit grant bound to the commit's repository,
     branch and HEAD authorizes it, or its subject is
     `auto-bulk: end-of-cycle commit for <branch>` while a /commit --bulk
-    sentinel is live. Stderr literal: `BLOCKED: agent git commit`.
+    sentinel is live, or its repository lies wholly in the caller's own scratch
+    directory (_own_scratch_commit). Stderr literal: `BLOCKED: agent git commit`.
   - git merge (any form; /merge merges inside hooks/merge.sh, whose subprocess
     no hook sees). Stderr literal: `BLOCKED: agent git merge`.
   - git push (any form; /push pushes inside hooks/push.sh). Stderr literal:
@@ -152,6 +153,7 @@ from lib.git_command_classifier import (  # noqa: E402
 # hooks/pretool-commit-dispatch-attest.py. See _grant_provenance_refusal.
 from lib import commit_pipeline  # noqa: E402
 from lib import shell_parse  # noqa: E402
+from lib import git_facts  # noqa: E402
 # The per-event pointer a spent grant hands to the PostToolUse finalizer, which
 # appends the commit-event journal entry from it.
 from lib import commit_journal  # noqa: E402
@@ -177,14 +179,15 @@ GIT_COMMAND_RE = r'(?:^|[\s;&|()`])git' + GIT_GLOBAL_OPTION_RE + r'\s+'
 # What repoints a commit at another repository or work tree than its cwd or its
 # one -C directory, where the grant's repo/branch/HEAD binding is checked. No
 # committer uses them, so a commit under a grant that carries one is refused.
-_GIT_REDIRECT_ENV_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')
-_GIT_REDIRECT_FLAGS = ('--git-dir', '--work-tree', '--namespace')
-# Builtins that move a later commit to another cwd than the guard probes.
-_CWD_CHANGE_CMDS = ('cd', 'pushd', 'popd')
+_GIT_REDIRECT_ENV_VARS = shell_parse.GIT_REDIRECT_ENV_VARS
+_GIT_REDIRECT_FLAGS = shell_parse.GIT_REDIRECT_OPTS
+
+
+_COMMIT_NOTE = ''  # names the caller's own scratch directory on a commit refusal (_evaluate_commit)
 
 
 def _block(message):
-    sys.stderr.write(message)
+    sys.stderr.write(message + _COMMIT_NOTE)
     sys.exit(2)
 
 
@@ -536,10 +539,9 @@ def _push_forces_or_deletes(args):
     return False
 
 
-# Commit options whose value is the next word when it is not attached.
-_COMMIT_VALUE_OPTS = {'-C', '-c', '-t', '--author', '--date', '--cleanup', '--fixup', '--squash',
-                      '--reuse-message', '--reedit-message', '--template', '--trailer',
-                      '--pathspec-from-file'}
+# Commit options whose value is the next word when it is not attached, but the message options
+# (-m/--message, -F/--file), which the walks below read on their own.
+_COMMIT_VALUE_OPTS = (git_facts.GIT_COMMIT_VALUE_OPTIONS - {'--message', '--file'}) | {'-C', '-c', '-t'}
 
 
 # ---------------------------------------------------------------------------
@@ -771,7 +773,7 @@ def _commit_records(command):
     invocation statically). A command the parser cannot read yields none."""
     sites, invocations = _git_view(command)
     moves = [k for k, site in enumerate(sites)
-             if shell_parse.resolve(site.cmd).name in _CWD_CHANGE_CMDS]
+             if shell_parse.resolve(site.cmd).name in shell_parse.CWD_BUILTINS]
     assigned = any(a.name in _GIT_REDIRECT_ENV_VARS for site in sites for a in site.cmd.assignments)
     records = []
     for at, inv in invocations:
@@ -828,7 +830,7 @@ def _commit_message(rec, cwd):
                 continue
         if value is None or (opt in ('-F', '--file') and value == '-'):
             return None
-        if opt in ('-m', '--message'):
+        if opt in shell_parse.GIT_MESSAGE_OPTS:
             texts.append(value)
         else:
             path = os.path.join(base, value)
@@ -1059,7 +1061,50 @@ def _grant_provenance_refusal(grant, grant_path, data):
     return ''
 
 
+_SCRATCH_CALL_GIT = ('add', 'commit', 'status', 'log', 'diff', 'show', 'rev-parse', 'ls-files')
+
+
+def _own_scratch_commit(command, data):
+    """(True when every commit of `command` lands wholly inside the caller's own scratch directory, the note
+    naming that directory or ''). Own: the write policy's one definition (lib/bash_safety_rules._scratch_owner,
+    removal=False). The call runs only cd/pushd and git _SCRATCH_CALL_GIT with no option but -C and user.* config,
+    no GIT_ word and no write but /dev/null, so nothing in it repoints the repository first; each commit's
+    directory is followed through its cds (shell_parse.CdScopes) and -C, and the repository git finds there
+    now (work tree, git dir, common dir, objects, index; real paths, the hook's environment) must lie in it.
+    A directory not there yet, an unknown cd or any doubt is no answer: False."""
+    from lib import bash_safety_rules, locations
+    owns, note = bash_safety_rules._scratch_owner(data, removal=False)
+    note = note and note + ('\nA throwaway repository whose work tree and git directory both lie there, made by '
+                            '`git init` in an earlier call, commits there without a grant.\n')
+    script = shell_parse.parse(command)
+    sites, invocations = _git_view(command)
+    if script.error is not None or 'GIT_' in command or not invocations or any(
+            k not in {at for at, _inv in invocations}
+            and shell_parse.resolve(site.cmd).name not in shell_parse.CWD_BUILTINS for k, site in enumerate(sites)):
+        return False, note
+    if any(t.path != locations.NULL_DEVICE for t in shell_parse.write_targets(script, raw=command)):
+        return False, note
+    scopes, cwd = shell_parse.CdScopes(command).run(script), _hook_cwd(data)
+    for _at, inv in invocations:
+        if (inv.subcommand not in _SCRATCH_CALL_GIT or inv.unresolved or None in inv.C_dirs
+                or any(opt != '-C' and opt not in shell_parse.GIT_CONFIG_OPTS for opt, _v in inv.global_opts)
+                or any(not str(key).startswith('user.') for key, _v in inv.config_pairs)):
+            return False, note
+        for d in scopes.of(inv.word) if inv.subcommand == 'commit' else ():
+            top = os.path.join(cwd, d, *inv.C_dirs)
+            paths = [] if d == '?' else _git_output([
+                '-C', top, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--absolute-git-dir',
+                '--git-common-dir', '--git-path', 'objects', '--git-path', 'index']).splitlines()
+            if len(paths) != 5 or not all(owns(os.path.realpath(p)) for p in [top] + paths):
+                return False, note
+    return True, note
+
+
 def _evaluate_commit(command, data):
+    global _COMMIT_NOTE
+    owned, _COMMIT_NOTE = _own_scratch_commit(command, data)
+    if owned:
+        return
     cwd = _hook_cwd(data)
     if _auto_bulk_subject(command, cwd):
         # The auto-bulk subject authorizes nothing by itself: a live /commit --bulk
@@ -1196,7 +1241,7 @@ def _branch_writes(inv):
         return False, []
     if sub in ('merge', 'cherry-pick', 'revert', 'am', 'reset'):
         return sub != 'reset' or _reset_moves(args), []
-    if sub in ('pull', 'fetch'):  # a refspec's destination is a local ref
+    if sub in _FETCHING:  # a refspec's destination is a local ref
         return sub == 'pull', [o.rpartition(':')[2] for o in ops if ':' in o]
     if sub == 'rebase':
         ops = _operands(args, ('--onto', '-x', '--exec', '-s', '--strategy', '-X',
@@ -1396,7 +1441,7 @@ def _in_checkpoint_ns(dst):
     and `..` applied; the spellings git rejects outright are refused alike."""
     parts = []
     for comp in dst.lstrip('+').lower().split('/'):
-        if comp in ('', '.'):
+        if comp in ('', os.curdir):
             continue
         if comp == '..':
             if parts:

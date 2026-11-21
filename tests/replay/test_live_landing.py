@@ -394,7 +394,10 @@ BASH = _pre(None, "*", "Bash", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Writ
     | {("PostToolUse", "Bash"), POST_LAUNCH}
 WRITE = _pre(None, "*", "Write", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash",
              "Write|Edit|NotebookEdit|MultiEdit") | {("PostToolUse", "Write"), POST_LAUNCH}
-AGENT = _pre(None, "*", "Agent") | {("PostToolUse", "Agent"), ("SubagentStop", "*"), POST_LAUNCH}
+# The dispatch registrations now match both dispatch tools (lib/subagent.DISPATCH_TOOLS): the base's "Agent"
+# groups are gone and "Agent|Task" ones stand in their place; an Agent dispatch reaches both keys' changes.
+AGENT = _pre(None, "*", "Agent", "Agent|Task") | {("PostToolUse", "Agent"), ("PostToolUse", "Agent|Task"),
+                                                 ("SubagentStop", "*"), POST_LAUNCH}
 # The registrations (event, matcher) where this tree's settings.json differs from the base's that each
 # scenario's events after the landing reach (the harness-home session writes no todo list, no file and
 # dispatches no agent); together they must be every one that differs
@@ -418,7 +421,7 @@ EXERCISES = {PRE.name: {STOP, TODO, SESSION} | BASH | WRITE | AGENT, HOME.name: 
 # one the REACHED entry of its scenario does not name fails test_again_with_your_settings's `hooklist` part.
 # (P2's overnight guard, under either matcher, is a rule of P12's write gate: its old registration's removal
 # is among those the scenarios reach.)
-RATING = ("PostToolUse", "AskUserQuestion|Agent")
+RATING = ("PostToolUse", "AskUserQuestion|Agent|Task")  # its dispatch half is both dispatch tools since 2026-11-19
 PROMPT = ("UserPromptSubmit", None)
 # The harness switch's UserPromptSubmit registration (hooks/userprompt-harness-switch.sh, /harness off|on):
 # appended after the event's other hooks, which stay as they were; it acts only on a typed /harness
@@ -442,7 +445,10 @@ ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
              # design A's Monitor guard: a Monitor command meets every Bash hook; no landing scenario starts a monitor
              ("PreToolUse", "Monitor"): ([], ["hooks/pretool-monitor-command.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
-             ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], [])}
+             ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], []),
+             # 2026-11-19: every permission request is answered by rule (permissionrequest-launch.py runs it);
+             # no replay raises a PermissionRequest (a replayed call is decided by its hooks alone)
+             ("PermissionRequest", None): ([], ["hooks/permissionrequest-answer.py"])}
 REACHED = {PRE.name: {RATING, PROMPT, START}, HOME.name: {PROMPT}, A.name: {RATING, START, FAILED_LAUNCH},
            B.name: {RATING, START, FAILED_LAUNCH}}  # P13-3: a dispatch starts an agent
 

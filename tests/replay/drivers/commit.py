@@ -5,9 +5,8 @@
 The main agent types `/commit <task-id>` (Steps 1-2 bind TASK_ID: no tool call) and runs, as the
 tree's text spells each one, read at run time:
 
-* Step 3: the step's one Bash block (the close-report path, its mtime, the `--disposition --stage
-  close` call), its output read as data: `DISPOSITION=`, the `GAP` lines, the `CHAIN=` line bound as
-  ARTIFACT_CHAIN. `incomplete`: each gap on an artifact other than the close-report is routed (the
+* Step 3: the step's one Bash block (the `--disposition --stage close` call), its output read as
+  data: `DISPOSITION=`, the `GAP` lines, the `CHAIN=` line bound as ARTIFACT_CHAIN. `incomplete`: each gap on an artifact other than the close-report is routed (the
   Routes section: its declaring-dispatch reader on the gap's path, its own Bash call, the answer acted
   on as drivers/close.py does); with no such gap left, commands/close.md Steps 1-2 run for the task
   (drivers/close.py's Step 1 and Step 2, in /commit's session); the block runs again until it prints
@@ -25,7 +24,7 @@ tree's text spells each one, read at run time:
   its finding (Routes) and runs a fresh round from Step 5.
 * Step 7: changelog-analyst from the step's prompt block, the real commit in the toy project and
   the push-gate token as the tree's agent text writes it; the status block read and handled per
-  its commit_status (a `hook_blocked` failure: the text's one AskUserQuestion, then Steps 5-7 again).
+  its commit_status (a `hook_blocked` failure: the text's REFUSED: line and the hook's output; the run ends).
 * Step 8: the selection as the text orders it, by the main agent's own Read, Glob and Grep calls and no
   script (context spec_path, the close-report's continuation line, the specs glob), ending in the outcome
   the text prints.
@@ -34,8 +33,9 @@ tree's text spells each one, read at run time:
 * `--auto`: Step 2's discovery call (the text's `--auto` section runs it) and each discovered parent walked
   through Steps 3-8, the batch summary; when discovery lists no parent, the task's lifecycle row
   (dev-lifecycle.py scan, run by the driver, no agent call) is recorded as a fact.
-* The waits (variant waits): each one AskUserQuestion with the options the text names (the stub owner
-  picks the first), as AskUserQuestion tool calls the hooks see.
+* The waits (variant waits): nobody is asked. `/commit` with no task ends on its NO_TARGET: line and the owner
+  types `/commit <the first candidate>`; the hook's refusal of Phase 8's commit ends on Step 7's REFUSED: line;
+  `/commit --auto --force` ends on Step 1's NO_TARGET: line.
 
 The changelog-analyst is played from agents/changelog-analyst.md of the tree (agents.Player plus
 the role work below): Phase 1's plan checks (the three equality reads and the status read), Phase
@@ -266,28 +266,16 @@ class CommitRun:
     def label(self, text: str) -> str:
         return f"/commit {text}"
 
-    def run_text(self, text: str, label: str, desc: str, capture=(), rules=()):
+    def run_text(self, text: str, label: str, desc: str, rules=()):
         o = self.o
         text = o.bind(text, list(rules))
-        return closedrv.run_captured(o, o.shell_bind(text), desc, label, capture)
-
-    def ask(self, header: str, question: str, options: list, label: str) -> str:
-        """One AskUserQuestion with the options the text names; the stub owner picks the first."""
-        tin = {"questions": [{"question": question, "header": header[:12], "multiSelect": False,
-                              "options": [{"label": l, "description": d} for l, d in options]}]}
-        call = self.o.s.tool("AskUserQuestion", tin, label=self.label(label), deviation=self.devs.at(self.label(label)))
-        ans = (call.response.get("answers") or {}).get(question, "") if call.ok else ""
-        closedrv.fact(self.rp, "commit question", {"label": label, "header": header, "question": question,
-                                                   "options": [l for l, _ in options], "answer": ans,
-                                                   "blocked": call.blocked})
-        return ans
+        return o.run(o.shell_bind(text), desc, label)
 
     # ------------------------------------------------------------ Step 3
     def disposition(self, label: str) -> tuple:
         o = self.o
         block = o.block("Step 3", anchor="--disposition")
-        c = self.run_text(block, self.label(f"{label} Bash disposition"),
-                          "Step 3: the close-report path, its age and the task's disposition", capture=("CLOSE_REPORT",))
+        c = self.run_text(block, self.label(f"{label} Bash disposition"), "Step 3: the task's disposition")
         out = (c.response.get("stdout") or "") if c.ok else (c.error or "")
         return c, parse_disposition(out)
 
@@ -846,7 +834,7 @@ class CommitRun:
         """The selection as the text orders it, made with the main agent's own calls and no script (a script
         reading the close report here would be a second decider of it): the context's spec_path (Read), the close
         report's continuation line (Read, the text's pattern on the lines outside fenced blocks), the specs of this
-        cycle (Glob, then the text's one content test, a Grep, on the files of its time window), ending in the
+        cycle (Glob, then the text's one content test, a Grep, on the files of its name form), ending in the
         outcome the text prints. A spec that stage 1 or 2 names is recorded as a fact: the toy cycle links none,
         and no spec-update agent is played."""
         o, tid = self.o, self.tid
@@ -900,16 +888,14 @@ class CommitRun:
         if not stage:
             lab = self.label("Step 8 Glob specs")
             g = o.s.tool("Glob", {"pattern": "spec-*.md", "path": sdir}, label=lab, deviation=self.devs.at(lab))
-            mtime = os.path.getmtime(report) if os.path.isfile(report) else float("-inf")
-            window = [f for f in (g.response.get("filenames") or [] if g.ok else [])
-                      if re.fullmatch(r"spec-\d{8}-\d{6}\.md", os.path.basename(f))
-                      and mtime - 24 * 3600 <= os.path.getmtime(f) <= mtime + 3600]
-            if window:
+            named = [f for f in (g.response.get("filenames") or [] if g.ok else [])
+                     if re.fullmatch(r"spec-\d{8}-\d{6}\.md", os.path.basename(f))]
+            if named:
                 lab = self.label("Step 8 Grep spec marker")
                 m = o.s.tool("Grep", {"pattern": re.escape(marker), "path": sdir, "output_mode": "files_with_matches"},
                              label=lab, deviation=self.devs.at(lab))
                 held = {os.path.join(sdir, f) for f in (m.response.get("filenames") or [])} if m.ok else set()
-                found = [f for f in window if f in held]
+                found = [f for f in named if f in held]
         if stage:
             outcome = warning if stage == 2 else f"Step 8: updating the spec {found[0]}"
         else:
@@ -920,34 +906,24 @@ class CommitRun:
         o.s.say(outcome)
 
     # ------------------------------------------------------------ Step 7
-    def hook_question(self) -> bool:
-        """Step 7's hook-rejection question, as the text spells it: header, question (the hook, the operation
-        and the exact command it refused, the hook's output verbatim), the two options; the authorizing
-        option's description the exact command the owner runs (the remedy the hook's output names, else an
-        `/allow` of the refused command). True when the owner authorizes: the owner then runs it."""
-        sec = self.o.section("Step 7")
-        para = re.sub(r"\s+", " ", next(p for p in re.split(r"\n\s*\n", sec) if "**A hook rejection**" in p))
-        header = re.search(r"header `([^`]+)`", para).group(1)
-        template = re.search(r"question `([^`]+)`", para).group(1)
-        yes, _, no, no_desc = re.search(r"options `([^`]+)` \(description: (.*?)\) and `([^`]+)` \(description: (.*)\)\.?\s*$",
-                                        para).groups()
+    def hook_refused(self) -> None:
+        """Step 7's hook rejection, as the text spells it: one REFUSED: line (the hook, the operation and the exact
+        command it refused), the hook's output verbatim and the remedy it names; nobody is asked and the commit is
+        not run again."""
+        para = re.sub(r"\s+", " ", next(p for p in re.split(r"\n\s*\n", self.o.section("Step 7"))
+                                         if "**A hook rejection**" in p))
+        template = re.search(r"line `(REFUSED: [^`]+)`", para)
+        if not template:
+            raise cmdtext.TextNotFound("Step 7: no REFUSED: line for a hook rejection")
         hb = self.hook_block
         op = f"`git commit` in {hb['repo']} (`{hb['command']}`)"
-        question = (template.replace("<hook>", hb["hook"]).replace("<the operation>", op)
-                    .replace("<TASK_ID>", self.tid) + "\n\n" + hb["text"])
+        line = template.group(1).replace("<hook>", hb["hook"]).replace("<the operation>", op).replace(
+            "<TASK_ID>", self.tid)
         remedy = re.search(r"^Run (.+?) in (\S+) first, then retry\.$", hb["text"], re.M)
-        how = (f"`cd {shlex.quote(remedy.group(2))} && {remedy.group(1)}` (the remedy {hb['hook']} names; this "
-               f"refusal runs before any /allow grant)" if remedy else f"`/allow {hb['command']}`")
-        opts = [(yes, f"{how}; /commit runs the operation again once it is done"), (no, no_desc)]
-        ans = self.ask(header, question, opts, "Step 7 AskUserQuestion hook block")
-        closedrv.fact(self.rp, "owner authorizes", {"answer": ans, "operation": "git commit", "hook": hb["hook"],
-                                                    "command": hb["command"], "authorize": how})
-        if ans != yes:
-            return False
-        if not remedy:
-            raise RuntimeError(f"the owner's authorization for {hb['hook']} is an /allow grant this driver does not play")
-        owner_register_filter(self.rp, remedy.group(2), remedy.group(1))
-        return True
+        how = (f"`cd {shlex.quote(remedy.group(2))} && {remedy.group(1)}`" if remedy else f"`/allow {hb['command']}`")
+        self.o.s.say(f"{line}\n\n{hb['text']}\n\nTo have it done: {how}")
+        closedrv.fact(self.rp, "commit refused", {"line": line, "hook": hb["hook"], "command": hb["command"],
+                                                  "remedy": how, "output": hb["text"]})
 
     def qa_approved(self) -> dict:
         """Step 6's `COMMIT: APPROVE` record as the text spells it: QA_APPROVED_FILES = PLAN_FILES (per repo),
@@ -982,11 +958,8 @@ class CommitRun:
             cs = self.status.get("commit_status", "unknown")
             o.s.say(f"changelog-analyst: commit_status={cs}")
             if cs == "failed" and self.status.get("failure_code") == "hook_blocked" and self.hook_block:
-                o.s.say(f"ERROR: changelog-analyst failed with failure_code: hook_blocked. "
-                        f"Reason: {self.status.get('failure_reason')}.")
-                if not self.hook_question():
-                    return "failed"  # not authorized: the operation is withdrawn, never retried
-                continue
+                self.hook_refused()
+                return "refused"  # reported, nobody asked: the operation is withdrawn, never retried
             return cs
         return "failed"
 
@@ -1082,7 +1055,10 @@ class CommitRun:
         o = self.o
         o.slash(typed, label="/commit --auto typed")
         if typed != "--auto":
-            self.flags_question(typed)
+            line = self.flags_refused(typed)
+            ev = o.s.stop(line, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
+            self.rp.terminal("commit", False, ev, outcome=line)
+            return []
         c = self.run_text(self.list_call("commit"), "/commit --auto Bash discovery",
                           "Discover the commit_pending parents")
         parents = [l for l in ((c.response.get("stdout") or "") if c.ok else "").split("\n") if l.strip()]
@@ -1102,17 +1078,16 @@ class CommitRun:
         return results
 
     # ------------------------------------------------------------ the waits
-    def flags_question(self, typed: str) -> str:
-        """Step 1's --auto flag-combination question, its options as the text lists them (one the text
-        offers only when its flag was typed, only then)."""
-        para = self.o.section("Step 1")
+    def flags_refused(self, typed: str) -> str:
+        """Step 1's --auto flag combination: the NO_TARGET: line the text spells; nothing runs, nobody is asked."""
+        para = re.sub(r"\s+", " ", self.o.section("Step 1"))
         para = para[para.index("**`--auto` flag combination**"):]
-        header = re.search(r"header `([^`]+)`", para).group(1)
-        question = re.sub(r"\s+", " ", re.search(r"question `([^`]+)`", para, re.S).group(1))
-        opts = [(re.sub(r"<task-id>", self.tid, m.group(1)), re.sub(r"\s+", " ", m.group(3)).strip())
-                for m in re.finditer(r"^- `([^`]+)`( \([^)]*\))?: (.*?)(?=^- `|\n\n)", para, re.M | re.S)
-                if not m.group(2) or m.group(1) in typed.split()]
-        return self.ask(header, question, opts, "Step 1 AskUserQuestion flags")
+        line = re.search(r"line `(NO_TARGET: [^`]+)`", para)
+        if not line:
+            raise cmdtext.TextNotFound("Step 1: no NO_TARGET: line for a refused flag combination")
+        self.o.s.say(line.group(1))
+        closedrv.fact(self.rp, "commit no target", {"typed": typed, "line": line.group(1)})
+        return line.group(1)
 
     def list_call(self, action: str) -> str:
         """Step 2's discovery call (the `--auto` section runs it too), for `--next-action <action>`."""
@@ -1121,22 +1096,23 @@ class CommitRun:
                          r"--next-action commit --project-dir \"<PROJECT_ROOT>\")`", sec).group(1)
         return call.replace("--next-action commit", f"--next-action {action}")
 
-    def task_question(self) -> str:
-        """Step 2's no-unambiguous-candidate question: the text's discovery calls, then the question."""
+    def no_target(self) -> list:
+        """Step 2's no-unambiguous-candidate end: the text's discovery calls, then one NO_TARGET: line naming
+        each candidate as `/commit <task-id>`; nobody is asked. Returns the candidates."""
         o = self.o
         sec = re.sub(r"\s+", " ", o.section("Step 2"))
+        if "Print one line `NO_TARGET: `" not in sec:
+            raise cmdtext.TextNotFound("Step 2: no NO_TARGET: line for an ambiguous task")
         cands = []
         for action in ("commit", "close"):
             c = self.run_text(self.list_call(action),
                               self.label(f"Step 2 Bash list-actionable {action}"), f"The {action}_pending parents")
             cands += [l.split()[0] for l in (c.response.get("stdout") or "").split("\n") if l.strip()] if c.ok else []
-        if not cands:  # "When neither list names a parent, print ... and end."
-            self.o.s.say(re.search(r"print `(No task to commit:[^`]*)`", sec).group(1))
-            return ""
-        header = re.search(r"header `([^`]+)`", sec).group(1)
-        question = re.search(r"question `([^`]+)`", sec).group(1)
-        opts = [(t, "the task to land") for t in cands[:3]] + [("/commit --auto", "every commit_pending parent")]
-        return self.ask(header, question, opts, "Step 2 AskUserQuestion task")
+        line = ("NO_TARGET: " + ", ".join(f"/commit {t}" for t in cands) + ", /commit --auto") if cands else \
+            re.search(r"the line is `(NO_TARGET: [^`]*)`", sec).group(1)
+        o.s.say(line)
+        closedrv.fact(self.rp, "commit no target", {"typed": "", "line": line, "candidates": cands})
+        return cands
 
 
 # ---------------------------------------------------------------- variant waits: the owner's world
@@ -1263,16 +1239,22 @@ def run(rp) -> None:
     run_ = CommitRun(rp, session, tid, producer=producer, variant=variant, codex=codex)
     if variant == "waits":
         owner_settings_edit(rp)
-        # `/commit` with no task context: the Task question; the stub owner picks the first candidate.
+        # `/commit` with no task context: the candidates in a NO_TARGET: line, the run ends; the owner types
+        # `/commit <the first candidate>`.
         run_.o.slash("", label=run_.label("typed (no task)"))
-        ans = run_.task_question()
-        if not ans or ans.startswith("/"):
-            raise RuntimeError(f"the Task question offered no task: {ans!r}")
-        run_.tid = ans
+        cands = run_.no_target()
+        if not cands:
+            raise RuntimeError("the NO_TARGET: line named no task")
+        ev = run_.o.s.stop(None, label="/commit Stop (no task)", deviation=run_.devs.at("/commit Stop (no task)"))
+        closedrv.fact(rp, "commit no target stop", {"still_blocked": bool(ev.still_blocked)})
+        run_.tid = cands[0]
+        run_.o.slash(run_.tid, label=run_.label("typed (the task)"))
         out = run_.walk()
-        run_.o.s.stop(run_.stalled or f"/commit {run_.tid}: {out}", label="/commit Stop",
-                      deviation=run_.devs.at("/commit Stop"))
-        # `/commit --auto --force`: the Flags question, then --auto as the answer names it.
+        # a refused commit ends on Step 7's REFUSED: report, the turn's last text
+        ev = run_.o.s.stop(None if out == "refused" else run_.stalled or f"/commit {run_.tid}: {out}",
+                           label="/commit Stop", deviation=run_.devs.at("/commit Stop"))
+        closedrv.fact(rp, "commit stop", {"outcome": out, "still_blocked": bool(ev.still_blocked)})
+        # `/commit --auto --force`: the NO_TARGET: line naming the refused combination; nothing runs.
         CommitRun(rp, rp.later_session(session), tid, producer=producer).run_auto("--auto --force")
         return
     run_.run(f"{tid} --codex" if codex else None)
