@@ -441,8 +441,11 @@ def test_a_prompt_the_human_did_not_type_also_ends_the_turn_state(sess, kind):
                     sess.payload("UserPromptSubmit", prompt=text))
     sess.append(record)
     assert proc.returncode == 0, proc.stderr
-    assert not sess.flag().exists(), f"a {kind} UserPromptSubmit must end the /do turn's consent"
-    assert not sess.streak().exists(), f"a {kind} UserPromptSubmit must reset the streak"
+    # A wake by a returning background task is not the owner's turn (the owner's decision of 2026-11-21):
+    # it keeps the consent and the streak (test_background_dispatch.py, decision 3).
+    kept = kind == "task_notification"
+    assert sess.flag().exists() is kept, f"a {kind} UserPromptSubmit and the /do turn's consent"
+    assert sess.streak().exists() is kept, f"a {kind} UserPromptSubmit and the streak"
     sess.assert_other_session_untouched()
 
 

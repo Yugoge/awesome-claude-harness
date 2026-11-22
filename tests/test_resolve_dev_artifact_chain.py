@@ -699,6 +699,72 @@ def test_declared_directory_and_symlink_count_as_present(tmp_path: Path) -> None
     assert result["checks"]["declared_paths_exist"] is True
 
 
+# A declared path the lane deleted is not absent: the repository knows it as
+# deleted since the report's baseline_head_sha (hooks/lib/declared_absence.py).
+
+
+def _git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), "-c", "user.email=t@example.invalid", "-c", "user.name=t", *args],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _tracked_cycle(root: Path, modified: list[str]) -> dict[str, Path]:
+    """A singular chain in a repository holding scripts/one.py and scripts/old.py,
+    its report's baseline_head_sha the seed commit."""
+    parents = _make_singular(root)
+    _materialise(root, "scripts/old.py")
+    _git(root, "init", "-q")
+    _git(root, "add", "scripts")
+    _git(root, "commit", "-q", "-m", "seed")
+    document = _dev_document(TASK_ID, modified=modified)
+    document["baseline_head_sha"] = _git(root, "rev-parse", "HEAD")
+    _write(parents["dev"], document)
+    return parents
+
+
+@pytest.mark.parametrize("how", ["working_tree", "index", "commit"])
+def test_path_deleted_since_the_baseline_is_not_absent(tmp_path: Path, how: str) -> None:
+    _tracked_cycle(tmp_path, ["scripts/one.py", "scripts/old.py"])
+    if how == "working_tree":
+        (tmp_path / "scripts" / "old.py").unlink()
+    else:
+        _git(tmp_path, "rm", "-q", "scripts/old.py")
+    if how == "commit":
+        _git(tmp_path, "commit", "-q", "-m", "drop old")
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert "ABSENT_DECLARED_PATH" not in _error_codes(result), result["errors"]
+    assert result["checks"]["declared_paths_exist"] is True
+    assert result["status"] == "pass", result["errors"]
+
+
+def test_path_deleted_before_the_baseline_is_absent(tmp_path: Path) -> None:
+    parents = _tracked_cycle(tmp_path, ["scripts/one.py", "scripts/old.py"])
+    _git(tmp_path, "rm", "-q", "scripts/old.py")
+    _git(tmp_path, "commit", "-q", "-m", "drop old")
+    document = json.loads(parents["dev"].read_text(encoding="utf-8"))
+    document["baseline_head_sha"] = _git(tmp_path, "rev-parse", "HEAD")
+    _write(parents["dev"], document)
+    details = _absent_path_details(RESOLVER.resolve_chain(tmp_path, TASK_ID))
+    assert len(details) == 1 and "scripts/old.py" in details[0]
+
+
+def test_missing_never_tracked_path_is_absent_in_a_repository(tmp_path: Path) -> None:
+    _tracked_cycle(tmp_path, ["scripts/one.py", "scripts/never.py"])
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "fail"
+    details = _absent_path_details(result)
+    assert len(details) == 1 and "scripts/never.py" in details[0]
+
+
+def test_report_without_an_absent_path_is_unchanged_in_a_repository(tmp_path: Path) -> None:
+    _tracked_cycle(tmp_path, ["scripts/one.py", "scripts/old.py"])
+    result = RESOLVER.resolve_chain(tmp_path, TASK_ID)
+    assert result["status"] == "pass", result["errors"]
+    assert result["checks"]["declared_paths_exist"] is True
+
+
 def test_absent_and_explicitly_empty_parallel_workers_are_distinguishable(
     tmp_path: Path,
 ) -> None:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preloaded TodoList for /close: commands/close.md's "### Step 0" to "### Step 4",
 the same five steps under every prompt (--auto walks each step over its parents;
---force is accepted and ignored).
+a /close that code completes at the prompt, hooks/lib/close_exit.py, has no list).
 
 Under --late-repair, Step 0 also declares the effective report finalize writes
 (the main agent's own step), so a gap on that report routes back to Step 0.

@@ -95,7 +95,11 @@ def test_r2_paths_are_denied_to_every_caller(tmp_path, caller, form, name):
 
 @pytest.mark.parametrize("form", ["Write", "echo", "rm", "mv"])
 def test_the_do_sidecar_without_a_state_dir_is_the_default_roots(tmp_path, form):
-    assert_denied(run(tmp_path, *forms(f"/tmp/claude-do-task-{SID}.json")[form], state=False), "a /do task sidecar")
+    sys.path.insert(0, os.path.join(ROOT, "hooks", "lib"))
+    from harness_state_dir import state_root  # the default state dir of the hook's HOME, on disk
+    default = os.path.join(state_root(home=str(tmp_path / "home")), "state")
+    assert_denied(run(tmp_path, *forms(f"{default}/claude-do-task-{SID}.json")[form], state=False),
+                  "a /do task sidecar")
     # ... and named through the variable the agent's shell holds
     proc = run(tmp_path, "Bash", {"command": f'rm -f "$CLAUDE_STATE_DIR/claude-do-task-{SID}.json"'})
     assert_denied(proc, "a /do task sidecar")
@@ -388,7 +392,10 @@ def test_h2_a_directory_holding_a_token_or_a_grant_is_denied(tmp_path, command):
 @pytest.mark.parametrize("form", ["Write", "Edit", "echo", "append"])
 @pytest.mark.parametrize("which", ["answers", "producer answer", "score log", "score lock"])
 def test_r6_hook_owned_files_are_refused_to_every_agent(tmp_path, caller, form, which):
-    logs = tmp_path / "home" / ".claude" / "logs"
+    sys.path.insert(0, os.path.join(ROOT, "hooks", "lib"))
+    from harness_state_dir import state_root  # the score log's place for the hook's HOME
+    from pathlib import Path
+    logs = Path(state_root(home=str(tmp_path / "home")), "logs")
     answer = "an owner's answer, which only the PostToolUse AskUserQuestion hook writes"
     score = "the score log or its lock, which only hooks write"
     path, what = {"answers": (f"{PRODUCT}/docs/dev/requirement-answers-20261109-120000-r1.json", answer),

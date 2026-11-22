@@ -91,7 +91,7 @@ def run_one(sb: str, tree: str, out_dir: str, *, driver: str, mode: str, setting
     env_inner = {"PATH": lay.path, "HOME": lay.home,
                  "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": lay.sb}
     t0, ru0 = time.monotonic(), resource.getrusage(resource.RUSAGE_CHILDREN)
-    rc = sandbox.launch(sb, lay, argv, env_inner, guard=guard)
+    rc = sandbox.launch(sb, lay, argv, env_inner, guard=guard, full_tmp=(driver_args or {}).get("tmp") == "full")
     outer, ru1 = time.monotonic() - t0, resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu = (ru1.ru_utime - ru0.ru_utime) + (ru1.ru_stime - ru0.ru_stime)  # the whole tree, strace included
     if os.path.exists(out_dir):

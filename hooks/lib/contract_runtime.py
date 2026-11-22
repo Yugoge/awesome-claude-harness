@@ -188,6 +188,10 @@ def exploration_calls(steps: list[tuple[str, dict]], text: Optional[str] = None)
 # (17) its dev, then its QA.
 _REDISPATCHES = {'9': ('8',), '11': ('8',), '13': ('12',), '17': ('12', '15')}
 
+# A step an older text of /dev-overnight numbered with a letter, folded since into
+# the step above it: a session in flight still holds the old label in its list.
+FOLDED_STEPS = {'11g': '11'}
+
 
 def post_triage_steps(steps: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
     """The dispatches after PM TRIAGE, which its contract renders, in step order:
@@ -197,7 +201,7 @@ def post_triage_steps(steps: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
         return []
     call_of = dict(steps)
     return [(label, each) for label, call in steps[last + 1:]
-            for each in ([call] if call else [call_of.get(s) for s in _REDISPATCHES.get(label, ())])
+            for each in [call] + [call_of.get(s) for s in _REDISPATCHES.get(label, ())]
             if each]
 
 

@@ -45,8 +45,9 @@
 #     fetch = +refs/checkpoints/*:refs/remotes/origin/checkpoints/*
 #
 # Log file locations:
-#   ~/.claude/logs/checkpoint.log        CAS/build failures
-#   ~/.claude/logs/checkpoint-push.log   background push failures
+#   <state root>/logs/checkpoint.log        CAS/build failures
+#   <state root>/logs/checkpoint-push.log   background push failures
+#   (CHECKPOINT_LOG_DIR overrides <state root>/logs; harness_state_root below)
 #
 # Concurrency safety:
 #   - flock advisory lock on .git/checkpoint-core.lock serializes the
@@ -66,8 +67,10 @@
 #     logs a warning about potential orphan commits under concurrency).
 # ============================================================================
 
-. "${BASH_SOURCE[0]%/*}/claude_home.sh" 2>/dev/null || claude_config_home() { printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
-CHECKPOINT_LOG_DIR="${CHECKPOINT_LOG_DIR:-$(claude_config_home)/logs}"  # one per harness home, not per account
+. "${BASH_SOURCE[0]%/*}/claude_home.sh" 2>/dev/null
+# The harness's state root on disk (lib/harness_state_dir.sh): its logs/ and the push stamp below.
+. "${BASH_SOURCE[0]%/*}/harness_state_dir.sh" || return 1 2>/dev/null || exit 1
+CHECKPOINT_LOG_DIR="${CHECKPOINT_LOG_DIR:-$(harness_state_root)/logs}"  # one per install, not per account
 CHECKPOINT_LOG_FILE="${CHECKPOINT_LOG_DIR}/checkpoint.log"
 CHECKPOINT_PUSH_LOG_FILE="${CHECKPOINT_LOG_DIR}/checkpoint-push.log"
 CHECKPOINT_PUSH_MIN_INTERVAL="${CHECKPOINT_PUSH_MIN_INTERVAL:-30}"  # seconds
@@ -80,6 +83,15 @@ CHECKPOINT_REMOTE_MAX_FILE_BYTES="${CHECKPOINT_REMOTE_MAX_FILE_BYTES:-104857600}
 # Short timeout for the remote-ref lookup so the gate (which runs inside the
 # fully-detached worker) cannot reintroduce the latency M1 removed.
 CHECKPOINT_REMOTE_LOOKUP_TIMEOUT="${CHECKPOINT_REMOTE_LOOKUP_TIMEOUT:-10}"  # seconds
+# Bound of one tree scan (auto-commit.sh's status, add -A below), 5 s more to end it: timeout then ends git and every
+# process git started (its process group), so no scan outlives its hook; two stay under the Stop phase's 120 s.
+CHECKPOINT_SCAN_TIMEOUT="${CHECKPOINT_SCAN_TIMEOUT:-45}"  # seconds
+checkpoint_scan() { if command -v timeout >/dev/null 2>&1; then timeout -k 5 "$CHECKPOINT_SCAN_TIMEOUT" git "$@"; else git "$@"; fi; }
+# True when dir (default: here) is the top of its repository's working tree. A project below a larger repository is
+# not: the snapshot is the repository's (one ref per branch, restored at its top), so it would take the tree above.
+checkpoint_project_top() {
+    local d t; d=$(cd "${1:-.}" 2>/dev/null && pwd -P) && t=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null) && [ "$t" = "$d" ]
+}
 
 # Known PII file classes hard-excluded from every checkpoint snapshot,
 # independent of the CURRENT .gitignore content (defense-in-depth backstop;
@@ -159,14 +171,6 @@ _checkpoint_refused() {
     _checkpoint_log ERROR "snapshot refused by ${checkpoint_refused_by}: nothing written (ref=${ref})"
     _checkpoint_record_failure
     checkpoint_notice="Checkpoint snapshot refused by ${checkpoint_refused_by}: nothing written, see logs/checkpoint.log; ${checkpoint_streak}"
-}
-
-# Internal: compute git dir (.git) for the repo at <work_dir>
-_checkpoint_git_dir() {
-    local work_dir="$1"
-    local -a git_cmd
-    if [ -n "$work_dir" ]; then git_cmd=(git -C "$work_dir"); else git_cmd=(git); fi
-    "${git_cmd[@]}" rev-parse --git-dir 2>/dev/null
 }
 
 # Internal: stale temp-index sweep (defensive; prevents SIGKILL residue buildup)
@@ -361,10 +365,6 @@ _checkpoint_rate_limited_push() {
         repo_hash=$(printf '%s' "$abs_git_dir" | cksum | awk '{print $1}')
     fi
     local stamp_file
-    # Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp), the one path rule every hook
-    # sources. Fail-soft fallback.
-    . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/harness_state_dir.sh" 2>/dev/null \
-      || harness_state_dir() { printf '%s\n' /tmp; }
     stamp_file="$(harness_state_dir)/.checkpoint-push-${repo_hash}.ts"
 
     # Rate limit: skip if last push attempt was within the interval
@@ -474,11 +474,9 @@ write_checkpoint() {
         return 0
     fi
 
-    # rc=2 (not a repo) is a no-op skip, NOT a checkpoint failure: the counter is left alone.
-    local git_dir
-    git_dir=$(_checkpoint_git_dir "$work_dir")
-    if [ -z "$git_dir" ]; then
-        _checkpoint_log WARN "not a git repo (work_dir='${work_dir}', trigger='${trigger}')"
+    # rc=2 (not a repo, or not its top) is a no-op skip, NOT a checkpoint failure: the counter is left alone.
+    if ! checkpoint_project_top "$work_dir"; then
+        _checkpoint_log WARN "not a git repo, or not the top of its repository (work_dir='${work_dir}', trigger='${trigger}')"
         return 2
     fi
 
@@ -564,7 +562,8 @@ write_checkpoint() {
     local scratch=".claude/scratch" err="${TMP_INDEX}.err" nested="" rc=0
     [ -d "$top/$scratch" ] && ! [ -e "$top/$scratch/.gitignore" -o -L "$top/$scratch/.gitignore" ] \
         && ! "${git_cmd[@]}" check-ignore -q "$top/$scratch" && printf '*\n' >"$top/$scratch/.gitignore" 2>/dev/null
-    GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" add -A --ignore-errors -- :/ ":(top,exclude,glob)[.]${scratch#.}/**" 2>"$err" || rc=$?
+    GIT_INDEX_FILE="$TMP_INDEX" checkpoint_scan "${git_cmd[@]:1}" add -A --ignore-errors -- :/ ":(top,exclude,glob)[.]${scratch#.}/**" 2>"$err" || rc=$?
+    case "$rc" in 124|137) echo "error: add -A ran past ${CHECKPOINT_SCAN_TIMEOUT}s and was ended" >>"$err" ;; esac
     cat "$err" >>"$CHECKPOINT_LOG_FILE" 2>/dev/null
     [ "$rc" = 0 ] || { nested=$(sed -n "s/^error: '\(.*\)\/' does not have a commit checked out$/\1/p" "$err")
         grep -v -e " does not have a commit checked out$" -e "^error: unable to index file '.*/'$" "$err" \

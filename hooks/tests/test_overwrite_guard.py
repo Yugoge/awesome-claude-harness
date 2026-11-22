@@ -2,28 +2,21 @@
 """Tests of live code that the suite of the deleted overwrite guard also pinned.
 
 The overwrite guard was never registered and was deleted with its route
-corpus. What stays here has a live subject:
-
-  * hooks/lib/allowlist.py's sentinel grants: a Write grant keeps its bare
-    wildcard for the Write tool, and the registered PostToolUse consumer's
-    bash-command matcher never matches a Write grant.
-  * hooks/lib/bash_write_targets.py, the import shim over the shared parser
-    (hooks/lib/shell_parse.py) that two registered hooks call: the path text
-    `extract_bash_write_paths` and `extract_bash_touched_paths` return, and the
-    parser's redirect and anchored-path readings behind them.
+corpus. What stays here has a live subject: hooks/lib/bash_write_targets.py,
+the import shim over the shared parser (hooks/lib/shell_parse.py) that two
+registered hooks call: the path text `extract_bash_write_paths` and
+`extract_bash_touched_paths` return, and the parser's redirect and
+anchored-path readings behind them.
 """
 from __future__ import annotations
 
 import ast
 import importlib.util
 import inspect
-import json
 import os
 import re
 import subprocess
 import sys
-import time
-import uuid
 from pathlib import Path
 
 import pytest
@@ -32,78 +25,6 @@ REPO = Path(__file__).resolve().parent.parent.parent
 
 sys.path.insert(0, str(REPO / "hooks"))
 from lib import bash_write_targets as bwt  # noqa: E402
-from lib.allowlist import (  # noqa: E402
-    SENTINEL_GRANT_DIR,
-    consume_sentinel_grant_on_terminal_result,
-    match_sentinel_grant_for_bash_command,
-    match_sentinel_grant_for_write,
-)
-
-NEW = "NEWCONTENT"
-
-
-def original_bytes() -> str:
-    """Fresh known bytes for this run; never a remembered constant."""
-    return f"ORIGINAL-{uuid.uuid4().hex}"
-
-
-def write_grant(task_id, session_id, operations) -> Path:
-    Path(SENTINEL_GRANT_DIR).mkdir(parents=True, exist_ok=True)
-    path = Path(SENTINEL_GRANT_DIR) / f"{task_id}.json"
-    path.write_text(json.dumps({
-        "task_id": task_id,
-        "session_id": session_id,
-        "allowed_operations": operations,
-        "created_at": time.time(),
-        "expires_at": time.time() + 300,
-    }), encoding="utf-8")
-    return path
-
-
-def drop_grants(task_id):
-    for path in Path(SENTINEL_GRANT_DIR).glob(f"{task_id}*.json"):
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-
-
-def test_ac06_write_tool_wildcard_behaviour_is_unchanged():
-    """A bare Write grant keeps its wildcard for the Write tool."""
-    task_id = f"ovwtest-{uuid.uuid4().hex}"
-    session_id = f"sid-{uuid.uuid4().hex}"
-    try:
-        write_grant(task_id, session_id, [{"op": "Write"}])
-        matched = match_sentinel_grant_for_write(task_id, session_id, "/any/path/at/all")
-        assert matched == {"op": "Write"}, "allowlist.py must be untouched"
-    finally:
-        drop_grants(task_id)
-
-
-def test_ac09_the_registered_posttool_consumer_still_cannot_see_a_write_grant(tmp_path):
-    """A Write grant is invisible to the registered PostToolUse consumer.
-
-    hooks/posttool-allowlist-consume.py gates its unlink on
-    match_sentinel_grant_for_bash_command, which reads the shell command's
-    FIRST WORD as the op name. A {"op":"Write","target":...} grant names no
-    shell command, so that matcher returns None for every replacement command
-    and the consumer never spends it.
-    """
-    work = tmp_path / "posttool-blind"
-    work.mkdir()
-    target = work / "victim.txt"
-    target.write_text(original_bytes(), encoding="utf-8")
-    task_id = f"ovwtest-{uuid.uuid4().hex}"
-    session_id = f"sid-{uuid.uuid4().hex}"
-    try:
-        write_grant(task_id, session_id, [{"op": "Write", "target": str(target)}])
-        for command in (f"echo {NEW} > {target}", f"cp src {target}", f"tee {target}"):
-            assert match_sentinel_grant_for_bash_command(task_id, command) is None, (
-                "the PostToolUse consumer now matches a Write grant against a shell command")
-        # And the helper it would have called is, and always was, fine.
-        assert consume_sentinel_grant_on_terminal_result(task_id, "success") is True
-    finally:
-        drop_grants(task_id)
 
 
 CONSUMERS = (

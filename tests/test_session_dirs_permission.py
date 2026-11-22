@@ -372,7 +372,11 @@ WRAPPERS = {"timeout", "time", "nice", "nohup", "stdbuf", "command", "builtin", 
 
 
 def _deny(settings: Path = REPO / "settings.json") -> list[str]:
-    return json.loads(settings.read_text(encoding="utf-8"))["permissions"]["deny"]
+    """settings.json's own entries, and for the shipped file the hook rule's (policies/cli-deny.v1.json)."""
+    own = json.loads(settings.read_text(encoding="utf-8"))["permissions"]["deny"]
+    if settings != REPO / "settings.json":
+        return own
+    return own + json.loads((REPO / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"]
 
 
 def bash_rule_matches(entry: str, text: str) -> bool:
@@ -570,7 +574,7 @@ def _cli_decision(perms: dict, cmd: str, work: Path, port: int, cmdfile: Path) -
 @pytest.mark.skipif(os.environ.get("HARNESS_LIVE_CLI") != "1" or not shutil.which("claude"),
                     reason="live CLI re-measurement is opt-in: HARNESS_LIVE_CLI=1 with `claude` installed")
 def test_live_cli_decisions(tmp_path):
-    perms = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+    perms = dict(json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"], deny=_deny())
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]

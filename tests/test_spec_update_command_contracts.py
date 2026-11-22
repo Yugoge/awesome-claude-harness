@@ -26,5 +26,5 @@ def test_command_policy() -> None:
     [row] = [r for r in json.loads(run.stdout)["facts"]["command_rows"] if r["name"] == "spec-update"]
     assert (row["human_only"], row["group"]) == (True, "Spec")
     assert set(re.findall(r"--[a-z]+", row["argument_hint"])) == {"--update", "--continue", "--temp", "--spec"}
-    deny = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))["permissions"]["deny"]
+    deny = json.loads((ROOT / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"]
     assert deny.count("Skill(spec-update)") == 1

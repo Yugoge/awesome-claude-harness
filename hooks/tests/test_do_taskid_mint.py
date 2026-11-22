@@ -151,7 +151,7 @@ def test_minted_line_is_printed_when_the_sidecar_write_fails():
             assert proc.returncode == 0, proc.stderr
             m = re.search(r"\[/do\] task-id minted: (\S+)", proc.stdout)
             assert m and TS_RE.match(m.group(1)), proc.stdout
-            assert "Failed to write task sidecar" in proc.stderr, proc.stderr
+            assert f"[/do] The task sidecar was not written ({blocker}: [Errno 21] Is a directory" in proc.stdout, proc.stdout
     finally:
         blocker.rmdir()
         _cleanup(sid)

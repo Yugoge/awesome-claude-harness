@@ -354,7 +354,7 @@ def _template_obligation(role: str, sfx: str) -> dict:
     line = next(ln for ln in text.splitlines() if "Obligation block" in ln and f'role="{role}"' in ln)
     head, _, rest = line.partition("artifacts=")
     fields = dict(re.findall(r'\b(role|pipeline|profile)="([^"]*)"', head))
-    artifacts = json.loads(re.match(r"(\[.*\])\.\s", rest).group(1).replace("{pipeline.timestamp_suffix}", sfx))
+    artifacts = json.loads(re.match(r"(\[.*\])\.(?:\s|$)", rest).group(1).replace("{pipeline.timestamp_suffix}", sfx))
     return dict(fields, task_id=sfx, lane=None, lane_set=None, dispatched_at=_iso(), artifacts=artifacts)
 
 

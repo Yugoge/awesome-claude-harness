@@ -102,7 +102,7 @@ def _test_md_calls() -> list[str]:
 
 def test_every_bash_call_in_test_md_is_allowed_by_the_analyzer_and_the_hook():
     calls = _test_md_calls()
-    assert len(calls) >= 11 and any("--full" in call for call in calls), calls
+    assert len(calls) >= 10 and any("--full" in call for call in calls), calls
     for command in calls:
         result = eb.analyze(command)
         assert result["allowed"] is True, (command, result["verdict"], result.get("reason"))

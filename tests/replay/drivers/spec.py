@@ -291,7 +291,7 @@ class SpecText:
         """(prefix before `spec-write.py`, the quote closing its path, heredoc opener, delimiter) of the
         text's create block."""
         first = self.create_block.split("\n")[0]
-        m = re.match(r"^(.*?)spec-write\.py(\"?) create --spec \S+\s*(<<'?(\w+)'?)\s*$", first)
+        m = re.match(r"^(.*?)spec-write\.py(\"?) create --spec (?:\"[^\"]*\"|\S+)\s*(<<'?(\w+)'?)\s*$", first)
         if not m:
             raise cmdtext.TextNotFound("Step 3's writer block has no `spec-write.py create --spec ... <<'X'` line")
         return m.group(1), m.group(2), m.group(3), m.group(4)
@@ -840,8 +840,13 @@ class SpecRun:
         # Step 1: no --codex token; non-empty requirement -> Step 3. Step 2: not triggered.
         self.to(3)
         self.step3()
-        if re.search(r"^#+\s+Step 3a\b", o.text, re.M):  # a text that asks the round (an earlier one does not)
-            self.to("3a")
+        # A text that asks the round (an earlier one does not): as its own Step 3a before the integer step numbers,
+        # as Step 3's sub-heading "The requirement round" since.
+        lettered = bool(re.search(r"^#+\s+Step 3a\b", o.text, re.M))
+        self.round_heading = "Step 3a" if lettered else "The requirement round"
+        if lettered or re.search(r"^#+\s+The requirement round\b", o.text, re.M):
+            if lettered:
+                self.to("3a")
             self.step3a()
         o.advance()  # Step 3 (or 3a) done, Step 4 in progress
         if self.variant == "text-question":  # R7: a turn ending with a question in text is a Stop gap (A8)
@@ -862,11 +867,11 @@ class SpecRun:
             self.angle = angle
             act = agents.Act(notes=_round.panel_notes(angle), status="ready", summary=f"panel {angle}",
                              terminal={"docs/dev/ba-panel-*": f"BA PANEL {angle}: DONE"})
-            o.dispatch(o.template("Step 3a", index=0), act, f"Step 3a Agent(ba) panel {angle}", sid,
+            o.dispatch(o.template(self.round_heading, index=0), act, f"Step 3a Agent(ba) panel {angle}", sid,
                        subagent_type="ba")
         self.angle = None
         doc = _round.with_paths(_round.round1(sid, panel=_round.panel()), sid)
-        o.dispatch(o.template("Step 3a", index=1), agents.Act(content={"requirement-round.v1": doc}, summary="panel QA"),
+        o.dispatch(o.template(self.round_heading, index=1), agents.Act(content={"requirement-round.v1": doc}, summary="panel QA"),
                    "Step 3a Agent(qa) panel QA", sid, subagent_type="qa")
         rel = f"docs/dev/ba-panel-{sid}-r1.json"
         if self.variant == "round":  # Finalize before round 1 is asked is refused (A6)
@@ -880,7 +885,7 @@ class SpecRun:
         ans = f"docs/dev/requirement-answers-{sid}-r1.json"
         if not os.path.isfile(os.path.join(self.project, ans)):
             raise AssertionError("/spec's round 1 was asked and the hook wrote no answer file")
-        block = next(b.text for b in cmdtext.blocks(o.text, "Step 3a") if "--answers" in b.text)
+        block = next(b.text for b in cmdtext.blocks(o.text, self.round_heading) if "--answers" in b.text)
         o.run_text(block, "Step 3a Bash spec-write append --answers", "Copy the owner's answers into Section 5",
                    extra_rules=[(r"^n$", "1")])
         raw = agents.peek(self.rp, "main", os.path.join(self.project, ans)).rstrip("\n")
@@ -910,8 +915,15 @@ class SpecRun:
             text = appended(text, "5", self.requirement, replace_placeholder=True)
         self.populated = text
         if self.st.writer:
-            o.run_text(self.st.create_block, "Step 3 Bash spec-write create", "Write the first spec",
-                       extra_rules=[(r"^the populated template$", text)])
+            # the text's nested `<the path of sub-step 2, <YYYYMMDD-HHMMSS> as written>`: the path of sub-step 2
+            # (its stamp bound by the driver: a typed name, which the writer writes as given)
+            block = re.sub(r"<the path of sub-step 2,[^<>]*<[^<>]+>[^<>]*>", lambda m: self.path, self.st.create_block)
+            call = o.run_text(block, "Step 3 Bash spec-write create", "Write the first spec",
+                              extra_rules=[(r"^the populated template$", text)])
+            # the writer prints the path it wrote (its own UTC time in a name the text leaves stamped): spec_path
+            m = re.search(r"^spec-write: create (\S+)$", (getattr(call, "response", None) or {}).get("stdout", ""), re.M)
+            if m:
+                self.path = m.group(1) if os.path.isabs(m.group(1)) else os.path.join(self.project, m.group(1))
         else:
             if "Create `docs/dev/specs/` if it does not exist" in sec:
                 o.run(f"mkdir -p {shlex.quote(os.path.dirname(self.path))}", "Create docs/dev/specs/",

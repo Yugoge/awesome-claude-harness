@@ -19,6 +19,7 @@ LIB = Path(__file__).resolve().parents[1] / "lib"
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
+import harness_state_dir  # noqa: E402
 import harness_temp_state as hts  # noqa: E402
 
 ENV_VARS = ("CLAUDE_STATE_DIR", "TMPDIR", "CLAUDE_TMPDIR", "CLAUDE_CODE_TMPDIR",
@@ -36,7 +37,7 @@ def roots(tmp_path, monkeypatch):
     tmp.mkdir()
     var_tmp.mkdir(parents=True)
     monkeypatch.setattr(hts, "SYSTEM_TEMP_ROOTS", (str(tmp), str(var_tmp)))
-    # harness_state_dir() defaults to the literal /tmp; point it at the fake one.
+    # Point the state dir at the fake /tmp, where the names are matched as in any name root.
     monkeypatch.setenv("CLAUDE_STATE_DIR", str(tmp))
     return tmp, var_tmp
 
@@ -73,12 +74,24 @@ CASES = [
     ("tmpfs-pressure-counter", "claude-pressure-warn-sid1"),
     ("tmpfs-pressure-counter", "claude-pressure-warn-sid1.lock"),
     ("checkpoint-push-stamp", ".checkpoint-push-abc123.ts"),
+    ("tool-ran", "claude-tool-ran-sid1.log"),
+    ("checkpoint-overtime", ".checkpoint-overtime-0123456789abcdef01234567"),
+    ("codex-unavailable", "codex-unavailable.json"),
+    ("report-provenance", "report-provenance/k1.json"),
+    ("report-provenance", "report-provenance/k1.head"),
+    ("lane-ledger", "lane-ledger/sid1/agent1.json"),
+    ("lane-ledger", "lane-ledger/sid1/.agent1.json.tmp.123"),
+    ("returns-hold", "returns-hold/sid1.json"),
+    ("returns-hold", "returns-hold/sid1.json.lock"),
     ("capability-state", "claude-capability-0/sid1.json"),
     ("git-blessed-grants", "claude-git-blessed/tok.grant"),
     ("daemon-restart-grant", "claude-allow-daemon-restart-web.flag"),
     ("scratch-owner", "sid1/.owner"),
     ("scratch-owner", "sid1/.owner.123.tmp"),
     ("scratch-owner", "claude-scratch/sid1/.owner"),
+    ("dispatch-temp-state", "sid1/.dispatch-tmp"),
+    ("dispatch-temp-state", "sid1/.dispatch-tmp.123"),
+    ("dispatch-temp-state", "claude-scratch/sid1/.dispatch-tmp"),
     ("doc-sync-notices", "sid1/doc-sync-notices-main.json"),
     ("doc-sync-notices", "sid1/.doc-sync-notices-x.tmp"),
     ("doc-sync-notices", "claude-scratch/sid1/doc-sync-notices-agent-ab.json"),
@@ -87,13 +100,6 @@ CASES = [
     ("claude-scratch", "claude-scratch/sid1/tmp.abc"),
     ("codex-outputs", "codex-outputs/codex-output-1-2.txt"),
     ("graphify-cache", "claude-graphify/repo/graph.json"),
-    ("orchestrator-output", "dev-output-1.json"),
-    ("orchestrator-output", "qa-output-1.json"),
-    ("orchestrator-output", "iteration-context-1.json"),
-    ("orchestrator-output", "cleanliness-output-1.json"),
-    ("orchestrator-output", "style-output-1.json"),
-    ("orchestrator-output", "cleaner-output-1.json"),
-    ("orchestrator-output", "rule-output-1.json"),
     ("runtime-guard-err", "runtime-guard-AbC123"),
     ("grepguard-probe", "grepguard-probe-x1/probe.txt"),
     ("checkpoint-result", "checkpoint-result.123.ns"),
@@ -355,7 +361,7 @@ def test_name_root_overrides(roots, tmp_path, monkeypatch, var, rel, name):
 
 def test_relative_state_dir_falls_back_to_default(roots, monkeypatch):
     monkeypatch.setenv("CLAUDE_STATE_DIR", "relative/state")
-    assert hts.state_dir() == os.path.realpath("/tmp")
+    assert hts.state_dir() == os.path.realpath(os.path.join(harness_state_dir.state_root(), "state"))
 
 
 def test_pathlike_and_bad_input(roots):

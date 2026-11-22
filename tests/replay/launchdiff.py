@@ -20,6 +20,9 @@ Normalised before comparing (and only this): the replay's own ids, times and san
 norm.refusal_text normalises a refusal, and the durations a hook prints ("12 ms", "0.31 s", "7h 59m";
 on stderr, the only stream the short-window warning reaches, also "time budget <1h (9m)" and that
 warning's presence at a 60-minute window), which are its own measurement and differ run to run.
+One decision is let differ: when an overnight record's isolation window ends between the old path's
+start and the launcher's end, a stdout that is exactly the write boundary's bwrap rewrite on the old
+side against nothing on the launcher's (the window closed in between: _window_closed, _boundary_rewrite).
 A replay with any difference reports it as
 a driver error (Replay.finish), so every pipeline scenario of the suite asserts there is none.
 REPLAY_LAUNCH_DIFFERENTIAL=0 turns it off for a local run; a traced replay never runs it (the
@@ -32,6 +35,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 from . import differential, hookrun
 
@@ -111,7 +115,9 @@ def old_path(harness: str, launched: dict, event: str, payload: dict) -> list:
     rules = launcher_rules(harness, launched["hook"]) or []
     tool = payload.get("tool_name") if event in hookrun.TOOL_EVENTS else None
     return [{"hook": "hooks/" + f, "matcher": "|".join(t) if t else None, "timeout": to,
-             "command": hookrun.LAUNCHED_COMMAND % ("hooks/" + f)}
+             # a shell hook was registered, and is launched, as `bash <file>` (hooks/pretool-launch.py)
+             "command": (hookrun.LAUNCHED_COMMAND.replace("python3 ", "bash ", 1) if f.endswith(".sh")
+                         else hookrun.LAUNCHED_COMMAND) % ("hooks/" + f)}
             for f, t, to in rules if tool is None or t is None or tool in t]
 
 
@@ -126,10 +132,48 @@ def run_old(layout, hooks: list, payload_raw: str, env: dict, cwd: str) -> list:
             *roots, "--", "--", "none", "", "", "env", "-i", *[f"{k}={v}" for k, v in sorted(inner.items())],
             sys.executable, "-m", f"{__package__}.launchdiff"]
     timeout = sum(int(h["timeout"] or hookrun.DEFAULT_TIMEOUT_S) for h in hooks) + 30
+    started = time.time()  # compare() reads it: the clock the old path's first hook can meet (_window_closed)
     p = subprocess.run(argv, input=spec, capture_output=True, text=True, cwd=cwd, timeout=timeout, errors="replace")
     if p.returncode != 0:
         raise RuntimeError(f"the old path's runner exited {p.returncode}: {p.stderr[-800:]}")
-    return json.loads(p.stdout)
+    return [dict(r, started=started) for r in json.loads(p.stdout)]
+
+
+def _window_closed(project: str, since: float, until: float) -> bool:
+    """True iff an overnight record of `project` ends its isolation window (isolation_active_until, else
+    end_time: lib/overnight.state_verdicts) between `since` and `until`: the old path ran inside the window
+    and the launcher, after it, may have met it closed."""
+    from datetime import datetime, timezone
+    claude = os.path.join(project, ".claude")
+    try:
+        names = [n for n in os.listdir(claude) if n.startswith("overnight-state-") and n.endswith(".json")]
+    except OSError:
+        return False
+    for name in names:
+        try:
+            with open(os.path.join(claude, name)) as fh:
+                rec = json.load(fh)
+            end = datetime.fromisoformat(str(rec.get("isolation_active_until") or rec.get("end_time"))
+                                         .strip().replace("Z", "+00:00"))
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        end = end.replace(tzinfo=timezone.utc) if end.tzinfo is None else end
+        if since <= end.timestamp() <= until:
+            return True
+    return False
+
+
+def _boundary_rewrite(stdout: str) -> bool:
+    """True iff `stdout` is exactly the overnight write boundary's answer (pretool-overnight-hook-guard.py
+    _emit_command_rewrite): a PreToolUse updatedInput whose command is a bwrap re-exec, and nothing else."""
+    try:
+        d = json.loads(stdout)
+        hso = d["hookSpecificOutput"]
+        cmd = hso["updatedInput"]["command"]
+    except (ValueError, TypeError, KeyError):
+        return False
+    return (set(d) == {"hookSpecificOutput"} and set(hso) == {"hookEventName", "updatedInput"}
+            and isinstance(cmd, str) and os.path.basename(cmd.split(" ", 1)[0]) == "bwrap")
 
 
 def _combine(harness: str, event: str, old: list) -> tuple:
@@ -160,22 +204,32 @@ def compare(rp, event: str, launched: dict, old: list) -> list:
             a, b = _budget_flip(a, b)
         return n(a, stderr), n(b, stderr)
     tail = hookrun.TAIL
+    # The one expected decision change: the isolation window closed between the old path's run and the
+    # launcher's, so the old one was handed the boundary's bwrap rewrite and the launcher, rightly, nothing.
+    closed = bool(old) and _window_closed(rp.layout.project, min(r.get("started", 0) for r in old), time.time())
+
+    def window_moved(full_old, b):
+        return closed and not b and _boundary_rewrite(full_old)
     old_full, old = old, [dict(r, stdout=r["stdout"][-tail:], stderr=r["stderr"][-tail:]) for r in old]
     diffs = []
     new = launched.get("rules") or []
     if [r["hook"] for r in new] != [r["hook"] for r in old]:
         diffs.append({"what": "hooks run", "old": [r["hook"] for r in old], "new": [r["hook"] for r in new]})
-    for o, w in zip(old, new):
+    for o, of, w in zip(old, old_full, new):
         for key in ("rc", "stdout", "stderr"):
             a, b = o[key], w[key]
             if key != "rc":
                 a, b = pair(a, b, key == "stderr")
+            if key == "stdout" and window_moved(of["stdout"], w["stdout"]):
+                continue
             if a != b:
                 a, b = _region(str(a), str(b))
                 diffs.append({"what": f"{o['hook']} {key}", "old": a, "new": b})
     code, out, err = _combine(rp.layout.harness, event, old_full)
     for key, a, b in (("rc", code, launched["rc"]), ("stdout", *pair(out[-tail:], launched.get("stdout"), False)),
                       ("stderr", *pair(err[-tail:], launched.get("stderr"), True))):
+        if key == "stdout" and window_moved(out, launched.get("stdout")):
+            continue
         if a != b:
             a, b = _region(str(a), str(b))
             diffs.append({"what": f"answer {key}", "old": a, "new": b})

@@ -11,6 +11,8 @@ and SubagentStart (P2-3), as rules of the one Python registration each event has
 - The existing hook's own result (exit status, stdout, stderr) is what it gives alone, and its text reaches the
   model as before, now beside prompt-workflow.py's PROJECT_ROOT and HARNESS_ROOT lines; when it prints nothing the
   launcher's answer is prompt-workflow.py's alone, byte for byte.
+- SubagentStart's third rule, subagentstart-scratch.py, makes the agent's own scratch directory (a directory, no
+  file) and prints nothing (LATER).
 """
 from __future__ import annotations
 
@@ -33,6 +35,8 @@ PW = "prompt-workflow.py"
 LAUNCHERS = {"SessionStart": ("sessionstart-launch.py", "check-todo-md-sync.py"),
              "SubagentStart": ("subagentstart-launch.py", "subagentstart-record.py")}
 COMMAND = 'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/%s"'
+# Rules after those two: SubagentStart's makes the agent's own scratch directory and prints nothing.
+LATER = {"SessionStart": [], "SubagentStart": [("subagentstart-scratch.py", None, 5)]}
 
 
 def _env(tmp_path: Path) -> dict:
@@ -89,10 +93,11 @@ def _files(root: Path) -> dict:
     return {str(p): (p.stat().st_size, p.stat().st_mtime_ns) for p in root.rglob("*") if p.is_file()}
 
 
-def _one_process_both_hooks(records, existing: str, alone) -> None:
-    assert [r["hook"] for r in records] == ["hooks/" + existing, "hooks/" + PW], records
+def _one_process_both_hooks(records, existing: str, alone, later=()) -> None:
+    assert [r["hook"] for r in records] == ["hooks/" + existing, "hooks/" + PW] + ["hooks/" + f for f in later], records
     # each in a fork of the launcher (lib/hook_launch.py `how`): no process of its own ("process", the fallback)
-    assert [r["how"] for r in records] == ["fork", "fork"], records
+    assert {r["how"] for r in records} == {"fork"}, records
+    assert all((r["rc"], r["stdout"], r["stderr"]) == (0, "", "") for r in records[2:]), records
     first = records[0]
     assert (first["rc"], first["stdout"], first["stderr"]) == alone, (first, alone)
     assert records[1]["rc"] == 0 and records[1]["stderr"] == "", records[1]
@@ -109,12 +114,13 @@ def test_the_event_registers_its_launcher_once_for_every_source_and_no_other_pyt
     assert pythons == [COMMAND % launcher], pythons
     group = next(g for g in groups if any(h["command"] == COMMAND % launcher for h in g["hooks"]))
     assert group.get("matcher", "") in ("", "*"), group  # every source, every agent type
-    assert launch_settings.rules(str(ROOT), "hooks/" + launcher) == [(existing, None, 60), (PW, None, 60)]
+    assert launch_settings.rules(str(ROOT), "hooks/" + launcher) == [(existing, None, 60), (PW, None, 60)] + LATER[event]
     expanded = launch_settings.expand({"hooks": {event: groups}}, str(ROOT))["hooks"][event]
     names = [h["command"] for g in expanded for h in g["hooks"]]
     at = commands.index(COMMAND % launcher)  # the existing hook keeps its place, prompt-workflow.py after it
-    assert names[at:at + 2] == [COMMAND % existing, COMMAND % PW], names
-    assert names[:at] + names[at + 2:] == commands[:at] + commands[at + 1:], names
+    n = 2 + len(LATER[event])
+    assert names[at:at + n] == [COMMAND % f for f in (existing, PW, *(r[0] for r in LATER[event]))], names
+    assert names[:at] + names[at + n:] == commands[:at] + commands[at + 1:], names
 
 
 # ------------------------------------------------------------------ SessionStart
@@ -165,7 +171,7 @@ def test_subagent_start_joins_the_record_and_the_roots_in_one_process(tmp_path):
     assert alone[0] == 0 and alone[2] == "" and "dev" in _context(alone[1], "SubagentStart"), alone
     (code, out, err), records = _launched(HOOKS / "subagentstart-launch.py", payload, env)
     assert code == 0 and err == "", (code, err)
-    _one_process_both_hooks(records, "subagentstart-record.py", alone)
+    _one_process_both_hooks(records, "subagentstart-record.py", alone, ["subagentstart-scratch.py"])
     assert _context(out, "SubagentStart") == \
         _context(alone[1], "SubagentStart") + "\n" + _roots(payload["cwd"], ROOT)
 
@@ -175,6 +181,6 @@ def test_subagent_start_outside_the_roster_answers_with_the_roots_alone(tmp_path
     alone = _alone(HOOKS / "subagentstart-record.py", payload, env)
     assert alone == (0, "", ""), alone  # no record for an agent outside agents/
     (code, out, err), records = _launched(HOOKS / "subagentstart-launch.py", payload, env)
-    _one_process_both_hooks(records, "subagentstart-record.py", alone)
+    _one_process_both_hooks(records, "subagentstart-record.py", alone, ["subagentstart-scratch.py"])
     assert (code, err) == (0, "") and out == records[1]["stdout"] == _alone(HOOKS / PW, payload, env)[1]
     assert _context(out, "SubagentStart") == _roots(payload["cwd"], ROOT)

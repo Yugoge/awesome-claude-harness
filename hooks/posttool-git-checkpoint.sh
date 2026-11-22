@@ -30,6 +30,10 @@ fi
 # Allow explicit override via environment variable
 GIT_DIR="${GIT_CHECKPOINT_DIR:-$GIT_DIR}"
 
+# shellcheck source=lib/checkpoint-core.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
+checkpoint_project_top "$GIT_DIR" || exit 0  # no snapshot, so no count, below a larger repository's top
+
 # Build git command for counting only (no commit is issued here; the lib handles commits)
 if [ -n "$GIT_DIR" ]; then GIT_CMD=(git -C "$GIT_DIR"); else GIT_CMD=(git); fi
 
@@ -46,10 +50,7 @@ fi
 
 # Threshold gate
 if [ "$TOTAL" -ge "$CHECKPOINT_THRESHOLD" ]; then
-  # Source lib and delegate. Lib writes to refs/checkpoints/<branch>, never HEAD.
-  # shellcheck source=lib/checkpoint-core.sh
-  . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
-
+  # Delegate to the lib. Lib writes to refs/checkpoints/<branch>, never HEAD.
   write_checkpoint "$GIT_DIR" "posttool threshold (${TOTAL} files, threshold=${CHECKPOINT_THRESHOLD})" >&2
   RC=$?
   # A snapshot that was refused or failed is told to the user (systemMessage) and to the
@@ -60,7 +61,7 @@ if [ "$TOTAL" -ge "$CHECKPOINT_THRESHOLD" ]; then
   if [ -n "$checkpoint_notice" ]; then  # refused, or written without a file: the library's line
     NOTICE="$checkpoint_notice"
   elif [ "$RC" -ne 0 ] && [ "$SILENT_MODE" != "1" ]; then
-    NOTICE="Checkpoint failed (${TOTAL} files pending); see ~/.claude/logs/checkpoint.log${checkpoint_streak:+; $checkpoint_streak}"
+    NOTICE="Checkpoint failed (${TOTAL} files pending); see ${CHECKPOINT_LOG_FILE}${checkpoint_streak:+; $checkpoint_streak}"
   fi
   if [ -n "$NOTICE" ]; then
     printf '{"systemMessage": "%s", "hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "%s"}}\n' \

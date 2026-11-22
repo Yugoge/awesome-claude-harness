@@ -17,11 +17,14 @@ files", same page), exactly the scratch an agent writes, and nothing a hook read
   hooks/pretool-bash-safety.sh consumes, the git blessed-token grants hooks/git-keystone/reference-transaction
   checks, each session dir's `.owner` that hooks/sessionend-scratch-sweep.sh and hooks/lib/scratch_owner.py
   trust, doc-sync's dedupe state, the CLI's task outputs);
-* the role scratch root, /tmp/claude-scratch: policies/tool-policy.v1.json grants each role
-  `*/tmp/claude-scratch/<role>/` and the agent texts write there (agents/changelog-analyst.md). No hook
-  builds a path under it (SOURCE_SCAN checks).
+* each role's drafts directory, `<TMPDIR>/<session>/<role>/`: policies/tool-policy.v1.json grants each role
+  `<session root>/<role>/` and the agent texts write there (agents/changelog-analyst.md); one Read and one
+  Edit entry per role, `//var/tmp/claude-scratch/*/<role>/**` (`*` one name: the session id; a CLI project
+  directory name starts with `-`, so `claude-0/<project>/...` is never one). The old role root,
+  /tmp/claude-scratch, is no longer granted and no hook builds a path under it but the in-flight check
+  (hooks/lib/policy_registry.py in_flight, SOURCE_SCAN checks).
 
-The hook state root (hooks/lib/harness_state_dir.py, CLAUDE_STATE_DIR, default /tmp) keeps its files
+The hook state root (hooks/lib/harness_state_dir.py, CLAUDE_STATE_DIR, default on disk) keeps its files
 directly in it; STATE_PATHS enumerates them and they stay uncovered too. Every must-ask path is checked
 for the shipped settings and for the shipped settings plus settings.machine.example.json's overlay, which
 moves TMPDIR to /opt/demo/scratch and appends its own pair.
@@ -34,9 +37,9 @@ read) or Edit rule (op write) allows; otherwise the call asks. Bracket ranges in
 (measured: `claude-[0-9]*` matched `claude-0`). For Bash, the paths a recognised file command (cat, ls, rm,
 touch) names and the targets of `>` redirections go through this check BEFORE the Bash allow rules, and an
 outside-the-working-directory ask is not one a Bash allow rule can lift: `cat > /tmp/claude-tool-streak-abc.json`
-asks although `Bash(cat:*)` and `Bash(cat > /tmp/*.json:*)` both match its text. That is why the
-`Bash(cat > /tmp/*...)` and `Bash(rm -f /tmp/*...)` entries are not this lane's: they never granted a /tmp
-write, and they are subsumed by `Bash(cat:*)` and `Bash(rm:*)`.
+asks although `Bash(cat:*)` matches its text. That is why the former `Bash(cat > /tmp/*...)` and
+`Bash(rm -f /tmp/*...)` entries went (policy_version 10): they never granted a /tmp write, and `Bash(cat:*)` and
+`Bash(rm:*)` match every command text they matched (test_no_entry_names_tmp_as_a_place_to_write).
 """
 from __future__ import annotations
 
@@ -54,15 +57,38 @@ SETTINGS = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))
 EXAMPLE = json.loads((REPO / "settings.machine.example.json").read_text(encoding="utf-8"))
 
 sys.path.insert(0, str(REPO / "hooks" / "lib"))
-from harness_state_dir import _DEFAULT_ROOT as STATE_DEFAULT_ROOT  # noqa: E402
+from harness_state_dir import state_root  # noqa: E402
+
+
+def _default_state_dir(home: str = "/work/u") -> str:
+    """The default control-state dir, on disk, for a user whose home is `home` (not the test's scratch HOME)."""
+    import os
+    saved = os.environ.get("HOME")
+    os.environ["HOME"] = home
+    try:
+        return posixpath.join(state_root(), "state")
+    finally:
+        if saved is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = saved
+
+
+STATE_DEFAULT_ROOT = _default_state_dir()
 
 SESSION_ROOT = "/var/tmp/claude-scratch"
-ROLE_ROOT = "/tmp/claude-scratch"
+ROLE_ROOT = "/tmp/claude-scratch"  # the old role root (before policy_version 10): granted no more
 SID = "0b0e6c1e-0000-4000-8000-000000000000"
+DRAFTS = f"{SESSION_ROOT}/{SID}"  # a session's drafts directories are <DRAFTS>/<role>/
+POLICY = json.loads((REPO / "policies" / "tool-policy.v1.json").read_text(encoding="utf-8"))
+DRAFT_ROLES = sorted(r for r, row in POLICY["roles"].items() if f"<session root>/{r}/" in
+                     row.get("allowed_write_path_prefixes", []))
+ROLE_ENTRIES = [f"{SESSION_ROOT}/*/{r}/**" for r in DRAFT_ROLES]
 OTHER_SID = "7f7f7f7f-0000-4000-8000-000000000000"
 WORKDIR = "/home/u/proj"
 SETTINGS_SOURCE = "<home>/.claude"  # user settings: a single leading slash anchors here
 SCRATCHPAD_TAIL = "claude-[0-9]*/*/*/scratchpad"
+AGENT_SCRATCH_TAIL = "[0-9a-f]*-*-*-*-*/*/a[0-9a-f]*/**"  # <session id>/<role>/<agent id>/: a subagent's own
 
 
 def _layer(base: dict, overlay: dict | None) -> dict:
@@ -167,19 +193,33 @@ def test_session_root_is_the_pinned_tmpdir():
 
 
 def test_role_root_is_the_policy_role_scratch():
-    policy = json.loads((REPO / "policies" / "tool-policy.v1.json").read_text())
-    prefixes = {p for role in policy["roles"].values() for p in role.get("allowed_write_path_prefixes", [])
-                if "claude-scratch" in p}
-    assert prefixes, "no role scratch prefix found"
-    assert all(re.fullmatch(r"\*/tmp/claude-scratch/[a-z-]+/", p) for p in prefixes), prefixes
+    """Each role's drafts directory is `<session root>/<role>/`, its own name, and nothing names a role
+    scratch root in a temp directory; the settings hold one Read and one Edit entry per such role."""
+    prefixes = {(r, p) for r, row in POLICY["roles"].items() for p in row.get("allowed_write_path_prefixes", [])
+                if "claude-scratch" in p or p.startswith("<session root>")}
+    assert len(DRAFT_ROLES) == 21 and prefixes == {(r, f"<session root>/{r}/") for r in DRAFT_ROLES}, prefixes
+    for tool in ("Read", "Edit"):
+        held = sorted(s for s in _specifiers(SHIPPED["permissions"], tool, "allow")
+                      if re.fullmatch(r"//var/tmp/claude-scratch/\*/[a-z-]+/\*\*", s))
+        assert held == sorted("/" + e for e in ROLE_ENTRIES), (tool, held)
 
 
 @pytest.mark.parametrize("layer", LAYERS)
 @pytest.mark.parametrize("tool", ["Read", "Edit"])
 def test_exact_scratch_entries_present(layer, tool):
     perms, tmpdir = LAYERS[layer]["permissions"], LAYERS[layer]["env"]["TMPDIR"]
-    for spec in (f"/{tmpdir}/{SCRATCHPAD_TAIL}", f"/{tmpdir}/{SCRATCHPAD_TAIL}/**", f"/{ROLE_ROOT}/**"):
+    for spec in (f"/{tmpdir}/{SCRATCHPAD_TAIL}", f"/{tmpdir}/{SCRATCHPAD_TAIL}/**", *("/" + e for e in ROLE_ENTRIES)):
         assert f"{tool}({spec})" in perms["allow"], (layer, spec)
+    assert f"{tool}(/{ROLE_ROOT}/**)" not in perms["allow"], layer
+
+
+def test_no_entry_names_tmp_as_a_place_to_write():
+    """No allow entry names the system temp directory as a place to write, edit or remove, and the Bash
+    entries that went had a shorter entry matching every text they matched. What stays: the run of a
+    program in a /tmp venv (`Bash(/tmp/*-venv/bin/python*)`), which writes nothing by its name."""
+    allow = SHIPPED["permissions"]["allow"]
+    assert [e for e in allow if "/tmp" in e.replace("/var/tmp", "")] == ["Bash(/tmp/*-venv/bin/python*)"]
+    assert {"Bash(cat:*)", "Bash(rm:*)"} <= set(allow)
 
 
 @pytest.mark.parametrize("layer", LAYERS)
@@ -189,7 +229,8 @@ def test_no_tmp_or_tmpdir_wide_grant(layer):
     perms, tmpdir = LAYERS[layer]["permissions"], LAYERS[layer]["env"]["TMPDIR"]
     # The overlay cannot remove a clean-form entry, so the shipped root's pair stays beside its own.
     allowed = {f"{r}/{SCRATCHPAD_TAIL}{tail}" for r in (tmpdir, SESSION_ROOT) for tail in ("", "/**")}
-    allowed.add(f"{ROLE_ROOT}/**")
+    allowed.update(f"{r}/{AGENT_SCRATCH_TAIL}" for r in (tmpdir, SESSION_ROOT))
+    allowed.update(ROLE_ENTRIES)
     dirs = [posixpath.normpath(d) for d in perms.get("additionalDirectories", [])]
     assert not [d for d in dirs if d in ("/", "/tmp", "/var", "/var/tmp", tmpdir)
                 or d.startswith(("/tmp/", "/var/tmp/", tmpdir + "/"))]
@@ -210,7 +251,8 @@ def test_no_single_slash_path_rule():
     The two HOME_ANCHORED_DENY entries are exempt, and `ask` was: OB-L08 shipped one `Edit(/<entry>)` ask per top-level harness-home entry, anchored at the
     settings source on purpose (tests/test_project_write_permissions.py). Ask is checked after deny and
     before allow, so an anchored ask narrows and never grants."""
-    perms = SHIPPED["permissions"]
+    policy = json.loads((REPO / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"]
+    perms = dict(SHIPPED["permissions"], deny=SHIPPED["permissions"]["deny"] + policy)  # the hook rule's list too
     bad = [f"{t}({s})" for kind in ("allow", "deny") for t in ("Read", "Edit")
            for s in _specifiers(perms, t, kind) if re.match(r"/[^/]", s)]
     assert sorted(bad) == sorted(HOME_ANCHORED_DENY)
@@ -244,8 +286,13 @@ def must_pass(tmpdir: str):
         ("mkdir -p <session scratch>/sub", "write", f"{s}/sub", False),
         ("Read tool <session scratch>/notes.md", "read", f"{s}/notes.md", True),
         ("Write tool <session scratch>/w.md", "write", f"{s}/w.md", True),
-        ("echo done > role scratch", "write", f"{ROLE_ROOT}/qa/out.txt", False),
-        ("Write tool role scratch", "write", f"{ROLE_ROOT}/changelog-analyst/commit-msg-1.txt", True),
+        ("echo done > drafts", "write", f"{DRAFTS}/qa/out.txt", False),
+        ("Write tool drafts", "write", f"{DRAFTS}/changelog-analyst/commit-msg-1.txt", True),
+        ("cat drafts", "read", f"{DRAFTS}/changelog-analyst/commit-msg-1.txt", False),
+        # a subagent's own scratch directory, <TMPDIR>/<session id>/<role>/<agent id>/ (hooks/subagentstart-scratch.py)
+        ("echo > own scratch", "write", f"{tmpdir}/{SID}/dev/a1b2c3d4e5f60718/out.txt", False),
+        ("Write tool own scratch", "write", f"{tmpdir}/{SID}/general-purpose/a1b2c3d4e5f60718/w.md", True),
+        ("cat own scratch", "read", f"{tmpdir}/{SID}/dev/a1b2c3d4e5f60718/out.txt", False),
     ]
 
 
@@ -461,15 +508,18 @@ def test_source_scan_is_not_vacuous():
     # The daemon-restart grant and its lock are found in the Python source, not only in LISTED_TMPDIR_NAMES.
     assert {"claude-allow-daemon-restart-{target}.flag", "claude-allow-daemon-restart-{target}.flag.lock"} <= py, py
     assert any(n.startswith("checkpoint-result") for n in tmp), tmp  # S31 removed the blessed-token grants
-    assert not [n for n in state if n.split("/")[0] == "claude-scratch"], "state under the role root"
+    # The old role root as hooks/lib/policy_registry.py in_flight names it (a dispatch's own drafts, no state).
+    old_root = {"claude-scratch/{role}/", "claude-scratch/"}
+    assert not [n for n in state if n.split("/")[0] == "claude-scratch" and n not in old_root], "state under the role root"
 
 
 def test_no_hook_builds_a_path_under_the_role_root():
-    """The role root is policy-and-prose only: no hook or script composes a path under it."""
+    """The old role root is no place to write: no hook or script composes a path under it but the check
+    that lets a dispatch begun before policy_version 10 rewrite what it left there."""
     hits = [f.relative_to(REPO).as_posix() for f in _sources()
             if _ROLE_SOURCE.search(f.read_text(encoding="utf-8", errors="ignore"))
             and not f.as_posix().endswith(".conf")]
-    assert hits == [], hits
+    assert hits == ["hooks/lib/policy_registry.py"], hits
 
 
 ASK_CASES = [(layer, p) for layer in LAYERS for p in gate_read_paths(layer)]
@@ -507,6 +557,9 @@ def must_still_ask(tmpdir: str):
         ("a name like the scratchpad beside it", f"{s}x/notes.md"),
         ("a non-uid claude- dir", f"{tmpdir}/claude-git-blessed/a/b/scratchpad/x"),
         ("sibling name of the role root", "/tmp/claude-scratch-userintent-abc.flag"),
+        ("the old role root", f"{ROLE_ROOT}/qa/out.txt"),
+        ("a drafts name at the TMPDIR root", f"{tmpdir}/qa/out.txt"),
+        ("a drafts name below the CLI's project directory", f"{tmpdir}/claude-0/-home-u-proj/qa/x"),
         ("the /var/tmp graphify cache", "/var/tmp/claude-graphify/x"),
     ]
 
@@ -532,8 +585,11 @@ MEASURED = {
     "ls scratch": (scratchpad(SESSION_ROOT), "read", False, "ask", "ran", "ran"),
     "Read tool scratch": (f"{scratchpad(SESSION_ROOT)}/notes.md", "read", True, "ran", "ran", "ran"),
     "Write tool scratch": (f"{scratchpad(SESSION_ROOT)}/w.md", "write", True, "ask", "ran", "ran"),
-    "echo > role scratch": (f"{ROLE_ROOT}/qa/out.txt", "write", False, "ask", "ran", "ran"),
-    "Write tool role scratch": (f"{ROLE_ROOT}/qa/w.txt", "write", True, "ask", "ran", "ran"),
+    # The two role-scratch rows were measured at /tmp/claude-scratch/qa under `Read/Edit(//tmp/claude-scratch/**)`;
+    # policy_version 10 moved the drafts and their entries (the same `//<dir>/**` form, `*` one name as in the
+    # scratchpad entries), and the rows follow the drafts, not re-measured.
+    "echo > role scratch": (f"{DRAFTS}/qa/out.txt", "write", False, "ask", "ran", "ran"),
+    "Write tool role scratch": (f"{DRAFTS}/qa/w.txt", "write", True, "ask", "ran", "ran"),
     "echo > consent flag": ("/tmp/claude-orchestrator-consent-abc.flag", "write", False, "ask", "ask", "ask"),
     "echo > streak": ("/tmp/claude-tool-streak-abc.json", "write", False, "ask", "ask", "ask"),
     "Write tool consent flag": ("/tmp/claude-orchestrator-consent-abc.flag", "write", True, "ask", "ask", "ask"),

@@ -9,16 +9,17 @@ dispatch's scope it BLOCKS (exit 2), in every mode as on master, while every
 lane has reported and the canonical aggregate dev-report-<task-id>.json is
 missing. Two more rules block only when CLAUDE_OBLIGATION_BARRIER=block, which
 the shipped settings.json sets (P2's arming; the code default stays advisory):
-  (a) a lane its lane_set declares has no lane report (the roster check that
-      hooks/posttool-lane-completeness-watch.py used to make, which never
-      blocked);
+  (a) a lane its lane_set declares has no lane report;
   (b) the canonical's parallel_workers does not name every declared lane (it
       predates the last lane report).
 A report without a lane_set declares no fan-out: a singular cycle, or one of
 the overnight pipelines' dev-report-<ts>-<N>.json, which the filenames alone
-would read as lanes of task <ts>. The canonical's one producer is the lane
-completeness watch, run by each lane report's write; a hook has no dispatch, so
-a canonical finding names the lane whose declaring dispatch, run again, runs it
+would read as lanes of task <ts>. The canonical's one writer is
+scripts/aggregate-dev-report.py. A fan-out in scope whose canonical is older
+than a lane report (or absent) is rebuilt here first, by the Stop gate's own
+rebuild (lib/aggregate_rebuild.py); one the rebuild leaves stale is judged by
+nothing in it and, armed, blocks as stale_canonical. A dev lane's stop runs the
+same rebuild, so a canonical finding names the lane whose declaring dispatch, run again, runs it
 (P1b E5 (a)): a missing one, the first whose own report the aggregator refuses,
 with its reasons (W1; two lanes that differ, both named), else this QA's lane.
 
@@ -64,16 +65,16 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
+from lib.allowlist import has_do_consent  # noqa: E402
 from lib import command_span, obligation as obligation_lib  # noqa: E402
-from lib import contract_runtime  # noqa: E402
+from lib import aggregate_rebuild, contract_runtime  # noqa: E402
 from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 from lib.dev_report_shard_patterns import classify_filename as _shared_classify_filename  # noqa: E402
 
 # Filename-classification regexes and the NON_WORKER_LABELS/NON_WORKER_LABEL_RE
 # iteration-suffix filter live in lib/dev_report_shard_patterns.py (the ONE
 # shared module scripts/aggregate-dev-report.py and
-# hooks/posttool-lane-completeness-watch.py also import) -- ticket
+# hooks/lib/aggregate_rebuild.py also import) -- ticket
 # 20261001-161041-r05 M2. Re-export, not used here: tests/test_aggregate_dev_report.py
 # (test_script_and_hook_prefixed_classifiers_are_identical) reads these two through
 # this module's namespace to prove the script and the hook classify alike.
@@ -124,8 +125,7 @@ def _scan_dev_dir(dev_dir):
     """Return ({task_id: {label: path}}, {task_id: path}): the lane-shaped
     reports of each task family in docs/dev, and each family's canonical.
 
-    Canonical singletons are excluded from the lane reports via
-    _classify_filename ordering.
+    A report's task is _task_of's; a family's canonical is never another's lane report.
     """
     lane_reports = defaultdict(dict)
     canonicals = {}
@@ -144,8 +144,32 @@ def _scan_dev_dir(dev_dir):
         if result[0] == "canonical":
             canonicals[result[1]] = child
         else:
-            lane_reports[result[1]][result[2]] = child
+            task_id, lane = _task_of(child, result[1], result[2])
+            lane_reports[task_id][lane] = child
+    for task_id in list(lane_reports):  # a pipeline's canonical, dev-report-<stamp>-0.json, is no lane of <stamp>
+        for reports in lane_reports.values():
+            for lane, path in list(reports.items()):
+                if path.name == f"dev-report-{task_id}.json":
+                    canonicals[task_id] = reports.pop(lane)
     return lane_reports, canonicals
+
+
+@functools.lru_cache(maxsize=None)
+def _aggregator():
+    return aggregate_rebuild.aggregator()
+
+
+def _task_of(path, stamp, label):
+    """(task, lane) of a lane-shaped report: the task scripts/aggregate-dev-report.py's task_of_lane_report gives
+    for the lane the report names (its lane, else one of its lane_set); else its name's stamp and label."""
+    report = _read_json(path)
+    report = report if isinstance(report, dict) else {}
+    lane_set = report.get("lane_set")
+    for lane in [report.get("lane"), *(lane_set if isinstance(lane_set, list) else [])]:
+        task_id = isinstance(lane, str) and _aggregator().task_of_lane_report(path.name, lane)
+        if task_id:
+            return task_id, lane
+    return stamp, label
 
 
 def _read_json(path):
@@ -223,7 +247,22 @@ def _fanouts(lane_reports, canonicals, dev_dir, scope_task_id):
         yield task_id, declared, reported, canonicals.get(task_id) or dev_dir / f"dev-report-{task_id}.json", via
 
 
-def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
+def _rebuild_stale(lane_reports, canonicals, dev_dir, scope_task_id):
+    """{task_id: lane reports still newer than its canonical} after the rebuild the Stop gate runs too
+    (lib/aggregate_rebuild.py, the aggregator's rebuild_if_stale), for each fan-out in scope; with no
+    scope, only one whose canonical is absent (the global scan judges presence, never contents)."""
+    stale = {}
+    for task_id, _, _, canonical, _ in _fanouts(lane_reports, canonicals, dev_dir, scope_task_id):
+        if scope_task_id is None and canonical.is_file():
+            continue
+        left = aggregate_rebuild.aggregator().rebuild_if_stale(
+            dev_dir.parent.parent, task_id, timeout=aggregate_rebuild.QA_DISPATCH_TIMEOUT_S)
+        if left:
+            stale[task_id] = left
+    return stale
+
+
+def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None, stale=None):
     """Return [(code, path, problem, lane, via)] for each fan-out in scope
     whose collection is incomplete. A lane report's finding names its lane
     and via None; a canonical finding names lane None and _fanouts' via.
@@ -261,6 +300,10 @@ def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None):
             ))
             continue
         if scope_task_id is None:
+            continue
+        if task_id in (stale or {}):  # nothing in it is judged
+            violations.append(("stale_canonical", canonical, "older than lane report(s) " + ", ".join(
+                os.path.basename(p) for p in stale[task_id]) + "; its rebuild did not finish", None, via))
             continue
         aggregate = _read_json(canonical)
         workers = aggregate.get("parallel_workers") if isinstance(aggregate, dict) else None
@@ -301,16 +344,16 @@ def _roster(value):
     return sorted(value) if isinstance(value, list) and all(isinstance(x, str) for x in value) else None
 
 
-def _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_set):
+def _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_set, stale=None):
     """P3 row 12(b): [(code, path, problem, via)] for each due canonical in the
     dispatch's scope that does not parse, validate against dev-report.v2,
     carry its task's identity (task_id and request_id), or name in
     parallel_workers exactly its lane reports' lanes and the dispatch
-    obligation's lane_set. A canonical not yet due, or absent, is
+    obligation's lane_set. A canonical not yet due, absent or stale is
     _find_violations' finding."""
     findings = []
     for task_id, declared, reported, canonical, via in _fanouts(lane_reports, canonicals, dev_dir, scope_task_id):
-        if not canonical.is_file() or not reported.issuperset(declared):
+        if not canonical.is_file() or not reported.issuperset(declared) or task_id in (stale or {}):
             continue
         result = contract_runtime.validate_artifact_for_obligation(canonical, "dev-report.v2")
         if result.get("status") == "fail":
@@ -340,8 +383,8 @@ def _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_s
 
 
 CANONICAL_PRODUCER = (
-    "hooks/posttool-lane-completeness-watch.py, which runs the aggregator "
-    "whenever a lane report of the task is written"
+    "scripts/aggregate-dev-report.py, which a dev lane's stop, this check and the Stop gate run "
+    "when a lane report of the task is newer than the canonical"
 )
 
 
@@ -361,7 +404,7 @@ def _reached_by(via, dev_dir):
     via_lane, via_path = via
     return (f" | reached by: dispatching again the dev dispatch that declared "
             f"{_project_relative(via_path, dev_dir)} (lane {via_lane}), which writes that "
-            "report again in that dispatch; the write runs it")
+            "report again in that dispatch; its stop runs it")
 
 
 def _emit_block(violations, dev_dir):
@@ -677,20 +720,11 @@ def main():
         if has_do_consent(data):
             sys.exit(0)
 
-        # /allow bypass: if allowlist pattern matches "Agent" dispatch, pass
-        try:
-            if not data.get('agent_id'):
-                _sid = (data.get('session_id') or
-                        os.environ.get('CLAUDE_SESSION_ID', '') or 'default')
-                if match_sentinel_grant_for_tool(_sid, 'Agent') is not None:
-                    sys.exit(0)
-        except Exception:
-            pass
-
         dev_dir = _resolve_dev_dir()
-        lane_reports, canonicals = _scan_dev_dir(dev_dir)
         scope_task_id = _scope_task_id(data)
-        violations = _find_violations(lane_reports, canonicals, dev_dir, scope_task_id)
+        stale = _rebuild_stale(*_scan_dev_dir(dev_dir), dev_dir, scope_task_id)
+        lane_reports, canonicals = _scan_dev_dir(dev_dir)
+        violations = _find_violations(lane_reports, canonicals, dev_dir, scope_task_id, stale)
         armed = os.environ.get(OBLIGATION_BARRIER_ENV, "advisory").strip().lower() == "block"
         if not armed:
             # Unarmed G3 (the code default; the shipped settings arm it) keeps master's one
@@ -706,7 +740,7 @@ def main():
         if scope_task_id is not None:
             try:
                 lane_set = _parsed_obligation(_qa_prompt_body(data)).get("lane_set")
-                findings = _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_set)
+                findings = _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_set, stale)
             except Exception:
                 findings = []  # fail open: a self-bug here never skips the checks below
             _emit_canonical_findings(findings, armed, dev_dir)

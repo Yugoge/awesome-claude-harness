@@ -13,7 +13,7 @@ import re
 
 import pytest
 
-from test_tool_policy_own_scratch import NAMED, PROJECTS, run, writes
+from test_tool_policy_own_scratch import NAMED, PROJECTS, SID, run, session_root, writes
 
 LOOP = re.compile(r"Bash call \(timeout up to (\d+) ms\): (until <check>; do sleep \d+; done);")
 ROLES = ("dev", "qa", "ba", "user", "changelog-analyst")
@@ -45,7 +45,7 @@ def test_a_refused_qa_write_outside_temp_names_its_own_directory(tmp_path, proje
         found = NAMED.search(refused.stderr)
         assert found, refused.stderr
         own = found.group(1)
-        assert own.startswith(f"{project}/.claude/scratch/") and caller[0] in own, own
+        assert own == str(session_root(tmp_path) / SID / caller[1] / caller[0]), own  # below the session, not the project
         for next_tool, next_input in writes(own):
             proc = run(tmp_path, project, next_tool, next_input, caller)
             assert proc.returncode == 0, (next_tool, json.dumps(next_input), proc.stderr)

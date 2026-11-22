@@ -851,7 +851,9 @@ ASK_OVERLAP = {"HM Write .config/x/package.json (cwd=home, base allow)", "K alt 
 
 def _permissions() -> dict:
     with open(ROOT / "settings.json", encoding="utf-8") as fh:
-        return json.load(fh)["permissions"]
+        perms = json.load(fh)["permissions"]
+    with open(ROOT / "policies" / "cli-deny.v1.json", encoding="utf-8") as fh:  # the hook rule's deny list
+        return dict(perms, deny=perms["deny"] + json.load(fh)["deny"])
 
 
 def _anchored_asks() -> list[str]:

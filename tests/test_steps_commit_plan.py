@@ -138,6 +138,7 @@ def test_a_second_supported_repository_is_planned_and_its_status_read(world) -> 
 
 def test_a_plan_that_owns_no_path_asks_the_verifier_nothing(world) -> None:
     tmp, control, home = world
+    (control / "owned.txt").unlink()  # an unclaimed change would be asked about (test_commit_unclaimed_landing.py)
     _dev_report(control, TASK, [])
     _close_report(control)
 

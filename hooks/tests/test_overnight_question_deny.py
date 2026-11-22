@@ -215,6 +215,22 @@ def test_another_session_in_the_same_repository_asks_freely(project, store):
     assert _ask(project, tx.path).returncode == 2  # meanwhile the overnight session stays denied
 
 
+def test_the_deny_is_not_the_active_span(project, store):
+    """Two facts of one record: the deny asks whether the latest human-typed prompt is /dev-overnight
+    (the owner is absent), the Stop gate (command_span.active_span) which command's span is active. A
+    plain prompt after /dev-overnight ends the first and continues the second; so the guard does not
+    read the active span."""
+    tx = _overnight(store)
+    tx.typed("good morning, what happened overnight?")
+    assert _ask(project, tx.path).returncode == 0
+    sys.path.insert(0, str(REPO_ROOT / "hooks"))
+    try:
+        from lib import command_span
+    finally:
+        sys.path.pop(0)
+    assert command_span.active_span(tx.path).command == "dev-overnight"
+
+
 def test_shipped_settings_route_ask_user_question_to_the_guard():
     """The CLI's matcher rule (hookrun.select, as runhook.py) sends a PreToolUse
     AskUserQuestion payload to the guard: since P12 the write gate, which runs the guard as its

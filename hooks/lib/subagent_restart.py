@@ -101,7 +101,7 @@ NOTIFICATION_CLOSE = "</task-notification>"
 # dispatched and the authorization hook refused the redispatch (2026-09-28,
 # agent a8ab56bdd1870882d).
 TASK_NOTIFICATION_RE = re.compile(
-    r"<task-id>([^<]+)</task-id>.*?<status>(completed|failed|stopped)</status>(.*)",
+    r"<task-id>([^<]+)</task-id>.*?<status>(completed|failed|stopped|killed)</status>(.*)",
     re.IGNORECASE | re.DOTALL,
 )
 # The fixed resume message instructs every resumed agent to end with an explicit
@@ -206,11 +206,11 @@ def state_dir() -> Path:
     override = os.environ.get("CLAUDE_RESTART_STATE_DIR")
     if override:
         return Path(override)
-    try:  # one record per harness home, whichever configuration directory runs the session
-        from .locations import config_home
+    try:  # one record per install, on disk, whichever configuration directory runs the session
+        from .harness_state_dir import state_root
     except ImportError:
-        from locations import config_home  # type: ignore[no-redef]
-    return config_home() / "restart-state"
+        from harness_state_dir import state_root  # type: ignore[no-redef]
+    return Path(state_root(), "restart-state")
 
 
 def grant_path(session_id: str) -> Path:
@@ -509,28 +509,6 @@ def _textify(value: Any) -> str:
     return ""
 
 
-def _extract_agent_id(value: Any) -> str:
-    if isinstance(value, dict):
-        for key in ("agentId", "agent_id"):
-            candidate = value.get(key)
-            if isinstance(candidate, str) and AGENT_RE.fullmatch(candidate):
-                return candidate
-        for item in value.values():
-            found = _extract_agent_id(item)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for item in value:
-            found = _extract_agent_id(item)
-            if found:
-                return found
-    elif isinstance(value, str):
-        match = AGENT_ID_TEXT_RE.search(value)
-        if match:
-            return match.group(1)
-    return ""
-
-
 def _iter_notification_blocks(line: str) -> Iterator[str]:
     """Yield each complete task-notification body found on one JSONL line.
 
@@ -611,17 +589,32 @@ def _read_parent_calls(
                             "tool_name": block.get("name"),
                             "line": line_no,
                             "input": tool_input,
+                            "timestamp": record.get("timestamp"),  # the dispatch's time (obligation.dispatch_time)
                         }
                 elif block.get("type") == "tool_result":
                     tool_id = block.get("tool_use_id")
                     if isinstance(tool_id, str) and tool_id:
                         result = dict(block)
                         result["_parent_line"] = line_no
+                        result["_tool_use_result"] = record.get("toolUseResult")  # the CLI's own, not the report's
                         if tool_id in command_span.hook_refused(record):  # a call a hook refused: it never ran
                             result["_hook_refused"] = True
                         results.setdefault(tool_id, []).append(result)
 
     return calls, results, latest_notifications
+
+
+def read_meta(meta_path: str | Path) -> dict[str, str] | None:
+    """The CLI's record about one subagent (<session>/subagents/agent-<id>.meta.json), read in this one
+    place for every decider: {tool_use_id, agent_type ('' when it names none), description} when the file
+    is a JSON object naming its call (a non-empty toolUseId string), else None (missing, unreadable, none)."""
+    meta = _load_json(Path(meta_path))
+    tool_id = meta.get("toolUseId") if meta else None
+    if not isinstance(tool_id, str) or not tool_id:
+        return None
+    kind, text = meta.get("agentType"), meta.get("description")
+    return {"tool_use_id": tool_id, "agent_type": kind if isinstance(kind, str) else "",
+            "description": text if isinstance(text, str) else ""}
 
 
 def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
@@ -632,23 +625,75 @@ def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
     except OSError:
         return result
     for meta_path in files:
-        meta = _load_json(meta_path)
-        if not meta:
+        agent_id = meta_path.name[len("agent-") : -len(".meta.json")]
+        meta = read_meta(meta_path) if AGENT_RE.fullmatch(agent_id) else None
+        if meta is None:
             continue
-        tool_id = meta.get("toolUseId")
-        if not isinstance(tool_id, str) or not tool_id:
-            continue
-        name = meta_path.name
-        agent_id = name[len("agent-") : -len(".meta.json")]
-        if not AGENT_RE.fullmatch(agent_id):
-            continue
-        result[tool_id] = {
-            "agent_id": agent_id,
-            "agent_type": meta.get("agentType") if isinstance(meta.get("agentType"), str) else "",
-            "description": meta.get("description") if isinstance(meta.get("description"), str) else "",
+        result[meta["tool_use_id"]] = {
+            "agent_id": agent_id, "agent_type": meta["agent_type"], "description": meta["description"],
             "agent_transcript_path": str(subagent_dir / f"agent-{agent_id}.jsonl"),
         }
     return result
+
+
+def _lane_key(prompt: Any) -> tuple | None:
+    """(task_id, lane, role) of a gated command's dispatch: its obligation block's lane, else None."""
+    try:
+        from . import obligation
+    except ImportError:
+        import obligation  # type: ignore[no-redef]
+    block = obligation.extract_obligation_block(prompt) if isinstance(prompt, str) else None
+    try:
+        doc = json.loads(block.body) if isinstance(block, obligation.ExtractedBlock) else None
+    except ValueError:
+        doc = None
+    return (doc.get("task_id"), doc["lane"], doc.get("role")) if isinstance(doc, dict) and doc.get("lane") else None
+
+
+def own_children(transcript_path: str | Path, parsed: tuple | None = None) -> list[dict[str, Any]]:
+    """This session's own subagents: the one definition (send_policy.children, discover_candidates).
+
+    One entry per Agent/Task call of the transcript that ran (no hook refused it) whose child the CLI
+    names: by its structured result (toolUseResult.agentId), else the result text's trailing
+    "agentId: <id>" (the CLI appends it last, after the report), else, for a child whose call returned
+    no result naming it (a foreground dispatch cut by the owner's interrupt), by the CLI's
+    <session>/subagents/agent-<id>.meta.json whose toolUseId is that call. Only the CLI's records
+    decide: a message, a report's prose or a file in an agent's own scratch names no call of this
+    transcript, so nothing an agent writes makes a foreign agent own.
+    Entry: agent_id, tool_use_id, name, subagent_type, description, prompt, line, background,
+    returned (a result named the child), results, agent_transcript_path, replaced (a later call that
+    ran carries the same prompt or the same gated-command lane)."""
+    transcript = Path(transcript_path)
+    calls, results, _notes = parsed if parsed is not None else _read_parent_calls(transcript)
+    metadata = _metadata_by_tool_use(transcript)
+    ran = sorted((c for c in calls.values() if not any(r.get("_hook_refused") for r in results.get(c["tool_use_id"], []))),
+                 key=lambda c: c["line"])
+    keys = [(c["input"].get("prompt"), _lane_key(c["input"].get("prompt"))) for c in ran]
+    own: list[dict[str, Any]] = []
+    for index, call in enumerate(ran):
+        tool_id, tool_input = call["tool_use_id"], call["input"]
+        blocks = results.get(tool_id, [])
+        named = [a for a in [r["_tool_use_result"].get("agentId") for r in blocks if isinstance(r.get("_tool_use_result"), dict)]
+                 + [m[-1] for m in (AGENT_ID_TEXT_RE.findall(_textify(r.get("content"))) for r in blocks) if m]
+                 if isinstance(a, str) and AGENT_RE.fullmatch(a)]
+        meta = metadata.get(tool_id, {})
+        agent = named[0] if named else meta.get("agent_id")
+        if agent is None:
+            continue
+        path = meta.get("agent_transcript_path") or str(transcript.with_suffix("") / "subagents" / f"agent-{agent}.jsonl")
+        prompt, lane = keys[index]
+        own.append({
+            "agent_id": agent, "tool_use_id": tool_id, "tool_name": call.get("tool_name", "Agent"),
+            "name": tool_input.get("name") if isinstance(tool_input.get("name"), str) else None,
+            "subagent_type": meta.get("agent_type") or (tool_input.get("subagent_type")
+                                                         if isinstance(tool_input.get("subagent_type"), str) else None),
+            "description": meta.get("description") or tool_input.get("description") or "",
+            "prompt": prompt, "line": call["line"], "background": tool_input.get("run_in_background") is True,
+            "returned": bool(named), "results": blocks, "agent_transcript_path": path,
+            "replaced": any((isinstance(prompt, str) and p == prompt) or (lane is not None and k == lane)
+                            for p, k in keys[index + 1:]),
+        })
+    return own
 
 
 def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
@@ -783,15 +828,15 @@ def _child_reported_end_turn(agent_transcript_path: str | Path) -> bool | None:
 def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
     """Return every recoverable interrupted/quota Agent call in parent order."""
     transcript = Path(transcript_path).expanduser().resolve()
-    calls, results, latest_notifications = _read_parent_calls(transcript)
-    metadata = _metadata_by_tool_use(transcript)
+    parsed = _read_parent_calls(transcript)
+    latest_notifications = parsed[2]
     candidates: list[dict[str, Any]] = []
-    for tool_id, call in sorted(calls.items(), key=lambda item: item[1]["line"]):
-        result_blocks = results.get(tool_id, [])
+    for call in own_children(transcript, parsed):
+        if call["replaced"]:  # its task was dispatched again later: that dispatch is the one to recover
+            continue
+        tool_id, agent_id, result_blocks = call["tool_use_id"], call["agent_id"], call["results"]
         result_text = _textify(result_blocks)
-        meta = metadata.get(tool_id, {})
-        agent_id = meta.get("agent_id") or _extract_agent_id(result_blocks)
-        notification = latest_notifications.get(agent_id, {}) if isinstance(agent_id, str) else {}
+        notification = latest_notifications.get(agent_id, {})
         notification_after_call = (
             isinstance(notification.get("line"), int)
             and notification["line"] > call["line"]
@@ -820,11 +865,14 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             continue
         evidence: list[str] = []
         interruption_lines: list[int] = []
-        tool_input = call.get("input") if isinstance(call.get("input"), dict) else {}
-        is_background = tool_input.get("run_in_background") is True
-        if not result_blocks and not is_background:
+        if not result_blocks and not call["background"]:
             evidence.append("missing_parent_tool_result")
             interruption_lines.append(call["line"])
+        elif not call["returned"] and not call["background"]:
+            # A foreground call whose result names no child returned no report: the owner's interrupt
+            # ("stopped while running"), whatever the CLI's wording. Structural, not a phrase.
+            evidence.append("dispatch_returned_no_report")
+            interruption_lines.extend(b["_parent_line"] for b in result_blocks if isinstance(b.get("_parent_line"), int))
         if (result_text and _is_quota_text(result_text)) or (
             notification_after_call and notification.get("quota_interrupted")
         ):
@@ -835,11 +883,11 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             )
             if notification_after_call and notification.get("quota_interrupted"):
                 interruption_lines.append(notification["line"])
-        if notification_after_call and notification.get("status") == "stopped":
-            # Host-process teardown left this child with no completion record;
-            # the notification line itself is the interruption point that lets
-            # prepare_state re-derive a dispatched candidate back to pending.
-            evidence.append("session_teardown_stop")
+        if notification_after_call and notification.get("status") in ("stopped", "killed"):
+            # Host-process teardown (stopped) or the orchestrator's TaskStop (killed) left this child
+            # with no completion record; the notification line itself is the interruption point that
+            # lets prepare_state re-derive a dispatched candidate back to pending.
+            evidence.append("session_teardown_stop" if notification["status"] == "stopped" else "stopped_by_orchestrator")
             interruption_lines.append(notification["line"])
         # Real Agent/Task tool_results set is_error present-only-when-true
         # (never explicit False) on genuine transport/hook errors -- see
@@ -858,16 +906,10 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
                 block["_parent_line"] for block in interrupted_blocks
                 if isinstance(block.get("_parent_line"), int)
             )
-        # Child identity and the child's OWN structural record are resolved
-        # BEFORE the evidence-sufficiency test, because that record is often the
-        # only evidence in existence. A hook-rejected Agent call has no child
-        # identity and must never be replaced with a fresh agent: it is not a
-        # resumable invocation.
-        if not isinstance(agent_id, str) or not AGENT_RE.fullmatch(agent_id):
-            continue
-        agent_transcript_path = meta.get("agent_transcript_path") or str(
-            transcript.with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"
-        )
+        # The child's OWN structural record is read BEFORE the evidence-sufficiency
+        # test, because that record is often the only evidence in existence. A
+        # hook-rejected Agent call is no own child (own_children): never resumed.
+        agent_transcript_path = call["agent_transcript_path"]
         child = _child_transcript_signals(agent_transcript_path)
         # Structural liveness gate. The parent's Agent tool_result IS the
         # child's own report whenever the child completed, so the textual
@@ -905,8 +947,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             ))
         if not evidence:
             continue
-        description = meta.get("description") or tool_input.get("description") or ""
-        agent_type = meta.get("agent_type") or tool_input.get("subagent_type") or ""
+        description, agent_type = call["description"], call["subagent_type"] or ""
         candidates.append({
             "parent_session_id": transcript.stem,
             "origin_transcript_path": str(transcript),
@@ -1136,8 +1177,33 @@ def build_resume_message(
     ])
 
 
+def is_resume_message(session_id: str, child: dict[str, Any], message: Any) -> bool:
+    """``message`` is this recovery's resume message for ``child`` (an own_children entry): the text
+    build_resume_message makes for this session and agent, or the one the restart state holds for it
+    (with the owner's guidance), followed by nothing or by an exact copy of the child's original
+    <obligation> block (commands/restart.md step 3). Its text is fixed by the session, the agent id and
+    the owner's guidance, so it adds no work; anything else in it, or another agent's id, is not one."""
+    if not isinstance(message, str):
+        return False
+    try:
+        sid, aid = _safe_session_id(session_id), _safe_agent_id(str(child.get("agent_id") or ""))
+    except RestartError:
+        return False
+    exact = {build_resume_message(sid, aid)} | {
+        item["resume_message"] for item in (_read_state(sid) or {}).get("candidates", [])
+        if isinstance(item, dict) and item.get("agent_id") == aid and isinstance(item.get("resume_message"), str)}
+    try:
+        from . import obligation
+    except ImportError:
+        import obligation  # type: ignore[no-redef]
+    prompt = child.get("prompt") if isinstance(child.get("prompt"), str) else ""
+    start, end = prompt.find(obligation.OBLIGATION_OPEN_TOKEN), prompt.find(obligation.OBLIGATION_CLOSE_TAG)
+    tails = {""} | ({prompt[start:end + len(obligation.OBLIGATION_CLOSE_TAG)]} if 0 <= start < end else set())
+    return any(message.startswith(text) and message[len(text):].strip() in tails for text in exact)
+
+
 NO_GRANT_NOTICE = (
-    "no valid restart grant: every resume send will be refused until /restart mints one"
+    "no valid restart grant: the resume sends are judged as dispatches all the same (lesson 16)"
 )
 
 
@@ -1293,9 +1359,9 @@ def _read_state(sid: str) -> dict[str, Any] | None:
 def completed_resumes(session_id: str) -> dict[str, str]:
     """{agent_id: tool_use_id of its original Agent call} of the agents this
     session's recovery resumed and saw come back: the journal complete, every
-    response observed (what finalize requires). The capability is not read:
-    load_valid_grant is its one deciding rule; that the recovery was finalized
-    is its finalize call's own ok result in the transcript."""
+    response observed. That state is finalized by the hook that records the last
+    response (observe_subagent_stop), so no finalize call of the agent is needed.
+    The capability is not read: load_valid_grant is its one deciding rule."""
     try:
         state = _read_state(session_id)
     except RestartError:
@@ -1552,20 +1618,71 @@ def observe_subagent_stop(payload: dict[str, Any]) -> dict[str, Any] | None:
             if isinstance(agent_transcript, str) and agent_transcript:
                 item["agent_transcript_path"] = agent_transcript
             state["updated_at"] = _iso()
+            view = status_view(state)
+            if view["complete"]:  # the last response is in: the recovery finalizes here, by code
+                _consume(sid, state)
             _atomic_write_json(state_path(sid), state)
             return status_view(state)
     return None
 
 
+def _consume(sid: str, state: dict[str, Any], *, any_epoch: bool = False) -> None:
+    """Finalize a complete recovery (called under the state lock; the caller writes ``state``):
+    the capability it was prepared under is consumed and the state records when. A grant minted
+    by a later /restart is not this recovery's and stays (``any_epoch``: the helper's old finalize
+    command, which consumed whatever grant there was)."""
+    path = grant_path(sid)
+    grant = _load_json(path)
+    if any_epoch or (grant and grant.get("issued_at") == state.get("grant_issued_at")):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise RestartError(f"cannot consume restart grant: {exc}") from exc
+    state.setdefault("finalized_at", _iso())
+
+
 def finalize(session_id: str) -> dict[str, Any]:
+    """The helper's finalize command, kept for a session that still holds the older text of
+    commands/restart.md: the hooks finalize a complete recovery themselves (observe_subagent_stop,
+    settle), so on such a state this only confirms it."""
     sid = _safe_session_id(session_id)
-    view = get_status(sid)
-    if not view["complete"]:
-        raise RestartError("cannot finalize while recovered agents remain incomplete")
+    with _state_lock(sid):
+        state = _load_state(sid)
+        view = status_view(state)
+        if not view["complete"]:
+            raise RestartError("cannot finalize while recovered agents remain incomplete")
+        _consume(sid, state, any_epoch=True)
+        _atomic_write_json(state_path(sid), state)
+    return {**view, "finalized_at": state["finalized_at"]}
+
+
+def settle(session_id: str) -> str:
+    """At a prompt of the parent session (a resumed child's task-notification or the owner's next
+    prompt): finalize a recovery that is complete (the zero-candidate set included) and return
+    the one line that says how this session's recovery stands, once per change of the state;
+    '' when there is nothing new to say."""
     try:
-        grant_path(sid).unlink()
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        raise RestartError(f"cannot consume restart grant: {exc}") from exc
-    return view
+        sid = _safe_session_id(session_id)
+        with _state_lock(sid):
+            state = _read_state(sid)
+            if state is None or state.get("reported_for") == state.get("updated_at"):
+                return ""
+            view = status_view(state)
+            if view["complete"]:
+                _consume(sid, state)
+                ids = [c["agent_id"] for c in view["candidates"] if c.get("status") == "response_observed"]
+                line = (f"[/restart] RECOVERY FINALIZED by the harness: {len(ids)} resumed agent(s) "
+                        f"responded ({', '.join(ids) or 'none to resume'}); nothing to run. "
+                        "Carry on from the checklist step in progress (commands/restart.md step 4).")
+            else:
+                missing = [f"{c['agent_id']} ({c.get('status')})" for c in view["candidates"]
+                           if c["agent_id"] in view["incomplete_agent_ids"]]
+                line = (f"[/restart] RESTART_INCOMPLETE: no response yet from {', '.join(missing)}; "
+                        "a later /restart retries them (commands/restart.md step 4).")
+            state["reported_for"] = state.get("updated_at")
+            _atomic_write_json(state_path(sid), state)
+            return line
+    except (RestartError, OSError):
+        return ""

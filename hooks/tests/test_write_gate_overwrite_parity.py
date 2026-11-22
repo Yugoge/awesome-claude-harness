@@ -85,7 +85,7 @@ def _payloads(existing: Path, new: Path, sentinel: Path):
 
 
 @pytest.mark.parametrize("consent", [False, True])
-@pytest.mark.parametrize("grant", [None, "existing", "other", "bare"])
+@pytest.mark.parametrize("grant", [None])  # the per-file grant cases are retired: retired_hooks.CUT says why
 def test_the_port_answers_as_the_shell_hook(tmp_path, consent, grant):
     proj = tmp_path / "proj"
     proj.mkdir()
@@ -108,21 +108,24 @@ def test_the_port_answers_as_the_shell_hook(tmp_path, consent, grant):
 
 
 def test_the_corpus_reaches_every_decision(tmp_path):
-    """The corpus is not vacuous: across consent and grants it meets each refusal and each allow."""
+    """The corpus is not vacuous: across consent it meets each refusal and each allow. The rule reads
+    no /allow grant (one releases any refusal upstream, lib/hook_launch): a grant naming the target,
+    another one or none changes no answer."""
     proj = tmp_path / "proj"
     proj.mkdir()
     existing, new = proj / "existing.txt", proj / "new.txt"
     existing.write_text("old\n")
     _track(proj, "existing.txt")
     sentinel = tmp_path / "state" / "claude-bulk-commit-sentinel-s-n.json"
-    seen = set()
-    for consent, grant in itertools.product((False, True), (None, "existing", "other")):
+    seen, by_grant = set(), {}
+    for consent, grant in itertools.product((False, True), (None, "existing", "other", "bare")):
         _setup(tmp_path, consent, grant, existing, new)
         for raw in _payloads(existing, new, sentinel):
-            rc, err, _ = _run([sys.executable, str(PORT)], raw, _env(tmp_path), proj)
+            rc, err, out = _run([sys.executable, str(PORT)], raw, _env(tmp_path), proj)
             seen.add((rc, err.splitlines()[0][:40] if err else ""))
+            by_grant.setdefault(grant, []).append((consent, raw, rc, err, out))
     firsts = {first for rc, first in seen if rc == 2}
     assert any(f.startswith("BLOCKED: bulk-commit-sentinel-write") for f in firsts)
     assert any(f.startswith("[Write Guard] BLOCKED: File already exi") for f in firsts)
-    assert any(f.startswith("[Write Guard] BLOCKED: sentinel grant d") for f in firsts)
     assert (0, "") in seen
+    assert all(answers == by_grant[None] for answers in by_grant.values())

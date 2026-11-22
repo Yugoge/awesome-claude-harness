@@ -149,7 +149,11 @@ MEASURED = {
 
 
 def _perms(path: Path = SETTINGS) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))["permissions"]
+    perms = json.loads(path.read_text(encoding="utf-8"))["permissions"]
+    if path != SETTINGS:
+        return perms
+    policy = json.loads((REPO / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"]
+    return dict(perms, deny=perms["deny"] + policy)  # the hook rule's deny list joins the CLI's own
 
 
 OLD_ASK = json.loads((REPO / "tests" / "fixtures" / "permissions-ask-until-20261119.json").read_text())["ask"]

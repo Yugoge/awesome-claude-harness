@@ -449,7 +449,13 @@ def test_l4s_whole_registration_change():
     OB-L02's two make 59: posttool-orchestrator-ran.py on every tool at PostToolUse and at
     PostToolUseFailure, each a rule of its event's launcher; T4's Monitor rule makes 60; the
     PermissionRequest answer makes 61; the bulk-commit detector's retirement (its rule of
-    pretool-launch.py goes, its file stays an exit-0 stub) makes 60."""
+    pretool-launch.py goes, its file stays an exit-0 stub) makes 60; the own scratch made at a
+    subagent's start (subagentstart-scratch.py, the SubagentStart launcher's third rule) makes 61; the
+    four new rules of pretool-launch.py (the deny list, the merge verdict, the time limit per subagent,
+    the lane record) make 65; the lane state at a dispatch's return (posttool-launch.py) makes 66; the
+    dispatch's temp (posttool-failure-launch.py and userprompt-launch.py) makes 68; the hold of returns
+    (two rules of userprompt-launch.py) makes 70; the lane completeness watch's retirement (its rule of
+    posttool-launch.py goes with its file) makes 69."""
     w = write_gate_settings
     regs = _registrations(_settings())
     gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
@@ -464,9 +470,12 @@ def test_l4s_whole_registration_change():
         assert calls == ([(dev_loop, "advise")] if dev_loop else []), gate
     # P2-4, P2-3: prompt-workflow.py on every source and every agent type, after the event's one Python hook
     # before it (each event's launcher runs both: hooks/tests/test_start_launchers.py)
-    for event, before in (("SessionStart", "check-todo-md-sync.py"), ("SubagentStart", "subagentstart-record.py")):
+    # and at SubagentStart, after them, the own scratch's maker with its own 5-second budget
+    for event, before, after in (("SessionStart", "check-todo-md-sync.py", []),
+                                 ("SubagentStart", "subagentstart-record.py",
+                                  [(None, f'python3 "{w._HOME}subagentstart-scratch.py"', 5)])):
         assert [(m, c, t) for e, m, c, t in regs if e == event and c.startswith("python")] == \
-            [(None, f'python3 "{w._HOME}{name}"', None) for name in (before, "prompt-workflow.py")], event
+            [(None, f'python3 "{w._HOME}{name}"', None) for name in (before, "prompt-workflow.py")] + after, event
     # OB-L02: the orchestrator gate's record of the calls that ran, on both events that follow a call that ran
     assert [(e, m, t) for e, m, c, t in regs if c.endswith('/posttool-orchestrator-ran.py"')] == \
         [("PostToolUse", None, 10), ("PostToolUseFailure", None, 10)]
@@ -477,8 +486,16 @@ def test_l4s_whole_registration_change():
     # - 1: T4's Monitor rule (pretool-monitor-command.py, a rule of pretool-launch.py);
     # - 1: the PermissionRequest answer (permissionrequest-answer.py, the rule of permissionrequest-launch.py);
     # + 1: the bulk-commit detector, a rule of pretool-launch.py until it was retired to a stub
-    assert not [r for r in regs if w._names(r[2], ("pretool-bulk-commit-detector.py",))]
-    assert len(regs) - 2 - 2 - 2 - 1 - 1 + 1 ==w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
+    # - 1: the own scratch's maker (subagentstart-scratch.py, a rule of subagentstart-launch.py)
+    # - 4: pretool-launch.py's rules pretool-deny-list.py, pretool-merge-verdict.py, pretool-subagent-time-limit.py
+    #      and pretool-lane-ledger.py;
+    # - 1: lib/dispatch_return.py, a rule of posttool-launch.py;
+    # - 2: lib/dispatch_temp.py, a rule of posttool-failure-launch.py and of userprompt-launch.py;
+    # - 2: lib/returns_hold.py and userprompt-returns-deadline.sh, rules of userprompt-launch.py;
+    # + 1: the lane completeness watch, a rule of posttool-launch.py until it was retired with its file
+    assert not [r for r in regs if w._names(r[2], ("pretool-bulk-commit-detector.py",
+                                                   "posttool-lane-completeness-watch.py"))]
+    assert len(regs) - 2 - 2 - 2 - 1 - 1 + 1 - 1 - 4 - 1 - 2 - 2 + 1 ==w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
         - len(w.DISPATCH) + len(w.GATES) + 1 == 53
     for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')

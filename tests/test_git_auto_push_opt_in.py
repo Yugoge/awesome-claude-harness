@@ -232,6 +232,15 @@ def _fswatch_functions(base: Path) -> Path:
     return functions
 
 
+def _fswatch_log_dir(functions: Path, env: dict) -> Path:
+    """The logs/ of the state root the sourced functions resolve (made here: git-fswatch.sh's main, which
+    sourcing skips, makes it)."""
+    out = subprocess.run(["bash", "-c", '. "$1" && d="$(harness_state_root)/logs" && mkdir -p "$d" && printf %s "$d"',
+                          "_", str(functions.parent / "lib" / "harness_state_dir.sh")],
+                         env=env, text=True, capture_output=True, check=True).stdout
+    return Path(out)
+
+
 # ---------------------------------------------------------------------------
 # triggers: one per push path, each on a fresh repo
 # ---------------------------------------------------------------------------
@@ -292,10 +301,11 @@ def _trigger_fswatch(base: Path, env: dict, case: str) -> Run:
     # safe_push so the exit status is safe_push's own.
     script = ('source "$1" "$2"; loaded=$?; trap - EXIT INT TERM; '
               '[ "$loaded" -eq 0 ] || exit 90; safe_push')
+    log_dir = _fswatch_log_dir(functions, env)
     proc = _run(["bash", "-c", script, "bash", functions, repo], env,
                 check=False)
     triggered_at = time.monotonic()
-    log_file = Path(env["HOME"]) / ".claude" / "logs" / f"git-fswatch-{repo.name}.log"
+    log_file = log_dir / f"git-fswatch-{repo.name}.log"
     return Run("fswatch", case, env, repo, origin, origin_before,
                f"refs/heads/{BRANCH}", head, proc.returncode,
                proc.stdout + proc.stderr, triggered_at,

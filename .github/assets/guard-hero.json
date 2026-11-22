@@ -102,31 +102,31 @@
       "id": "hero-009",
       "ordinal": 9,
       "stage": "granted",
-      "kind": "artifact",
-      "text": "To ../hero-remote.git",
+      "kind": "verdict",
+      "text": "[allow] RELEASED by the owner's /allow grant (the next refused shell command that starts with: git push hero-remote main): the Bash call refused by pretool-git-privilege-guard.py (BLOCKED: agent git push - agents are not authorized to push to remote from an agent context.). The grant is spent: the next refused call is refused.",
       "source_ref": ".github/assets/hero-capture.txt",
       "source_locator": ".github/assets/hero-capture.txt:9",
-      "extract_hash": "eb90c043f00c4866363a3f1c6dc7d2d2871280a617150ffcb8dcb5da0da2e557"
+      "extract_hash": "1d4cd0e5cb1280b8473e7198dd042253068477bde6588fde99d595a1ef772c26"
     },
     {
       "id": "hero-010",
       "ordinal": 10,
-      "stage": "granted",
+      "stage": "consumed",
       "kind": "artifact",
-      "text": " * [new branch]      main -> main",
+      "text": "To ../hero-remote.git",
       "source_ref": ".github/assets/hero-capture.txt",
       "source_locator": ".github/assets/hero-capture.txt:10",
-      "extract_hash": "9cffc56565cdbb064db2752420d86808fadbe9a06e38849acff0562713b76ee4"
+      "extract_hash": "eb90c043f00c4866363a3f1c6dc7d2d2871280a617150ffcb8dcb5da0da2e557"
     },
     {
       "id": "hero-011",
       "ordinal": 11,
-      "stage": "granted",
-      "kind": "verdict",
-      "text": "[ALLOW-SENTINEL] grant CONSUMED for task_id=readme-hero-demo-reserved terminal_result=success path=/tmp/claude-grants/readme-hero-demo-reserved.json",
+      "stage": "consumed",
+      "kind": "artifact",
+      "text": " * [new branch]      main -> main",
       "source_ref": ".github/assets/hero-capture.txt",
       "source_locator": ".github/assets/hero-capture.txt:11",
-      "extract_hash": "74c1cb49471b03aa849d3bede5942e6b4ec1eea6bed204fd50b4e5092945c573"
+      "extract_hash": "9cffc56565cdbb064db2752420d86808fadbe9a06e38849acff0562713b76ee4"
     },
     {
       "id": "hero-012",

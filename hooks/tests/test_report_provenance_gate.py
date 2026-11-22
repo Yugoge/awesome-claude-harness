@@ -81,6 +81,8 @@ class World:
         env.update({"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.home / ".claude"),
                     "CLAUDE_STATE_DIR": str(self.tmp / "state"), "CLAUDE_PROJECT_DIR": str(self.project),
                     "TMPDIR": str(self.scratch), "PYTHONDONTWRITEBYTECODE": "1"})
+        # The launcher runs bash-safety, whose runtime guard needs the file bootstrap installs (conftest's copy).
+        env["CLAUDE_PROTECTED_RUNTIME_FILE"] = os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"]
         return env
 
     def sh(self, command: str) -> subprocess.CompletedProcess:

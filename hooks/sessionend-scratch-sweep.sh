@@ -4,8 +4,8 @@
 #
 # Removes ONLY this session's own files: its runtime files in the project, and
 # its scratch directory (<root>/<own-sid>/) after confirming its .owner record
-# names this exact session id — the common-case
-# cleanup: session-owned scratch dies with its session. Runs in the hook
+# names this exact session id — all of it but its role directories, which a
+# resumed session's agents still need (below). Runs in the hook
 # channel, outside the agent tool-call gate — the same legitimate deletion
 # channel already used by hooks/stop-cleanup-allowlist.sh; the agent-side rm
 # ban (hooks/pretool-bash-safety.sh) is untouched and never bypassed by this
@@ -84,6 +84,16 @@ if ! python3 "$(dirname "${BASH_SOURCE[0]}")/lib/scratch_owner.py" "$TARGET" "$S
   exit 0
 fi
 
-rm -rf -- "$TARGET" 2>/dev/null   # this session's own dir; a failure leaves it to the orphan floor
+# The main agent's own temp files (the top level) go; a role directory (<role>/, holding agents' own
+# <role>/<agent id>/ scratch and the role's drafts) stays with the .owner for a resumed session: its age
+# rule is scripts/install/tmp-cleanup-install.sh's. With none, the whole dir goes.
+shopt -s dotglob nullglob
+KEEP=""
+for e in "$TARGET"/*; do
+  [ "${e##*/}" = .owner ] && continue
+  if [ -d "$e" ] && [ ! -L "$e" ] && [ -n "$(echo "$e"/a[0-9a-f]*/)" ]; then KEEP=1; continue; fi
+  rm -rf -- "$e" 2>/dev/null
+done
+[ -n "$KEEP" ] || rm -rf -- "$TARGET" 2>/dev/null   # a failure leaves it to the age rule
 
 exit 0

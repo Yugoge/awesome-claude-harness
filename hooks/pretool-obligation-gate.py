@@ -28,9 +28,9 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
      the harness's own schemas/registry.json (resolved from the hook's
      location, so a product repo without schemas/ works):
        - ParsedObligation -> its role must equal the dispatch's subagent_type
-         (role_mismatch) and its dispatched_at must lie within
-         DISPATCH_CLOCK_BOUND_SECONDS of now (dispatch_clock_out_of_bound; an
-         uncomparable value fails closed). Otherwise exit 0.
+         (role_mismatch). Otherwise exit 0. Its time is not the block's: a
+         dispatched_at typed in it is accepted and never judged; every reader
+         takes the CLI's record of this event (obligation.dispatch_time).
        - NoBlock (a dispatch step 2 requires a block of): missing_block.
        - Rejection (malformed block, unregistered schema id, OR
          tool_input.prompt absent/non-string -- hooks/lib/obligation.py's own
@@ -64,7 +64,7 @@ Exit codes:
        its reason on stderr; nothing is written).
   2 -- reject (block mode only: missing, malformed or invalid block or bad
        prompt where step 2's span requires a block; on any dispatch, a block
-       that parses but has a role mismatch or an out-of-bound clock).
+       that parses but has a role mismatch).
 """
 
 from __future__ import annotations
@@ -73,7 +73,6 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -82,7 +81,6 @@ from lib.obligation import (  # noqa: E402
     OBLIGATION_OPEN_TOKEN,
     NoBlock,
     ParsedObligation,
-    dispatch_clock_within_bound,
     parse_obligation,
 )
 
@@ -235,13 +233,8 @@ def _evaluate(data: dict, mode: str) -> None:
     parsed = parse_obligation(prompt, known_schema_ids=known)
     if isinstance(parsed, ParsedObligation):
         obligation = parsed.obligation
-        clock = dispatch_clock_within_bound(
-            obligation.get("dispatched_at"), datetime.now(timezone.utc)
-        )
         if obligation.get("role") != subagent_type:
             reason = "role_mismatch"
-        elif clock is not True:
-            reason = "dispatch_clock_out_of_bound" if clock is False else "dispatch_clock_unverifiable"
         else:
             findings = _order_findings(data, obligation, prompt, known) if mode == "block" else []
             if findings:
@@ -261,7 +254,7 @@ def _evaluate(data: dict, mode: str) -> None:
         # OB-L41: a prompt that only mentions the tag ('<obligation> blocks', an unterminated
         # '<obligation v="1">' in prose) parses to a Rejection and carries no obligation; it is
         # refused only on a dispatch its span requires a block of. A block that parses is held
-        # to role and clock above on every dispatch.
+        # to its role above on every dispatch.
         if not _block_required(data.get("transcript_path"), subagent_type):
             return
         reason = parsed.reason + (f" at {parsed.field}" if getattr(parsed, "field", "") else "")

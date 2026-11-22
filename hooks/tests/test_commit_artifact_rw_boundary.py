@@ -94,6 +94,7 @@ STATE_DIR_LIB = os.path.join(HOOKS_DIR, "lib", "harness_state_dir.sh")
 GRANT_MINTER = os.path.join(REPO_ROOT, "scripts", "write-commit-grant.py")
 
 sys.path.insert(0, os.path.join(HOOKS_DIR, "lib"))
+sys.path.insert(0, HOOKS_DIR)  # the rules module imports `lib.*`; its own path setup reads argv, which is pytest's here
 
 from commit_pipeline import ATTEST_PREFIX  # noqa: E402
 import bash_safety_rules  # noqa: E402
@@ -563,7 +564,8 @@ def test_redirection_actually_moved_the_root(layer, state_root):
         f"{layer.name} ignores CLAUDE_STATE_DIR; rc={rc1}\n{err1}"
     )
 
-    default_path = layer.path(DEFAULT_STATE_ROOT)
+    # The default root lies under HOME, which each test moves (conftest): resolve it under this test's HOME.
+    default_path = layer.path(harness_state_dir(None))
     default_cmd = f"echo x > {default_path}"
     _, err2 = run_hook(default_cmd, state_root)
     assert layer.label not in refusal_labels(err2), (

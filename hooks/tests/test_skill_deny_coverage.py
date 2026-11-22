@@ -1,7 +1,8 @@
 """P5 R5: every human-only harness command is denied to the agent's Skill tool.
 
-`disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>)` entry in
-settings.json's permissions.deny is the barrier against an agent invoking a command itself (CLAUDE.md
+`disable-model-invocation: true` blocks the SlashCommand route only; the `Skill(<stem>)` entry of the deny
+list (policies/cli-deny.v1.json, decided by the pre-tool rule hooks/pretool-deny-list.py since 2026-11-21; it
+was settings.json's permissions.deny) is the barrier against an agent invoking a command itself (CLAUDE.md
 lesson 15). Each commands/*.md stem (INDEX and README are no command) outside stop_contract's
 CONTROL_COMMANDS needs its entry, so a new command file without one fails here, unless the harness's
 own command or agent text invokes it through the Skill tool (`Skill(skill="<stem>")`): such a command
@@ -23,9 +24,48 @@ CONTROL = {"allow", "restart", "checkpoint", "tickets", "rating"}
 _SKILL_CALL = re.compile(r"""Skill\(skill=["']([a-z0-9_-]+)["']""")
 
 
-def _deny() -> set:
+def _settings_deny() -> set:
     with open(os.path.join(ROOT, "settings.json"), encoding="utf-8") as fh:
-        return set(json.load(fh)["permissions"]["deny"])
+        return set(json.load(fh)["permissions"].get("deny", []))
+
+
+def _deny() -> set:
+    with open(os.path.join(ROOT, "policies", "cli-deny.v1.json"), encoding="utf-8") as fh:
+        return set(json.load(fh)["deny"]) | _settings_deny()
+
+
+def test_the_only_skill_entry_left_in_settings_is_the_switchs():
+    """Skill(harness) stays the CLI's: the off form keeps it (render-settings SWITCH_PERMISSIONS), when no hook runs."""
+    assert {e for e in _settings_deny() if e.startswith("Skill(")} == {"Skill(harness)"}
+
+
+def test_the_rule_refuses_every_human_only_command_as_owner_only():
+    """The rule, not the matcher alone, refuses each human-only stem (bare, with `/`, with arguments)."""
+    import subprocess
+    import sys
+    human_only = sorted(((_stems() - CONTROL - _agent_invoked()) | {s for s in CONTROL if f"Skill({s})" in _deny()})
+                        - {s for s in _stems() if f"Skill({s})" in _settings_deny()})
+    for stem in human_only:
+        for ti in ({"skill": stem}, {"skill": "/" + stem, "args": "x y"}):
+            p = subprocess.run([sys.executable, os.path.join(ROOT, "hooks", "pretool-deny-list.py")],
+                               input=json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Skill",
+                                                 "tool_input": ti, "cwd": ROOT}),
+                               capture_output=True, text=True, timeout=60)
+            assert p.returncode == 2 and "owner-only command" in p.stderr, (stem, ti, p.stderr)
+
+
+def test_no_hook_makes_a_commands_effect_from_a_skill_call():
+    """A model's Skill call, even one an /allow released, only loads the command's text: the effects of the
+    owner's typed command (a grant, a consent, a command span) are written at UserPromptSubmit, from the prompt.
+    The hooks that read a Skill call's tool_name either refuse it (harness switch, capability gate, this rule)
+    or keep the codex ledger (agent-invoked by design)."""
+    readers = set()
+    for path in glob.glob(os.path.join(ROOT, "hooks", "*.py")) + glob.glob(os.path.join(ROOT, "hooks", "lib", "*.py")):
+        with open(path, encoding="utf-8") as fh:
+            if re.search(r"""tool_name\s*(==|!=|in)\s*\(?["']Skill["']|tool in \(["']Skill["']""", fh.read()):
+                readers.add(os.path.relpath(path, ROOT))
+    assert readers <= {"hooks/pretool-harness-switch-guard.py", "hooks/posttool-codex-skill-ledger.py",
+                       "hooks/lib/capability_state.py"}, sorted(readers)
 
 
 def _stems() -> set:

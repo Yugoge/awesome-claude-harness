@@ -1101,7 +1101,6 @@ DERIVED = {
     "WORKFLOW_PRUNE_ACCOUNTS_DIR": "/opt/demo/accounts",
     "WORKFLOW_PRUNE_PROJECT_DIRNAME": "-opt-demo-dot-claude",
     "CLAUDE_HARD_BANNED_SCRIPTS": "demo-session-recovery|demo-restart-all",
-    "CLAUDE_PROTECTED_PROCESS_FAMILY": "demo",
     "CLAUDE_CHECKPOINT_EXTRA_TRAILER": "Co-Authored-By: Demo Bot <demo-bot@example.invalid>",
     "PASEO_DAEMON_ACCOUNTS": "acct-a,acct-b",
     "PASEO_DAEMON_MODEL": "demo-model@acct-a",

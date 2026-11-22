@@ -40,6 +40,7 @@ stderr (on non-zero exit):
 """
 
 import argparse
+import functools
 import hashlib
 import importlib.util
 import itertools
@@ -56,7 +57,7 @@ from types import ModuleType
 
 # ---------------------------------------------------------------------------
 # Filename patterns — lib/dev_report_shard_patterns.py, the ONE shared module
-# hooks/pretool-aggregate-check.py and hooks/posttool-lane-completeness-watch.py
+# hooks/pretool-aggregate-check.py and hooks/lib/aggregate_rebuild.py
 # also import (ticket 20261001-161041-r05 M2). Loaded by its path from this
 # file's own harness (scripts/../hooks/lib), else from CLAUDE_PROJECT_DIR / cwd
 # (this source is also exec'd into a bare namespace, which may have no
@@ -200,7 +201,7 @@ def _is_worker_for_task(filename: str, target_bare_tid: str, original_task_id: s
     # Role-first: dev-report-<role>-<task-id>.json
     m_role = PER_WORKER_ROLE_FIRST_RE.match(filename)
     if m_role is not None:
-        if m_role.group("task_id") != target_bare_tid:
+        if m_role.group("task_id") != target_bare_tid or _task_suffix(original_task_id, target_bare_tid):
             return False, None
         role = m_role.group("role")
         role_lc = role.lower()
@@ -220,15 +221,20 @@ def _is_worker_for_task(filename: str, target_bare_tid: str, original_task_id: s
         return False, None
     if NON_WORKER_LABEL_RE.match(worker_lc):
         return False, None
-    # Extra isolation when original_task_id has a suffix:
-    # "20260524-125300-push" has suffix "-push"; shards of the plain
-    # "20260524-125300" task (e.g. dev-report-20260524-125300-B.json) share
-    # the bare timestamp but belong to a different task.  Reject them if the
-    # original task_id has a suffix by requiring the worker not to be a
-    # single uppercase letter (likely a different parallel task's worker label)
-    # — this is a best-effort heuristic.  The recommended fix from codex is to
-    # validate the loaded shard's task_id field in _validate_shards, which we do.
+    # A suffixed task (<stamp>-0, <stamp>-c1-0: an overnight pipeline) has as lanes only
+    # dev-report-<task-id>-<lane>.json: another task sharing the stamp (<stamp>-1) is none of its lanes.
+    suffix = _task_suffix(original_task_id, target_bare_tid)
+    if suffix:
+        lane = worker[len(suffix) + 1:] if worker.startswith(suffix + "-") else ""
+        if not lane or _SP.is_non_worker_label(lane):
+            return False, None
     return True, worker
+
+
+def _task_suffix(original_task_id: str, target_bare_tid: str) -> str:
+    """What original_task_id holds after its stamp ("0" of <stamp>-0), "" for a bare or prefixed id."""
+    at = original_task_id.find(target_bare_tid)
+    return original_task_id[at + len(target_bare_tid) + 1:] if at >= 0 else ""
 
 
 def _self_declared_lane(path: Path, original_task_id: str) -> str | None:
@@ -1026,9 +1032,82 @@ def _atomic_write_json(path: Path, document: dict) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
+        _stamp_built_from(path)
     except BaseException:
         temporary_path.unlink(missing_ok=True)
         raise
+
+
+# The newest mtime of the lane reports this run read, stamped on the canonical it writes or validates:
+# a lane report changed after they were read is newer than the canonical, so it reads as stale.
+_BUILT_FROM_NS: int | None = None
+REBUILD_TIMEOUT_S = 240  # the recorded case's stand-in measured 15 s (129 s before the replay shortcuts); Stop allows 300
+
+
+def _stamp_built_from(path: Path) -> None:
+    if _BUILT_FROM_NS is not None:
+        os.utime(path, ns=(_BUILT_FROM_NS, _BUILT_FROM_NS))
+
+
+def stale_lane_reports(project_dir, task_id: str) -> list[str]:
+    """The lane reports of task_id's fan-out newer than its canonical (every one when it is absent);
+    [] for a cycle of fewer than two, and for a task_id whose report is itself a lane report of a fan-out
+    (dev-report-<cycle>-<lane>.json is no canonical: rebuilding it would overwrite the lane's report).
+    The only staleness test: an mtime, whatever wrote the report."""
+    dev_dir = _resolve_dev_dir(_resolve_project_root(str(project_dir)))
+    canonical = dev_dir / f"dev-report-{task_id}.json"
+    bare = _bare_task_id(task_id)
+    if canonical.is_file() and _is_worker_for_task(canonical.name, bare, bare)[0]:
+        declared = _load_shard(canonical)
+        if isinstance(declared, dict) and declared.get("lane"):  # a built aggregate names no lane
+            return []
+    shards = _scan_shards(dev_dir, bare, task_id)
+    built = canonical.stat().st_mtime_ns if canonical.is_file() else -1
+    return [str(path) for _, path in shards if path.stat().st_mtime_ns > built] if len(shards) > 1 else []
+
+
+def task_of_lane_report(filename: str, lane: str) -> str | None:
+    """The task whose lane `lane`'s report filename is (dev-report-<task-id>-<lane>.json), by the
+    definition this script collects its inputs by (_is_worker_for_task); None for any other name."""
+    head, tail = "dev-report-", f"-{lane}.json"
+    task_id = filename[len(head):-len(tail)] if lane and filename.startswith(head) and filename.endswith(tail) else ""
+    return task_id if task_id and _is_worker_for_task(filename, _bare_task_id(task_id), task_id)[0] else None
+
+
+def rebuild_if_stale(project_dir, task_id: str, timeout: float = REBUILD_TIMEOUT_S) -> list[str]:
+    """Run this script for task_id when a lane report is newer than its canonical; the lane reports
+    still newer afterwards. A refused, failed or cut-off run leaves the old canonical (writes are
+    atomic) with its old mtime, so it never reads as current.
+
+    At most one run per state of the lane reports, whoever asks: the run holds a lock on
+    docs/dev/.dev-report-<task_id>.rebuild (an asker that finds it held is answered stale, the run is
+    under way) and, once the run has ended, records there the state it ran on; a state recorded there
+    is not run again. Only a run cut off at `timeout` records nothing, so the next asker tries it."""
+    stale = stale_lane_reports(project_dir, task_id)
+    if not stale:
+        return []
+    import fcntl
+    dev_dir = Path(stale[0]).parent
+    state = json.dumps(sorted((os.path.basename(p), os.stat(p).st_mtime_ns, os.stat(p).st_size) for p in stale))
+    with open(dev_dir / f".dev-report-{task_id}.rebuild", "a+", encoding="utf-8") as record:
+        try:
+            fcntl.flock(record, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return stale  # another asker's run is under way
+        record.seek(0)
+        if record.read() == state:
+            return stale  # this state's run has ended already and left it stale
+        try:
+            subprocess.run([sys.executable, str(Path(__file__).resolve()), "--task-id", task_id,
+                            "--project-dir", str(project_dir)], cwd=str(project_dir), capture_output=True,
+                           timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            return stale_lane_reports(project_dir, task_id)
+        except Exception:
+            pass
+        record.truncate(0)
+        record.write(state)
+    return stale_lane_reports(project_dir, task_id)
 
 
 def _build_aggregate(shards: list[tuple[str, dict]], task_id: str) -> dict:
@@ -1402,12 +1481,22 @@ _BLOB_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 def _git(project_root: Path, args: list[str]) -> tuple[int, bytes, bytes]:
     """Run a read-only git command scoped to project_root; return (rc, stdout,
     stderr). Used only by the backlog #99 criterion-C completeness check
-    (ls-files/cat-file/show only -- never mutates the index or worktree)."""
+    (ls-files/cat-file/show only -- never mutates the index or worktree).
+    cat-file and show name an object by its id, so their answer is kept for the run: the full and the
+    same-cycle passes ask each file the same questions (about half of one run's git processes)."""
+    key = (str(project_root), *args)
+    if key in _GIT_OBJECTS:
+        return _GIT_OBJECTS[key]
     proc = subprocess.run(
         ["git", "-C", str(project_root)] + args,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
+    if args[0] in ("cat-file", "show"):
+        _GIT_OBJECTS[key] = (proc.returncode, proc.stdout, proc.stderr)
     return proc.returncode, proc.stdout, proc.stderr
+
+
+_GIT_OBJECTS: dict = {}
 
 
 def _resolve_baseline_snapshot(
@@ -1571,6 +1660,16 @@ def _load_stage_owned_hunks_replay():
         )
     replay = module._replay_with_provenance
     refusal = module.OwnedLandingRefusal
+    # This private copy is asked for replayed bytes and refusals only. The replay's ambiguity envelope
+    # (_optimal_structure) feeds nothing but the components this script drops, and cost most of a run:
+    # its own budget-exceeded answer (envelope unknown) stands in. Each entry's decomposition is asked once.
+    budget = module.AlignmentBudgetExceeded
+
+    def _envelope_not_asked(_p, _q):
+        raise budget("envelope not needed for replayed bytes")
+    module._optimal_structure = _envelope_not_asked
+    module._decompose_entry = functools.lru_cache(maxsize=4096)(module._decompose_entry)
+    module._dp_match_pairs = _match_pairs_on(module._lcs_rows)
     probe_bytes, _, _ = replay(b"S-O-H-PROBE-abc-TAIL", [{"old": "abc", "new": "XYZ"}], "probe")
     if probe_bytes != b"S-O-H-PROBE-XYZ-TAIL":
         raise RuntimeError(
@@ -1578,8 +1677,48 @@ def _load_stage_owned_hunks_replay():
             "probe; its semantics have drifted underneath this checker and "
             "the rule table must be re-derived" % consumer
         )
-    _STAGE_OWNED_HUNKS_CACHE.append((replay, refusal))
-    return replay, refusal
+    _STAGE_OWNED_HUNKS_CACHE.append((_memoized_replay(replay), refusal))
+    return _STAGE_OWNED_HUNKS_CACHE[0]
+
+
+def _match_pairs_on(lcs_rows):
+    """stage-owned-hunks.py _dp_match_pairs with its LCS table taken from the same module's bit-parallel
+    _lcs_rows (the same table, built row by row in C instead of cell by cell) and its traceback unchanged."""
+    @functools.lru_cache(maxsize=512)
+    def match_pairs(p, q):
+        if not p or not q:
+            return []
+        rows, pairs, i, j = lcs_rows(p, q), [], len(p), len(q)
+        while i > 0 and j > 0:
+            if p[i - 1] == q[j - 1] and rows[i][j] == rows[i - 1][j - 1] + 1:
+                pairs.append((i - 1, j - 1))
+                i, j = i - 1, j - 1
+            elif rows[i - 1][j] >= rows[i][j - 1]:
+                i -= 1
+            else:
+                j -= 1
+        pairs.reverse()
+        return pairs
+    return match_pairs
+
+
+def _memoized_replay(replay):
+    """The replay, answered once per (snapshot, ledger, rel): a run asks the same replay many times (every
+    ordering walk, both completeness passes). Its outcome, the replayed bytes or the refusal, depends on those
+    alone; nothing here reads the provenance or components, so they are not kept (None)."""
+    memo: dict = {}
+
+    def replayed(snapshot, edits, rel):
+        key = (bytes(snapshot), json.dumps(edits, sort_keys=True, default=repr), rel)
+        if key not in memo:
+            try:
+                memo[key] = (bytes(replay(snapshot, edits, rel)[0]), None, None)
+            except Exception as exc:  # the same refusal, raised again for the same question
+                memo[key] = exc
+        if isinstance(memo[key], Exception):
+            raise memo[key]
+        return memo[key]
+    return replayed
 
 
 _ATTRIBUTION_ADJUDICATOR_CACHE: list = []  # [module], lazy singleton
@@ -1767,26 +1906,33 @@ def _lane_candidates_for_file(
     edited `rel` BEFORE a lane did be accounted for at all -- the forward-only
     cross-cycle chain in `_follow_declared_claim_chain` starts from a lane's
     replay output and so structurally cannot reach backwards past it."""
-    base_lanes: list[str] = []
-    seen: set[str] = set()
-    for label, _ in shards:
-        base = _base_lane(label)
-        if base not in seen:
-            seen.add(base)
-            base_lanes.append(base)
     candidates = []
-    for base in base_lanes:
-        subset = [(label, data) for label, data in shards if _base_lane(label) == base]
-        lane_hunks = _merge_owned_edits(subset).get(rel)
+    for base, owned, snapshots in _lane_merges(shards):
+        lane_hunks = owned.get(rel)
         if not isinstance(lane_hunks, list) or not lane_hunks:
             continue
-        lane_snapshot = _merge_pre_edit_snapshots(subset).get(rel)
-        candidates.append((base, lane_snapshot, lane_hunks))
+        candidates.append((base, snapshots.get(rel), lane_hunks))
     if cycle_claimants and project_root is not None:
         candidates.extend(
             _evidenced_claimant_candidates(project_root, rel, cycle_claimants)
         )
     return candidates
+
+
+_LANE_MERGES: list = []  # [(shards, [(base, owned_edits, pre_edit_snapshots)])]: the last shard list's merges
+
+
+def _lane_merges(shards) -> list:
+    """Each base lane's own merged owned_edits and pre_edit_snapshots, in roster order, computed once per
+    shard list (the same list is asked for every file of a run; recomputing it per file took most of a run)."""
+    if not _LANE_MERGES or _LANE_MERGES[0][0] is not shards:
+        bases = list(dict.fromkeys(_base_lane(label) for label, _ in shards))
+        merges = []
+        for base in bases:
+            subset = [(label, data) for label, data in shards if _base_lane(label) == base]
+            merges.append((base, _merge_owned_edits(subset), _merge_pre_edit_snapshots(subset)))
+        _LANE_MERGES[:] = [(shards, merges)]
+    return _LANE_MERGES[0][1]
 
 
 _MAX_CLAIM_CHAIN_LINKS = 8
@@ -2708,8 +2854,11 @@ def _tracked_at_baseline(project_root: Path, baseline_head_sha: str, rel: str) -
     if not baseline_head_sha:
         rc, _, _ = _git(project_root, ["ls-files", "--error-unmatch", "--", rel])
         return rc == 0
-    rc, _, _ = _git(project_root, ["cat-file", "-e", f"{baseline_head_sha}:{rel}"])
-    return rc == 0
+    key = ("ls-tree", str(project_root), baseline_head_sha)
+    if key not in _GIT_OBJECTS:  # one listing of the baseline tree, not one git process per owned file
+        rc, out, _ = _git(project_root, ["ls-tree", "-r", "-z", "--name-only", baseline_head_sha])
+        _GIT_OBJECTS[key] = set(out.decode("utf-8", "surrogateescape").split("\0")) if rc == 0 else set()
+    return rel in _GIT_OBJECTS[key]
 
 
 def _is_completeness_diagnostic(text, owned) -> bool:
@@ -2849,6 +2998,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Scan for shards scoped to this task-id (using bare timestamp for pattern matching).
     shards_info = _scan_shards(dev_dir, bare_tid, task_id)
+    global _BUILT_FROM_NS
+    _BUILT_FROM_NS = max((path.stat().st_mtime_ns for _, path in shards_info), default=None)
 
     # Full scanned label roster, independent of load/validate outcome: a
     # roster shrink is measured against it.
@@ -3091,6 +3242,8 @@ def main(argv: list[str] | None = None) -> int:
                 extra=_outcome_fields(expected["dev"]["status"], loaded, shards_info),
             )
             return 0
+        if not args.dry_run:
+            _stamp_built_from(canonical_path)  # matches the lane reports read: current as of them
         _emit_ok(
             action="validated",
             output_path=str(canonical_path),

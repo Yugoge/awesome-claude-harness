@@ -62,9 +62,9 @@ def _load(path: str):
     return value if isinstance(value, dict) else None
 
 
-def _task_suffix(prompt) -> tuple[str, str] | None:
-    """(X, dispatched_at) of the docs/dev/dev-report-<X>.json the dispatch's obligation declares, or None."""
-    from lib.obligation import ExtractedBlock, extract_obligation_block
+def _task_suffix(prompt, payload=None) -> tuple[str, str] | None:
+    """(X, the dispatch's time, recorded_dispatch's) of the docs/dev/dev-report-<X>.json it declares, or None."""
+    from lib.obligation import ExtractedBlock, extract_obligation_block, recorded_dispatch
     block = extract_obligation_block(prompt)
     if not isinstance(block, ExtractedBlock):
         return None
@@ -78,6 +78,7 @@ def _task_suffix(prompt) -> tuple[str, str] | None:
         path = artifact.get("path") if isinstance(artifact, dict) else None
         match = REPORT_RE.search(path) if isinstance(path, str) else None
         if match:
+            doc = recorded_dispatch(doc, payload.get("transcript_path"), payload.get("tool_use_id")) if payload else doc
             return match.group(1), str(doc.get("dispatched_at") or "")
     return None
 
@@ -186,7 +187,8 @@ def advice(payload: dict) -> list[str]:
     tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
     if tool_input.get("subagent_type") != "dev":
         return []
-    suffix, since = _task_suffix(tool_input.get("prompt")) or (None, "")
+    post = payload.get("hook_event_name") == "PostToolUse"  # only there is its time read
+    suffix, since = _task_suffix(tool_input.get("prompt"), payload if post else None) or (None, "")
     if suffix is None:
         return []
     project = _project_dir(payload)

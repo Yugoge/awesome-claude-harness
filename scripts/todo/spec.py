@@ -17,10 +17,8 @@ _SPEC_STEPS = (
            "Parsing arguments"),
     ("2", "Clarify requirement (max 3 rounds)",
            "Clarifying requirement"),
-    ("3", "Write first spec and dispatch exploration",
-           "Writing spec and dispatching exploration"),
-    ("3a", "Requirement round: BA panel, panel QA, ask, copy the answers",
-            "Running the requirement round"),
+    ("3", "Write first spec, dispatch exploration; Requirement round: BA panel, panel QA, ask, copy the answers",
+           "Writing spec, dispatching exploration, running the requirement round"),
     ("4", "Accumulate requirements (multi-turn loop)",
            "Accumulating requirements"),
     ("5", "Detect natural conclusion",
@@ -42,17 +40,17 @@ def _build_step(label: str, desc: str, active: str) -> dict:
 
 
 def get_todos() -> list:
-    """Return the Spec Creation Mode todo list (Steps 1-7, with Step 3a)."""
+    """Return the Spec Creation Mode todo list (Steps 1-7)."""
     return [_build_step(label, desc, active) for label, desc, active in _SPEC_STEPS]
 
 
 def get_blocking_count() -> int:
-    """Steps 1-3a must complete before Claude can stop.
-    (Parse, Clarify, Write first spec + dispatch Explore, the requirement round)
+    """Steps 1-3 must complete before Claude can stop.
+    (Parse, Clarify, Write first spec + dispatch Explore and the requirement round)
     Steps 4-7 are session-duration: multi-turn loop, conclusion detection,
     finalize, and display -- these run until natural-conclusion signal fires.
     """
-    return 4
+    return 3
 
 
 if __name__ == "__main__":

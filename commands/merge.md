@@ -67,7 +67,7 @@ Dispatch the `merge-analyst` subagent (Agent tool, `run_in_background: false`) w
 <the eight lines Step 1 printed>
 
 <obligation v="1">
-{"task_id": null, "lane": null, "lane_set": null, "role": "merge-analyst", "pipeline": "merge", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^merge-analyst grant written: \\S+\\.json$"}]}
+{"task_id": null, "lane": null, "lane_set": null, "role": "merge-analyst", "pipeline": "merge", "profile": "ad_hoc", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^merge-analyst grant written: \\S+\\.json$"}]}
 </obligation>
 ```
 
@@ -79,7 +79,7 @@ Read the grant at:
 ```
 <state dir>/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json
 ```
-(the state dir is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`) and act on its `verdict` and `risks`. `hooks/lib/merge_grant.py` validates the grant once, on the analyst's own Write (run from `hooks/posttool-allowlist-consume.py`, which the ledger rates `detected`); this step re-checks none of it.
+(the state dir is what `. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"; harness_state_dir` prints) and act on its `verdict` and `risks`. `hooks/lib/merge_grant.py` validates the grant on the analyst's own Write (run from `hooks/posttool-allowlist-consume.py`, which the ledger rates `detected`) and again at Step 5's call: `hooks/pretool-merge-verdict.py` refuses merge.sh unless this session's newest grant since the opener is `approved`, unexpired, at the live tips and for that ref, and the Stop gate counts a landed merge only with that approval. This step re-checks none of it.
 
 - No grant at that path: refuse: "merge-analyst did not write a grant" (action "re-run the analysis now").
 - `verdict` = `blocked`: refuse: "merge-analyst blocked the merge" with `risks[]` (action "resolve the listed risks first"; never "merge anyway"). Do not call merge.sh.

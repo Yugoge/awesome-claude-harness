@@ -10,7 +10,8 @@ it, so only the human could end the state.
 These tests pin the fix:
   * no stale-worktree state makes the guard exit 2, for any tool;
   * the cleanup it recommends passes every PreToolUse hook settings.json
-    registers for Bash, really removes the worktree, and leaves the guard quiet;
+    runs for Bash (the guard and pretool-bash-safety.sh are rules of
+    pretool-launch.py), really removes the worktree, and leaves the guard quiet;
   * the lesson, "a stale worktree causes merge conflicts", still reaches Claude
     (PreToolUse additionalContext) and the user (systemMessage), whatever the
     tool;
@@ -31,6 +32,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -38,6 +40,8 @@ import pytest
 
 HOOKS = Path(__file__).resolve().parents[1]
 ROOT = HOOKS.parent
+sys.path.insert(0, str(HOOKS))
+from lib import launch_settings  # noqa: E402  (the launchers' static table reader)
 GUARD = HOOKS / "pretool-worktree-guard.sh"
 LESSON = "a stale worktree causes merge conflicts"
 
@@ -250,15 +254,28 @@ def test_flags_tell_the_agent_what_it_is_looking_at(tmp_path):
     assert "detached HEAD" in context
 
 
-def _bash_pretool_hooks():
-    """Every PreToolUse command settings.json runs before a Bash call."""
-    settings = json.loads((ROOT / "settings.json").read_text())
+def _settings():
+    return json.loads((ROOT / "settings.json").read_text())
+
+
+def _pretool_commands(settings, tool):
+    """Every PreToolUse command of `settings` that runs before a `tool` call."""
     commands = []
     for block in settings["hooks"]["PreToolUse"]:
         matcher = block.get("matcher")
-        if matcher in (None, "", "*") or re.fullmatch(matcher, "Bash"):
+        if matcher in (None, "", "*") or re.fullmatch(matcher, tool):
             commands += [h["command"] for h in block["hooks"] if h.get("type") == "command"]
     return commands
+
+
+def _bash_pretool_hooks():
+    """Every PreToolUse command settings.json registers before a Bash call: what the CLI runs."""
+    return _pretool_commands(_settings(), "Bash")
+
+
+def _bash_pretool_rules():
+    """Every hook those registrations run before a Bash call, the launcher's rules included."""
+    return _pretool_commands(launch_settings.expand(_settings(), str(ROOT)), "Bash")
 
 
 def _chain_env(tmp_path, env):
@@ -272,9 +289,10 @@ def _chain_env(tmp_path, env):
 
 def _run_cleanup_step(repo, tmp_path, env, command):
     """One Bash call, end to end: every PreToolUse hook for Bash, then the call."""
-    hooks = _bash_pretool_hooks()
-    assert any("pretool-worktree-guard.sh" in h for h in hooks)
-    assert any("pretool-bash-safety.sh" in h for h in hooks)
+    rules = _bash_pretool_rules()
+    assert any("pretool-worktree-guard.sh" in h for h in rules)
+    assert any("pretool-bash-safety.sh" in h for h in rules)
+    hooks = _bash_pretool_hooks()  # run as registered: the launcher runs those rules
     chain_env = _chain_env(tmp_path, env)
     for hook in hooks:
         proc = subprocess.run(["bash", "-c", hook],
@@ -403,11 +421,23 @@ def test_unwritable_cache_does_not_hide_the_lesson(tmp_path):
     assert LESSON in context.lower()
 
 
-def test_guard_still_runs_before_every_tool():
+def test_guard_still_runs_before_every_tool(tmp_path):
     """The lesson stays visible because settings.json still runs the guard,
-    with no matcher, before every tool call."""
-    settings = json.loads((ROOT / "settings.json").read_text())
-    blocks = [b for b in settings["hooks"]["PreToolUse"]
+    with no matcher, before every tool call: as a rule of the PreToolUse launcher."""
+    expanded = launch_settings.expand(_settings(), str(ROOT))
+    blocks = [b for b in expanded["hooks"]["PreToolUse"]
               if any("pretool-worktree-guard.sh" in h["command"] for h in b["hooks"])]
     assert len(blocks) == 1
     assert blocks[0].get("matcher") in (None, "", "*")
+    # The registrations as the CLI runs them run the guard (its cache, which only it
+    # writes, appears), whatever the tool; a call no other rule refuses carries the lesson.
+    repo, worktrees = _scratch_repo(tmp_path, "clean")
+    env = _chain_env(tmp_path, _env(tmp_path))
+    cache = tmp_path / "state" / "worktree-guard-cache"
+    for tool, tool_input in _tool_calls(repo, worktrees[0]):
+        cache.unlink(missing_ok=True)
+        for hook in _pretool_commands(_settings(), tool):
+            proc = subprocess.run(["bash", "-c", hook], input=_payload(repo, tool, tool_input),
+                                  text=True, capture_output=True, cwd=str(repo), env=env, timeout=120)
+            assert proc.returncode == 2 or LESSON in proc.stdout.lower(), (tool, proc.stdout)
+        assert cache.exists(), tool

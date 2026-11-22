@@ -630,21 +630,25 @@ def test_f6o_usage_limit_after_end_time_before_the_summary_resumed_by_the_wake(r
     assert got["terminal"]["end_time"] < got["cut"]["at"] <= got["terminal"]["stopped_at"], got
 
 
-# ---------------------------------------------------------------- X8's refusals of the widened exception
+# ---------------------------------------------------------------- X8's two sends outside the widened exception
+# Since the owner's ruling of 2026-11-21 (a send to an own subagent is judged as its dispatch, lib/send_policy.py; the
+# /restart-candidate refusal retired) only the exact resume message passes as a resume: another message to the cut
+# agent is new work, judged as a dispatch of its role (resume-message ruling), so the dispatch gate refuses it for
+# the cut pm, whose dispatch needs its mode; a send to an id that is no subagent of the session is the receiving
+# session's to decide (not refused). The run then resumes the cut agent with the exact message as before.
 
 @pytest.mark.parametrize("key", _cases(STOP_WAKE, REFUSALS["bad-message"], "bad-message-")
                          + _cases(STOP_WAKE, REFUSALS["bad-id"], "bad-id-"))
-def test_the_wakes_capability_refuses_any_other_message_or_id(replays, key):
+def test_the_wakes_other_message_or_id_is_not_refused_and_the_cut_agent_still_resumes(replays, key):
     r = replays.get(key)
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     assert not r.hook_errors, r.explain()
-    refusal = r.fact("wake refusal")
-    assert refusal and refusal["refused"], refusal
-    want = {"bad-message": "does not begin with the exact restart-v1 recovery message",
-            "bad-id": "not a recoverable interrupted subagent"}[refusal["case"]]
-    bl = blocks(r)
-    assert bl and all(b["step"] == f"/restart SendMessage ({refusal['case']})" for b in bl), r.explain()
-    assert any(want in b["text"] for b in bl), r.explain()
+    sent = r.fact("wake refusal")
+    other = sent and sent["case"] == "bad-message"  # new work for the cut pm: a dispatch without its mode
+    assert sent and sent["refused"] is bool(other), sent
+    assert not other or "is a dispatch of pm" in sent["text"], sent
+    assert not [b for b in blocks(r) if b["step"].startswith("/restart SendMessage")
+                and b["step"] != "/restart SendMessage (bad-message)"], r.explain()
     f = recovery.facts(r)  # the compliant SendMessage after it resumed the cut agent
     assert all(a["resumed"] and a["written_after_resume"] == a["declared"] for a in f["agents"].values()), f
 

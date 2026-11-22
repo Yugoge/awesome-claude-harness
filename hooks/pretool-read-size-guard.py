@@ -22,7 +22,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
+from lib.allowlist import has_do_consent  # noqa: E402
 
 BINARY_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp", ".pdf",
@@ -86,9 +86,8 @@ def main():
         sys.exit(0)
 
     if data.get("tool_name") == "Read" and not data.get("agent_id"):
-        sid = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "default")
         try:
-            if has_do_consent(data) or match_sentinel_grant_for_tool(sid, "Read") is not None:
+            if has_do_consent(data):
                 sys.exit(0)
         except Exception:
             pass

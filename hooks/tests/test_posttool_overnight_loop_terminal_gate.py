@@ -63,9 +63,8 @@ def _retro_reports(project_dir, session_id, done):
 
 
 def _written_logs(home):
-    """Files under the scratch home's logs/ directory: the hook writes none."""
-    logs = home / ".claude" / "logs"
-    return sorted(p.name for p in logs.rglob("*")) if logs.is_dir() else []
+    """Files under the scratch home's logs/ directories (the harness state root's): the hook writes none."""
+    return sorted(p.name for p in home.glob(".local/state/claude-harness/*/logs/**/*"))
 
 
 def _said(result):

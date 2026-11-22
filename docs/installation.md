@@ -348,19 +348,34 @@ the binary under another name is not recognized.
   `hooks/lib/overnight.py`'s one writer; the switch finds the records from the session's project. The command's own text has the session delete its
   wake, and while off the hook refuses the wake's prompts.
 - **From the next session.**
-  - settings.json is in its off form: no harness hook, env var or permission rule (the
-    settings filter's "harness switch" in `scripts/install/render-settings`).
+  - settings.json is in its off form: no harness hook, env var (but the two temp directories
+    below) or permission rule (the settings filter's "harness switch" in
+    `scripts/install/render-settings`).
   - A sparse checkout leaves `CLAUDE.md`, `commands/` (all but `commands/harness.md`),
     `agents/` and `skills/` out of the working tree. git keeps them in the index, so `git pull`
     works while off and lands the new version hidden.
 
 **What it keeps.** MCP servers (`.claude.json`), plugins, login and credentials, session history,
 and your own settings: the overlay's entries (`env.CLAUDE_HOME` included), CLI-written keys,
-anything else in settings.json the harness does not ship. Two keys the harness ships are kept,
+anything else in settings.json the harness does not ship. Four keys the harness ships are kept,
 because dropping them would change what is not the harness:
 
 - `cleanupPeriodDays`: without it Claude Code deletes session history after 30 days.
 - `deniedMcpServers`: it keeps three connectors off.
+- `env.CLAUDE_CODE_TMPDIR` and `env.TMPDIR`: without them a session started while off keeps its
+  command output, and its commands their temp files, on the memory-backed `/tmp` for the life of
+  its process (Claude Code fixes the place when the process starts); every command fails once
+  `/tmp` is full. Off makes the directory they name when it is missing.
+
+**Sessions started while off.** At the first prompt after `/harness on`, the switch's hook runs
+the harness's SessionStart hooks such a session's process never ran, and says what cannot be done
+late: the per-session `TMPDIR` of the session-start env file, and what Claude Code read when the
+process started. Every `/harness` report lists each running Claude Code process whose command
+output is on a memory-backed volume, by project and session (it reads which output directory a
+process holds open, or the newest file of the session's output directory, against the process's
+start; a process it cannot check is named as such, never counted as fine), and in such a session
+every prompt prints one line, in either switch state. The fix is a restart of the process: end it
+and resume the same session (`claude --resume <session>`). `/restart` does not do this.
 
 **What on does.** It restores settings.json byte for byte when nothing changed while off. When
 something did, it keeps the owner's changes; after a pull, it brings the pulled version.

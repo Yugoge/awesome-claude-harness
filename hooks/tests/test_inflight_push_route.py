@@ -56,10 +56,11 @@ def _hook(tmp_path: Path, tool: str, tool_input: dict, role, state) -> subproces
                           text=True, env=env, timeout=60)
 
 
-def _token_word(repo_hash: str, branch: str) -> str:
-    """The path 2acc29b's Phase 10 Writes: literal /tmp, the session digest, the branch encoded."""
+def _token_word(repo_hash: str, branch: str, state: str = "/tmp") -> str:
+    """The path 2acc29b's Phase 10 Writes: literal /tmp (the state dir then), the session digest, the branch
+    encoded; with `state`, the same path under that state dir."""
     digest = hashlib.sha256(SID.encode()).hexdigest()[:16]
-    return f"/tmp/agentic-commit/push/{repo_hash}/{digest}/{branch.replace('/', '__')}.json"
+    return f"{state}/agentic-commit/push/{repo_hash}/{digest}/{branch.replace('/', '__')}.json"
 
 
 # ---------------------------------------------------------------- the refusal names the route
@@ -69,7 +70,10 @@ def test_the_in_flight_token_writes_refusal_names_the_push_analyst_route(tmp_pat
     dir elsewhere the analyst's role row does. Either way the refusal's first line is the one it was, and
     the next line names the route; no other caller's refusal of a token write gains it."""
     state = None if layout == "default state dir" else tmp_path / "state"
-    word = _token_word("60229693667929e5", "master")
+    sys.path.insert(0, str(ROOT / "hooks" / "lib"))
+    import harness_state_dir  # the default state dir of the hook's HOME, on disk
+    default = os.path.join(harness_state_dir.state_root(home=str(tmp_path / "hookhome")), "state")
+    word = _token_word("60229693667929e5", "master", default if state is None else "/tmp")
     content = json.dumps({"commit_sha": "1" * 40, "branch": "master", "repo_root": str(tmp_path / "toyproj"),
                           "session_id": SID})
     proc = _hook(tmp_path, "Write", {"file_path": word, "content": content}, "changelog-analyst", state)

@@ -1,4 +1,4 @@
-"""OB-L19: settings.json's secret-file Read/Edit denies name secret files, not substrings of any path.
+"""OB-L19: the deny list's secret-file Read/Edit entries name secret files, not substrings of any path.
 
 The base globs `**/*password*`, `**/*secret*`, `**/credentials*` and `**/shadow` refused ordinary source
 (`src/auth/ForgotPassword.tsx`, `src/secret_scanner.py`, `src/components/Shadow/index.tsx`) and every file
@@ -24,6 +24,9 @@ under a directory whose name held the word, and `**/.env.*` refused the committe
 
 Every refusal entry is a subset of what the base refused (test_the_new_names_only_narrow_the_old_globs).
 What the base refused and this list opens on purpose is DELIBERATELY_OPEN, listed and justified.
+
+The entries were settings.json's permissions.deny; they now live in policies/cli-deny.v1.json, decided by the
+pre-tool rule hooks/pretool-deny-list.py (hooks/lib/deny_list.py) as the CLI matched them.
 
 How the CLI matches (code.claude.com/docs/en/permissions, "Read and Edit"): gitignore syntax, a bare name
 or `**/name` at any depth under the current directory, `//path` from the filesystem root; deny before
@@ -371,7 +374,9 @@ def bash_denied(deny: list[str], cmd: str) -> bool:
 
 
 def _deny() -> list[str]:
-    return json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]["deny"]
+    """The deny list as shipped: settings.json's own entries and the hook rule's (policies/cli-deny.v1.json)."""
+    return (json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]["deny"]
+            + json.loads((REPO / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"])
 
 
 # ------------------------------------------------------------------ tests
@@ -453,7 +458,7 @@ def _guarded(name: str) -> list[tuple[str, str]]:
 
 
 def _negation_cases():
-    deny = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]["deny"]
+    deny = _deny()
     pats = dict.fromkeys(e[6:-1] for e in deny if e.startswith(("Read(!", "Edit(!")))
     return [(p, tool, path) for p in pats for n in _lifted_names(p) for tool, path in _guarded(n)]
 

@@ -42,8 +42,8 @@ RULES = (
     Rule('doc-sync', 'posttool-doc-sync.py', ('Write', 'Edit', 'NotebookEdit', 'MultiEdit'),
          after=('attribution-post',)),  # rewrites the CLAUDE.md attribution-post hashes
     Rule('command-frontmatter-validate', 'posttool-command-frontmatter-validate.py', ('Write', 'Edit', 'NotebookEdit', 'MultiEdit')),
-    Rule('lane-completeness-watch', 'posttool-lane-completeness-watch.py', ('Write', 'Edit', 'NotebookEdit', 'MultiEdit')),
     Rule('dispatch-record', 'posttool-dispatch-record.py', DISPATCH_TOOLS),
+    Rule('dispatch-return', 'lib/dispatch_return.py', DISPATCH_TOOLS, timeout=30),  # lane state + open gaps (gate: 20 s)
     Rule('restart-sendmessage', 'posttool-restart-sendmessage.py', ('SendMessage',)),
     Rule('runcode-watchdog', 'posttool-runcode-watchdog.py', ('mcp__playwright__browser_run_code',)),
     Rule('codex-skill-ledger', 'posttool-codex-skill-ledger.py', ('Skill',)),

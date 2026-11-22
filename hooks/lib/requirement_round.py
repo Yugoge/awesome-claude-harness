@@ -138,8 +138,8 @@ def ba_round_paths(task_id) -> list:
     return own + ([ROUND.format(task=task, n=n + 1)] if found else [])
 
 
-# What names the round in a command's text or its checklist (commands/dev.md Step 4b's source, dev-command.md's and
-# spec.md's round files; scripts/todo's Step 4b and Step 3a).
+# What names the round in a command's text or its checklist (commands/dev.md Step 4's source, dev-command.md's and
+# spec.md's round files; scripts/todo's /dev Step 4 and /spec Step 3, and a list written before as Step 4b).
 ROUND_MARKERS = ("requirement-round", "Ask each round with AskUserQuestion", "Requirement round")
 
 
@@ -370,7 +370,7 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
 # go on. The kinds kept, each in the step that owns it (question_refusal); every other AskUserQuestion is refused
 # at the tool (hooks/pretool-tool-policy.py).
 KEPT = {
-    "requirement-round": "/spec Step 3a or /dev Step 4b: its round file's questions as written",
+    "requirement-round": "/spec Step 3 or /dev Step 4: its round file's questions as written",
     "producer-question": "the relay of a producer's question file, docs/dev/producer-question-<task>-<role>.json",
     "close-rating": "/close Step 4, after a landed close QA of the task",
     # The owner stating and confirming what he wants (/spec Steps 1, 2 and 4); not a permission or a way past a refusal.

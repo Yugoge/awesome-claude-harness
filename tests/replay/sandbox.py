@@ -480,6 +480,9 @@ mount --bind /mnt/sb/home "$NSHOME"
 mount --bind /mnt/sb/tmp /tmp
 mount --bind /mnt/sb/vartmp /var/tmp
 [ -d /dev/shm ] && mount --bind /mnt/sb/shm /dev/shm
+if [ "${REPLAY_TMP:-}" = full ]; then  # a full system temp volume: a 64 KiB tmpfs with no block left
+  mount -t tmpfs -o size=64k,mode=1777 none /tmp; cat /dev/zero > /tmp/.full 2>/dev/null || true
+fi
 [ -z "$OWNER" ] || chown -R 0:0 /mnt/sb
 set +e
 "$@"; rc=$?
@@ -510,13 +513,15 @@ def _priv() -> tuple[list, str]:
     return ["sudo", "-n"], f"{os.getuid()}:{os.getgid()}"
 
 
-def launch(sb: str, lay: Layout, argv: list, env: dict, guard: bool = False) -> int:
-    """Run argv (with exactly `env`) isolated as `lay.mode` says; returns its exit code."""
+def launch(sb: str, lay: Layout, argv: list, env: dict, guard: bool = False, full_tmp: bool = False) -> int:
+    """Run argv (with exactly `env`) isolated as `lay.mode` says; returns its exit code. `full_tmp` (mode ns):
+    the namespace's /tmp is a volume with no space left."""
     sb = os.path.abspath(sb)
     cmd = ["env", "-i"] + [f"{k}={v}" for k, v in sorted(env.items())] + list(argv)
     if lay.mode == "ns":
         pre, owner = _priv()
-        cmd = pre + ["unshare", "--mount", "--propagation", "private", "bash", "-c", _NS_SCRIPT, "ns",
+        cmd = pre + ["env", f"REPLAY_TMP={'full' if full_tmp else ''}",
+                     "unshare", "--mount", "--propagation", "private", "bash", "-c", _NS_SCRIPT, "ns",
                      sb, lay.home, owner] + cmd
     elif guard:
         pre, owner = _priv()

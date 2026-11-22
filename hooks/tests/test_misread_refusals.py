@@ -39,7 +39,7 @@ def sandbox(tmp_path_factory):
            "CLAUDE_STATE_DIR": str(state), "GIT_CONFIG_GLOBAL": str(base / "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1",
            "TMPDIR": str(tmp), "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8",
            "CLAUDE_PROTECTED_RUNTIME_FILE": str(base / "protected-runtime.json"),
-           "CLAUDE_PROTECTED_PROCESS_FAMILY": "svc", "CLAUDE_HARD_BANNED_SCRIPTS": "svc-session-recovery|svc-restart"}
+           "CLAUDE_HARD_BANNED_SCRIPTS": "svc-session-recovery|svc-restart"}
     return {"env": env, "repo": str(repo), "state": str(state), "mono": str(mono)}
 
 
@@ -533,8 +533,11 @@ def test_a_relative_target_is_rendered_at_the_directory_in_effect(tmp_path, monk
     assert _write_paths('cd "$SOMEWHERE" && echo x > /srv/abs/out.txt') == ["/srv/abs/out.txt"]
 
 
+SESSION = "5e6f7a8b-1c2d-4e3f-9a0b-1c2d3e4f5a6b"
+
+
 def tool_policy(tmp_path, project, command, caller=("a1b2c3d4e5f60718", "ba")):
-    payload = {"session_id": "5e6f7a8b-1c2d-4e3f-9a0b-1c2d3e4f5a6b", "cwd": str(project), "hook_event_name": "PreToolUse",
+    payload = {"session_id": SESSION, "cwd": str(project), "hook_event_name": "PreToolUse",
                "tool_name": "Bash", "tool_input": {"command": command}}
     if caller:
         payload.update(agent_id=caller[0], agent_type=caller[1], subagent_type=caller[1])
@@ -555,12 +558,13 @@ def repo_project(tmp_path):
 
 
 @pytest.mark.parametrize("command", [
-    "cd /tmp/claude-scratch/ba/rev1 && jq '.forms' forms.json > t_forms.json && cat t_forms.json > forms.json",
+    "cd {D}/ba && jq '.forms' forms.json > t_forms.json && cat t_forms.json > forms.json",  # its drafts directory
     "cd {P}/docs/codex; sed -i '2,4d' note-r05.md && sed -n '1,3p' note-r05.md | cut -c1-80",
     "cd {P}/docs/codex && grep -n x note-r04.md | cut -c1-80; sed -i 's/17/18/' note-r04.md; grep -c 18 note-r04.md",
 ])
 def test_a_write_after_cd_into_the_roles_own_directory_passes(tmp_path, repo_project, command):
-    r = tool_policy(tmp_path, repo_project, command.replace("{P}", str(repo_project)))
+    session = os.path.join(os.path.realpath(os.environ.get("TMPDIR") or "/var/tmp/claude-scratch"), SESSION)
+    r = tool_policy(tmp_path, repo_project, command.replace("{P}", str(repo_project)).replace("{D}", session))
     assert r.returncode == 0, (command, r.stderr)
 
 

@@ -1,10 +1,10 @@
-"""/allow Workflow lets exactly one Workflow call through the no-background hook (T5).
+"""/allow Workflow lets exactly one refused Workflow call through (T5).
 
-The orchestrator gate already passed a Workflow call under `/allow Workflow`, but
-pretool-block-background-tasks.py refused every Workflow call whatever the grant, so the grant
-did nothing. The hook now reads the same named-tool grant (lib.allowlist.match_sentinel_grant_for_tool)
-and posttool-allowlist-consume.py spends it after the call, so a second call is refused again.
-Each test runs the hooks as the CLI does, under a throwaway HOME and state directory.
+pretool-block-background-tasks.py refuses every Workflow call of the main agent. The owner's
+`/allow Workflow` (hooks/userprompt-consent-allowlist.sh) makes a grant that the pre-tool launcher
+(lib/hook_launch.release_refused) spends on the next refused Workflow call, so a second call is
+refused again and no other tool's refusal is released by it. Each test runs the hooks as the CLI
+does, under a throwaway HOME and state directory.
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ ROOT = HOOKS.parent
 sys.path.insert(0, str(HOOKS))
 
 BACKGROUND = HOOKS / "pretool-block-background-tasks.py"
-CONSUME = HOOKS / "posttool-allowlist-consume.py"
+PROMPT = HOOKS / "userprompt-consent-allowlist.sh"
 PRETOOL = HOOKS / "pretool-launch.py"
 POSTTOOL = HOOKS / "posttool-launch.py"
 WORKFLOW_INPUT = {"script": "export default async () => {}", "name": "probe"}
@@ -42,11 +42,13 @@ def session(tmp_path: Path):
         env.pop(name, None)
 
     class S:
-        def grant(self, *ops):
-            code = ("import sys; sys.path.insert(0, sys.argv[1]);"
-                    "from lib.allowlist import write_sentinel_grant;"
-                    "write_sentinel_grant(sys.argv[2], sys.argv[2], [{'op': o} for o in sys.argv[3:]])")
-            subprocess.run([sys.executable, "-c", code, str(HOOKS), sid, *ops], env=env, check=True)
+        def grant(self, text):
+            """The owner types `/allow <text>`."""
+            prompt = {"hook_event_name": "UserPromptSubmit", "session_id": sid, "prompt": f"/allow {text}",
+                      "cwd": str(ROOT), "transcript_path": str(transcript)}
+            p = subprocess.run(["bash", str(PROMPT)], input=json.dumps(prompt), text=True, capture_output=True,
+                               env=env, check=False)
+            assert p.returncode == 0 and "Grant recorded" in p.stdout, p.stdout + p.stderr
 
         def do_consent(self):
             (state / f"claude-orchestrator-consent-{sid}.flag").write_text("true")
@@ -60,7 +62,7 @@ def session(tmp_path: Path):
             return subprocess.run([sys.executable, str(hook)], input=json.dumps(payload), text=True,
                                   capture_output=True, env=env, cwd=str(ROOT), check=False)
 
-        def call(self, pre=BACKGROUND, post=CONSUME, **kw):
+        def call(self, pre=PRETOOL, post=POSTTOOL, **kw):
             """One Workflow call: the PreToolUse verdict, and PostToolUse when it ran."""
             payload = self.payload(**kw)
             pre_run = self.run(pre, payload)
@@ -100,28 +102,19 @@ def test_a_grant_for_another_tool_does_not_unlock_workflow(session):
 
 def test_a_grant_for_workflow_unlocks_nothing_else(session):
     session.grant("Workflow")
-    agent = session.run(BACKGROUND, session.payload("Agent", {"prompt": "x", "subagent_type": "general-purpose"}))
-    assert agent.returncode == 2, "a background dispatch stays refused"
-    send = session.run(BACKGROUND, session.payload("SendMessage", {"to": "a0000000000000000", "message": "x"}))
-    assert send.returncode == 2
-    bash = session.run(BACKGROUND, session.payload("Bash", {"command": "true", "run_in_background": True}))
+    agent = session.run(PRETOOL, session.payload("Agent", {"prompt": "x", "subagent_type": "general-purpose"}))
+    assert agent.returncode == 0, agent.stderr  # a background dispatch passes without any grant
+    bash = session.run(PRETOOL, session.payload("Bash", {"command": "true", "run_in_background": True}))
     assert bash.returncode == 2
+    assert list((session.state / "claude-grants").glob("*.json")), "the Workflow grant is not spent by them"
 
 
 def test_do_consent_still_lifts_workflow(session):
     session.do_consent()
-    assert session.call().returncode == 0
-    assert session.call().returncode == 0
+    assert session.call(pre=BACKGROUND).returncode == 0
+    assert session.call(pre=BACKGROUND).returncode == 0
 
 
 def test_a_subagent_workflow_call_passes_as_before(session):
-    assert session.call(agent_id="a1234567890abcdef").returncode == 0
+    assert session.call(pre=BACKGROUND, agent_id="a1234567890abcdef").returncode == 0
 
-
-def test_the_registered_launchers_pass_one_granted_call_and_refuse_the_next(session):
-    """Through the PreToolUse and PostToolUse launchers the CLI runs, every gate included."""
-    assert _refused(session.call(pre=PRETOOL, post=POSTTOOL))
-    session.grant("Workflow")
-    first = session.call(pre=PRETOOL, post=POSTTOOL)
-    assert first.returncode == 0, first.stderr
-    assert _refused(session.call(pre=PRETOOL, post=POSTTOOL))

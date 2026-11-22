@@ -64,6 +64,17 @@ _UNANSWERED_RE = re.compile(r"`(\w+)` when the question went unanswered: your qu
                             r"recorded in ([^)]*)\)")
 
 
+
+def _drop_bare(lib: str) -> None:
+    """Forget the modules imported bare from `lib` (obligation.py's ImportError fallback imports its siblings by bare
+    name): a landing replaces the tree's files at the same path, and a sibling a base tree's module left in
+    sys.modules would be taken in place of the landed one (an old subagent_restart without RestartError)."""
+    lib = os.path.realpath(lib)
+    for key, mod in list(sys.modules.items()):
+        f = getattr(mod, "__file__", None)
+        if f and "." not in key and not key.startswith("replay_") and os.path.dirname(os.path.realpath(f)) == lib:
+            del sys.modules[key]
+
 class PlayError(RuntimeError):
     """The player cannot act compliantly on this prompt (a driver or text change to look at)."""
 
@@ -229,6 +240,7 @@ class Tree:
                 spec = importlib.util.spec_from_file_location(name, os.path.join(lib, "obligation.py"))
                 if spec and spec.loader:
                     mod = importlib.util.module_from_spec(spec)
+                    _drop_bare(lib)
                     sys.path.insert(0, lib)
                     sys.modules[name] = mod
                     try:
@@ -249,6 +261,7 @@ class Tree:
             with self.rp.acting("driver"):
                 spec = importlib.util.spec_from_file_location("replay_tree_obligation", os.path.join(lib, "obligation.py"))
                 if spec and spec.loader:
+                    _drop_bare(lib)
                     sys.path.insert(0, lib)
                     try:
                         mod = importlib.util.module_from_spec(spec)

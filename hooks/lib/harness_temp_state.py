@@ -4,7 +4,7 @@
 Is a resolved path harness temp state, and which temp root is it in: the one definition.
 
 The harness keeps grants, consent flags, sentinels, counters, locks, stamps and
-caches under the state dir (hooks/lib/harness_state_dir.py, default /tmp) and a
+caches under the state dir (hooks/lib/harness_state_dir.py, on disk; /tmp before) and a
 few more under $TMPDIR, /var/tmp or an override directory. LOCATIONS lists every
 one (docs/reference/harness-temp-state.md has the inventory, each with the
 path:line that writes or reads it). This module is the only definition a caller
@@ -37,7 +37,8 @@ str, bytes or os.PathLike path is accepted; any other type raises TypeError.
 Relative TMPDIR-style values count, against the cwd, for state detection
 but never widen temp_roots(). Control names match case-insensitively. Known
 limits (hard links, per-call variable redirects) are in the inventory doc.
-No hook uses it yet.
+Its readers: hooks/pretool-tool-policy.py, lib/write_gate/overwrite_scope.py,
+lib/dispatch_temp.py and lib/lane_ledger.py.
 """
 
 from __future__ import annotations
@@ -79,6 +80,8 @@ class Location:
     patterns: tuples of fnmatch globs, one per path component below a name root.
     tree: the matched entry and everything below it, else the exact entry only.
     tree_vars: override variables whose absolute value is this location's whole directory.
+    hooks_only: only hooks write it; hooks/pretool-tool-policy.py `_protected` refuses every agent's write,
+    move or removal of it (and of a directory holding it).
     """
 
     name: str
@@ -86,6 +89,7 @@ class Location:
     patterns: Tuple[Tuple[str, ...], ...]
     tree: bool = False
     tree_vars: Tuple[str, ...] = ()
+    hooks_only: bool = False
 
 
 def _p(*components: str) -> Tuple[str, ...]:
@@ -100,6 +104,7 @@ LOCATIONS: Tuple[Location, ...] = (
     # name to its reader and writer only.
     Location("do-consent-flag", CONTROL, (_p("claude-*-consent-*.flag"),)),
     Location("tool-streak", CONTROL, (_p("claude-tool-streak-*.json"),)),
+    Location("tool-ran", CONTROL, (_p("claude-tool-ran-*.log"),), hooks_only=True),
     Location("do-reservation", CONTROL, (_p("claude-do-resv-*"),)),
     Location("do-task-sidecar", CONTROL, (_p("claude-do-task-*.json"),)),
     Location("userintent-flag", CONTROL, (_p("claude-*-userintent-*.flag"),)),
@@ -119,6 +124,11 @@ LOCATIONS: Tuple[Location, ...] = (
     Location("git-fswatch-lock", CONTROL, (_p("git-fswatch-*.lock"),)),
     Location("tmpfs-pressure-counter", CONTROL, (_p("claude-pressure-warn-*"),)),
     Location("checkpoint-push-stamp", CONTROL, (_p(".checkpoint-push-*.ts"),)),
+    Location("checkpoint-overtime", CONTROL, (_p(".checkpoint-overtime-*"),), hooks_only=True),
+    Location("codex-unavailable", CONTROL, (_p("codex-unavailable.json"),), hooks_only=True),
+    Location("report-provenance", CONTROL, (_p("report-provenance"),), tree=True, hooks_only=True),
+    Location("lane-ledger", CONTROL, (_p("lane-ledger"),), tree=True, hooks_only=True),
+    Location("returns-hold", CONTROL, (_p("returns-hold"),), tree=True, hooks_only=True),
     Location("capability-state", CONTROL, (_p("claude-capability-*"),), tree=True,
              tree_vars=("CLAUDE_CAPABILITY_STATE_DIR",)),
     Location("git-blessed-grants", CONTROL, (_p("claude-git-blessed"),), tree=True,
@@ -127,6 +137,11 @@ LOCATIONS: Tuple[Location, ...] = (
     Location("scratch-owner", CONTROL,
              (_p("*", ".owner"), _p("*", ".owner.*.tmp"),
               _p("claude-scratch", "*", ".owner"), _p("claude-scratch", "*", ".owner.*.tmp"))),
+    # The dispatch temp's state (hooks/lib/dispatch_temp.py POINTER and its write's temp file).
+    Location("dispatch-temp-state", CONTROL,
+             (_p("*", ".dispatch-tmp"), _p("*", ".dispatch-tmp.*"),
+              _p("claude-scratch", "*", ".dispatch-tmp"), _p("claude-scratch", "*", ".dispatch-tmp.*")),
+             hooks_only=True),
     Location("doc-sync-notices", CONTROL,
              (_p("*", "doc-sync-notices-*.json"), _p("*", ".doc-sync-notices-*.tmp"),
               _p("claude-scratch", "*", "doc-sync-notices-*.json"),
@@ -136,10 +151,6 @@ LOCATIONS: Tuple[Location, ...] = (
     Location("codex-outputs", SCRATCH, (_p("codex-outputs"),), tree=True),
     Location("graphify-cache", SCRATCH, (_p("claude-graphify"),), tree=True,
              tree_vars=("CLAUDE_GRAPHIFY_CACHE_ROOT",)),
-    Location("orchestrator-output", SCRATCH,
-             tuple(_p(f"{stem}-*.json") for stem in (
-                 "dev-output", "qa-output", "iteration-context", "cleanliness-output",
-                 "style-output", "cleaner-output", "rule-output"))),
     Location("runtime-guard-err", SCRATCH, (_p("runtime-guard-*"),)),
     Location("grepguard-probe", SCRATCH, (_p("grepguard-probe-*"),), tree=True),
     Location("checkpoint-result", SCRATCH, (_p("checkpoint-result.*"),)),
@@ -147,6 +158,17 @@ LOCATIONS: Tuple[Location, ...] = (
     Location("tmp-cleanup-candidates", SCRATCH, (_p("tmp-cleanup-cands-*"),)),
 )
 _CAPABILITY = next(loc for loc in LOCATIONS if loc.name == "capability-state")
+# Control entries kept elsewhere than the state dir (TMPDIR, CLAUDE_TMPDIR, the session scratch root): the
+# explicit carry-over (scripts/install/carry_state.py) leaves them.
+NOT_IN_STATE_DIR = frozenset({"git-blessed-grants", "daemon-restart-grant", "scratch-owner", "doc-sync-notices",
+                              "dispatch-temp-state"})
+
+
+def moved_by_default(name: str) -> bool:
+    """Whether an entry of this name directly in the old default root (/tmp) is control state the
+    previous version kept in its state dir."""
+    return any(loc.kind == CONTROL and loc.name not in NOT_IN_STATE_DIR and _matches((name,), loc)
+               for loc in LOCATIONS)
 
 
 def _var_path(name: str, cwd: Optional[str]) -> Optional[str]:
@@ -232,6 +254,15 @@ def classify(path, *, cwd: Optional[str] = None) -> Optional[Location]:
                 if rel and _matches(rel, loc):
                     return loc
     return None
+
+
+def hooks_only_below(directory) -> Optional[Location]:
+    """The hooks_only entry found on disk at or below ``directory`` (a removal or move of it takes it), else None."""
+    import glob
+    views = resolved_views(directory, None)
+    hits = ((loc, hit) for loc in LOCATIONS if loc.hooks_only for root in name_roots() for pattern in loc.patterns
+            for hit in glob.glob(os.path.join(glob.escape(root), *pattern)))
+    return next((loc for loc, hit in hits if any(_below(_real(hit) or hit, v) is not None for v in views)), None)
 
 
 def is_harness_state(path, *, include_scratch: bool = False,

@@ -34,12 +34,12 @@ def _typed(name: str, args: str = "") -> dict:
             f"<command-args>{args}</command-args>"}}
 
 
-def _transcript(path: Path, *commands: str) -> Path:
+def _transcript(path: Path, *commands: str, extra=()) -> Path:
     records = []
     for name in commands:
         records += [{"type": "queue-operation", "operation": "enqueue", "content": f"/{name}"}, _typed(name),
                     {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}]
-    path.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+    path.write_text("".join(json.dumps(r) + "\n" for r in [*records, *extra]), encoding="utf-8")
     return path
 
 
@@ -69,11 +69,11 @@ def _scratch(tmp_path: Path, coordinator: str | None, *, timeout: int | None = N
     return hooks
 
 
-def _stop(tmp_path: Path, hooks: Path, *commands: str, gate: str | None = "block") -> subprocess.CompletedProcess:
+def _stop(tmp_path: Path, hooks: Path, *commands: str, gate: str | None = "block", extra=()) -> subprocess.CompletedProcess:
     project = tmp_path / "project"
     project.mkdir(exist_ok=True)
-    transcript = _transcript(tmp_path / "transcript.jsonl", *commands)
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_COMMAND_GATE"}
+    transcript = _transcript(tmp_path / "transcript.jsonl", *commands, extra=extra)
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_COMMAND_GATE", "CLAUDE_SUBAGENT_TIME_LIMIT_MINUTES")}
     env.update({"CLAUDE_PROJECT_DIR": str(project), "HOME": str(tmp_path / "home")})
     if gate is not None:
         env["CLAUDE_COMMAND_GATE"] = gate
@@ -173,6 +173,51 @@ def test_a11_the_launcher_marks_the_coordinator_it_runs(tmp_path):
     assert (done.returncode, done.stdout) == (0, "1\n")
 
 
+def _background_launch(minutes_ago: float) -> list:
+    """The CLI's records of a background dev dispatch launched ``minutes_ago`` (its result: isAsync, agentbg1)."""
+    sys.path.insert(0, str(REPO))
+    from tests.cli_shapes import synthesize
+    at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat().replace("+00:00", "Z")
+    return [synthesize("assistant", "tool_use", timestamp=at, sessionId=SID, message__content=[
+                {"type": "tool_use", "id": "toolu_bg01", "name": "Agent", "input": {
+                    "subagent_type": "dev", "description": "dev", "prompt": "work", "run_in_background": True}}]),
+            synthesize("user", "agent_launched", timestamp=at, sessionId=SID, toolUseResult__agentId="agentbg1",
+                       message__content=[{"type": "tool_result", "tool_use_id": "toolu_bg01",
+                                          "content": "Async agent launched successfully"}])]
+
+
+@pytest.mark.parametrize("minutes_ago, code", [(5, 0), (24 * 60, 2)])
+def test_a10_a_failed_coordinator_while_a_child_runs_ends_the_turn_as_a_wait(tmp_path, minutes_ago, code):
+    """The fallback reads the waiting state through the gate's own reading (waiting_for): a child that runs
+    makes the stop a wait (exit 0, naming the failure and the child); one past its bound is not running and
+    the fallback blocks as before."""
+    hooks = _scratch(tmp_path, BROKEN, whole=True)
+    done = _stop(tmp_path, hooks, "dev", extra=_background_launch(minutes_ago))
+    assert done.returncode == code, done.stderr
+    if code:
+        assert done.stderr == LINE.format("stop-workflow-coordinator.py exited 1 (SyntaxError: invalid syntax)")
+    else:
+        assert done.stderr == ("COMMAND_GATE instrument failure: stop-workflow-coordinator.py exited 1 (SyntaxError: "
+                               "invalid syntax); waiting for agentbg1, still running; not complete\n")
+        assert json.loads(done.stdout) == {"systemMessage": done.stderr}
+
+
+@pytest.mark.parametrize("minutes_ago, code", [(5, 0), (24 * 60, 2), (None, 2)])
+def test_a10_inside_an_open_window_the_fallback_waits_as_the_gate_does(tmp_path, minutes_ago, code):
+    """The window open (end_time an hour ahead) and /dev-overnight the latest command: a child launched 5 minutes
+    ago makes the stop a wait, as in the gate; one a day old (lost) or none blocks naming the failure and /stop."""
+    hooks = _scratch(tmp_path, BROKEN, whole=True)
+    _state(tmp_path, 1)
+    done = _stop(tmp_path, hooks, "dev-overnight", extra=_background_launch(minutes_ago) if minutes_ago else ())
+    assert done.returncode == code, done.stderr
+    failure = "stop-workflow-coordinator.py exited 1 (SyntaxError: invalid syntax)"
+    if code:
+        assert done.stderr == LINE.format(failure)
+    else:
+        assert done.stderr == f"COMMAND_GATE instrument failure: {failure}; waiting for agentbg1, still running; not complete\n"
+        assert json.loads(done.stdout) == {"systemMessage": done.stderr}
+
+
 def test_a10_a_broken_stop_contract_leaves_the_launcher_deciding(tmp_path):
     """A10: with a syntax error in a scratch stop_contract.py and the real coordinator, a
     /dev span still blocks, the human's /stop allows, an ungated session allows; the
@@ -215,7 +260,7 @@ def test_a10_the_launcher_loads_only_stdlib_and_the_two_modules_and_copies_no_ru
     assert imported <= set(sys.stdlib_module_names) | {"harness_switch"}, imported
     loads = {c.args[0].value for c in ast.walk(tree) if isinstance(c, ast.Call)
              and getattr(c.func, "id", "") == "_load" and isinstance(c.args[0], ast.Constant)}
-    assert loads == {"command_span", "overnight"}
+    assert loads == {"command_span", "overnight", "stop_command_gate"}  # the gate: its waiting_for reading only
     defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
     assert not defined & {"prompt_text", "span_opener", "slash_command", "active_command", "timelock_released",
                           "is_human_prompt", "window_open", "state_verdicts"}

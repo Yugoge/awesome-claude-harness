@@ -99,7 +99,7 @@ def test_the_docker_daemon_rule_merged_into_the_systemctl_rule(sandbox, command)
 
 def test_the_docker_daemon_disable_is_the_settings_deny():
     """BS-22's `systemctl disable docker` is refused by settings.json's permissions.deny."""
-    deny = json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
+    deny = json.loads((REPO / "policies" / "cli-deny.v1.json").read_text())["deny"]  # the deny-list rule's
     assert {"Bash(systemctl restart:*)", "Bash(systemctl stop:*)", "Bash(systemctl disable:*)"} <= set(deny)
 
 
@@ -107,7 +107,7 @@ def test_session_dirs_ban_is_the_settings_deny():
     """BS-18 merged into settings.json's permissions.deny, which refuses the file for Read and Edit and, since
     OB-L16 (owner decision: a search pattern or commit message naming it passes), per command for Bash: each
     command that reads, writes or runs it has its own entry for the name and for a `?` glob of the dot."""
-    deny = json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
+    deny = json.loads((REPO / "policies" / "cli-deny.v1.json").read_text())["deny"]  # the deny-list rule's
     assert {"Read(**/session_dirs.txt)", "Edit(**/session_dirs.txt)"} <= set(deny)
     stems = ("cat *", "cp *", "rm *", "tee *", "bash *", "sh *", "source *", ". *", "eval *", "python*")
     assert {f"Bash({stem}{tail})" for stem in stems for tail in ("session_dirs.t*", "session_dirs?*")} <= set(deny)

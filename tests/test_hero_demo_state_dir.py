@@ -1,18 +1,17 @@
-"""The hero demo honours an absolute CLAUDE_STATE_DIR end to end.
+"""Every run of the hero demo gives its hooks a fresh state dir of its own.
 
-scripts/capture-hero-run.py writes the demo's single-use grant with allowlist.py's own
-writer, under <state dir>/claude-grants (hooks/lib/harness_state_dir.py: CLAUDE_STATE_DIR
-when absolute, else /tmp). examples/guard-demo/run-hero-demo.sh runs the real guard and
-the real consumer under `env -i`; when that list dropped CLAUDE_STATE_DIR the hooks looked
-in /tmp/claude-grants, never saw the grant, and the capture exited 2 -- so
-scripts/verify-claims.sh failed on any host that sets an absolute state dir.
+scripts/capture-hero-run.py builds a new fixture for each run and points both sides at
+<fixture>/state: itself, for the grant it writes with allowlist.py's own writer (the
+grant /allow writes), and examples/guard-demo/run-hero-demo.sh, for the hooks it sends
+each push to through the real pre-tool launcher (hooks/pretool-launch.py) under `env -i`.
+The hooks keep state between calls: when they used the caller's CLAUDE_STATE_DIR, a
+second run against the same dir found the first run's call streak and the third push
+was also refused by the orchestrator's call limit, so a rerun differed from the
+committed capture.
 
-The run uses a fresh state dir of its own, so no grant from another test or a live
-session is in its inventory, and it watches the default root for the demo's reserved
-grant name the whole time: a grant written or read there would mean the two sides
-still disagree. The capture it makes is then compared as scripts/verify-hero-provenance.py
-compares a rerun with the committed capture: the consumer's marker names the grant under
-the run's own state root, and that one path is all the comparison may map.
+Two runs here share one caller environment, with an absolute CLAUDE_STATE_DIR. Both must
+succeed, leave that dir and the default grant root untouched, and give a capture whose
+normalized text equals the committed one, as scripts/verify-hero-provenance.py compares.
 """
 
 from __future__ import annotations
@@ -36,7 +35,18 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None or shutil.which("pyt
                                 reason="the hero demo needs git and python3 on PATH")
 
 
-def test_capture_succeeds_with_an_absolute_state_dir(tmp_path):
+COMPARE = (
+    "import importlib.util, sys\n"
+    "spec = importlib.util.spec_from_file_location('vhp', sys.argv[1])\n"
+    "vhp = importlib.util.module_from_spec(spec); spec.loader.exec_module(vhp)\n"
+    "fresh = open(sys.argv[2], encoding='utf-8').read()\n"
+    "committed = vhp.CAPTURE.read_text(encoding='utf-8')\n"
+    "same = vhp.norm_text(fresh) == vhp.norm_text(committed)\n"
+    "sys.exit(0 if same and not vhp.fails else 3)\n"
+)
+
+
+def test_two_runs_in_one_environment_give_the_committed_capture(tmp_path):
     assert not DEFAULT_GRANT.exists(), f"precondition: {DEFAULT_GRANT} already exists"
     state = tmp_path / "state"
     state.mkdir()
@@ -62,32 +72,24 @@ def test_capture_succeeds_with_an_absolute_state_dir(tmp_path):
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
     try:
-        r = subprocess.run([sys.executable, str(CAPTURE),
-                            "--capture", str(tmp_path / "capture.txt"),
-                            "--evidence", str(tmp_path / "evidence.json")],
-                           cwd=str(REPO), env=env, capture_output=True, text=True, timeout=180)
+        for run in (1, 2):
+            cap = tmp_path / f"capture-{run}.txt"
+            r = subprocess.run([sys.executable, str(CAPTURE), "--capture", str(cap),
+                                "--evidence", str(tmp_path / f"evidence-{run}.json")],
+                               cwd=str(REPO), env=env, capture_output=True, text=True, timeout=180)
+            # The comparison verify-hero-provenance.py makes; the duration window is the
+            # host's speed, not this property, so a run may fail it alone.
+            c = subprocess.run([sys.executable, "-c", COMPARE, str(PROVENANCE), str(cap)],
+                               cwd=str(REPO), env=env, capture_output=True, text=True, timeout=60)
+            assert c.returncode == 0, (f"run {run}: the capture differs from the committed one\n"
+                                       f"{cap.read_text(encoding='utf-8')}\n{c.stderr}")
+            assert r.returncode == 0 or "raw duration" in r.stderr and r.stderr.count("FAIL:") == 1, \
+                f"run {run}: rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     finally:
         stop.set()
         watcher.join(timeout=5)
 
-    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     assert not seen_default, f"a demo grant appeared under the default root {DEFAULT_GRANT}"
     assert not DEFAULT_GRANT.exists()
-    # The real consumer removed the grant from the state dir the verifier wrote it to.
-    grants = state / "claude-grants"
-    assert grants.is_dir(), "the verifier did not write its grant under CLAUDE_STATE_DIR"
-    assert list(grants.iterdir()) == []
-
-    # The rerun comparison verify-claims.sh makes: the normalized diff is empty.
-    compare = (
-        "import importlib.util, sys\n"
-        "spec = importlib.util.spec_from_file_location('vhp', sys.argv[1])\n"
-        "vhp = importlib.util.module_from_spec(spec); spec.loader.exec_module(vhp)\n"
-        "fresh = open(sys.argv[2], encoding='utf-8').read()\n"
-        "committed = vhp.CAPTURE.read_text(encoding='utf-8')\n"
-        "same = vhp.norm_text(vhp.align_state_root(fresh, committed)) == vhp.norm_text(committed)\n"
-        "sys.exit(0 if same and not vhp.fails else 3)\n"
-    )
-    c = subprocess.run([sys.executable, "-c", compare, str(PROVENANCE), str(tmp_path / "capture.txt")],
-                       cwd=str(REPO), env=env, capture_output=True, text=True, timeout=60)
-    assert c.returncode == 0, f"fresh capture differs from the committed one\n{c.stdout}\n{c.stderr}"
+    assert list(state.iterdir()) == [], "the demo wrote into the caller's state dir"
+    assert list(scratch_tmp.iterdir()) == [], "the run left its fixture behind"

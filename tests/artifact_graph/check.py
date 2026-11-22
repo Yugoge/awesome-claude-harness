@@ -57,7 +57,12 @@ Derivation rules, in the order row 19 states them:
     (it exists, is a file, may be opened) decides on its removal alone, since
     the content mutation leaves that answer as it was. Deciders of one
     artifact are one rule only when their deciding reads are the same code
-    site (the one function they all call). Over E2's budget the differential
+    site (the one function they all call). A measured change of a merged
+    gate's decision is the decision of those of its refusing rules whose own
+    deciding read on the artifact can refuse (exit 2, block, non-zero exit,
+    raise); a rule that only routes on it (moves on when it is missing) cannot
+    give that block and is no decider of it (all of them when none can).
+    Over E2's budget the differential
     runs only for the shipped readers outside the allowed positions (E1's
     fallback).
 (5) Position of a deciding read: from the hook's event and matcher
@@ -90,7 +95,8 @@ Derivation rules, in the order row 19 states them:
 (6') The register of accepted deciding reads (register.py, policies/artifact-check-accepted-reads.v1.json in
     the tree) covers a rule (6) violation, 6-move or 6-recheck, and nothing else: an entry names the
     artifact and the position (the hook event and the tool of the call), with a reason it must carry, and
-    covers every rule (6) line on that artifact whose decisions were all taken there. A covered violation is not reported; the check counts the covered ones
+    covers, with the other entries on that artifact, every rule (6) line whose decisions were all taken at
+    positions those entries name (one entry per position). A covered violation is not reported; the check counts the covered ones
     (counts()["register_covered"], the map's header and the log) and an entry that covers no current
     violation is a violation itself (register-stale). Rules (1), (2), (4), (5), (7) and (8) have no register.
 (8) Every replay sets CLAUDE_STATE_DIR to a directory other than /tmp, and a
@@ -412,7 +418,9 @@ class _Ctx:
         rt = sorted(self.rt_keys)
         own: dict = {}
         staged = []
-        temps = _rename_sources(rels)
+        # a rename onto an unresolved name (an entry a listing gave) still folds a source of its own name
+        temps = _rename_sources(rels + [dict(r, path=r["partial"], **{"from": [s for s in r["from"] if not _holes_only(s)]})
+                                        for r in self.recs if r["kind"] == "unresolved" and r.get("from")])
         floating: set = set()
         # a project-dir resolver's last tiers are the harness home or HOME (the session ran
         # there): a site whose alternatives name the same path under the project (<proj>, or the
@@ -658,6 +666,15 @@ class _Ctx:
         # change only when no rule's deciding read names the artifact itself
         named = [f for f, ds in cands.items() if any(not _holes_only(d["path"]) for d in ds)]
         return sorted(named or cands)
+
+    def _refusing_rules(self, rules: list[str], key: str, file: bool) -> list[str]:
+        """Of a merged gate's deciding rules on `key` (_gate_deciders), those a change of the gate's
+        decision can be the answer of: a rule with a deciding read on `key` that ends in a refusal
+        (_refuses). A rule whose every deciding read on it only routes (a `continue`, another branch)
+        never refuses on it, so the gate's block is another rule's. With none such, all of them."""
+        own = [f for f in rules if any(_refuses(d) for d in self._deciding_on(f, key)
+                                       if not (file and self._dir_test_only(d)))]
+        return own or rules
 
     def _dir_test_only(self, d: dict) -> bool:
         """A deciding read whose own read site reads its path by directory tests alone (_DIR_TEST:
@@ -1077,9 +1094,11 @@ class _Ctx:
                         elif rules:
                             # a merged gate's decision is its refusing rules': each rule file that
                             # decides on the artifact, with its own deciding reads (rule (4)), at the
-                            # gate's position as that file (its own artifact only if it wrote it)
+                            # gate's position as that file (its own artifact only if it wrote it);
+                            # of them, those whose own answer on it can be a refusal (_refuses)
                             deciders = [(f, self._position(a, u["event"], u.get("tool"), u.get("agent_type"), f,
-                                                           u["kind"]), f"{where} in {who}") for f in rules]
+                                                           u["kind"]), f"{where} in {who}")
+                                        for f in self._refusing_rules(rules, key, a.kind == "file" and key not in self.dirs)]
                         else:
                             deciders = [(who, self._position(a, u["event"], u.get("tool"), u.get("agent_type"),
                                                              u["origin"], u["kind"]), where)]
@@ -1784,6 +1803,12 @@ def _shape_diff(rec: dict, paths: dict | None) -> str:
 def _decides(reg: dict) -> bool:
     """A registration whose refusals reach the call: a hook's own, or a gate's `refuse` rule."""
     return reg.get("type") != "gate_rule" or reg.get("rule_kind") == "refuse"
+
+
+def _refuses(d: dict) -> bool:
+    """A static deciding read whose decision is a refusal: exit 2, a block, a non-zero exit, or a raise
+    (a rule's exception is the gate's to answer); `route` is not."""
+    return d["decision"] in ("exit2", "block", "raise") or d["decision"] == "exit" and d.get("code") not in (0, None)
 
 
 def _presence_only(vias) -> bool:

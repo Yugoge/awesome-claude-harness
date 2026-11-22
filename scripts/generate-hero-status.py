@@ -240,7 +240,7 @@ HERO_MANIFEST = ".github/assets/guard-hero.json"
 HERO_ASSET = ".github/assets/guard-hero.svg"
 
 CAPTURE_TS_RE = re.compile(r"^\[\s*(\d+\.\d+)\]\s")
-CONSUMPTION_MARKER = "[ALLOW-SENTINEL] grant CONSUMED for task_id="
+CONSUMPTION_MARKER = "[allow] RELEASED by the owner's /allow grant ("  # the release spends the grant
 
 
 def _read(rel: str) -> str | None:

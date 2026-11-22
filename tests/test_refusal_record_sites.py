@@ -141,7 +141,11 @@ class Scratch:
         """(exit status, stderr, the record's lines) of `command` run, as registered or `traced`, with each of `files`
         holding the given text or gone (None); every file is as it was afterwards."""
         kept = {}
-        shutil.rmtree(self.root / "home" / ".local", ignore_errors=True)
+        # Each run is a real first call: no state of an earlier run (a per-turn call count, a hold) answers it.
+        for name in ("home/.local", "state", "tmp"):
+            shutil.rmtree(self.root / name, ignore_errors=True)
+        for name in ("state", "tmp"):
+            (self.root / name).mkdir()
         try:
             for name, text in files.items():
                 target = self.home / name

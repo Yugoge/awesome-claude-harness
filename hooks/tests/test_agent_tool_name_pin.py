@@ -148,7 +148,7 @@ def test_the_recorded_task_alias_dispatch_resets_the_bash_cap_and_passes_the_no_
     assert s.bash().returncode == 0  # the dispatch cleared the streak
     assert s.run(BACKGROUND, payload).returncode == 0
     foreground_unset = {**payload, "tool_input": {k: v for k, v in pre["tool_input"].items() if k != "run_in_background"}}
-    assert s.run(BACKGROUND, foreground_unset).returncode == 2
+    assert s.run(BACKGROUND, foreground_unset).returncode == 0  # a background dispatch passes too
 
 
 class _StandInModel(BaseHTTPRequestHandler):

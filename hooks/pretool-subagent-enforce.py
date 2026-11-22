@@ -46,8 +46,7 @@ from lib import contract_runtime  # noqa: E402
 from lib import overnight  # noqa: E402
 from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 from lib import command_span  # noqa: E402
-from lib.subagent import is_subagent_context  # noqa: E402
-from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
+from lib.allowlist import has_do_consent  # noqa: E402
 
 
 def _parse_stdin() -> dict:
@@ -287,11 +286,6 @@ def _main() -> None:
     if has_do_consent(stdin_data):
         sys.exit(0)
 
-    # /allow bypass: main-agent-only
-    if (not is_subagent_context(stdin_data)
-            and match_sentinel_grant_for_tool(session_id, "Agent") is not None):
-        sys.exit(0)
-
     if overnight_state is None:
         # Not an overnight session: no cycle contract governs it.
         sys.exit(0)
@@ -312,6 +306,8 @@ def _main() -> None:
         # No checklist / no in-progress step — cannot enforce; fail open
         # rather than block all Agent calls.
         sys.exit(0)
+    if step in contract_runtime.FOLDED_STEPS and step not in _contracted_step_id_list(allowed):
+        step = contract_runtime.FOLDED_STEPS[step]  # a list in flight, a contract rendered since
     _enforce(stdin_data, allowed, step, loaded)
     sys.exit(0)
 

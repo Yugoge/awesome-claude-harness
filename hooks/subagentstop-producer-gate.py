@@ -8,8 +8,12 @@ exemptions, its failure direction; hooks/lib/gate_runner.py):
    Codex ledger;
 2. subagentstop-e2e-enforce.py: a QA's report exists and states an accepted
    e2e_enforcement status;
+2a. lib/aggregate_rebuild.py at_lane_stop, an observer: a dev lane of a fan-out stops and
+   the canonical aggregate older than a lane report is rebuilt, whatever wrote the report;
 3. subagentstop-artifact-contract-enforce.py (G2): every artifact the agent's own
    obligation declares exists, validates and carries its identity;
+3a. subagentstop-lane-blockers.py: a dev lane whose report lists blocking issues is
+   held once per dispatch, shown the list;
 4. subagentstop-cp-enforce.py: the agent leaves no pending checkpoint in its own
    cp-state slot;
 5. subagentstop-restart-track.py, an observer: the response evidence /restart reads,
@@ -41,14 +45,19 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 
-from lib.gate_runner import OBSERVE, REFUSE, Outcome, Rule, main  # noqa: E402
+from lib.gate_runner import OBSERVE, REFUSE, WITNESS, Outcome, Rule, main  # noqa: E402
 
 RULES = [
     Rule("codex-ledger", str(HOOKS / "subagentstop-codex-enforce.py"), REFUSE),
     Rule("qa-e2e", str(HOOKS / "subagentstop-e2e-enforce.py"), REFUSE),
+    Rule("lane-ledger", kind=OBSERVE, call="lib.lane_ledger:at_stop"),  # completes the report the next two read
+    Rule("aggregate-rebuild", kind=OBSERVE, call="lib.aggregate_rebuild:at_lane_stop"),  # before G2, which reads it
     Rule("g2-artifact-contract", str(HOOKS / "subagentstop-artifact-contract-enforce.py"), REFUSE),
+    Rule("lane-blockers", str(HOOKS / "subagentstop-lane-blockers.py"), REFUSE),
     Rule("cp-pending", str(HOOKS / "subagentstop-cp-enforce.py"), REFUSE),
     Rule("restart-track", str(HOOKS / "subagentstop-restart-track.py"), OBSERVE),
+    # a background dispatch's end: what its return runs, on the stop the rules above let stand
+    Rule("dispatch-end", str(HOOKS / "posttool-dispatch-record.py"), WITNESS),
 ]
 
 _E2E_ABSENT = re.compile(r"declared a qa-report\.v2 obligation \(task_id=[^)]*\) at (\S+) but no such file exists")

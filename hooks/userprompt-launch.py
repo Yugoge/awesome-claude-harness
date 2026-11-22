@@ -37,6 +37,8 @@ RULES = (
     Rule('doc-sync-check', 'userprompt-doc-sync-check.py'),
     Rule('restart-authorize', 'userprompt-restart-authorize.py'),
     Rule('bulk-commit-capability', 'userprompt-bulk-commit-capability.py'),
+    Rule('dispatch-temp', 'lib/dispatch_temp.py', timeout=10),  # a dispatch whose end was never seen closes
+    Rule('returns-hold', 'lib/returns_hold.py', timeout=15),  # a background return waits for its siblings
 )
 
 if __name__ == "__main__":

@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook: block background execution on Agent/Task/Bash/SendMessage/Workflow
-for the orchestrator.
+PreToolUse hook: block background execution on Bash/SendMessage/Workflow for the
+orchestrator; Agent/Task dispatches pass in either mode.
 
 ENFORCEMENT (default disposition matters):
-  - Agent / Task → background is the DEFAULT, so the field is usually ABSENT.
-    Block unless run_in_background is explicitly False (True or absent → exit 2).
+  - Agent / Task → pass, foreground or background (the owner's decision of 2026-11-21:
+    every role, every command, /dev-overnight included); what a return runs, a background
+    child's end runs (hooks/posttool-dispatch-record.py).
   - Bash → foreground is the default, so only an explicit True is a background
     task (exit 2); absent/False is fine.
   - SendMessage / Workflow → inherently background with NO synchronous mode.
-    SendMessage passes only lib/send_policy.decide: the exact, validated /restart
-    recovery message to a pending candidate, or a send to this session's own
-    finished subagent dispatched with no obligation outside every gated span.
+    SendMessage passes lib/send_policy.decide: a send to another session is allowed;
+    a send to this session's own subagent is a dispatch, judged by the dispatch gate;
+    none in the overnight wake's turn after the owner's /stop.
     Workflow is blocked, except one call an `/allow Workflow` grant names.
   - Subagents (agent_id truthy) → exit 0 (no restriction)
   - /do consent active → exit 0 (bypass)
@@ -23,11 +24,8 @@ FAIL-OPEN, never-wedge:
   sends a well-formed object, so this path costs nothing in practice.
 
 RATIONALE:
-  Orchestrator background tasks bypass harness monitoring and create
-  unmanageable execution state. All work must be synchronous and observable.
-  Because Agent/Task run in the background *by default*, guarding only against an
-  explicit run_in_background=true lets every default-dispatch slip through — the
-  orchestrator must be forced to opt into synchronous execution.
+  An orchestrator background shell or Workflow fleet has no end the harness sees;
+  a background dispatch has one, its child's SubagentStop and task-notification.
 """
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
@@ -43,8 +41,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
-from lib.subagent import DISPATCH_TOOLS  # noqa: E402
+from lib.allowlist import has_do_consent  # noqa: E402
 
 
 def first_present(mapping, names, default=None):
@@ -57,49 +54,6 @@ def first_present(mapping, names, default=None):
         if name in mapping:
             return mapping[name]
     return default
-
-
-# --- Narrow /spec Explore exemption --------------------------------------
-# /spec Step 3 legitimately dispatches a NON-BLOCKING background Explore agent
-# for codebase exploration, and pretool-spec-block-foreground-agent.py exempts
-# exactly that (run_in_background is True). This blanket background block would
-# otherwise kill that one legitimate /spec background use. The exemption below is
-# deliberately narrow — ONLY a background Explore agent, ONLY while a /spec
-# interview is active — so arbitrary orchestrator background work stays blocked
-# and the observability policy holds for everything else.
-#
-# The active-interview detection is pretool-spec-block-foreground-agent.py's own
-# (lib.todo_canonical.live_spec_checklist: the transcript's active span is /spec,
-# its checklist has an incomplete step, and the span was not abandoned by a human
-# prompt that followed it while Steps 1-3a were open), so the two hooks agree on
-# the /spec FSM window.
-
-
-def _spec_interview_active(payload: dict) -> bool:
-    """True iff the active span is a live /spec interview: its checklist (the
-    last ok TodoWrite, or the canonical list before the first) has an
-    incomplete step and the span was not abandoned, read from the transcript
-    (lib.todo_canonical.live_spec_checklist). Any exception -> False:
-    fail-safe (the hole stays SHUT) AND never-wedge (the hook must never exit
-    1 on this matcher=None path)."""
-    try:
-        from lib.todo_canonical import live_spec_checklist  # only this exemption pays the import
-        return live_spec_checklist(payload.get("transcript_path")) is not None
-    except Exception:  # noqa: BLE001 — never raise: fail-safe (shut) + never-wedge
-        return False
-
-
-def _is_spec_explore_exempt(tool_name, params, payload: dict) -> bool:
-    """Narrow exemption: an EXPLICIT background Explore agent during a live /spec
-    interview. Everything else (other subagent types, other tools, non-/spec
-    sessions, absent run_in_background) is NOT exempt and stays blocked."""
-    if tool_name not in DISPATCH_TOOLS:
-        return False
-    if params.get("run_in_background") is not True:
-        return False
-    if params.get("subagent_type") != "Explore":
-        return False
-    return _spec_interview_active(payload)
 
 
 def main():
@@ -130,10 +84,8 @@ def main():
     if has_do_consent(payload):
         sys.exit(0)
 
-    # SendMessage resumes a child asynchronously, so the main agent's send passes only
-    # lib/send_policy.decide: a /restart candidate gets the exact recovery message and
-    # nothing else (lesson 16); any other target must be this session's own finished
-    # subagent, dispatched with no obligation and outside every gated command's span.
+    # The main agent's send passes lib/send_policy.decide (lesson 16): a send to an own
+    # subagent is judged as the dispatch it is; any other target is another session's.
     # Import inside the branch so a missing helper cannot wedge unrelated tools;
     # SendMessage fails CLOSED on any helper error.
     if tool_name == "SendMessage":
@@ -145,58 +97,28 @@ def main():
             send_ok, send_reason = False, f"SendMessage policy unavailable: {exc}"
         if send_ok:
             sys.exit(0)
-        print(
-            f"[BLOCK] SendMessage refused for the orchestrator: {send_reason}\n"
-            "Dispatch new work with Agent(run_in_background=false), or use /do.",
-            file=sys.stderr,
-        )
+        print(f"[BLOCK] SendMessage refused for the orchestrator: {send_reason}", file=sys.stderr)
         sys.exit(2)
 
     # Workflow spawns a whole background fleet and has no synchronous mode: blocked,
-    # except the one call an `/allow Workflow` grant names (posttool-allowlist-consume.py
-    # spends the grant after that call, so the next one is refused again).
+    # except the one call an owner's /allow grant releases where the pre-tool verdicts
+    # meet (lib/hook_launch.release_refused).
     if tool_name == "Workflow":
-        sid = payload.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "default")
-        try:
-            if match_sentinel_grant_for_tool(sid, "Workflow") is not None:
-                sys.exit(0)
-        except Exception:  # noqa: BLE001 — an unreadable grant is no grant
-            pass
         print(
             "[BLOCK] Workflow runs agents in the background and is forbidden for "
             "the orchestrator.\n"
             "There is no synchronous mode; dispatch work with "
-            "Agent(run_in_background=false), or use /do; an owner's /allow Workflow grant admits exactly one.",
+            "Agent, or use /do; an owner's /allow Workflow grant admits exactly one.",
             file=sys.stderr,
         )
         sys.exit(2)
 
-    # Non-dict params (malformed) → treat as empty so Agent/Task still block and
-    # the hook never crashes into an exit-1 fail-open.
+    # Non-dict params (malformed) → treat as empty so the hook never crashes into
+    # an exit-1 fail-open.
     if not isinstance(params, dict):
         params = {}
 
     rib = params.get("run_in_background")
-
-    # Narrow /spec Explore hole: allow an EXPLICIT background Explore agent while a
-    # /spec interview is active (restores the legitimate non-blocking Step-3 codebase
-    # exploration that pretool-spec-block-foreground-agent.py already exempts). Bounded
-    # to Agent/Task + subagent_type=="Explore" + run_in_background is True + live /spec
-    # FSM window — arbitrary orchestrator background work remains blocked.
-    if _is_spec_explore_exempt(tool_name, params, payload):
-        sys.exit(0)
-
-    # Agent and Task default to BACKGROUND when the field is absent, so anything
-    # other than an explicit False (i.e. True or None/absent) is a background
-    # dispatch and is blocked.
-    if tool_name in DISPATCH_TOOLS and rib is not False:
-        print(
-            f"[BLOCK] {tool_name} runs in the background by default and is forbidden "
-            "for the orchestrator.\n"
-            "Pass run_in_background=false for synchronous execution, or use /do.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
 
     # Bash defaults to FOREGROUND, so only an explicit True is a background task.
     if tool_name == "Bash" and rib is True:

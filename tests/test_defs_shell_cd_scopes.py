@@ -58,6 +58,9 @@ ROW = ("cd /tmp/claude-scratch/ba/r00rev && jq -r '.decisions_new[] | .id' gover
        "&& wc -l sec1_rows.md &&\n{\necho '## Section 13. Rulings'\necho\necho 'Every request has one row.'\n} > sec13.md")
 
 
+SID = "sess-0c1d2e3f"
+
+
 def _tool_policy(tmp_path, command):
     proj, home = tmp_path / "proj", tmp_path / "home"
     for d in (proj / ".claude", home / ".claude", tmp_path / "state", tmp_path / "tmp"):
@@ -65,7 +68,7 @@ def _tool_policy(tmp_path, command):
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
            "CLAUDE_CONFIG_DIR": str(home / ".claude"), "CLAUDE_STATE_DIR": str(tmp_path / "state"),
            "TMPDIR": str(tmp_path / "tmp"), "CLAUDE_PROJECT_DIR": str(proj), "PYTHONDONTWRITEBYTECODE": "1"}
-    payload = {"session_id": "sess-" + uuid.uuid4().hex[:8], "transcript_path": str(tmp_path / "none.jsonl"),
+    payload = {"session_id": SID, "transcript_path": str(tmp_path / "none.jsonl"),
                "cwd": str(proj), "hook_event_name": "PreToolUse", "tool_name": "Bash",
                "tool_input": {"command": command}, "tool_use_id": "toolu_" + uuid.uuid4().hex[:24],
                "agent_id": "a1", "agent_type": "ba", "subagent_type": "ba"}
@@ -75,7 +78,10 @@ def _tool_policy(tmp_path, command):
 
 def test_the_recorded_ba_command_is_placed_in_its_scratch_and_allowed(tmp_path):
     assert "/tmp/claude-scratch/ba/r00rev/sec13.md" in placed(ROW)
-    assert _tool_policy(tmp_path, ROW).returncode == 0
+    # Recorded when the role's drafts lay in /tmp/claude-scratch/ba/ (before policy_version 10): it runs in its
+    # drafts directory now, <session root>/ba/ (the old place: hooks/tests/test_role_drafts_session_root.py).
+    drafts = os.path.join(os.path.realpath(tmp_path / "tmp"), SID, "ba")
+    assert _tool_policy(tmp_path, ROW.replace("/tmp/claude-scratch/ba/r00rev", drafts)).returncode == 0
 
 
 def test_the_same_group_after_a_cd_out_of_the_prefix_is_refused(tmp_path):

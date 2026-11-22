@@ -61,7 +61,8 @@ def _tool(event, raw):
 def _run(rule, raw):
     t0 = time.monotonic()
     try:
-        p = subprocess.run([sys.executable, os.path.join(HOOKS, rule.path)], input=raw, capture_output=True,
+        p = subprocess.run(["bash" if rule.path.endswith(".sh") else sys.executable, os.path.join(HOOKS, rule.path)],
+                           input=raw, capture_output=True,
                            timeout=rule.timeout)
         return _Result(rule, p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace"),
                        time.monotonic() - t0)
@@ -113,6 +114,11 @@ def run(event, rules, raw, record_fd=None) -> int:
                                     "stderr": r.stderr if r.code != "timeout" else "timeout",
                                     "ms": round(r.seconds * 1000), "how": r.how}) + "\n" for r in results)
         _write(record_fd, lines)
+    try:  # an /allow grant's release (lib/hook_launch.release_refused), when that module loads
+        from lib.hook_launch import release_refused
+        code, out, err = release_refused(event, results, raw, code, out, err)
+    except Exception:
+        pass
     _write(1, out)
     _write(2, err)
     if code == 2:  # a report to the refusal record (lib/refusal_record.py); it never changes the answer

@@ -711,6 +711,7 @@ class CloseRun:
                      label=self.label("Task-id resolution Glob reports"),
                      deviation=self.devs.at(self.label("Task-id resolution Glob reports")))
         names = [os.path.basename(p) for p in (g.response.get("filenames") or [])] if g.ok else []
+        # OLDER_TEXT: "a dev-report takes precedence" -- an older Task-id resolution's rule; today's text has none
         if f"dev-report-{self.tid}.json" in names and "a dev-report takes precedence" in o.section("Task-id resolution"):
             self.do_report = None
             return
@@ -1219,7 +1220,7 @@ class CloseRun:
             if not append:
                 return None
             # Overwrite policy: the section to a temp file, then the append helper the text names.
-            section = os.path.join("/tmp/claude-scratch/qa", f"close-section-{tid}-r{rounds}.md")
+            section = os.path.join(_codex.drafts(sub), f"close-section-{tid}-r{rounds}.md")
             text = f"## Close attempt (round {rounds}) {utc_now()}\n\n{body}\n\n{verdict}\n"
             sub.write(section, text, label=f"{sub.role} Write section")
             code = self.append_call()

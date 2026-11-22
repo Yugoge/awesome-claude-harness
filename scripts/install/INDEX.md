@@ -1,8 +1,8 @@
 # install
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-16T02:46:58Z*
-**Total entries**: 15
+*Last updated: 2026-11-21T16:29:11Z*
+**Total entries**: 17
 **Convention**: kebab
 
 ## Tree
@@ -12,6 +12,7 @@ install/
 │   └── `core.json` - Minimal core profile: blocking safety hooks + the capability gate + the shared harness-home resolver. Nothing that edits, commits, pushes or orchestrates.
 ├── tests/
 │   └── `installer-acceptance.py` - Runs every acceptance criterion (AC1-AC8) of the installer lane against real
+├── `carry_state.py` - An earlier version kept its control state directly in /tmp, its score log in <harness home>/logs/...
 ├── `install` - install file
 ├── `installer.py` - Subcommands: plan | apply | uninstall | snapshot
 ├── `land` - land file
@@ -19,6 +20,7 @@ install/
 ├── `push-guard` - push-guard file
 ├── `render-settings` - render-settings file
 ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+├── `tmp-cleanup.cron` - cron file
 ├── `tmpfiles-claude-scratch.conf` - conf file
 ├── `tmpfiles-tmp-override.conf` - conf file
 ├── `tmpfiles-var-tmp-override.conf` - conf file

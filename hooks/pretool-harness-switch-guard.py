@@ -40,10 +40,8 @@ the rule above's.
                         body is commands only where a shell reads it), unless the whole command
                         is `echo '<literal>' > or >> <file>` whose result the Write rule passes;
                         an interpreter's own writes are not seen
-The owner edits the file, or grants the one call with /allow (hooks/lib/allowlist.py; spent after
-the call by hooks/posttool-allowlist-consume.py): a Bash grant naming the command, for any actor,
-as every Bash grant is; `/allow Write <path>`, or `/allow <tool>`, for the main agent, as the
-overwrite rule's Write grant is.
+The owner edits the file, or types /allow: the grant releases the next refused call where the
+pre-tool verdicts meet (lib/hook_launch.release_refused); this guard reads no grant.
 
 Reading stays free (status: scripts/harness-switch status is the owner's, through /harness
 status). The home's settings files stay writable for a /dev cycle on the harness only where the
@@ -84,9 +82,8 @@ INTERPRETER = re.compile(r"(?:python[\d.]*|node|nodejs|deno|bun|ruby|perl|php|ba
 LITERAL_ECHO = re.compile(r"echo((?:\s+-[nE]+)*)\s+'([^']*)'\s*(>>?|>\|)\s*([\w./~+-]+)")
 FALLBACK_REDIRECT = re.compile(r"(?:\d*|&)>>?\|?(.*)\Z", re.S)  # a redirection in text the parser cannot read
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-OWNER_SETTINGS = ("Only the owner changes them: edit the file yourself, or type /allow for this one call "
-                  "(/allow <the command> for Bash; /allow Write <path>, or /allow <tool> for Edit, MultiEdit "
-                  "or NotebookEdit, for the main agent's call)")
+OWNER_SETTINGS = ("Only the owner changes them: edit the file yourself, or type /allow, which lets the next "
+                  "refused call through once")
 
 
 def _resolve(path: str, cwd: str) -> str:
@@ -412,28 +409,6 @@ def _edit_result(tool: str, ti: dict, before):
     return text
 
 
-def _granted(tool: str, ti: dict, data: dict) -> bool:
-    """The owner's /allow grant for this one call (hooks/lib/allowlist.py), as each grant already
-    reaches: a Bash grant naming the command, for the main agent and subagents alike; for the main
-    agent alone, `/allow Write <path>` (or bare `/allow Write`) and `/allow <tool>`.
-    hooks/posttool-allowlist-consume.py spends it once the call ends."""
-    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-    try:
-        from lib.allowlist import (match_sentinel_grant_for_bash_command, match_sentinel_grant_for_tool,
-                                   match_sentinel_grant_for_write)
-        sid = str(data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID") or "default")
-        key = os.environ.get("CLAUDE_TASK_ID") or sid
-        if tool == "Bash":
-            return match_sentinel_grant_for_bash_command(key, str(ti.get("command") or "")) is not None
-        if data.get("agent_id"):
-            return False
-        if tool == "Write" and match_sentinel_grant_for_write(key, sid, str(ti.get("file_path") or "")):
-            return True
-        return match_sentinel_grant_for_tool(sid, tool) is not None
-    except Exception:
-        return False
-    finally:
-        sys.path.pop(0)
 
 
 def _refuse_settings(tool: str, change: str, path: str) -> int:
@@ -464,7 +439,7 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
     for path in settings_writes(command, cwd):
         before = _current(path)
         change = _settings_change(_held(path), _echo_result(command, path, cwd, before))
-        if change and not _granted("Bash", {"command": command}, data or {}):
+        if change:
             return _refuse_settings("Bash command", change, path)
     return 0
 
@@ -496,7 +471,7 @@ def check_write(tool: str, ti: dict, cwd: str, data: dict | None = None) -> int:
     if named:
         before = _current(named[0])
         change = _settings_change(_held(named[0]), _edit_result(tool, ti, before))
-        if change and not _granted(tool, ti, data or {}):
+        if change:
             return _refuse_settings(tool, change, raw)
     if harness_switch.DIR_NAME in text and not _in_harness_checkout(path):
         return refuse("this %s writes a file naming the switch's state (%s), outside the harness" % (tool, raw))

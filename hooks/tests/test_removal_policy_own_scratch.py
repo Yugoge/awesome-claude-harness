@@ -108,7 +108,12 @@ class Project:
         self.scratch = os.path.join(self.root, ".claude", "scratch")
         self.own = os.path.join(self.scratch, SID, "dev", AGENT)
         self.other = os.path.join(self.scratch, SID, "dev", OTHER_AGENT)
-        for d in (self.own + "/sub", self.other, self.root + "/src"):
+        # TMPDIR as the hooks see it: below it the session's scratch directory and in that each agent's own, the
+        # directory the refusals name (above: the place an earlier version sent an agent to, which it keeps)
+        self.session_root = str((base / "session-root").resolve())
+        self.named = os.path.join(self.session_root, SID, "dev", AGENT)
+        self.named_other = os.path.join(self.session_root, SID, "dev", OTHER_AGENT)
+        for d in (self.own + "/sub", self.other, self.root + "/src", self.named + "/sub", self.named_other):
             os.makedirs(d)
         os.symlink(self.own + "/sub", self.root + "/src/link_in")   # outside, pointing into the own directory
         os.symlink(self.root + "/src", self.own + "/link_out")      # inside, pointing out of it
@@ -117,7 +122,7 @@ class Project:
     def env(self):
         env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
         env.update(HOME=self.home, CLAUDE_CONFIG_DIR=os.path.join(self.home, ".claude"), CLAUDE_PROJECT_DIR=self.root,
-                   CLAUDE_STATE_DIR=str(self.base / "state"), CLAUDE_PYTHON_BIN=sys.executable,
+                   CLAUDE_STATE_DIR=str(self.base / "state"), CLAUDE_PYTHON_BIN=sys.executable, TMPDIR=self.session_root,
                    CLAUDE_PROTECTED_RUNTIME_FILE=os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"],
                    CLAUDE_HOOK_BOUNDARY_TIMEOUT="120s", PYTHONDONTWRITEBYTECODE="1")
         return env
@@ -153,6 +158,8 @@ NOT_OWN = [
     "rm {root}/src/main.py",                                      # a project file
     "rm -f {own}/a.txt {root}/src/main.py",                       # one own, one not
     "rm -f {other}/a.txt",                                        # another actor's scratch directory
+    "rm -f {named_other}/a.txt",                                  # another actor's, below the session's
+    "rm -f {session}/a.txt",                                      # the session's, not the agent's own
     "rm -f {scratch}/_probe.py",                                  # the scratch root, nobody's own
     "rm /tmp/x.py",                                               # a bare file in the system temp directory
     "rm -rf {own}/sub/../../../../../src",                        # leaves the directory through `..`
@@ -175,7 +182,7 @@ NOT_OWN = [
 
 def _fill(template, project):
     return template.format(own=project.own, other=project.other, root=project.root, scratch=project.scratch, sid=SID,
-                           agent=AGENT)
+                           agent=AGENT, named_other=project.named_other, session=os.path.dirname(project.named))
 
 
 @pytest.mark.parametrize("template", OWN)
@@ -184,12 +191,18 @@ def test_a_removal_inside_the_callers_own_scratch_directory_runs(project, templa
     assert code == 0 and "removal-policy" not in err, (template, err)
 
 
+@pytest.mark.parametrize("template", [t for t in OWN if ".claude/scratch" not in t])
+def test_a_removal_inside_the_callers_own_scratch_directory_below_the_session_runs(project, template):
+    code, err = project.bash(template.format(own=project.named, root=project.root))
+    assert code == 0 and "removal-policy" not in err, (template, err)
+
+
 @pytest.mark.parametrize("template", NOT_OWN)
 def test_any_other_removal_is_refused_and_names_the_own_directory(project, template):
     code, err = project.bash(_fill(template, project))
     assert code == 2 and "BLOCKED: removal-policy" in err, (template, err)
     found = NAMED.search(err)
-    assert found and found.group(1) == project.own, (template, err)
+    assert found and found.group(1) == project.named, (template, err)
     assert "A removal runs when every file it names is known" in err, err
 
 
@@ -252,7 +265,7 @@ def test_without_a_verdict_a_removal_is_refused_wherever_its_files_lie(project):
     """The degraded path knows no file: the text holds a removal word, so it refuses, naming the directory."""
     code, err = project.bash("rm -f " + project.own + "/a.txt", CLAUDE_HOOK_BOUNDARY_TIMEOUT="0.001s")
     assert code == 2 and "removal-policy FAIL-CLOSED" in err, err
-    assert NAMED.search(err).group(1) == project.own
+    assert NAMED.search(err).group(1) == project.named
 
 
 def test_an_unproven_command_naming_a_removal_is_refused_and_names_the_directory(project):
@@ -260,7 +273,7 @@ def test_an_unproven_command_naming_a_removal_is_refused_and_names_the_directory
     # Python form used here before is now read with ast and found as a removal: FORBIDDEN_REMOVAL.)
     code, err = project.bash("x=rm; $x '" + project.own + "/a.txt'")
     assert code == 2 and "removal-policy — UNRESOLVED" in err, err
-    assert NAMED.search(err).group(1) == project.own
+    assert NAMED.search(err).group(1) == project.named
 
 
 # ── One definition ───────────────────────────────────────────────────────────
@@ -285,6 +298,7 @@ def test_the_owner_test_is_the_write_policys_own(project, monkeypatch):
         monkeypatch.setenv(name, value)
     policy = _write_policy()
     paths = [project.own + "/a.txt", project.own, project.other + "/a.txt", project.scratch + "/x", project.root + "/src/a",
+             project.named + "/a.txt", project.named_other + "/a.txt",
              "/tmp/x.py", project.own + "/link_out", project.root + "/src/link_in"]
     for caller in ((AGENT, "dev"), (AGENT, "qa"), (OTHER_AGENT, "dev"), None):
         payload = project.payload("Bash", {"command": "true"}, caller)

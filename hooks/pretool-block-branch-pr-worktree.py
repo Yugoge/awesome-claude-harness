@@ -128,7 +128,6 @@ def _bypassed(text, data):
     checks = (
         ('is_overnight_active', lambda f: f(data.get('cwd'))),
         ('has_do_consent', lambda f: f(data)),
-        ('_allow_grant_matches', lambda f: f(text, data)),
     )
     problems = []
     for name, call in checks:
@@ -203,10 +202,7 @@ if __name__ == '__main__':
     sys.excepthook = _refuse_on_load_failure
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.allowlist import (  # noqa: E402
-    has_do_consent,
-    match_sentinel_grant_for_bash_command,
-)
+from lib.allowlist import has_do_consent  # noqa: E402 -- an /allow grant is released in lib/hook_launch
 from lib.overnight import is_overnight_active  # noqa: E402
 from lib.shell_parse import QUOTE_CHARS, git_invocations  # noqa: E402
 
@@ -219,19 +215,6 @@ def _detect(command):
             if first == 'add':
                 return True
     return False
-
-
-def _allow_grant_matches(command, data):
-    """True iff a /allow grant authorizes this command (main agent and subagent)."""
-    try:
-        sid = str(data.get('session_id', '') or '')
-    except Exception:
-        sid = ''
-    task_id = os.environ.get('CLAUDE_TASK_ID') or sid
-    try:
-        return bool(task_id) and match_sentinel_grant_for_bash_command(task_id, command) is not None
-    except Exception:
-        return False
 
 
 def _block(command, data):
@@ -258,7 +241,7 @@ def main():
         command = (data.get('tool_input', {}) or {}).get('command', '') or ''
         if not command.strip() or not _detect(command):
             sys.exit(0)
-        if is_overnight_active(data.get('cwd')) or has_do_consent(data) or _allow_grant_matches(command, data):
+        if is_overnight_active(data.get('cwd')) or has_do_consent(data):
             sys.exit(0)
         _block(command, data)
     except SystemExit:

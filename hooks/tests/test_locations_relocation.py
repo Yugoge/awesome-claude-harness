@@ -212,6 +212,30 @@ def test_f13_a_project_is_not_arbitrary_temp_wherever_it_is_checked_out(tmp_path
         assert "arbitrary /tmp and /var/tmp are denied for every role" in denial["deny_reason"], denial
 
 
+@pytest.mark.parametrize("home_is_project", [False, True], ids=["project", "harness-home-as-project"])
+def test_a_subagents_own_scratch_lies_below_the_session_root_wherever_the_project_and_home_are(
+        tmp_path, project, home_is_project):
+    """The directory a refused write names, and the same actor's next write there, are the same wherever the
+    project is, the harness home included as the project on the shared-memory tmpfs: below the session scratch
+    root (TMPDIR), never inside the project or the harness home, so a project that refuses a temp root inside
+    itself (as one did on 2026-11-20) never meets it."""
+    import re
+    from lib import locations
+    env = _env(tmp_path, project, **({"CLAUDE_HOME": project} if home_is_project else {}))
+    qa = {"agent_id": "a1", "agent_type": "qa", "subagent_type": "qa"}
+
+    def run(tool, tool_input):
+        return _hook("pretool-tool-policy.py", _payload(project, tool, tool_input, **qa), env, tmp_path)
+
+    refused = run("Write", {"file_path": f"/tmp/{NEVER}-stray/x.txt", "content": "x"})
+    own = re.search(r"your own scratch directory is (/\S+?)/ ", refused.stderr).group(1)
+    assert own == os.path.join(os.path.realpath(env["TMPDIR"]), "s-relocation", "qa", "a1"), refused.stderr
+    assert not locations.is_inside(own, project) and "TMPDIR" not in refused.stderr
+    for tool, tool_input in (("Write", {"file_path": f"{own}/n.md", "content": "x"}),
+                             ("Bash", {"command": f"printf x > {shlex.quote(own)}/n.md"})):
+        assert run(tool, tool_input).returncode == 0, tool
+
+
 def test_f13_a_symlinked_temp_directory_answers_alike(tmp_path, monkeypatch):
     from lib import locations
     real, link = tmp_path / "private-tmp", tmp_path / "tmp-link"
@@ -626,25 +650,6 @@ def test_f9_home_and_call_directory_spellings_answer_as_the_relative_one(tmp_pat
     assert not _heredoc_runs_git(classifier, "/usr/share/notes.md") and not _heredoc_runs_git(classifier, "notes.md")
     # beside the call directory a path is judged by its own components: a bin, sbin or etc one is code
     assert _heredoc_runs_git(classifier, "/usr/bin/notes.md")
-
-
-def test_f13_the_resource_layer_takes_a_project_in_system_temp_for_a_project(tmp_path, monkeypatch):
-    """lib/session_resources.classify_target, the twin of tool-policy's own reading."""
-    from lib import locations, session_resources
-    system_tmp = tmp_path / "system-tmp"
-    project = system_tmp / "proj"
-    project.mkdir(parents=True)
-    monkeypatch.setattr(locations, "SYSTEM_TEMP_DIRS", (str(system_tmp),))
-    binding = {"claude_session_id": "s1", "resource_session_id": "r1", "role": "dev", "dispatch_id": "a1"}
-    assert session_resources.locations is locations
-
-    def status(target):
-        return session_resources.classify_target(project, binding, target)["status"]
-
-    assert status("src/app.py") == "outside" and status(str(project / "src" / "app.py")) == "outside"
-    assert status(str(system_tmp / "stray.txt")) == "system_temp" and status(str(system_tmp)) == "system_temp"
-    assert status(".claude/scratch/r1/dev/a1/notes.md") == "owner"
-    assert status(".claude/scratch/r1/qa/a2/notes.md") == "sibling"
 
 
 def test_f13_a_state_root_that_is_another_name_of_system_temp_is_system_temp(tmp_path, monkeypatch):

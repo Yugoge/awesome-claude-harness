@@ -29,7 +29,7 @@ from lib.runtime_guard.config import REQUIRED_KEYS  # noqa: E402
 KNOBS = (
     "CLAUDE_DEV_CONTAINERS", "CLAUDE_DEV_SYSTEMD", "CLAUDE_DAEMON_RESTART_GRANT_HELPER",
     "CLAUDE_PROTECTED_DAEMON_PREFIX", "CLAUDE_PROTECTED_DAEMON_TARGETS",
-    "CLAUDE_PROTECTED_PROCESS_FAMILY", "CLAUDE_HARD_BANNED_SCRIPTS",
+    "CLAUDE_HARD_BANNED_SCRIPTS",
     "CLAUDE_CHECKPOINT_EXTRA_TRAILER", "CHECKPOINT_LOG_DIR",
     "WORKFLOW_PRUNE_ACCOUNTS_DIR", "WORKFLOW_PRUNE_PROJECT_DIRNAME", "CLAUDE_HOME",
     "CLAUDE_PYTHON_BIN", "CLAUDE_TASK_ID",
@@ -38,7 +38,6 @@ STAND_INS = {
     "CLAUDE_PROTECTED_DAEMON_PREFIX": "demo-daemon",
     "CLAUDE_PROTECTED_DAEMON_TARGETS": "acct-a|acct-b",
     "CLAUDE_DAEMON_RESTART_GRANT_HELPER": "/opt/demo/bin/allow-restart",
-    "CLAUDE_PROTECTED_PROCESS_FAMILY": "demo",
     "CLAUDE_DEV_CONTAINERS": "demo-web-dev",
 }
 SID = "env-defaults-test-sid"
@@ -163,10 +162,10 @@ def test_unset_grant_helper_guidance_reads_sensibly(sandbox):
     assert "Hint: user must run <daemon-restart grant helper> <target>" in r.stderr
 
 
-def test_process_family_rules(sandbox):
+def test_kill_by_name_and_docker_rules(sandbox):
     _, env = sandbox
     assert hook(env, "docker restart demo-prod").returncode == 0
-    # every kill by name or pattern is refused, with or without the family configured (one verdict for the act)
+    # every kill by name or pattern is refused, with or without the stand-in settings (one verdict for the act)
     r = hook(env, "killall claude")
     assert r.returncode == 2 and "Killing processes by name or pattern" in r.stderr
     r = hook(env, "pkill -f demo-daemon")
@@ -177,7 +176,7 @@ def test_process_family_rules(sandbox):
     # here; `docker rm` is settings.json's deny and `docker kill` of the family the runtime guard's.
     for command in ("docker restart demo-web-dev", "docker restart demo-prod", "docker stop demo-prod"):
         assert hook(env, command).returncode == 0, command
-    assert "Bash(docker rm:*)" in json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
+    assert "Bash(docker rm:*)" in json.loads((REPO / "policies" / "cli-deny.v1.json").read_text())["deny"]
     r = hook(env, "killall demo-daemon")
     assert r.returncode == 2 and "Killing processes by name or pattern" in r.stderr
 
@@ -293,7 +292,7 @@ def test_hard_ban_empty_entries_never_match_and_session_dirs_ban_stays(sandbox):
     assert r.returncode == 2 and "hard-banned script 'demo-restart'" in r.stderr
     # The session_dirs.txt ban is settings.json's permissions.deny: Read and Edit refuse the file, and since OB-L16
     # per-command Bash entries refuse a command that reads, writes or runs it (a search or commit mention passes).
-    deny = json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
+    deny = json.loads((REPO / "policies" / "cli-deny.v1.json").read_text())["deny"]  # the deny-list rule's
     assert {"Read(**/session_dirs.txt)", "Edit(**/session_dirs.txt)"} <= set(deny)
     stems = ("cat *", "cp *", "rm *", "tee *", "bash *", "sh *", "source *", ". *", "eval *", "python*")
     assert {f"Bash({stem}{tail})" for stem in stems for tail in ("session_dirs.t*", "session_dirs?*")} <= set(deny)
@@ -340,7 +339,8 @@ def test_checkpoint_commit_carries_only_the_claude_trailer_by_default(sandbox):
     assert lines[-1] == "Co-Authored-By: Claude <noreply@anthropic.com>"
     assert sum(line.startswith("Co-Authored-By:") for line in lines) == 1
     assert not any(line.startswith("via [") for line in lines)
-    assert (tmp_path / "config" / "logs" / "checkpoint.log").exists()  # CHECKPOINT_LOG_DIR default
+    logs = list((tmp_path / "home" / ".local" / "state" / "claude-harness").glob("*/logs/checkpoint.log"))
+    assert len(logs) == 1  # CHECKPOINT_LOG_DIR default: the state root's logs/, on disk
 
 
 def test_checkpoint_extra_trailer_is_appended_after_the_claude_one(sandbox):

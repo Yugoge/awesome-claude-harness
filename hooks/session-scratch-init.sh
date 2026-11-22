@@ -16,6 +16,9 @@
 #
 # Non-blocking: best-effort, exits 0 unconditionally. SessionStart must never
 # fail a session over scratch bookkeeping.
+# It also runs late, at the first prompt after /harness on of a session whose process started
+# while off (scripts/harness-switch late_setup), when the .owner it writes, with CLAUDE_PID and its
+# start time, does not name that process; then there is no CLAUDE_ENV_FILE and no TMPDIR export.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 set -u
@@ -68,6 +71,9 @@ fi
 BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
 CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# Before the new .owner: no dispatch is open at a start; the dispatch temp directories left go (lib/dispatch_temp.py).
+python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/dispatch_temp.py" --start "$SESSION_DIR" "$SID" 2>/dev/null || true
+
 OWNER_FILE="$SESSION_DIR/.owner"
 TMP_OWNER="$SESSION_DIR/.owner.$$.tmp"
 if python3 -c "
@@ -90,9 +96,12 @@ else
 fi
 
 # The session's programs keep their temp files here, the main agent's own scratch (pytest's
-# basetemp root included): the CLI runs each Bash command after sourcing CLAUDE_ENV_FILE.
+# basetemp root included), or, while a foreground dispatch is open, in the directory
+# lib/dispatch_temp.py names in .dispatch-tmp: the CLI runs the env file's content before each
+# Bash command. Builtins only, and it ends with status 0 whatever is missing.
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-  printf 'export TMPDIR=%q\n' "$SESSION_DIR" >> "$CLAUDE_ENV_FILE" \
+  printf 'if [ -d %q ]; then export TMPDIR=%q; if { IFS= read -r _claude_dtmp < %q/.dispatch-tmp; } 2>/dev/null && [ -n "$_claude_dtmp" ] && [ -d "$_claude_dtmp" ]; then export TMPDIR="$_claude_dtmp"; fi; unset _claude_dtmp; fi\n' \
+    "$SESSION_DIR" "$SESSION_DIR" "$SESSION_DIR" >> "$CLAUDE_ENV_FILE" \
     || echo "session-scratch-init: cannot set TMPDIR in $CLAUDE_ENV_FILE" >&3
 fi
 

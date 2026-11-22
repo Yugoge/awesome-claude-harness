@@ -95,9 +95,15 @@ def mint(state, repo, task_id="20261028-100000", sid=SID):
              "branch": git(repo, "branch", "--show-current"), "expected_head": git(repo, "rev-parse", "HEAD"),
              "created_at": (now - timedelta(seconds=2)).isoformat(),
              "expires_at": (now + timedelta(minutes=30)).isoformat(),
-             "minted_by": {"origin": CP.PIPELINE_ORIGIN}}
+             "minted_by": {"origin": CP.PIPELINE_ORIGIN,
+                           "evidence": {"manifest_dispatched_at": (now - timedelta(seconds=30)).isoformat()}}}
     path = Path(state) / f"claude-commit-grant-{sid}-{nonce}.json"
     path.write_text(json.dumps(grant))
+    # The pre-commit review approved this round (commands/commit.md Step 6); docs/dev stays out of the commit.
+    (Path(repo) / "docs" / "dev").mkdir(parents=True, exist_ok=True)
+    (Path(repo) / "docs" / "dev" / f"commit-qa-report-{task_id}.md").write_text("# pre-commit QA\n\nCOMMIT: APPROVE\n")
+    with open(Path(repo) / ".git" / "info" / "exclude", "a") as handle:
+        handle.write("docs/dev/\n")
     return str(path), grant
 
 

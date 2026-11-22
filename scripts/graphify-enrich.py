@@ -17,7 +17,7 @@ after BA-QA validation, before DEV. Operations:
      deterministic subgraph is kept (AC3)
   6. Write its own outputs only, under .claude/dev-registry/<task-id>/graphify/:
      the run record graphify-run.json on every path (status and the context
-     fingerprint /dev-overnight Step 11g compares), and focused-subgraph.json,
+     fingerprint /dev-overnight Step 11 compares), and focused-subgraph.json,
      the graph context dev's and QA's dispatches name, when status is ok or
      degraded. The context file is read, never written. Sensitive paths are
      scrubbed on read + on CLI stdout (AC15)
@@ -83,7 +83,7 @@ from graphify_lib import COUPLING_RELATIONS as REVERSE_DEPENDENT_RELATIONS  # no
 
 def _context_fingerprint(context_file: str | None, pipeline_index: int | None,
                          iteration: int | None) -> dict:
-    """The four fields /dev-overnight Step 11g compares before it dispatches
+    """The four fields /dev-overnight Step 11 compares before it dispatches
     enrichment again: the pipeline index and iteration its dispatch passes, and
     the path and SHA-256 of the context file given here (null when absent)."""
     sha = None

@@ -48,7 +48,7 @@ The demo needs no Claude Code. It runs the real hooks in a sandbox. It writes no
 
 Before any code, it asks you. Intent, scope, edge cases, acceptance, in Claude Code's question dialog. Skip what you like. A skipped question settles to its stated default.
 
-**Ways out.** `/stop` ends a held command or the overnight run. Esc interrupts a loop. `/allow` lets one refused operation through, once, never past a `settings.json` deny. `/restart` resumes what a usage limit cut off. `/harness off` switches the whole harness off. `/harness on` restores exactly what it removed.
+**Ways out.** `/stop` ends a held command or the overnight run. Esc interrupts a loop. `/allow` releases once the next call of the session, main agent or subagent, that a pre-tool hook refuses, whatever the tool, command or rule (only a refused call of the tool or command you name after it, if you name one). It is spent only by that release and ends at your next prompt. It never releases a stop gate, a block at prompt time, or an entry of the CLI's own deny list in `settings.json` while one exists. `/restart` resumes what a usage limit cut off. `/harness off` switches the whole harness off. `/harness on` restores exactly what it removed.
 
 ### Guardrails only: the installer core profile
 
@@ -98,7 +98,7 @@ flowchart TD
 | `/spec` | Optional. It asks you first. Then a durable spec with per-agent briefs. `/dev` and `/dev-overnight` build from it. |
 | `/dev <requirement>` | It asks you first. BA finds the root cause. QA checks the analysis before any code. Dev builds in one-issue lanes, in parallel. QA verifies until it passes. |
 | `/close` | Release readiness. Inspectors and QA judge the diff. `CLOSE: YES` or the findings. After `CLOSE: YES` it asks for your rating. |
-| `/commit` | QA reviews the commit first. The changelog analyst stages the task's own files and commits them. |
+| `/commit` | QA reviews the commit first; the guard refuses a commit its review did not approve. The changelog analyst stages the task's own files and commits them. A cycle that claims no file lands the changes no open cycle claims. |
 | `/merge` | Optional, for work on a branch. A real merge into the default branch, after a pre-merge analysis. |
 | `/push` | The push analyst checks what would go out. The wrapper publishes it. It needs a commit made by `/commit`. |
 | `/dev-overnight 6:00` | Unattended until the end time. Nobody is asked. It commits nothing. You land it in the morning. |
@@ -180,15 +180,15 @@ graph TD
     end
     ORC -.->|every tool call| PRE
     SUB -.->|every tool call| PRE
-    G -->|"/commit · /allow: checked by"| PRE
+    G -->|"/commit: checked by · /allow: releases one refusal of"| PRE
     G -->|"/push · /merge: checked before their wrapper runs git"| TOOL
     PRE -->|allow| TOOL[("Tool runs<br/>files · shell · git")]
     PRE -->|"refuse: the rule, the reason, a remedy"| BLK[/Refused/]
-    TOOL --> POST["PostToolUse hooks<br/>/allow grants spent · checkpoints · doc sync · lane aggregate"]
+    TOOL --> POST["PostToolUse hooks<br/>checkpoints · doc sync · dispatch returns"]
     POST -->|"snapshots, HEAD never moves"| CK[("refs/checkpoints")]
     CK ~~~ PAD["<br/><br/><br/>"]
 
-    SUB -.->|on stop| SS["SubagentStop producer gate<br/>artifact contract · end-to-end status · Codex record"]
+    SUB -.->|on stop| SS["SubagentStop producer gate<br/>lane aggregate · artifact contract · lane blockers · end-to-end status · Codex record"]
     ORC -.->|on stop| SG["Stop gate, on a gated command<br/>todos done · artifacts checked · overnight time-lock"]
 
     classDef restricted fill:#ffebee,stroke:#c62828
@@ -211,11 +211,11 @@ In words. You type a command. The orchestrator splits the work into lanes and di
 | Orchestrator | Your main session. It splits the work into lanes, dispatches agents and keeps the todo list. A hook caps what it does itself. Read on: [Context guardrails](docs/how-it-works.md#context-engineering-guardrails). |
 | Agents | One issue each, in a clean context. Each writes only to its role's paths and returns a structured report. Read on: [The cast of agents](#the-cast-of-agents). |
 | Artifacts | Files under `docs/dev/`. Your words, the ticket, the context, the acceptance criteria, each report. Each stage reads the last one's checked output. Read on: [The full pipeline](#the-full-pipeline). |
-| Hooks | Code at every prompt, every tool call and every stop. A prompt hook writes your words to disk before any agent runs. PreToolUse refuses before a call runs. PostToolUse spends `/allow` grants, takes checkpoints and syncs docs. SubagentStop checks what an agent owes. The Stop gate holds a gated command while a todo is open or an artifact fails its check. It holds the overnight run until its end time and its closeout are on disk. Read on: [Failure modes](docs/how-it-works.md#failure-modes-this-exists-to-prevent) and the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md). |
+| Hooks | Code at every prompt, every tool call and every stop. A prompt hook writes your words to disk before any agent runs. PreToolUse refuses before a call runs; the owner's `/allow` releases the next refusal once. PostToolUse takes checkpoints and syncs docs. SubagentStop checks what an agent owes. The Stop gate holds a gated command while a todo is open or an artifact fails its check. It holds the overnight run until its end time and its closeout are on disk. Read on: [Failure modes](docs/how-it-works.md#failure-modes-this-exists-to-prevent) and the [enforcement ledger](docs/ENFORCEMENT-LEDGER.md). |
 | Git protection kernel | Refuses an agent's commit, push, merge and hard reset. Only something you typed lets one through. Checkpoints snapshot the tree to `refs/checkpoints/`, one ref per branch. Read on: [The git protection kernel](#the-git-protection-kernel). |
-| Grants | Each expires. A commit, push or `/allow` grant works once. `/commit` and `/allow` grants are checked before the tool runs. `/push` and `/merge` grants are checked before their wrapper runs git. Who may use which is in the trust model. Read on: [Who may do what](#trust-model-in-practice). |
+| Grants | A commit or push grant expires; an `/allow` grant has no clock and ends at your next prompt. Each works once. A `/commit` grant is checked before the tool runs; an `/allow` grant releases the next call a pre-tool hook refuses. `/push` and `/merge` grants are checked before their wrapper runs git. Who may use which is in the trust model. Read on: [Who may do what](#trust-model-in-practice). |
 | Overnight loop | The same pipeline, unattended until a clock time. Nobody is asked. It commits nothing. Read on: [The overnight pipeline](#the-overnight-pipeline). |
-| Deny list | `settings.json` denies destructive shell forms and reads of secret files. No grant and no `/do` lifts it. Read on: [Every capability](#feature-highlights). |
+| Deny list | A pre-tool rule refuses destructive shell forms, reads and writes of secret files and an agent's call of an owner-only command, from the entries of `policies/cli-deny.v1.json`. `/do` does not lift it; the owner's `/allow` releases one refused call. `settings.json` keeps only the harness switch's two entries. Read on: [Every capability](#feature-highlights). |
 
 </details>
 
@@ -246,12 +246,12 @@ In words. You type a command. The orchestrator splits the work into lanes and di
 | **Durable specs** | `/spec` asks you first and writes a durable spec. It splits it into per-agent briefs with checklist-style checkpoints. `/dev` and `/dev-overnight` build from it. |
 | **Release-readiness gate** | `/close` checks that the system can ship it, not only that the code works. Inspectors and QA judge the diff. Plus workflow-integrity checks. It ends on `CLOSE: YES` or the findings. |
 | **Adversarial second opinion** | `--codex` sends each agent's draft to OpenAI Codex through an isolation wrapper you supply (`CODEX_ISO_BIN`). No wrapper, no call. Never a bare `codex`. It hunts real defects and missed edge cases before QA inherits them. Claude classifies every finding. Codex never sets the verdict. |
-| **Branch, PR and worktree firewall** | Agents create no branch, pull request or worktree. The exceptions: a live `/dev-overnight`, `/do` for the main agent, an `/allow` grant for that command. |
-| **Short-lived grants** | Only a command you type starts one: `/commit`, `/push`, `/merge` or `/allow`. Each expires. A commit, push or `/allow` grant works once. A `/commit --bulk` run covers its whole batch. A commit grant names the repository, branch and HEAD. `/allow` matches the command's structure, never a substring. |
+| **Branch, PR and worktree firewall** | Agents create no branch, pull request or worktree. The exceptions: a live `/dev-overnight`, `/do` for the main agent, your `/allow`, which releases one refused call. |
+| **Short-lived grants** | Only a command you type starts one: `/commit`, `/push`, `/merge` or `/allow`. A commit or push grant expires; an `/allow` grant ends at your next prompt. Each works once. A `/commit --bulk` run covers its whole batch. A commit grant names the repository, branch and HEAD. `/allow <command>` releases only a refused shell command that is, or starts with, that command. |
 | **Crash-proof checkpoints** | Snapshots go to `refs/checkpoints/`, one ref per branch, through git plumbing. HEAD never moves. `git blame` points at real commits. |
 | **Self-updating docs** | A session edits a command, agent or hook. A hook regenerates the marked sections of the folder's `INDEX.md` and `README.md` and of `CLAUDE.md`. Your prose outside the markers stays. CI fails when a folder's generated sections drift. |
 | **Generated acceptance tests** | For standard or risky tasks, `test-writer` writes failing skeletons from the acceptance criteria. A `TEST_INCOMPLETE` stop left in a test is a critical QA finding. |
-| **Shell and secrets deny list** | `settings.json` denies `sudo`, `rm -rf`, `dd`, `mkfs`, force-push, `git reset --hard`, `systemctl restart`, `kubectl delete` and package publish. It denies `Read` on `.env` files, keys, credentials and secret files. `Edit` and a shell redirect are refused on all of them but keys. A shell read is not refused. |
+| **Shell and secrets deny list** | A pre-tool rule refuses the entries of `policies/cli-deny.v1.json`: `sudo`, `su`, `rm -rf /`, `mkfs`, force-push, `git reset --hard`, the `systemctl` service verbs, power commands, `kubectl delete`, `docker rm` and `yarn publish`. It refuses `Read` of `.env` files, keys, credentials and secret files, and a plain shell read of them (`cat`, `grep` and the like). `Edit`, `Write` and a shell redirect to them are refused too. Each refusal is recorded; the owner's `/allow` releases one. |
 | **UI-audit skills** | Playwright review: axe-core injection, APCA contrast, an anti-pattern catalog, a state matrix, token conformance, a weighted beauty score. |
 | **Ask-first round** | `/spec`, `/dev`, `/redev` and `/dev-command` ask you first. Intent, scope, edge cases, acceptance. In Claude Code's question dialog. A skipped question settles to its stated default. |
 | **Hard Stop gate** | `/dev`, `/close`, `/commit` and the other gated commands cannot end until code confirms their todo list and artifacts. A commit only your own typed `/commit` can land holds nothing: the turn ends naming the command to type. `/stop` is your exit. An environment switch turns it off. The shipped settings never set it. |
@@ -267,7 +267,7 @@ In words. You type a command. The orchestrator splits the work into lanes and di
 
 Every agent commit, push, merge and hard reset is refused. Something you typed lets one through. It covers the main agent and every subagent, interactive or overnight. Only `/harness off` switches it off. Built from the two incidents above. Scars, not hypotheticals. The code names both, with dates. Interactive matters. The ninety-three-file push happened in one.
 
-- **Grants.** `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. `/do` is the main agent's, for one turn, and only where the protected branch cannot move. It never covers a commit or a push. A command that starts with `git reset --hard` also meets the `settings.json` deny, which nothing lifts.
+- **Grants.** `/commit` or `/allow` for a commit. `/push` or `/allow` for a push. `/allow` or `/do` for the rest. `/do` is the main agent's, for one turn, and only where the protected branch cannot move. It never covers a commit or a push. A command that starts with `git reset --hard` also meets the deny-list rule, which `/do` does not lift.
 - **Stays free.** Read-only git, `add`, a checkout or `restore` of a single file, `stash list`, `show` and `pop`. A commit in a throwaway repository that lies wholly inside the agent's own scratch directory.
 - **Limits.** `/push` and `/merge` run git inside their own wrappers. No hook sees inside.
 
@@ -279,10 +279,10 @@ You are the trust root. The threat model treats the agent itself as the adversar
 | Actor | Edit, Write | git commit | git push | git reset --hard | Break-glass |
 |---|---|---|---|---|---|
 | You, in your own shell | yes | yes | yes | yes | not needed |
-| Main agent | Once per tool per turn. Its own session scratch is uncounted. Free under `/do`. | Not itself. Only the changelog analyst that `/commit` dispatches spends the `/commit` grant. Or a matching `/allow`. | Through `/push`, or a matching `/allow` | Under `/do` when it cannot move the protected branch. Or a matching `/allow`. Never a command that starts with `git reset --hard`. | `/do` for one turn. Never for commit, push or protected files. `/allow` for one operation. |
-| Subagent | Its role's write paths | Only the changelog analyst that `/commit` dispatched, under that grant. Or a matching `/allow`. | A matching `/allow` only | A matching `/allow` only. Never a command that starts with `git reset --hard`. | `/allow` only. Subagents never get `/do`. |
+| Main agent | Once per tool per turn. Its own session scratch is uncounted. Free under `/do`. | Not itself. Only the changelog analyst that `/commit` dispatches spends the `/commit` grant. Or a matching `/allow`. | Through `/push`, or a matching `/allow` | Under `/do` when it cannot move the protected branch, never a command that starts with `git reset --hard`. Or a matching `/allow`. | `/do` for one turn. Never for commit, push or protected files. `/allow` for one operation. |
+| Subagent | Its role's write paths | Only the changelog analyst that `/commit` dispatched, under that grant. Or a matching `/allow`. | A matching `/allow` only | A matching `/allow` only. | `/allow` only. Subagents never get `/do`. |
 
-The commit grant works once and expires. The guard spends it as it authorizes the commit. An `/allow` grant matches the command's structure, or an anchored pattern on one sub-command. Never a substring of the raw text. It expires. It is consumed once the matched call ends, whatever the result.
+The commit grant works once and expires. The guard spends it as it authorizes the commit. An `/allow` grant releases the next call a pre-tool hook refuses (of the tool or command named after `/allow`, if one was). It is spent by that release, never by a call nothing refused, and ends at your next prompt. It has no clock.
 
 </details>
 
@@ -303,7 +303,7 @@ The git privilege guard runs before the tool executes. It finds the wrapper's va
 | `git push` | Refused, exit `2`. Agents may not push. The message points to `/push`. |
 | `/push`, typed by you | The push analyst checks what would go out and writes a grant. The push script spends it once, then hands over to the wrapper. The wrapper exits `3` unless a `/commit` token names an ancestor of HEAD. It refuses force, delete and mirror pushes. |
 
-The whole philosophy in miniature. Steered toward the right path. Stopped on the wrong one. The refusal names the right path. The install's demo replays the plain `git push` case in a sandbox. Refused. A single-use `/allow` grant lets it through once, and the real consumer spends the grant. Refused again. The [status page](docs/status.md) holds the recording.
+The whole philosophy in miniature. Steered toward the right path. Stopped on the wrong one. The refusal names the right path. The install's demo replays the plain `git push` case in a sandbox. Refused. A single-use `/allow` grant lets it through once, spent by that release. Refused again. The [status page](docs/status.md) holds the recording.
 
 </details>
 
@@ -360,9 +360,9 @@ The orchestrator dispatches each agent by describing the problem. It never names
 
 ## The command surface
 
-These are the commands you type. An owner-only command carries `disable-model-invocation: true` and a `Skill(...)` deny in `settings.json`. An agent cannot start one itself.
+These are the commands you type. An owner-only command carries `disable-model-invocation: true` and a `Skill(...)` entry in `policies/cli-deny.v1.json` (`Skill(harness)` stays in `settings.json`). An agent cannot start one itself.
 
-**Limits.** `disable-model-invocation` alone stops only the slash form. The `Skill(...)` deny is the real barrier. A coverage test fails when a command lacks one. `/codex` and `/tickets` are open to agents too.
+**Limits.** `disable-model-invocation` alone stops only the slash form. The `Skill(...)` entry, refused by the deny-list rule, is the real barrier; the owner's `/allow` releases one refused call. A coverage test fails when a command lacks one. `/codex` and `/tickets` are open to agents too.
 
 <details>
 <summary><strong>All commands.</strong> Who may type each, generated from each command's own file.</summary>
@@ -384,7 +384,7 @@ These are the commands you type. An owner-only command carries `disable-model-in
 | `/push`<br>owner only, Ship | Publish the current branch through the push wrapper after the push analyst reviews what would go out; it needs a commit made by /commit. |
 | `/clean [--codex]`<br>owner only, Quality | Clean up the project: inspectors find misplaced docs, byproducts and style violations, and the cleaner applies the approved fixes. |
 | `/test`<br>owner only, Quality | Check the project's tests against edge cases found in its git history, then run them and report. |
-| `/allow`<br>owner only, Control | Grant one single-use permission for an operation a grant-aware safety hook refused; it never overrides a settings deny rule. |
+| `/allow`<br>owner only, Control | Let the next call the harness refuses in this session through, once (optionally only a named tool or command). |
 | `/codex [prompt or --review or --model <model> <prompt>]`<br>owner or agent, Control | Ask OpenAI Codex for a second opinion, a code review or a delegated coding task, through an isolated wrapper. |
 | `/do`<br>owner only, Control | Let the main agent do one task itself for this turn, past the orchestrator gate; it does not cover commits or pushes. |
 | `/harness off \| on \| status`<br>owner only, Control | Switch the whole harness off or back on for this harness home, or show its state; on restores exactly what off removed. |
@@ -398,7 +398,7 @@ These are the commands you type. An owner-only command carries `disable-model-in
 
 </details>
 
-Did you hit a usage limit? `/restart` resumes every recoverable interrupted child in the current parent transcript by its original agent id. It never creates a replacement agent. It claims recovery only on response evidence from every candidate.
+Did you hit a usage limit? `/restart` resumes every recoverable interrupted child in the current parent transcript by its original agent id. It never creates a replacement agent. The harness finalizes the recovery itself, and only once every candidate has responded.
 
 <details>
 <summary><strong>Switches.</strong> What you can turn off, and how.</summary>
@@ -441,7 +441,7 @@ That is the threat model the kernel is built against. The design makes it hard, 
 
 - An agent cannot start an owner-only command.
 - The git guard refuses every agent by default.
-- Each grant expires. A commit, push or `/allow` grant works once.
+- A commit or push grant expires; an `/allow` grant ends at your next prompt. Each works once.
 - A hook refuses agent writes to a project's `.claude/hooks/` and `.claude/commands/`. The owner allows them with a sentinel file.
 
 The [status page](docs/status.md) lists what is not covered.

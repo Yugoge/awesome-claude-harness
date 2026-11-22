@@ -59,6 +59,7 @@ try:
 except Exception:  # pragma: no cover - fail-soft if lib missing
     claude_home = None  # type: ignore[assignment]
 from harness_state_dir import harness_state_dir  # noqa: E402
+from allowlist import state_entry_failure, write_state_entry  # noqa: E402
 
 
 def _try_git_toplevel() -> Path | None:
@@ -1069,7 +1070,7 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
         f'Read {overnight.locate(state.get("session_id"), {"cwd": str(PROJECT_DIR)})[0]} and resume from phase="{phase}".',
         # Phase->step map MUST match the markdown Continuation-Mode map in
         # commands/dev-overnight.md (### Continuation Mode), the single source of
-        # truth. implementing->Step 12 lands on the shared Step 11g Dev-dispatch
+        # truth. implementing->Step 12 lands on Step 11's shared graphify Dev-dispatch
         # precondition, which enriches before Dev on resume.
         'Phase mapping: initializing/exploring->Step 2, pipeline_creation->Step 6,',
         'analyzing->Step 8, implementing->Step 12, verifying->Step 14,',
@@ -1316,12 +1317,8 @@ def handle_do_consent(sid: str) -> None:
     agent guessed its id via `ls -t /tmp/...consent-*.flag | head -1` (globally
     newest) — which aliased parallel /do sessions onto one id and overwrote each
     other's do-reports."""
-    flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag")
-    try:
-        flag.write_text("true")
-        print("[/do] Consent granted. Main agent may now perform direct operations this turn.")
-    except Exception as e:
-        sys.stderr.write(f"[/do] Failed to write consent flag: {e}\n")
+    _record_or_refuse(Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag"), "/do consent", "do")
+    print("[/do] Consent granted. Main agent may now perform direct operations this turn.")
     # Mint a unique task-id and expose it via a session-keyed sidecar. Kept
     # SEPARATE from the consent flag (the orchestrator-gate trust root, whose
     # content stays "true" so every existence-checking reader is unaffected).
@@ -1334,14 +1331,15 @@ def handle_do_consent(sid: str) -> None:
         sys.stderr.write(f"[/do] Failed to mint a task-id: {e}\n")
         return
     print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → {harness_state_dir()}/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
+    sidecar = Path(f"{harness_state_dir()}/claude-do-task-{sid}.json")
     try:
-        Path(f"{harness_state_dir()}/claude-do-task-{sid}.json").write_text(json.dumps({
+        write_state_entry(sidecar, json.dumps({
             "task_id": task_id,
             "session_id": sid,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }))
-    except Exception as e:
-        sys.stderr.write(f"[/do] Failed to write task sidecar: {e}\n")
+    except OSError as e:  # the minted line above names the id all the same
+        print(f"[/do] The task sidecar was not written ({state_entry_failure(sidecar, e)}); the task id is the one minted above.")
 
 
 def _write_userintent_sentinel(cmd_name: str, sid: str) -> None:
@@ -1349,10 +1347,20 @@ def _write_userintent_sentinel(cmd_name: str, sid: str) -> None:
     writer (this hook) and reader (pretool-wrapper-userintent.py PreToolUse
     hook) resolve sid from stdin JSON, so sid-keying round-trips correctly.
     Single-use; consumed by the PreToolUse hook before the wrapper runs."""
+    _record_or_refuse(Path(f"{harness_state_dir()}/claude-{cmd_name}-userintent-{sid}.flag"),
+                      f"That you typed /{cmd_name}", cmd_name)
+
+
+def _record_or_refuse(path: Path, what: str, cmd_name: str) -> None:
+    """Write `true` to an entry the typed command's later steps need, or block
+    the prompt (exit 2: the CLI shows the owner stderr and submits nothing)."""
     try:
-        Path(f"{harness_state_dir()}/claude-{cmd_name}-userintent-{sid}.flag").write_text("true")
-    except OSError:
-        pass
+        write_state_entry(path, "true")
+    except OSError as e:
+        sys.stderr.write(f"[/{cmd_name}] {what} could not be recorded: {state_entry_failure(path, e)}.\n"
+                         f"This prompt was not submitted and /{cmd_name} is not granted: free space on that "
+                         f"volume or make that directory writable, then type /{cmd_name} again.\n")
+        raise SystemExit(2)
 
 
 def _dev_clock() -> datetime:
@@ -1773,6 +1781,15 @@ def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: st
     if cmd_name in _DEV_COMMANDS:
         _roots_ahead_of(lambda: _ordinary_dev_start(cmd_name, user_input, sid, envelope_digest), cmd_name, sid)
         return
+    if cmd_name == 'close':  # no files, or the owner's --force: code completes it here (lib/close_exit.py)
+        try:
+            from lib import close_exit
+            done = close_exit.complete(user_input, CURRENT_TRANSCRIPT_PATH, PROJECT_DIR)
+        except Exception:  # an unread record completes nothing: the ordinary route runs
+            done = None
+        if done:
+            print(done)
+            return
     if cmd_name != 'dev-overnight':
         print_roots(cmd_name, sid)
     if cmd_name == "push":
@@ -1829,6 +1846,9 @@ def print_roots(cmd_name: str, sid: str) -> None:
         import overnight  # hooks/lib is on sys.path (see the WS1 block above)
         state = overnight.locate(sid, {'cwd': str(PROJECT_DIR)})[1] if cmd_name == 'dev-overnight' else None
         print(root_lines(state))
+        if isinstance(state, dict) and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', str(state.get('start_time'))):
+            # /dev-overnight's <TS> stem: the launch's own time (commands/dev-overnight.md Step 2)
+            print('RUN_STAMP=' + re.sub(r'[-:Z]', '', state['start_time']).replace('T', '-'))
 
 
 def print_push_head() -> None:
@@ -1911,15 +1931,17 @@ def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
         pass
 
 
-def _clear_turn_state(session_id: str, cmd_name) -> None:
+def _clear_turn_state(session_id: str, cmd_name, prompt: str = '') -> None:
     """D5/TC-9: the only clearer of the tool streak and of the /do consent flag
-    (the files hooks/pretool-orchestrator-gate.py reads). Every
-    UserPromptSubmit starts a new turn, typed or not (the CLI also fires it
-    for a scheduled task, a background task or subagent reporting back and a
-    peer message), so the streak resets and /do consent, which lasts one turn,
-    goes unless this prompt is /do itself. An AskUserQuestion answered inside
+    (the files hooks/pretool-orchestrator-gate.py reads). A UserPromptSubmit
+    starts a new turn, typed or not (the CLI also fires it for a scheduled
+    task and a peer message), so the streak resets and /do consent, which
+    lasts one turn, goes unless this prompt is /do itself. A wake by a
+    returning subagent (a prompt that is a task-notification, which cannot be
+    typed) is not a turn of the owner: it resets nothing and keeps the consent
+    (the owner's decision of 2026-11-21). An AskUserQuestion answered inside
     the turn is not a UserPromptSubmit and keeps it."""
-    if not session_id:
+    if not session_id or str(prompt).lstrip().startswith('<task-notification>'):
         return
     from allowlist import write_tool_streak  # the streak's one writer (hooks/lib)
     write_tool_streak(session_id, None)
@@ -1957,7 +1979,7 @@ def main():
         # fails closed; handle_phase_a mints a unique id for the creation half.
         session_id = data.get('session_id', '')
         cmd_name = extract_command_name(user_input)
-        _clear_turn_state(session_id, cmd_name)
+        _clear_turn_state(session_id, cmd_name, user_input)
         if not cmd_name:
             handle_phase_b(session_id)
             recovery = wake_recovery(user_input)

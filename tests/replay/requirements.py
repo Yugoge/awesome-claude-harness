@@ -34,7 +34,7 @@ that decides that means, run as the CLI runs it:
                      lane's report. For each field of the lane report's schema that takes free text: a
                      sibling lane's report holding prose there, which that sibling's own stop accepts
                      (its schema validation, contract_runtime), and the stopping lane's own means
-                     (saving its own report again, which runs the aggregator; an Edit of a field of its own
+                     (saving its own report again and stopping again, which runs the aggregator; an Edit of a field of its own
                      report the finding names, to agree with the sibling's; an Edit of the
                      sibling's report, put to the write gate). If none clears it, the stopping lane
                      waits on a lane that has stopped, which only the main agent can dispatch again,
@@ -500,7 +500,7 @@ def wait_cells(hooks: Hooks, made: dict, tpls: list | None = None) -> list:
 
                     def edit_own(change: dict) -> str:
                         """The lane's Edit of its own report (each changed field, value for value), put to the
-                        write gate, made, the watch run on it as on the Edit, and the lane's next stop."""
+                        write gate, made, and the lane's next stop (whose chain rebuilds the aggregate)."""
                         with open(own_path) as fh:
                             before = fh.read()
                         doc = json.loads(before)
@@ -514,8 +514,6 @@ def wait_cells(hooks: Hooks, made: dict, tpls: list | None = None) -> list:
                             return verdict
                         with open(own_path, "w") as fh:
                             fh.write(after)
-                        hooks.run("posttool-lane-completeness-watch.py", {**store.payload("Edit", edit, me),
-                                  "hook_event_name": "PostToolUse", "tool_response": {"filePath": own_path}})
                         again = stop("l2")
                         if again.returncode == 0:
                             return "permitted"
@@ -523,9 +521,9 @@ def wait_cells(hooks: Hooks, made: dict, tpls: list | None = None) -> list:
                             fh.write(before)
                         return next((ln.strip() for ln in again.stderr.splitlines() if "canonical_missing" in ln
                                      or "dev-report" in ln), again.stderr.strip()[:300])[:400]
-                    # Its own means: save the report again (the watch runs the aggregator), or correct a field
+                    # Its own means: save the report again (the next stop runs the aggregator), or correct a field
                     # of its own report the finding names to agree with the fan-out (the sibling's value).
-                    means = {"save its own report again with Edit (the watch runs the aggregator)": edit_own({})}
+                    means = {"save its own report again with Edit (the next stop runs the aggregator)": edit_own({})}
                     with open(os.path.join(project, paths["l1"])) as fh:
                         theirs = json.load(fh)
                     finding = own.stderr.partition("canonical_missing")[2]  # the finding's own text

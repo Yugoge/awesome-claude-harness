@@ -1,8 +1,8 @@
 # scripts
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-20T17:00:10Z*
-**Total entries**: 164
+*Last updated: 2026-11-21T16:29:11Z*
+**Total entries**: 165
 **Convention**: kebab
 
 ## Tree
@@ -17,6 +17,7 @@ scripts/
 │   │   └── `core.json` - Minimal core profile: blocking safety hooks + the capability gate + the shared harness-home resolver. Nothing that edits, commits, pushes or orchestrates.
 │   ├── tests/
 │   │   └── `installer-acceptance.py` - Runs every acceptance criterion (AC1-AC8) of the installer lane against real
+│   ├── `carry_state.py` - An earlier version kept its control state directly in /tmp, its score log in <harness home>/logs/...
 │   ├── `install` - install file
 │   ├── `installer.py` - Subcommands: plan | apply | uninstall | snapshot
 │   ├── `land` - land file
@@ -24,6 +25,7 @@ scripts/
 │   ├── `push-guard` - push-guard file
 │   ├── `render-settings` - render-settings file
 │   ├── `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+│   ├── `tmp-cleanup.cron` - cron file
 │   ├── `tmpfiles-claude-scratch.conf` - conf file
 │   ├── `tmpfiles-tmp-override.conf` - conf file
 │   ├── `tmpfiles-var-tmp-override.conf` - conf file
@@ -124,7 +126,7 @@ scripts/
 ├── `measure-hero-fold.py` - Description: Renders the document that holds the hero, docs/status.md, LOCALLY from the
 ├── `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
 ├── `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
-├── `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
+├── `orchestrator.sh` - Description: Agent orchestration coordinator for the /clean workflow
 ├── `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
 ├── `overnight-git-selftest.sh` - overnight-git-selftest.sh — launch git-version + symref self-test (M8, M16).
 ├── `overnight-init.sh` - overnight-init.sh — perform the ENTIRE /dev-overnight Step 1 initialization in
@@ -153,7 +155,6 @@ scripts/
 ├── `scan-project.sh` - Description: Scan project structure and detect project type
 ├── `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 ├── `session-index.py` - Subcommands (all take --git-root):
-├── `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
 ├── `size-ratchet.py` - Usage:
 ├── `spec-check.py` - Subcommands: check-in, register, checkpoints, mark, waive, status, check-out, unlock
 ├── `spec-write.py` - Every write of a spec file runs through this script: /spec's own writes (the

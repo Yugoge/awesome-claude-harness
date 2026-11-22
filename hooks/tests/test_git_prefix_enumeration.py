@@ -82,13 +82,12 @@ DISPATCHERS = (
 def dispatches(command):
     """Return the set of _evaluate_* dispatchers the guard invokes for `command`.
 
-    Every dispatcher is replaced by a recorder and `_check_git_allowlist` is
-    pinned False, so the result depends ONLY on what the enumerator produced —
-    never on grant files, sentinels, or any other machine state.
+    Every dispatcher is replaced by a recorder, so the result depends ONLY on
+    what the enumerator produced. The guard reads no /allow grant (the launcher
+    releases a refused call), so no grant file can change the result.
     """
     called = set()
     saved = {name: getattr(GUARD, name) for name in DISPATCHERS}
-    saved_allow = GUARD._check_git_allowlist
     saved_block = GUARD._block
     blocked = []
 
@@ -98,14 +97,12 @@ def dispatches(command):
     try:
         for name in DISPATCHERS:
             setattr(GUARD, name, recorder(name))
-        GUARD._check_git_allowlist = lambda c, d: False
         GUARD._block = lambda msg: blocked.append(msg)
         GUARD._evaluate_command(command, {"tool_name": "Bash",
                                           "tool_input": {"command": command}})
     finally:
         for name, fn in saved.items():
             setattr(GUARD, name, fn)
-        GUARD._check_git_allowlist = saved_allow
         GUARD._block = saved_block
     if blocked:
         called.add("_block")

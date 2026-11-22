@@ -1255,6 +1255,21 @@ def test_pull_sh_pops_only_an_entry_its_own_push_made(tmp_path, env, kept):
 
 
 
+def _fswatch_logs(tmp_path, env, logs: bool = True) -> Path:
+    """hooks/git-fswatch.sh minus its call to main, beside its state-root resolver (lib/harness_state_dir.sh,
+    which it sources from its own directory), and the logs/ of that state root, which a live install has
+    (fact 1: tee needs it). The copy's path."""
+    copy = tmp_path / "fswatch-copy" / "hooks"
+    (copy / "lib").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO / "hooks/lib/harness_state_dir.sh", copy / "lib")
+    lines = (REPO / "hooks/git-fswatch.sh").read_text().rstrip("\n").splitlines(keepends=True)
+    (copy / "git-fswatch.sh").write_text("".join(lines[:-1]))
+    if logs:
+        subprocess.run(["bash", "-c", '. "$1" && mkdir -p "$(harness_state_root)/logs"', "_",
+                        str(copy / "lib/harness_state_dir.sh")], env=env, check=True)
+    return copy / "git-fswatch.sh"
+
+
 def test_fswatch_safe_pull_reports_a_failed_pop_as_failed(tmp_path, env):
     """hooks/git-fswatch.sh safe_pull pipes `git stash pop` into tee: tee's exit status chose the
     branch, so a conflicted pop was logged as "Stashed changes restored" and safe_pull returned
@@ -1268,10 +1283,10 @@ def test_fswatch_safe_pull_reports_a_failed_pop_as_failed(tmp_path, env):
     write(origin / "a.txt", "upstream\n")
     git(env, origin, "commit", "-q", "-am", "upstream")
     write(work / "a.txt", "local, uncommitted\n")
-    (Path(env["CLAUDE_CONFIG_DIR"]) / "logs").mkdir()  # a live home has it (fact 1: tee needs it)
-    script = ('source <(sed "\\$d" "$1") "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
+    fsw = _fswatch_logs(tmp_path, env)
+    script = ('source "$1" "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
               'echo "safe_pull rc=$?"')
-    proc = run(["bash", "-c", script, "x", str(REPO / "hooks/git-fswatch.sh"), str(work)], env,
+    proc = run(["bash", "-c", script, "x", str(fsw), str(work)], env,
                cwd=str(work), check=False)
     assert "CONFLICT" in proc.stdout and "UU a.txt" in git(env, work, "status", "--porcelain").stdout
     assert "Stashed changes restored" not in proc.stdout
@@ -1299,10 +1314,10 @@ def test_fswatch_safe_pull_pops_only_an_entry_its_own_push_made(tmp_path, env, k
         git(env, work, "stash", "push", "-q", "-m", "an entry kept from an earlier pull")
     entries = git(env, work, "stash", "list", "--format=%H").stdout
     write(work / "scratch-note.txt", "an untracked file, nothing else\n")
-    (Path(env["CLAUDE_CONFIG_DIR"]) / "logs").mkdir()
-    script = ('source <(sed "\\$d" "$1") "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
+    fsw = _fswatch_logs(tmp_path, env)
+    script = ('source "$1" "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
               'echo "safe_pull rc=$?"')
-    proc = run(["bash", "-c", script, "x", str(REPO / "hooks/git-fswatch.sh"), str(work)], env,
+    proc = run(["bash", "-c", script, "x", str(fsw), str(work)], env,
                cwd=str(work), check=False)
     assert "safe_pull rc=0" in proc.stdout, proc.stdout[-600:]
     assert "Failed to restore stash" not in proc.stdout and "MANUAL INTERVENTION" not in proc.stdout
@@ -1328,8 +1343,7 @@ def test_fswatch_safe_pull_judges_each_step_by_its_git_command(tmp_path, env, st
     git(env, tmp_path, "clone", "-q", str(origin), str(work))
     write(origin / "a.txt", "upstream\n")
     git(env, origin, "commit", "-q", "-am", "upstream")
-    if step != "tee":
-        (Path(env["CLAUDE_CONFIG_DIR"]) / "logs").mkdir()
+    fsw = _fswatch_logs(tmp_path, env, logs=step != "tee")
     if step == "fetch":
         git(env, work, "remote", "set-url", "origin", str(tmp_path / "gone"))
     if step in ("stash-push", "pull"):
@@ -1337,9 +1351,9 @@ def test_fswatch_safe_pull_judges_each_step_by_its_git_command(tmp_path, env, st
     if step == "stash-push":
         write(work / "b.txt", "an owner's edit\n")
     head = git(env, work, "rev-parse", "HEAD").stdout
-    script = ('source <(sed "\\$d" "$1") "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
+    script = ('source "$1" "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
               'echo "safe_pull rc=$?"')
-    proc = run(["bash", "-c", script, "x", str(REPO / "hooks/git-fswatch.sh"), str(work)], env,
+    proc = run(["bash", "-c", script, "x", str(fsw), str(work)], env,
                cwd=str(work), check=False)
     if step == "tee":
         assert "safe_pull rc=0" in proc.stdout and "Pull successful" in proc.stdout, proc.stdout
@@ -1400,10 +1414,10 @@ def test_a_cli_write_of_its_own_key_does_not_stop_the_pulls_after_a_stop(tmp_pat
         proc = run(["bash", str(REPO / "hooks/pull.sh")], env, cwd=str(home), check=False)
         assert proc.returncode == 0, proc.stdout[-600:] + proc.stderr[-600:]
     else:
-        (Path(env["CLAUDE_CONFIG_DIR"]) / "logs").mkdir()
-        script = ('source <(sed "\\$d" "$1") "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
+        fsw = _fswatch_logs(tmp_path, env)
+        script = ('source "$1" "$2"; trap - SIGINT SIGTERM EXIT; safe_pull; '
                   'echo "safe_pull rc=$?"')
-        proc = run(["bash", "-c", script, "x", str(REPO / "hooks/git-fswatch.sh"), str(home)],
+        proc = run(["bash", "-c", script, "x", str(fsw), str(home)],
                    env, cwd=str(home), check=False)
         assert "safe_pull rc=0" in proc.stdout, proc.stdout[-600:]
     assert git(env, home, "rev-parse", "HEAD").stdout == \
@@ -1566,7 +1580,7 @@ def test_a_value_the_tracked_tree_holds_in_100_lines_is_not_seeded(tmp_path, env
     git(env, home, "commit", "-q", "-m", "a public doc")
     (home / "settings.machine.json").write_bytes(canon(
         {"modules": {"paseo": False}, "env": {"CLAUDE_HOME": str(home),
-                                              "CLAUDE_PROTECTED_PROCESS_FAMILY": "demo-family|demo-fam2"}}))
+                                              "CLAUDE_PROTECTED_DAEMON_TARGETS": "demo-family|demo-fam2"}}))
     (home / "settings.machine.json").chmod(0o600)
     notice = land(env, home)
     lines = (home / "private-literals.txt").read_text().splitlines()

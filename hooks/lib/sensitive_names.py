@@ -34,7 +34,8 @@ role the name plays:
 
 A word computed at run time (`$X`, `$(...)`, backticks, globs, braces) or interpreter code is judged by
 substring on its raw text, with no exemption: `> .env$X`, `> $(echo .env)` and `python3 -c 'open(".env")'` stay
-sensitive.
+sensitive. The caller also judges the names such a word's wildcards, braces and known variables can spell
+(`.en?`, `{.e,x}nv`), with SECRET_WORDS, KEY_STEMS and EXACT_NAMES (bash_safety_rules._wildcard_spells_secret).
 
 `RAW_FALLBACK_WRITE` and `RAW_FALLBACK_READ` are the substring patterns a caller that cannot parse a command
 judges its raw text by, so a command no parser reads is refused more, never less.
@@ -43,8 +44,11 @@ Callers: hooks/lib/bash_safety_rules.py (sensitive_redirect).
 """
 import re
 
-SECRET_SUBSTRING = re.compile(r"\.env|credentials|secret|password")
+SECRET_WORDS = (".env", "credentials", "secret", "password")
+SECRET_SUBSTRING = re.compile("|".join(map(re.escape, SECRET_WORDS)))
 _KEY_NAME = r"id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?"  # a private key's file name (the key types ssh-keygen writes)
+KEY_STEMS = tuple("id_" + t for t in _KEY_NAME[6:_KEY_NAME.index(")")].split("|"))  # id_rsa ... read off it
+EXACT_NAMES = (".env",) + KEY_STEMS + tuple(k + "_sk" for k in KEY_STEMS)  # what EXACT_ANY_CASE matches
 PRIVATE_KEY = re.compile(r"^" + _KEY_NAME + r"(?!.*\.pub$)")
 # An exact env-file or key name in any case (`.ENV`, `ID_RSA`): sensitive although the substring check is not.
 EXACT_ANY_CASE = re.compile(r"^(?:\.env|" + _KEY_NAME + r")$", re.IGNORECASE)

@@ -32,6 +32,11 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
+    try:  # a send to an own subagent was opened as a dispatch (lib/send_policy); its run goes on in the background
+        from lib import dispatch_temp
+        dispatch_temp.returned({**payload, "tool_response": {"status": "async_launched"}})
+    except Exception:  # noqa: BLE001 -- never fails the tool call
+        pass
     ok, _ = restart.authorize_send_message(payload)
     if not ok:
         try:

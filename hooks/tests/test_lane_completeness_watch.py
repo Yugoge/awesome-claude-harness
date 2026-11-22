@@ -1,21 +1,48 @@
-"""Tests for hooks/posttool-lane-completeness-watch.py, the one producer of a
-fan-out's canonical aggregate (P1b E5): every lane report write runs the
-harness's aggregator, next to the hook, on the project the hook ran in -- a
-product repository has no scripts/ of its own. The roster (has every declared
-lane reported, does the canonical name them all) is G3's check before QA.
-
-Run with: python3 -m pytest hooks/tests/test_lane_completeness_watch.py -v
-"""
-
+"""hooks/posttool-lane-completeness-watch.py, retired to an exit-0 stub: no registration runs it (its
+rule of hooks/posttool-launch.py went), and the file stays for a hook list loaded before its
+retirement (D15); a dev lane's stop and the QA dispatch's check rebuild the aggregate
+(hooks/lib/aggregate_rebuild.py, tests/test_aggregate_at_lane_stop.py)."""
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parents[1] / "posttool-lane-completeness-watch.py"
+ROOT = Path(__file__).resolve().parents[2]
+HOOK = ROOT / "hooks" / "posttool-lane-completeness-watch.py"
+NAME = HOOK.name
+sys.path.insert(0, str(ROOT / "hooks"))
+from lib import launch_settings  # noqa: E402  (the launchers' static table reader)
 TASK = "20260101-120000"
 LANES = ["l1", "l2"]
+
+
+def test_the_unregistered_stub_decides_nothing(tmp_path):
+    """One `# STUB:` line; no registration, a launcher's rule included; the last lane report of a
+    fan-out it aggregated on, another Write and malformed stdin: exit 0, no output, nothing written."""
+    assert sum(line.startswith("# STUB:") for line in HOOK.read_text().splitlines()) == 1
+    settings = launch_settings.expand(json.loads((ROOT / "settings.json").read_text()), str(ROOT))
+    assert not [h["command"] for groups in settings["hooks"].values() for g in groups for h in g["hooks"]
+                if NAME in h["command"]]
+    project = tmp_path / "product"
+    dev_dir = project / "docs" / "dev"
+    dev_dir.mkdir(parents=True)
+    lanes = []
+    for lane in LANES:
+        lanes.append(dev_dir / f"dev-report-{TASK}-{lane}.json")
+        lanes[-1].write_text(json.dumps(_lane_report(lane)))
+    other = project / "notes.txt"
+    other.write_text("x")
+    before = sorted(str(p) for p in tmp_path.rglob("*"))
+    for written in (lanes[-1], other):
+        payload = {"session_id": "s1", "hook_event_name": "PostToolUse", "tool_name": "Write", "cwd": str(project),
+                   "tool_input": {"file_path": str(written), "content": written.read_text()}}
+        for raw in (json.dumps(payload), "{not json"):
+            done = subprocess.run([sys.executable, str(HOOK)], input=raw, capture_output=True, text=True,
+                                  cwd=project, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                                                    "HOME": str(tmp_path), "CLAUDE_PROJECT_DIR": str(project)})
+            assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
+    assert sorted(str(p) for p in tmp_path.rglob("*")) == before
 
 
 def _lane_report(lane, lane_set=LANES):
@@ -30,85 +57,3 @@ def _lane_report(lane, lane_set=LANES):
                 "observed_preexisting": []},
         "blocking_issues": [], "recommendations": [],
     }
-
-
-def _run(project, written):
-    payload = {"tool_name": "Write", "cwd": str(project),
-               "tool_input": {"file_path": str(written), "content": written.read_text()}}
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project)}
-    return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), text=True,
-                          capture_output=True, env=env, cwd=str(project), timeout=120)
-
-
-def _write_lanes(project, lane_set=LANES):
-    dev_dir = project / "docs" / "dev"
-    dev_dir.mkdir(parents=True)
-    paths = []
-    for lane in LANES:
-        path = dev_dir / f"dev-report-{TASK}-{lane}.json"
-        path.write_text(json.dumps(_lane_report(lane, lane_set)))
-        paths.append(path)
-    return dev_dir, paths
-
-
-def test_last_lane_report_writes_canonical_in_a_project_without_scripts(tmp_path):
-    project = tmp_path / "product"
-    dev_dir, paths = _write_lanes(project)
-    assert not (project / "scripts").exists()
-    result = _run(project, paths[-1])
-    assert result.returncode == 0, result.stderr
-    canonical = json.loads((dev_dir / f"dev-report-{TASK}.json").read_text())
-    assert sorted(canonical["parallel_workers"]) == LANES
-    assert canonical["dev"]["status"] == "completed"
-
-
-def test_report_without_lane_set_declares_no_roster(tmp_path):
-    project = tmp_path / "product"
-    dev_dir, paths = _write_lanes(project, lane_set=None)
-    result = _run(project, paths[-1])
-    assert result.returncode == 0, result.stderr
-    assert not (dev_dir / f"dev-report-{TASK}.json").exists()
-
-
-G3 = Path(__file__).resolve().parents[1] / "pretool-aggregate-check.py"
-
-
-def _qa_dispatch(project, task_id):
-    block = json.dumps({
-        "task_id": task_id, "role": "qa", "pipeline": "dev", "profile": "final_verification",
-        "dispatched_at": "2026-01-01T12:00:00Z",
-        "artifacts": [{"kind": "json", "path": f"docs/dev/qa-report-{task_id}.json",
-                       "schema": "qa-report.v2", "identity": {"task_id": task_id}}],
-    })
-    payload = {"tool_name": "Agent", "agent_id": "qa-dispatch-test",
-               "tool_input": {"subagent_type": "qa", "prompt": f'<obligation v="1">{block}</obligation>'}}
-    # G3's roster rule blocks only once it is armed (P2); armed here to see it.
-    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_OBLIGATION_BARRIER": "block"}
-    return subprocess.run([sys.executable, str(G3)], input=json.dumps(payload), text=True,
-                          capture_output=True, env=env, cwd=str(project), timeout=60)
-
-
-def test_every_lane_write_runs_the_aggregator_and_g3_checks_the_roster(tmp_path):
-    """No roster decision here: the second of three lane writes already
-    aggregates the two lanes on disk, and G3 refuses QA until the third lands
-    and its own write refreshes the canonical."""
-    project = tmp_path / "product"
-    dev_dir = project / "docs" / "dev"
-    dev_dir.mkdir(parents=True)
-    lanes = ["l1", "l2", "l3"]
-    canonical = dev_dir / f"dev-report-{TASK}.json"
-    for count, lane in enumerate(lanes, 1):
-        path = dev_dir / f"dev-report-{TASK}-{lane}.json"
-        path.write_text(json.dumps(_lane_report(lane, lanes)))
-        assert _run(project, path).returncode == 0
-        gate = _qa_dispatch(project, f"{TASK}-l1")
-        if count == 1:
-            assert not canonical.exists()
-        else:
-            assert sorted(json.loads(canonical.read_text())["parallel_workers"]) == lanes[:count]
-        if count < len(lanes):
-            assert gate.returncode == 2
-            assert f"[lane_report_missing] {dev_dir / f'dev-report-{TASK}-l3.json'}" in gate.stderr
-        else:
-            # The aggregator's canonical passes row 12(b)'s content check too.
-            assert (gate.returncode, gate.stderr) == (0, "")

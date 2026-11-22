@@ -359,31 +359,8 @@ def test_subagent_blocked_without_bypass(tmp_path):
 
 # ── Bypass 3: /allow sentinel grant (reaches subagents) ──────────────────────
 
-@pytest.mark.parametrize('cmd, target', [
-    ('git checkout -b feature/x', 'checkout'),
-    ('git worktree add ../wt', 'worktree'),
-])
-def test_allow_sentinel_grant_allows(cmd, target, tmp_path):
-    grant_dir = os.path.join(harness_state_dir(), 'claude-grants')
-    os.makedirs(grant_dir, exist_ok=True)
-    task_id = f'test-grant-{os.getpid()}'
-    grant_path = os.path.join(grant_dir, f'{task_id}.json')
-    grant = {
-        'task_id': task_id,
-        'session_id': 'sess-x',
-        'allowed_operations': [{'op': 'git', 'target': target}],
-        'created_at': '2000-01-01T00:00:00Z',
-        'expires_at': '2099-01-01T00:00:00Z',
-    }
-    with open(grant_path, 'w') as fh:
-        json.dump(grant, fh)
-    try:
-        payload = _bash(cmd, session_id='sess-x', agent_id='sub-2')
-        rc, _ = _run(payload, tmp_path, env_extra={'CLAUDE_TASK_ID': task_id})
-        assert rc == 0
-    finally:
-        if os.path.exists(grant_path):
-            os.unlink(grant_path)
+# Retired: test_allow_sentinel_grant_allows. The hook reads no /allow grant; the owner's /allow
+# releases its refusal in the launcher (test_allow_releases_anything.py).
 
 
 # ── Bash is the oracle: obfuscated words that are not git ───────────────────

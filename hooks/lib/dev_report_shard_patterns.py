@@ -3,7 +3,7 @@
 Single source for the per-worker / canonical dev-report filename regexes and
 the NON_WORKER_LABELS / NON_WORKER_LABEL_RE iteration-suffix filter.
 hooks/pretool-aggregate-check.py, scripts/aggregate-dev-report.py, and
-hooks/posttool-lane-completeness-watch.py all import from here instead of
+hooks/lib/aggregate_rebuild.py all import from here instead of
 hand-mirroring copies (ticket 20261001-161041-r05 M2; prior drift already
 required a one-off sync, commit 3c0101ce, backlog #102).
 

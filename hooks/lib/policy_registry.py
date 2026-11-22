@@ -28,10 +28,8 @@ Path prefix matching (T1.2 fix for B.11):
     form) and matches only that path or descendants. This closes the old
     substring-collision bug where an anchor could match merely because
     the same text appeared somewhere inside an unrelated target path.
-  - Relative prefix (doesn't start with '/' and contains no '*'):
-    falls back to legacy substring containment. New policies should
-    always anchor with '/' or '*'; relative prefixes remain only for
-    backward compatibility.
+  - Relative prefix (no leading '/', no '*'): read as project-root anchored.
+  - Place: an allow prefix may begin with <session root> or <state dir> (placed).
 
 Write carve-outs (``write_carveout_prefixes``, policy_version 9):
   - A row may name project-root anchored directories ('/reports/') that its
@@ -52,10 +50,12 @@ Write carve-outs (``write_carveout_prefixes``, policy_version 9):
 from __future__ import annotations
 
 import fnmatch
+import glob
 import json
 import os
 import stat
 import sys
+import time
 from typing import Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -66,6 +66,8 @@ import locations  # noqa: E402
 # path is resolved at load time via claude_home so a fresh non-root clone (whose
 # home is NOT /root/.claude) still finds its own policy.
 POLICY_RELPATH = "policies/tool-policy.v1.json"
+PLACES = ("<session root>", "<state dir>")  # an allow prefix's leading place, resolved per write (placed)
+IN_FLIGHT_HOURS = 24  # how long after the policy's arrival a flow begun before still finishes at its old places
 from harness_vocabulary import WRITE_TOOLS  # noqa: E402,F401 -- the tools that write a file
 # On policy load failure (missing/unparseable policy) the dev role gets a
 # fail-safe ALLOW (historical baseline behavior); every other role fails CLOSED.
@@ -356,13 +358,61 @@ def _write_denial(role_pol: dict, target: Optional[str], carveouts: bool = True)
     return None
 
 
-def _check_write_path(role_pol: dict, target: Optional[str], carveouts: bool = True) -> Tuple[bool, str]:
+def placed(prefixes, session_id=None) -> list:
+    """``prefixes``, a leading <session root> (locations.session_scratch_dir) or <state dir> written as a glob."""
+    roots = dict(zip(PLACES, (locations.session_scratch_dir(session_id), locations.state_root())))
+    found = [(next((n for n in PLACES if str(p).startswith(n + "/")), None), p) for p in prefixes or []]
+    return [p if n is None else glob.escape(roots[n]) + p[len(n):].rstrip("*") + "*" for n, p in found if roots.get(n, 1)]
+
+
+def _old_place(role: str, path: str, session_id=None):
+    """(old directory, new place), each ending in '/', when ``path`` lies at a place of ``role`` before v10."""
+    if role == "changelog-analyst" and os.path.dirname(path) == os.path.join(locations.DEFAULT_TEMP_DIR, "agentic-commit", "locks"):
+        return os.path.join(os.path.dirname(path), ""), os.path.join(locations.state_root(), "agentic-commit", "locks", "")
+    old = f"/tmp/claude-scratch/{role}/"
+    return (old, os.path.join(locations.session_scratch_dir(session_id) or "<session root>", role, "")) \
+        if path.startswith(old) else None
+
+
+def _in_flight_until() -> float:
+    """IN_FLIGHT_HOURS after the policy file reached this install (its mtime: the checkout that brought it); 0 unread."""
+    try:
+        return os.stat(claude_home.resolve_optional(POLICY_RELPATH)).st_mtime + IN_FLIGHT_HOURS * 3600
+    except (OSError, TypeError):
+        return 0.0
+
+
+def in_flight(role: str, target) -> bool:
+    """A dispatch begun before policy_version 10 rewrites a file it left at its old place or retakes its old lock:
+    until _in_flight_until, at a path with no link in any component (its own realpath), an existing single-link
+    regular file (the old text's unexpanded lock name in its existing directory), past the role's deny prefixes."""
+    path = str(target or "")
+    if not _old_place(role, path) or time.time() >= _in_flight_until() or os.path.realpath(path) != path \
+            or _write_denial(get_role_policy(role), path, carveouts=False) is not None:
+        return False
+    if os.path.basename(path) == "${REPO_HASH}.lock":
+        return os.path.isdir(os.path.dirname(path))
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+
+
+def _moved(role: str, target, session_id, verdict: Tuple[bool, str]) -> Tuple[bool, str]:
+    """``verdict``; a refusal at an old place (_old_place) names the new one."""
+    old = None if verdict[0] else _old_place(role, str(target or ""), session_id)
+    return verdict if not old else (False, f"{verdict[1]}; {old[0]} is the place before policy_version 10, open only "
+                                           f"to a flow begun before (policy_registry.in_flight): write to {old[1]}")
+
+
+def _check_write_path(role_pol: dict, target: Optional[str], carveouts: bool = True, session_id=None) -> Tuple[bool, str]:
     denial = _write_denial(role_pol, target, carveouts)
     if denial is not None:
         return (False, denial)
     if carveouts and any(_in_carveout(target, entry) for entry in _carveout_entries(role_pol)):
         return (True, "ok")
-    allowed_w = role_pol.get("allowed_write_path_prefixes", [])
+    allowed_w = placed(role_pol.get("allowed_write_path_prefixes", []), session_id)
     if allowed_w and "*" not in allowed_w and not _path_in_prefixes(target, allowed_w):
         return (False, f"write target {target} not in allowed_write_path_prefixes")
     return (True, "ok")
@@ -384,10 +434,10 @@ def _fail_open_or_closed(role: str, reason: str) -> Tuple[bool, str]:
 
 
 def is_allowed(
-    role: str, tool_name: str, target_path: Optional[str], carveouts: bool = True
+    role: str, tool_name: str, target_path: Optional[str], carveouts: bool = True, session_id=None
 ) -> Tuple[bool, str]:
-    """Return (allowed: bool, reason: str). See module docstring. With
-    ``carveouts`` false the row's write_carveout_prefixes admit nothing."""
+    """Return (allowed: bool, reason: str). See module docstring. With ``carveouts`` false the
+    row's write_carveout_prefixes admit nothing; ``session_id`` places its <session root>."""
     try:
         policy = load_policy()
         if not policy:
@@ -399,7 +449,8 @@ def is_allowed(
         if tool_check is not None:
             return tool_check
         if tool_name in WRITE_TOOLS:
-            return _check_write_path(role_pol, target_path, carveouts)
+            return (True, "ok") if in_flight(role, target_path) else \
+                _moved(role, target_path, session_id, _check_write_path(role_pol, target_path, carveouts, session_id))
         return _check_read_path(role_pol, target_path)
     except Exception as e:  # pragma: no cover
         sys.stderr.write(f"policy_registry: unexpected ({e})\n")

@@ -46,6 +46,7 @@ def world(tmp_path: Path) -> tuple[Path, dict]:
         "HOME": str(tmp_path / "user-home"),
         "CLAUDE_CONFIG_DIR": str(tmp_path / "config"),
         "CLAUDE_STATE_DIR": str(tmp_path / "state"),
+        "CHECKPOINT_LOG_DIR": str(tmp_path / "config" / "logs"),
         "TMPDIR": str(tmp_path / "tmp"),
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),

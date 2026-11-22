@@ -59,13 +59,16 @@ def test_session_info_tells_the_model(tmp_path, repo):
 def test_tmpfs_banner_tells_the_model_only_over_the_threshold(tmp_path, repo):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for pct, expect in (("91%", True), ("12%", False)):
-        (bin_dir / "df").write_text("#!/bin/sh\necho 'Filesystem Size Used Avail Use% Mounted on'\n"
-                                    f"echo 'tmpfs 1G 1G 0 {pct} /tmp'\n")
+    for avail, pct, expect in (("0", "91%", True), ("945000000", "12%", False)):
+        (bin_dir / "df").write_text("#!/bin/sh\necho 'Avail 1B-blocks Use% Mounted on'\n"
+                                    f"echo '{avail} 1073741824 {pct} /no-such-volume'\n")
         (bin_dir / "df").chmod(0o755)
-        p = _run("session-tmpfs-banner.sh", "{}", _env(tmp_path, PATH=f"{bin_dir}:{os.environ['PATH']}"), repo)
+        env = _env(tmp_path, PATH=f"{bin_dir}:{os.environ['PATH']}", TMPDIR=str(tmp_path / "scratch"),
+                   CLAUDE_CODE_TMPDIR=str(tmp_path / "cli"))
+        p = _run("session-tmpfs-banner.sh", json.dumps({"session_id": f"s-{avail}"}), env, repo)
         assert p.returncode == 0 and p.stderr == ""
-        assert (p.stdout == f"WARN tmpfs over 75%: tmpfs 1G 1G 0 {pct} /tmp\n") if expect else p.stdout == ""
+        want = "[space] SHORT: /no-such-volume has 0 free of 1.0G (91% used; short at 90% or under 256M free).\n"
+        assert p.stdout.startswith(want) if expect else p.stdout == "", p.stdout
 
 
 def test_scratch_init_tells_the_model_what_it_could_not_set_up(tmp_path, repo):

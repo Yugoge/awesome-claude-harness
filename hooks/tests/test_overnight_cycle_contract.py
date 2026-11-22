@@ -173,7 +173,7 @@ def test_the_rendered_contract_and_its_re_dispatches(main_root):
     contract = json.loads((_cycle_dir(working) / "cycle-contract.json").read_text())
     jsonschema.validate(contract, json.loads((REPO / "schemas" / "cycle-contract.v1.json").read_text()))
     entries = contract["required_calls"]
-    assert {e["step"] for e in entries} == {"8", "9", "10", "11", "11g", "12", "13", "15", "17", "20"}
+    assert {e["step"] for e in entries} == {"8", "9", "10", "11", "12", "13", "15", "17", "20"}
     assert {e["step"] for e in entries} <= set(LABELS)
     for entry in entries:
         assert set(entry) == {"step", "role", "mode", "pipeline_id"}

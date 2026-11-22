@@ -174,4 +174,6 @@ echo "SPEC_ID=$SPEC_ID"
 echo "CP_DIR=$CP_DIR"
 echo "VIEWS_DIR=$VIEWS_DIR"
 echo "REQUIREMENT_DOC=$REQUIREMENT_DOC"
+# /dev-overnight's <TS> stem: the launch's own time, as the UserPromptSubmit hook printed it
+if [[ -n "$STATE_FILE" ]]; then echo "RUN_STAMP=$(jq -r '.start_time // "" | gsub("[-:Z]"; "") | sub("T"; "-")' "$STATE_FILE")"; fi
 echo "OVERNIGHT_INIT_OK"

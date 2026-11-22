@@ -117,7 +117,8 @@ Bash write targets:
 Scratch namespace actor-exactness:
   - Every write target the prefix layer admits is additionally classified as
     owner scratch / sibling scratch / arbitrary system temp.
-  - Owner scratch is allowed for every role; a SIBLING's scratch directory is
+  - Owner scratch (a subagent's <session scratch>/<role>/<agent id>/, which the
+    prefix layer does not list) is allowed for every role; a SIBLING's scratch directory is
     denied for every role; arbitrary /tmp and /var/tmp are denied for every
     role INCLUDING one holding a bare '*' grant, which no prefix list can deny.
   - Each role's OWN pre-existing exact temp prefixes are generated from the
@@ -226,96 +227,67 @@ def _resolved(target: str):
     return path.resolve(strict=False)
 
 
-def _role_temp_exceptions(role: str) -> list:
-    """The role's OWN pre-existing exact temp prefixes, generated from the
-    policy file itself -- never from a prose enumeration.
+def _role_temp_exceptions(role: str, session_id=None) -> list:
+    """The role's OWN exact temp prefixes, from its policy row placed (policy_registry.placed): an entry
+    naming tmp/var-tmp, never a bare raw-temp grant, holds for exactly that role. A CLAUDE_STATE_DIR below
+    a temp root is no arbitrary temp: the role's '*/' entries (an analyst's grants) hold in it."""
+    from lib import policy_registry
 
-    An entry qualifies when it names tmp/var-tmp and is NOT one of the bare
-    raw-temp grants.  These survive the raw-temp denial verbatim, for exactly
-    the role that holds each.  A CLAUDE_STATE_DIR below a temp root is no
-    arbitrary temp: the role's '*/' entries (an analyst's grants) hold in it.
-    """
-    from lib.policy_registry import get_role_policy
-
-    allowed = get_role_policy(role).get("allowed_write_path_prefixes", []) or []
+    allowed = policy_registry.placed(policy_registry.get_role_policy(role).get("allowed_write_path_prefixes"), session_id)
     state = harness_state_dir()
     out = []
     for entry in allowed:
         if not isinstance(entry, str) or entry in locations.RAW_TEMP_GRANTS:
             continue
-        parts = entry.strip("*").split("/")
-        if "tmp" in parts:
+        if "tmp" in entry.strip("*").split("/"):
             out.append(entry)
         elif not locations.is_system_temp_root(state) and entry.startswith("*/"):
             out.append(state + entry[1:] + ("" if entry.endswith("*") else "*"))
     return out
 
 
-def _matches_role_exception(role: str, target: str) -> bool:
+def _matches_role_exception(role: str, target: str, session_id=None) -> bool:
     from lib import policy_registry
 
-    return bool(
-        policy_registry._path_in_prefixes(target, _role_temp_exceptions(role))
-    )
+    return policy_registry.in_flight(role, target) or \
+        policy_registry._path_in_prefixes(target, _role_temp_exceptions(role, session_id))
 
 
-def _owner_binding(role: str, data: dict):
-    """Best-effort owner binding for the caller, or None."""
-    session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID")
-    dispatch_id = data.get("agent_id")
-    if not session_id or not dispatch_id:
-        return None
-    try:
-        from lib import session_resources
-
-        pointer = session_resources.resolve_current_resource_session(
-            _project_root(), session_id
-        )
-        return {
-            "claude_session_id": session_id,
-            "resource_session_id": pointer["resource_session_id"],
-            "role": role,
-            "dispatch_id": dispatch_id,
-        }
-    except Exception:
-        return None
-
-
-def _main_scratch(data: dict):
-    """The main agent's own scratch directory: its session's (locations.session_scratch_dir) when
-    hooks/session-scratch-init.sh made it for this session (lib/scratch_owner), else None."""
+def _own_scratch(role, data: dict):
+    """The caller's own scratch directory (locations.session_scratch_dir): a subagent's <session scratch
+    directory>/<role>/<agent id>; the main agent's, its session's when hooks/session-scratch-init.sh made it
+    for this session (lib/scratch_owner); else None. Only the real directory counts (locations.unlinked): one an
+    agent replaced, or put below, a link is nobody's own."""
     from lib.scratch_owner import owns_scratch_dir
 
-    sid = data.get("session_id")
-    own = None if data.get("agent_id") else locations.session_scratch_dir(sid)
-    return own if own and owns_scratch_dir(own, sid) else None
+    sid, agent = data.get("session_id"), data.get("agent_id")
+    own = locations.session_scratch_dir(sid, role, agent) if agent else locations.session_scratch_dir(sid)
+    return locations.unlinked(own) if own and (agent or owns_scratch_dir(own, sid)) else None
+
+
+def _own_scratch_target(role: str, target, data: dict) -> bool:
+    """A literal (no expansion) write target in the caller's own scratch directory (_scratch_status)."""
+    return isinstance(target, str) and not set("$`\x00") & set(target) and _scratch_status(role, target, data) == "owner"
 
 
 def _scratch_status(role: str, target: str, data: dict) -> str:
     """Classify a write target as owner / sibling / system_temp / outside.
 
-    Authoritative path: session_resources.classify_target, which owns the
-    namespace layout.  When no resource session is provisioned (or the module
-    is absent) the same decision is taken structurally from the path shape
-    <project>/.claude/scratch/<resource_session_id>/<role>/<dispatch_id>/...,
+    The caller's own scratch directory (_own_scratch) is "owner". Then, for a subagent sent
+    there by an earlier version, its <project>/.claude/scratch/... directory, which it keeps.
+    That decision is taken structurally from the path shape
+    <project>/.claude/scratch/<session>/<role>/<dispatch_id>/...,
     because actor-exactness must not silently degrade to "allow" -- a JSON
     prefix admits a sibling's directory as readily as the owner's.
     """
     from pathlib import Path
 
-    own = _main_scratch(data)
+    own = _own_scratch(role, data)
     if own and locations.is_inside(target, own, str(_project_root())):
         return "owner"
-    binding = _owner_binding(role, data)
-    if binding is not None:
-        try:
-            from lib import session_resources
-
-            return session_resources.classify_target(
-                _project_root(), binding, target
-            )["status"]
-        except Exception:
-            pass
+    session = data.get("agent_id") and locations.session_scratch_dir(data.get("session_id"))
+    if session and locations.is_inside(target, session, str(_project_root())):
+        return "sibling"  # another agent's, or the main agent's: wherever the session scratch root lies
     resolved = _resolved(target)
     scratch_root = Path(_project_root()).resolve(strict=False) / ".claude" / "scratch"
     try:
@@ -333,11 +305,11 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
 
     Three decisions, taken for every write target:
       owner scratch        -> allow (every role)
-      sibling scratch      -> DENY  (every role)
+      sibling scratch      -> DENY  (every role) but its drafts (<session root>/<role>/<file>)
       arbitrary /tmp,/var/tmp -> DENY (every role, INCLUDING a role holding a
                                bare '*' grant, which no prefix list can deny)
                                unless the target matches one of that role's
-                               OWN pre-existing exact temp prefixes.
+                               OWN exact temp prefixes.
 
     Returns (True, "ok") or (False, reason).  A target the gate cannot resolve
     (dynamic/unexpanded) is left to the prefix layer.
@@ -346,11 +318,13 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
         return (True, "ok")
     if "$" in target or "`" in target or "\x00" in target:
         return (True, "ok")
-    status = _scratch_status(role, target, data)
-    if status == "sibling":
+    status, session = _scratch_status(role, target, data), locations.session_scratch_dir(data.get("session_id"))
+    drafts = session and os.path.basename(role) == role and locations.unlinked(os.path.join(session, role))
+    rel = locations.inside(target, drafts, str(_project_root())) if drafts else None  # where it lands, links resolved
+    if status == "sibling" and not (rel is not None and len(rel) <= 1):
         return (False, "sibling scratch target denied: actor-exact namespace")
     if status == "system_temp":
-        if _matches_role_exception(role, target):
+        if _matches_role_exception(role, target, data.get("session_id")):
             return (True, "ok")
         return (False, "arbitrary /tmp and /var/tmp are denied for every role")
     return (True, "ok")
@@ -358,29 +332,13 @@ def _check_scratch_actor_exactness(role: str, target, data: dict):
 
 def _note_own_scratch(role: str, data: dict, target) -> None:
     """After a refused write of ``target`` outside the caller's own scratch directory, name
-    that directory as a literal path. It is the directory
-    _scratch_status judges "owner": the main agent's session scratch, a
-    subagent's resource session's when one resolves, else
-    <project>/.claude/scratch/<session_id>/<role>/<agent_id>/."""
-    from pathlib import Path
-
+    that directory (_own_scratch) as a literal path."""
     try:
-        if _scratch_status(role, target, data) == "owner":
-            return
-        own, binding = _main_scratch(data), _owner_binding(role, data)
-        if not own and binding is not None:
-            from lib import session_resources
-
-            own = session_resources.scratch_path(_project_root(), binding)
-        elif not own:
-            parts = [str(data.get("session_id") or "session"), role, str(data.get("agent_id") or "")]
-            if not all(parts):  # an id that is no single name fails the owner check below
-                return
-            own = Path(_project_root()).resolve(strict=False).joinpath(".claude", "scratch", *parts)
-        if _scratch_status(role, os.path.join(own, "f"), data) != "owner":
-            return
-        sys.stderr.write(f"tool-policy.v1 scratch: your own scratch directory is {own}/ (mkdir -p {own} first; "
-                         f"a program that writes under $TMPDIR: TMPDIR={own} <command>)\n")
+        own = _own_scratch(role, data)
+        if own and _scratch_status(role, target, data) != "owner" and \
+                _scratch_status(role, os.path.join(own, "f"), data) == "owner":
+            sys.stderr.write(f"tool-policy.v1 scratch: your own scratch directory is {own}/ "
+                             f"(mkdir -p {own} if it is missing)\n")
     except Exception:
         pass
 
@@ -699,7 +657,7 @@ def _check_grant_writes(role, tool_name: str, targets: list, data: dict) -> None
 # lib/obligation.py read docs/dev/ba-qa-report-*.json's verdict and the status of
 # docs/dev/dev-report-*.json (lane shards and the canonical one, lib/dev_loop_checks.py,
 # lib/dev_report_shard_patterns.py). Only the producer subagent writes one (the canonical
-# aggregate by posttool-lane-completeness-watch.py's script).
+# aggregate by scripts/aggregate-dev-report.py).
 #
 # The decision for a QA report is the e2e gate's, by provenance: every call's PreToolUse
 # records who changed each qa-report (lib/report_provenance.py, observed in main() below)
@@ -1515,13 +1473,20 @@ def _decide_declared_writes(role, tool_name: str, writes: list, data: dict, tran
                   + f"; only {' or '.join(roles)} writes this artifact (D8)")
         check_tool = "Write" if tool_name == "Bash" else tool_name
         _emit_block(_caller_label(role, data), check_tool, target, reason)
+        # The means: the owning role's re-dispatch for that task declares the path, so its write passes.
+        redo = (f"re-dispatch {' or '.join(roles)}" + (f" for task {', '.join(tasks)}" if tasks else "")
+                + " (same subagent_type, task_id, lane and obligation template) with the change named; its write passes")
+        sys.stderr.write(f"tool-policy.v1 means: {' or '.join(roles)} owns {target}; " + (
+            f"name the change your work needs in your report (a dev report: blocking_issues), and the orchestrator will {redo}.\n"
+            if data.get("agent_id") else f"{redo}.\n"))
         sys.exit(2)
     return own
 
 
-def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True):
+def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True, declared: bool = True):
     """The role's denials on the declaring dispatch's own write: its tool lists (and
-    declared_artifact_tools), deny prefixes and an unreadable policy, never its allow prefixes."""
+    declared_artifact_tools), deny prefixes and an unreadable policy, never its allow prefixes.
+    With ``declared`` false (a write in its own scratch directory) declared_artifact_tools grant nothing."""
     from lib import policy_registry
 
     if policy_registry.load_policy() is None:
@@ -1529,7 +1494,7 @@ def _declared_write_allowed(role: str, tool: str, target, carveouts: bool = True
     role_pol = policy_registry.get_role_policy(role)
     if role_pol.get("_unknown_role"):
         return is_allowed(role, tool, target, carveouts)
-    tool_check = policy_registry._check_tool_lists(role_pol, tool, own=True)
+    tool_check = policy_registry._check_tool_lists(role_pol, tool, own=declared)
     if tool_check is not None:
         return tool_check
     denial = policy_registry._write_denial(role_pol, target, carveouts)
@@ -1819,7 +1784,8 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     actor-exact scratch gate, because a JSON prefix cannot distinguish an
     owner's scratch directory from a sibling's and cannot deny a role holding
     a bare '*' grant. A target in ``own`` is a path the caller's own dispatch
-    declared: the prefix layer applies only its denials to it. A target in
+    declared: the prefix layer applies only its denials to it, as to a literal
+    target in its own scratch directory (_own_scratch_target). A target in
     ``approved`` is one /clean's owner approved for the caller
     (_check_clean_writes): its tool lists and the shared protected prefixes
     apply to it.
@@ -1832,10 +1798,10 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
         carveouts = restaged is not None and target not in restaged
         if check_tool in WRITE_TOOLS and target in approved and target not in own:
             allowed, reason = _approved_write_allowed(role, check_tool, target)
-        elif check_tool in WRITE_TOOLS and target in own:
-            allowed, reason = _declared_write_allowed(role, check_tool, target, carveouts)
+        elif check_tool in WRITE_TOOLS and (target in own or _own_scratch_target(role, target, data)):
+            allowed, reason = _declared_write_allowed(role, check_tool, target, carveouts, target in own)
         else:
-            allowed, reason = is_allowed(role, check_tool, target, carveouts)
+            allowed, reason = is_allowed(role, check_tool, target, carveouts, data.get("session_id"))
         if not allowed:
             _emit_block(role, check_tool, target, reason)
             if tool_name == "Bash":
@@ -1948,15 +1914,28 @@ def _protected(path: str, removed: bool, home, config: str, state: str, git_file
 
     if _below(path, str(log_path().parent)) in ("lifecycle.jsonl", "lifecycle.jsonl.lock"):
         return "the score log or its lock, which only hooks write"
+    from lib.refusal_record import directory as refusals  # the record's own definition, beside the state root
+    if _below(path, refusals()) or (removed and _below(refusals(), path)):
+        return "the refusal record, which only hooks write"
     if _below(path, config) and kept(name):
         return "a session transcript or its subagent meta"
     if _below(os.path.dirname(path), state) == "." and fnmatchcase(name, "claude-do-task-*.json"):
         return "a /do task sidecar"
+    from lib.dispatch_temp import POINTER  # its own definition (inventory: lib/harness_temp_state)
+
+    rel = _below(path, locations.session_scratch_root()) or ""
+    if fnmatchcase(rel, f"*/{POINTER}") or fnmatchcase(rel, f"*/{POINTER}.*") \
+            or (removed and os.path.isfile(os.path.join(path, POINTER))):
+        return "the dispatch temp's state, which only its hooks write"
     provenance = os.path.join(state, "report-provenance")  # lib/report_provenance.ledger_dir
     if _below(path, provenance):
         return "the QA report provenance ledger, which only hooks write (CD-6)"
-    if removed and _below(provenance, path):
+    if removed and _below(provenance, path):  # before the owner's marks: that label names the path a mark
         return "a directory holding the QA report provenance ledger, which only hooks write (CD-6)"
+    rel = _below(path, state) or ""  # the owner's marks: only their hooks write them (lib/harness_temp_state)
+    if any(fnmatchcase(rel, g) for g in ("claude-grants/*", "claude-*-consent-*.flag", "claude-*-userintent-*.flag")) \
+            or (removed and _below(os.path.join(state, "claude-grants"), path)):
+        return "an /allow grant, a /do consent or a user-intent mark, which only hooks write"
     push = _push_input(path, state)
     if push:
         return push
@@ -1969,7 +1948,11 @@ def _protected(path: str, removed: bool, home, config: str, state: str, git_file
     if removed and walked and any(_push_input(os.path.join(d, n), state) for d, _, names in os.walk(walked)
                                   for n in names):
         return "a directory holding a push-gate token or a push-analyst grant"
-    return None
+    from lib import harness_temp_state as inventory  # every entry the inventory marks hooks_only
+
+    loc = inventory.classify(path)
+    loc = loc if loc is not None and loc.hooks_only else removed and os.path.isdir(path) and inventory.hooks_only_below(path)
+    return f"harness control state ({loc.name}), which only its hooks write" if loc else None
 
 
 def _grant_producer(target: str, state: str, data: dict) -> bool:

@@ -22,7 +22,7 @@ set -euo pipefail
 trap 'exit 0' EXIT
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-  || harness_state_dir() { printf '%s\n' /tmp; }
+  || exit 0  # no state root, no cache: the warning is advisory
 CACHE_FILE="$(harness_state_dir)/worktree-guard-cache"
 CACHE_TTL=60
 

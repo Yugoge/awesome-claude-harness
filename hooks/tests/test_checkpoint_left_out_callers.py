@@ -35,6 +35,7 @@ def sandbox(tmp_path):
     (tmp_path / "gitconfig").write_text("[user]\n\tname = sandbox\n\temail = sandbox@example.invalid\n")
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
            "CLAUDE_CONFIG_DIR": str(home / ".claude"), "CLAUDE_STATE_DIR": str(state),
+           "CHECKPOINT_LOG_DIR": str(home / ".claude" / "logs"),
            "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1", "TMPDIR": str(tmp),
            "PYTHONDONTWRITEBYTECODE": "1", "LANG": "C.UTF-8", "CLAUDE_PYTHON_BIN": sys.executable,
            "GIT_CEILING_DIRECTORIES": str(tmp_path)}  # `plain` is no repository, whatever holds tmp_path

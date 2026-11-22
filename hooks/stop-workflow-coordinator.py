@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serialize Stop phases and call the sole receipt-gated resource finalizer.
+"""Serialize Stop phases.
 
 LANE-B (20260808-035658) M4/M7, P5 R9: run by hooks/stop-launch.py (directly by a session that
 loaded an older hook list), in order: coverage, auto_commit, completion (hooks/stop-command-gate.py,
@@ -10,16 +10,7 @@ Only coverage and completion block: a coverage block relays failed_phase=coverag
 4 KB of its stderr, completion's stderr (its block text, or advisory `would block`) is relayed
 whole and first. Other failures are recorded in the result JSON and allowed; a completion that did
 not decide (exit outside {0, 2}, timeout, launch error, missing file) goes to `fallback`. Cleanup
-runs only on an allowed Stop, the finalizer only when every phase allowed cleanly. `gate_mode`
-reads the process environment only. The gate prints an allowed Stop's terminal time-lock status as
-its last stdout line, and this coordinator alone publishes the receipt finalize reads (P1b row 15).
-
-Resource preflight/finalize is opt-in: LANEB_SESSION_RESOURCE_TRUST_KEY and _TRUST_ROOT
-are set nowhere by default (no SessionStart provisioning). Without both, only the phases
-run and session_resources.resolve_current_resource_session() must NOT be called: it
-raises when the trust authority is unconfigured, which would make that default state a
-permanent Stop block. Fail-closed finalization applies once a resource session exists.
-No phase receives either key.
+runs only on an allowed Stop. `gate_mode` reads the process environment only.
 """
 
 from __future__ import annotations
@@ -38,23 +29,12 @@ HOOKS = Path(__file__).resolve().parent
 if str(HOOKS) not in sys.path:
     sys.path.insert(0, str(HOOKS))
 
-from lib import command_span, session_resources
+from lib import command_span
 
 
 PHASE_ORDER = ("coverage", "auto_commit", "completion", "cleanup")
 BLOCKING_PHASES = ("coverage", "completion")
 STDERR_RELAY_BYTES = 4096
-TRUST_ENVIRONMENT_KEYS = (
-    session_resources.TRUST_KEY_ENV,
-    session_resources.TRUST_ROOT_ENV,
-)
-FINALIZER_FAILURE_REASONS = frozenset(
-    {
-        "scratch_symlink_detected",
-        "process_identity_mismatch",
-        "process_exit_timeout",
-    }
-)
 
 
 @dataclass(frozen=True)
@@ -115,19 +95,6 @@ def _configured_phases(environment: Mapping[str, str], mode: str) -> list[Phase]
     return phases
 
 
-def _environment_views(
-    environment: Mapping[str, str] | None,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Separate ordinary child state from the two-key trust capability."""
-
-    values = dict(os.environ if environment is None else environment)
-    phase_environment = {
-        key: value for key, value in values.items() if key not in TRUST_ENVIRONMENT_KEYS
-    }
-    trust_environment = {key: values.get(key, "") for key in TRUST_ENVIRONMENT_KEYS}
-    return phase_environment, trust_environment
-
-
 def _phase_script(argv: Sequence[str]) -> str | None:
     """The script a phase runs: its first argument after the interpreter that
     names a .py or .sh file (python3 on a missing file exits 2, a block)."""
@@ -175,7 +142,7 @@ def _run_phase(
     except (LookupError, TypeError, ValueError):
         last = {}
     last = last if isinstance(last, dict) else {}
-    notice, terminal = last.get("systemMessage"), last.get("timelock_terminal")
+    notice = last.get("systemMessage")
     failure = {"fail": f"exit code {result.returncode}"}.get(status)
     # The gate's own text is relayed whole and first (P5 R9); a coverage block's last 4 KB.
     relayed = stderr if phase.name == "completion" else stderr[-STDERR_RELAY_BYTES:]
@@ -187,8 +154,6 @@ def _run_phase(
         "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
         **({"failure": failure} if failure else {}),
         **({"notice": notice} if status == "allow" and isinstance(notice, str) else {}),
-        **({"_terminal": terminal} if status == "allow" and phase.name == "completion"
-           and isinstance(terminal, str) else {}),
         **({"_stderr": relayed} if status == "block" or phase.name == "completion" else {}),
     }
 
@@ -216,25 +181,6 @@ def fallback(payload: Mapping[str, object], mode: str, reason: str) -> tuple[int
     return 0, ""
 
 
-def _publish_receipt(root: Path, session_id: str, terminal: str, payload: Mapping[str, object]) -> str | None:
-    """The terminal receipt finalize reads (P1b row 15), published from the gate's terminal
-    time-lock status; None, else the reason it was not published (recorded, allowed)."""
-    try:
-        from lib import overnight
-
-        _state_file, state = overnight.session_state_file(  # as the gate's time-lock found it
-            session_id, (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd") or str(root))
-        )
-        if state is None:
-            return "no overnight state record"
-        result = session_resources.publish_overnight_receipt(
-            root, claude_session_id=session_id, state=state, terminal_status=terminal
-        )
-    except Exception as exc:  # recorded by type only: trust diagnostics never cross hook output
-        return f"receipt not published ({type(exc).__name__})"
-    return None if isinstance(result, Mapping) and result.get("status") == "pass" else "receipt not published"
-
-
 def run_coordinator(
     payload: Mapping[str, object],
     *,
@@ -245,7 +191,7 @@ def run_coordinator(
 ) -> tuple[dict, int]:
     """Run phases sequentially; every non-success is non-destructive."""
 
-    phase_environment, trust_environment = _environment_views(environment)
+    phase_environment = dict(os.environ if environment is None else environment)
     root_value = (
         project_dir
         or phase_environment.get("CLAUDE_PROJECT_DIR")
@@ -258,9 +204,8 @@ def run_coordinator(
     if payload.get("agent_id"):
         return {
             "status": "nonterminal",
-            "reason": "subagent_stop_never_finalizes_parent_resources",
+            "reason": "subagent_stop_runs_no_phase",
             "phases": [],
-            "finalizer_called": False,
         }, 0
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -268,7 +213,6 @@ def run_coordinator(
             "status": "nonterminal",
             "reason": "missing_parent_session_id",
             "phases": [],
-            "finalizer_called": False,
         }, 0
     if raw_payload is None:
         raw_payload = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -284,32 +228,7 @@ def run_coordinator(
             "status": "blocked",
             "reason": "invalid_phase_configuration",
             "phases": [],
-            "finalizer_called": False,
         }, 2
-    resource_broker_configured = bool(trust_environment.get(session_resources.TRUST_KEY_ENV)) and bool(
-        trust_environment.get(session_resources.TRUST_ROOT_ENV)
-    )
-    resource_session_id: str | None = None
-    if resource_broker_configured:
-        try:
-            pointer = session_resources.resolve_current_resource_session(
-                root,
-                session_id,
-                trust_environment=trust_environment,
-            )
-            if not isinstance(pointer, Mapping):
-                raise ValueError("invalid resource preflight result")
-            resource_session_id = pointer.get("resource_session_id")
-            if not isinstance(resource_session_id, str) or not resource_session_id:
-                raise ValueError("invalid resource preflight identity")
-        except Exception:
-            # Trust-provider diagnostics are capabilities and never cross hook output.
-            return {
-                "status": "blocked",
-                "reason": "resource_preflight_contract_error",
-                "phases": [],
-                "finalizer_called": False,
-            }, 2
     results = []
     relays = []
     for phase in selected:
@@ -325,13 +244,8 @@ def run_coordinator(
         )
         results.append(result)
         stderr = result.pop("_stderr", "")
-        terminal = result.pop("_terminal", None)
         if phase.name == "completion" and result["status"] in ("allow", "block") and stderr:
             relays.append(stderr)
-        if terminal and resource_session_id is not None:  # finalize decides on the receipt
-            receipt = _publish_receipt(root, session_id, terminal, payload)
-            if receipt:
-                result["receipt"] = receipt
         if result["status"] == "allow":
             continue
         if result["status"] == "block" and phase.name in BLOCKING_PHASES:
@@ -340,7 +254,6 @@ def run_coordinator(
                 "reason": "phase_block",
                 "failed_phase": phase.name,
                 "phases": results,
-                "finalizer_called": False,
                 "_relay": "".join(relays) if phase.name == "completion" else f"failed_phase={phase.name}\n{stderr}",
             }, result["returncode"]  # the phase's own exit (2), relayed as stop-launch.py relays its child
         if phase.name != "completion":
@@ -354,65 +267,14 @@ def run_coordinator(
             "reason": "completion_instrument_failure",
             "failed_phase": phase.name,
             "phases": results,
-            "finalizer_called": False,
             "_relay": relay,
         }, 2
     advisory = "".join(relays)
-    if any(result["status"] not in ("allow", "skipped") for result in results):
-        # A recorded failure is allowed but never followed by the destructive finalizer.
-        return {
-            "status": "pass",
-            "phases": results,
-            "finalizer_called": False,
-            "reason": "phase_failure_recorded",
-            **({"_relay": advisory} if advisory else {}),
-        }, 0
-    if resource_session_id is None:
-        # No resource session was provisioned (the default): the phases passed and
-        # there is nothing to finalize, so this is a normal pass, not a block.
-        return {
-            "status": "pass",
-            "phases": results,
-            "finalizer_called": False,
-            "reason": "resource_broker_not_configured",
-            **({"_relay": advisory} if advisory else {}),
-        }, 0
-    try:
-        finalized = session_resources.finalize(
-            root,
-            claude_session_id=session_id,
-            resource_session_id=resource_session_id,
-            trust_environment=trust_environment,
-        )
-    except Exception:
-        # Finalizer diagnostics may name trusted paths; expose only a fixed code.
-        return {
-            "status": "blocked",
-            "reason": "resource_finalizer_contract_error",
-            "phases": results,
-            "finalizer_called": True,
-        }, 2
-    if not isinstance(finalized, Mapping) or finalized.get("status") != "pass":
-        error_code = (
-            finalized.get("error_code") if isinstance(finalized, Mapping) else None
-        )
-        reason = (
-            error_code
-            if error_code in FINALIZER_FAILURE_REASONS
-            else "resource_finalize_failed"
-        )
-        return {
-            "status": "blocked",
-            "reason": reason,
-            "phases": results,
-            "finalizer_called": True,
-        }, 2
+    recorded = any(result["status"] not in ("allow", "skipped") for result in results)
     return {
         "status": "pass",
         "phases": results,
-        "finalizer_called": True,
-        "resource_session_id": resource_session_id,
-        "finalizer": finalized,
+        **({"reason": "phase_failure_recorded"} if recorded else {}),
         **({"_relay": advisory} if advisory else {}),
     }, 0
 

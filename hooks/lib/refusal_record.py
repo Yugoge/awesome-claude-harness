@@ -28,7 +28,12 @@ REPORT_WAIT seconds for the writer and reads nothing back from it, and the write
 itself after as long (a shell hook's trap waits for it with no bound of its own).
 
 Kinds. REFUSAL; UNPROVEN, a command the removal policy could not prove safe and let through: the
-same fields, counted apart by the reader and left out of its reconcile.
+same fields, counted apart by the reader and left out of its reconcile; RELEASED, a pre-tool refusal an
+/allow grant let through (lib/hook_launch.release_refused): its rules are the rules that refused, and it
+takes the place of the call's refusal line that the refusing hooks wrote themselves, so a released call
+is never also counted as refused; HELD, a background return lib/returns_hold.py held and then handed over,
+written by it at the hand-over with the seconds held (its payload's ``held_seconds``; ``ts`` is when it was
+held): it takes the place of the refusal line the launcher wrote for the held prompt, so a hold is no refusal.
 """
 from __future__ import annotations
 
@@ -49,7 +54,7 @@ except ImportError:
     finally:
         sys.path.pop(0)
 
-REFUSAL, UNPROVEN = "refusal", "unproven"
+REFUSAL, UNPROVEN, RELEASED, HELD = "refusal", "unproven", "released", "held"
 # The events at which a hook's exit 2 refuses something: a call before or after it ran, a prompt, a stop, a
 # permission request (denied). The first three are the tool-call events (``same``); new names go at the end.
 EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "SubagentStop", "PermissionRequest")
@@ -57,7 +62,8 @@ KEEP_DAYS, MAX_DAY_BYTES = 90, 16 << 20
 LOCK_WAIT, SAME_CALL, REPORT_WAIT = 2.0, 30, 10   # seconds
 TEXT_MAX = 4000                         # characters of a rule's text handed to the writer
 TAIL = 1 << 18                          # bytes of the day file searched for an earlier report of the call
-REFUSED_MAX, MESSAGE_MAX, RULES_MAX, WORDS = 400, 800, 12, 8
+REFUSED_MAX, MESSAGE_MAX, RULES_MAX, WORDS = 400, 800, 12, 8  # MESSAGE_MAX: characters of each rule's text
+MESSAGE_ALL = (MESSAGE_MAX + 1) * RULES_MAX  # the message: each rule's text cut on its own, so none is cut away
 _WORD = re.compile(r"[A-Za-z][A-Za-z0-9_.'+-]*$")
 _EDGE, _QUOTE = "[](){}.,;:!?\u2014\u2013", ("'", '"', "`")
 
@@ -158,6 +164,11 @@ def same(old: dict, new: dict) -> bool:
     """Whether two reports are of one call: the kind, session, event and tool-call id are the same;
     where the payload has no id, the agent, tool and refused text are too, the earlier report is at most
     SAME_CALL seconds old and comes from other hooks (a hook reports a call once: its next is a retry)."""
+    if new.get("kind") == RELEASED and old.get("kind") == REFUSAL:  # the release of a call its hooks recorded as refused
+        old = dict(old, kind=RELEASED)
+    if new.get("kind") == HELD:  # the hand-over of a held prompt: its hold's refusal line, by the same hooks alone
+        return old.get("kind") == REFUSAL and all(old.get(k) == new.get(k) for k in ("session", "event", "refused")) \
+            and {r.get("hook") for r in old.get("rules", [])} <= {r.get("hook") for r in new.get("rules", [])}
     if any(old.get(k) != new.get(k) for k in ("kind", "session", "event", "tool_use_id")):
         return False
     if new.get("tool_use_id"):
@@ -179,7 +190,8 @@ def merge(old: dict, new: dict) -> dict:
     texts = sorted({old.get("message") or "", new.get("message") or ""} - {""})
     message = next((t for t in texts if all(x in t for x in texts)), "\n".join(texts))
     tools = sorted({t for x in (old, new) for t in str(x.get("tool") or "").split("|") if t})
-    return dict(old, rules=rules[:RULES_MAX], message=message[:MESSAGE_MAX], tool="|".join(tools) or None)
+    return dict(old, **{k: new[k] for k in ("held_seconds",) if k in new}, kind=new.get("kind", old.get("kind")), rules=rules[:RULES_MAX], message=message[:MESSAGE_ALL],
+                tool="|".join(tools) or None)
 
 
 def report(payload, rules, by, kind=REFUSAL) -> None:
@@ -220,7 +232,7 @@ def _payload(payload) -> dict:
 
 def _write(p: dict, rules, by, kind) -> bool:
     event = p.get("hook_event_name")
-    if event not in EVENTS or not rules or kind not in (REFUSAL, UNPROVEN):
+    if event not in EVENTS or not rules or kind not in (REFUSAL, UNPROVEN, RELEASED, HELD):
         return False
     tool_input = p.get("tool_input") if isinstance(p.get("tool_input"), dict) else {}
     refused = next((tool_input[k] for k in ("command", "file_path", "notebook_path")
@@ -235,12 +247,15 @@ def _write(p: dict, rules, by, kind) -> bool:
         "role": p.get("agent_type") or None, "tool": p.get("tool_name"), "tool_use_id": p.get("tool_use_id"),
         "refused": refused[:REFUSED_MAX],
         "rules": [{"hook": _name(str(h)), "id": rule_id(t, skip), "by": _name(str(by))} for h, t in rules][:RULES_MAX],
-        "message": "\n".join(str(t).strip("\n") for _, t in rules if t)[:MESSAGE_MAX],
+        "message": "\n".join(dict.fromkeys(str(t).strip("\n")[:MESSAGE_MAX] for _, t in rules if t))[:MESSAGE_ALL],
         "project": env.get("CLAUDE_PROJECT_DIR") or p.get("cwd"),
         "provider": "codex" if env.get("CLAUDE_COMPAT_RUNTIME") == "codex" else
                     "claude" if env.get("CLAUDECODE") or env.get("CLAUDE_PROJECT_DIR") else None,
         "version": _version(),
     }
+    if kind == HELD:
+        record["held_seconds"] = held = round(float(p.get("held_seconds") or 0), 1)
+        record["ts"] = _stamp(now - held)
     return _append(record, now)
 
 

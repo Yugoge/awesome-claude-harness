@@ -285,6 +285,10 @@ def _fault_arg(value: str):
     return role, kind
 
 
+# The prompt-inspector heading: "### Step 10A: Invoke Prompt Inspector (agents/ ..." in a base text, the
+# "#### Prompt Inspector (agents/ ..." sub-heading of Step 10 since integer steps (10A folded into 10).
+P_HEAD = "Prompt Inspector (agents/"
+
 class CleanRun:
     def __init__(self, rp, gaps: str = "bridged", fault: str = ""):
         if gaps not in ("bridged", "strict"):
@@ -373,8 +377,11 @@ class CleanRun:
         o = self.o
         o.slash("")
         o.todo_start()
-        script = self.code("Step 1", "Load TodoList checklist", contains="scripts/todo/")
-        self.bash(script, "Step 1 Bash checklist script", "Load the /clean checklist")
+        # OLDER_TEXT: "Load TodoList checklist" -- a base text's Step 1 ran the checklist script; since pure-repeats
+        # the hook hands the list at the slash and the step names no script, so the run makes no such call.
+        if "Load TodoList checklist" in o.section("Step 1"):
+            script = self.code("Step 1", "Load TodoList checklist", contains="scripts/todo/")
+            self.bash(script, "Step 1 Bash checklist script", "Load the /clean checklist")
         rid = self.code("Step 1", "Set up working directory", startswith="REQUEST_ID=")
         d = self.code("Step 1", "Set up working directory", startswith="docs/clean")
         c = self.bash(f"mkdir -p {shlex.quote(d)}\n{rid}\nTIMESTAMP=\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"",
@@ -784,10 +791,10 @@ class CleanRun:
         missed = [p for p in want if p not in getattr(self, "audited", [])]
         self.say("Coverage verification: " + ("every planned file audited" if not missed else f"missed {missed}"))
 
-    def step10a(self) -> None:
+    def step10a(self) -> None:  # the prompt-inspector dispatch (Step 10A of a base text, a sub-section of Step 10 since integer steps)
         o = self.o
-        role = self.role_in("Step 10A")
-        sec = o.section("Step 10A")
+        role = self.role_in(P_HEAD)
+        sec = o.section(P_HEAD)
         listed = {}
         for key in re.findall(r"`(\w+_files):\s*<every [^`>]+>`", sec):
             pat = re.search(r"`%s:\s*<every ([^`>]+)>`" % key, sec).group(1)

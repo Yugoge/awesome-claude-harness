@@ -19,11 +19,12 @@ A second, sibling scenario covering the five beats the README hero shows:
 2. `hooks/pretool-git-privilege-guard.py` refuses it **before execution**;
 3. the terminal shows the rule, the reason and two safe remedies — all of it
    printed by the hook, never by the script;
-4. a narrowly-scoped single-use grant permits **exactly one** push, which
-   really executes against a hermetic **local bare remote** reached by the
-   relative path `../hero-remote.git` inside a throwaway fixture;
-5. the real `hooks/posttool-allowlist-consume.py` consumes that grant and the
-   identical command is refused again.
+4. the grant the owner's `/allow` writes, scoped to this command, lets the
+   pre-tool launcher (`hooks/pretool-launch.py`) release **exactly one**
+   refused push and spend the grant as it does; the push really executes
+   against a hermetic **local bare remote** reached by the relative path
+   `../hero-remote.git` inside a throwaway fixture;
+5. the identical command is refused again: the grant was spent.
 
 Run it through its capture harness — the harness, not the demo, invokes the
 hooks and records their own streams, so the demo cannot mediate the evidence:
@@ -123,7 +124,7 @@ complete behaviour, treating the terminal cast as optional.
 
 ## Files
 - `run-demo.sh` - Description: Reproducible guard demo — a dangerous operation is BLOCKED by the
-- `run-hero-demo.sh` - Description: Five-beat guard demo — a real agent git push is refused pre-execution, a
+- `run-hero-demo.sh` - Description: Five-beat guard demo — a real agent git push is refused pre-execution, the
 <!-- /AUTO:readme-stats -->
 
 ---

@@ -52,6 +52,8 @@ def _canonical_dev() -> list:
 class CLI:
     """One main session; each call goes through the registered hooks in the CLI's order."""
 
+    post_codes = (0, 2)  # the PostToolUse dispatcher's exit statuses a call may meet
+
     def __init__(self, tmp_path: Path, first_prompt: str = "look at the repo"):
         self.tmp, self.sid, self.n = tmp_path, str(uuid.uuid4()), 0
         self.home, self.project, self.state = tmp_path / "home", tmp_path / "project", tmp_path / "state"
@@ -116,7 +118,7 @@ class CLI:
             self.result(tid, f"Exit code 1\n{output}", error=True)
         else:
             p = self.hook(POST, "PostToolUse", tool, tool_input, tid, tool_response={"stdout": output})
-            assert p.returncode in (0, 2), p.stderr
+            assert p.returncode in self.post_codes, p.stderr
             self.result(tid, output, error=False)
         return None
 
@@ -253,6 +255,7 @@ def test_a_dispatch_clears_the_bash_reservations(tmp_path):
 def test_an_unreadable_ran_log_gives_nothing_back(tmp_path):
     cli = CLI(tmp_path)
     (cli.state / f"claude-tool-ran-{cli.sid}.log").mkdir()  # reading it fails
+    cli.post_codes = (1,)  # appending to it fails too: a non-blocking error the user reads
     for _ in range(3):
         assert cli.bash("git commit --no-verify -m wip")
     assert _ran(cli.bash() for _ in range(2)) == [True] * 2

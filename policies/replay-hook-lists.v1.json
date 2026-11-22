@@ -1,0 +1,31 @@
+{
+  "schema": "replay-hook-lists.v1",
+  "about": "Every base tree the replay suites under tests/replay load a hook list from (a 40-hex revision named in a replay module), and whether a replayed session keeps that list across the landing (held=kept) or reloads this tree's at it (held=reloaded). Read by tests/test_replay_hook_lists.py: a revision named in a replay module and not registered here fails, an entry whose module no longer names its revision fails, `held` is read from the module's constant `kept_by.constant` (the list is kept exactly when that constant holds `kept_by.key`), and a kept list may name no hooks/ or scripts/ file this tree lacks unless `absent_by_design` lists it with the replay that has that absence as its subject. A reloaded list runs only while the base tree's own files are on disk. `retired` records transitions taken out of the suites, with what is no longer checked.",
+  "entries": [
+    {"module": "tests/replay/test_live_landing.py", "rev": "3a968cf823c517bcbff835a11ecdfe3c3d68c5e6", "held": "kept",
+     "kept_by": {"constant": "KEPT_LISTS", "key": "p12"},
+     "reason": "master's P12 merge, the first master list without the hook files unregistered by P1 (0ca9660), P5 (89c71a9, 067a29f) and P12 (fc8d436) and retired since: the oldest list a session that can still exist may hold. Pre-merge, (a) /redev and (b) /dev-overnight run across the landing with it kept, in place of master and p1b."},
+    {"module": "tests/replay/test_live_landing.py", "rev": "2acc29b0c8149c32d8e424e58c6af55d073eac20", "held": "reloaded",
+     "kept_by": {"constant": "KEPT_LISTS", "key": "master"},
+     "reason": "Names five retired hook files (notification-idle-overnight, posttool-push-gate-token-verify, posttool-todo-count, posttool-todo-sequence, pretool-push-analyst-grant-guard); no session holding it can still exist. Kept for the replays that reload this tree's list at the landing (a session resumed on old state) and test_obligation_role's old tree."},
+    {"module": "tests/replay/test_live_landing.py", "rev": "3f0b7a23ee9145c573678775dc67b0a230c228f4", "held": "reloaded",
+     "kept_by": {"constant": "KEPT_LISTS", "key": "p1b"},
+     "reason": "Names the same five retired hook files as master; no session holding it can still exist. Kept for the replays that reload this tree's list at the landing."},
+    {"module": "tests/replay/test_do_inflight_blocked.py", "rev": "a7d3a9fec736c0e64b5a822ba5da788d4f178bda", "held": "reloaded",
+     "kept_by": {"constant": "SETTINGS", "key": "kept"},
+     "reason": "Names the same five retired hook files; no session holding it can still exist. A do-report its /do left `blocked` can still meet this tree, so the `landed` cases stay. No newer list can replace it: since P5 the /do text has no `blocked` terminal, the case's subject."},
+    {"module": "tests/replay/test_live_landing_p6.py", "rev": "a7d3a9fec736c0e64b5a822ba5da788d4f178bda", "held": "reloaded",
+     "kept_by": {"constant": "SETTINGS", "key": "master"},
+     "reason": "Names the same five retired hook files; no session holding it can still exist. The subject is P6 landing on subagents registered before P6; a newer base already holds P6, so no newer list can replace it. The `base` cases (this tree's list from the landing on) stay."}
+  ],
+  "retired": [
+    {"test": "tests/replay/test_do_inflight_blocked.py::test_inflight_blocked_do_report_lands_through_dev[*-kept]",
+     "no_longer_checked": "A session still holding a7d3a9f's hook list after the landing routes its blocked do-report through /close on this tree's text."},
+    {"test": "tests/replay/test_live_landing_p6.py::test_inflight_subagent_meets_this_tree[*-master]",
+     "no_longer_checked": "A subagent registered under a7d3a9f, its session keeping a7d3a9f's hook list after the landing, meets this tree's hooks (untracked, codex, qa, explore, overnight, grant); and test_the_landed_settings_are_this_trees no longer checks that such a session did not reload its list."},
+    {"test": "tests/replay/test_live_landing.py::{test_every_hook_a_base_session_registered_is_on_disk,test_pre_merge_session_stops_exit_0,test_a_redev_after_a_no_progress_round,test_b_overnight_through_its_todo_reset_to_the_stop_after_end_time}[master,p1b]",
+     "no_longer_checked": "Sessions keeping master's (2acc29b) or p1b's (3f0b7a2) hook list across the landing; run on p12 instead. With them goes the check that the base G2's no-progress stores were on disk at the landing (master only: d625284's G2 wrote them, P1b deleted the writer)."},
+    {"test": "tests/replay/test_live_landing.py::test_g2_stops_a_deleted_copys_fault_through_the_landed_switch (A11 F2 after the landing [master])",
+     "no_longer_checked": "A session that keeps master's (2acc29b) hook list, which sets no CLAUDE_OBLIGATION_STOPGATE, across the landing has F2's invalid dev report stopped by G2 at the dev's stop through the landed settings.json's switch, with and without CLAUDE_HOME. It kept master's list while the register holds master reloaded, and passed only because a file missing from the kept list counts as a block, not an error. Not rebound to p12: 3a968cf's settings.json sets STOPGATE=block, so the subject (a list without the switch) does not exist there; no session holding master's list can still exist."}
+  ]
+}

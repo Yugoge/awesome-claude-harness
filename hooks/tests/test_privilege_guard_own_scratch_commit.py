@@ -5,7 +5,8 @@ just made in a work directory of its own (a dev subagent's integration repositor
 when the repository it writes to lies wholly inside the caller's own scratch directory: its work tree, git directory,
 common directory, object store and index, by real path, as git finds them from the directory the commit runs in. "Own"
 is the write policy's one definition (hooks/pretool-tool-policy.py `_scratch_status` == "owner"): a subagent's
-<project>/.claude/scratch/<session>/<role>/<agent>/, the main agent's session scratch directory.
+<session scratch directory>/<role>/<agent>/ (and <project>/.claude/scratch/<session>/<role>/<agent>/, where an
+earlier version sent it), the main agent's session scratch directory.
 
 Every other commit is refused as before, and the refusal names the caller's own scratch directory. Refused alike: a
 linked work tree of the project placed there, a variable or option that points git elsewhere, a link to the project,
@@ -59,8 +60,11 @@ class Box:
         scratch = self.root / ".claude" / "scratch" / SID / "dev"
         self.own, self.other = scratch / AGENT, scratch / OTHER_AGENT
         self.session = base / "tmp" / SID                       # the main agent's own: the session's directory
+        # a subagent's own below it (the directory refusals name); `own` above is where an earlier version sent it
+        self.named, self.named_other = (self.session.resolve() / "dev" / a for a in (AGENT, OTHER_AGENT))
         _repo(self.root, self.env)
-        for repo in (self.own / "repo", self.other / "repo", self.session / "repo"):
+        for repo in (self.own / "repo", self.other / "repo", self.session / "repo", self.named / "repo",
+                     self.named_other / "repo"):
             _repo(repo, self.env)
         (self.session / ".owner").write_text(json.dumps({"sid": SID}))
         _git(self.root, "worktree", "add", "-q", str(self.own / "wt"), env=self.env)   # the project's, placed there
@@ -79,7 +83,8 @@ class Box:
                               capture_output=True, cwd=str(cwd or self.root), env={**self.env, **env}, timeout=120)
 
     def fill(self, text):
-        return text.format(own=self.own, other=self.other, root=self.root, session=self.session)
+        return text.format(own=self.own, other=self.other, root=self.root, session=self.session, named=self.named,
+                           named_other=self.named_other)
 
 
 @pytest.fixture(scope="module")
@@ -92,6 +97,8 @@ ALLOWED = [
     ("cd {own}/repo && git add -A >/dev/null 2>&1 && git commit -qm base", None),
     ("git -C {own}/repo -c user.name=t -c user.email=t@example.invalid commit -qm base", None),
     ("cd {own} && cd repo && git status && git commit -qm base", None),
+    ("git commit -qm base", "{named}/repo"),                                 # its own below the session's
+    ("git -C {named}/repo commit -qm base", None),
 ]
 
 
@@ -132,6 +139,8 @@ REFUSED_CASES = [
     ("(cd {root} && git commit -qm x)", "{own}/repo"),
     ("git -C {other}/repo commit -qm x", None),                              # another agent's scratch directory
     ("git commit -qm x", "{other}/repo"),
+    ("git -C {named_other}/repo commit -qm x", None),                        # another agent's, below the session's
+    ("git -C {session}/repo commit -qm x", None),                            # the session's: the main agent's own
     ("git status > .git/config && git commit -qm x", "{own}/repo"),          # a write first
     ("mkdir {own}/new && cd {own}/new && git init -q && git commit -qm base", None),  # made by the same call
     ("bash -c 'git commit -qm x'", "{own}/repo"),
@@ -142,7 +151,7 @@ REFUSED_CASES = [
 def test_every_other_commit_is_refused_and_the_refusal_names_the_own_directory(box, command, cwd):
     proc = box.run(command, cwd=box.fill(cwd) if cwd else None)
     assert proc.returncode == 2 and REFUSED in proc.stderr, proc.stderr
-    assert f"your own scratch directory is {box.own}/" in proc.stderr, proc.stderr
+    assert f"your own scratch directory is {box.named}/" in proc.stderr, proc.stderr
     assert "commits there without a grant" in proc.stderr, proc.stderr
 
 

@@ -160,7 +160,9 @@ def test_in_flight_keeps_the_rule_and_the_counts(in_flight):
     for _ in range(2):
         for i in range(5):
             assert in_flight.gate("Bash", {"command": f"python3 -c {i}"}).returncode == 0
-        assert in_flight.gate("Agent", {"subagent_type": "dev", "prompt": "x"}).returncode == 0
+        # A foreground dispatch: a background launch resets nothing (background-dispatch.md).
+        assert in_flight.gate("Agent", {"subagent_type": "dev", "prompt": "x",
+                                        "run_in_background": False}).returncode == 0
     assert in_flight.bash_limit().stderr == BASE_BASH
     assert in_flight.write_limit().returncode == 2
     third = in_flight.gate("Write", {"file_path": str(in_flight.project / "c.md"), "content": "x"})

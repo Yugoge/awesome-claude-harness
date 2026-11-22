@@ -38,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import json
+import mmap
 import os
 import re
 from datetime import datetime, timezone
@@ -53,6 +54,7 @@ try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
         _read_parent_calls,
         account_project_roots,
         project_slug,
+        read_meta,
     )
 except ImportError:  # hooks/lib placed directly on sys.path
     import locations  # type: ignore[no-redef]
@@ -64,6 +66,7 @@ except ImportError:  # hooks/lib placed directly on sys.path
         _read_parent_calls,
         account_project_roots,
         project_slug,
+        read_meta,
     )
 
 
@@ -146,7 +149,7 @@ TOP_LEVEL_FIELDS = frozenset({
     "dispatched_at", "artifacts", "consistency", "expected_absent",
 })
 REQUIRED_TOP_LEVEL_FIELDS = frozenset({
-    "task_id", "role", "pipeline", "profile", "dispatched_at", "artifacts",
+    "task_id", "role", "pipeline", "profile", "artifacts",
 })
 IDENTITY_KEYS = frozenset({"task_id", "request_id"})  # design :98
 
@@ -215,8 +218,6 @@ CONDITIONAL_NULL_TASK_ID_PROFILE = "commit-qa"
 NULL_TASK_ID_PROFILES = _null_task_id_profiles() - {CONDITIONAL_NULL_TASK_ID_PROFILE}
 UNDISCHARGED_TASK_ID_NULL = "task_id_null_requires_bulk_context"
 
-# Dispatch-clock bound (design §1.3-G1 check 2: |dispatched_at - now| <= 300s).
-DISPATCH_CLOCK_BOUND_SECONDS = 300
 # File-kind freshness slack (design §1.2 freshness: mtime >= dispatched_at - 2s
 # covers filesystem timestamp granularity only; response kinds carry none --
 # inherently produced by this run). A file kind is one whose fields require a
@@ -557,8 +558,6 @@ def validate_obligation(
             return Rejection(reason="lane_missing_with_lane_set", field="lane")
         if lane not in lane_set:
             return Rejection(reason="lane_not_in_lane_set", field="lane")
-    if parse_iso8601(doc["dispatched_at"]) is None:
-        return Rejection(reason="bad_timestamp", field="dispatched_at")
     artifacts = doc["artifacts"]
     if not isinstance(artifacts, list):
         return Rejection(reason="bad_artifacts", field="artifacts")
@@ -613,7 +612,7 @@ def serialize_obligation(doc: Mapping[str, Any]) -> str:
 
 
 # --------------------------------------------------------------------------
-# Pure clock / freshness helpers (design §1.2 freshness, §1.3-G1 check 2)
+# Clock / freshness helpers (design §1.2 freshness); a dispatch's time
 # --------------------------------------------------------------------------
 
 def parse_iso8601(value: Any) -> datetime | None:
@@ -630,25 +629,18 @@ def parse_iso8601(value: Any) -> datetime | None:
         return None
 
 
-def dispatch_clock_within_bound(
-    dispatched_at: Any,
-    now: Any,
-    bound_seconds: int = DISPATCH_CLOCK_BOUND_SECONDS,
-) -> bool | None:
-    """G1 check 2 predicate: ``|dispatched_at - now| <= bound_seconds``.
+def dispatch_time(doc: Mapping[str, Any], recorded: Any) -> Mapping[str, Any]:
+    """The obligation as every reader of a dispatch's time takes it: dispatched_at is ``recorded``, the CLI's
+    timestamp on the record of the dispatch's tool use (the event the dispatch gate handled), never a typed one
+    (a copied block carries an earlier dispatch's); a typed one stands only where a record carries none."""
+    return {**doc, "dispatched_at": recorded} if parse_iso8601(recorded) is not None else doc
 
-    ``now`` is caller-supplied (never read here). Returns None when either
-    timestamp is unparseable or the aware/naive mix is uncomparable --
-    fail-closed disposition is the caller's."""
-    dispatched = parse_iso8601(dispatched_at)
-    current = parse_iso8601(now)
-    if dispatched is None or current is None:
-        return None
-    try:
-        delta = abs((current - dispatched).total_seconds())
-    except TypeError:
-        return None
-    return delta <= bound_seconds
+
+def recorded_dispatch(doc: Mapping[str, Any], transcript_path: Any, tool_use_id: Any) -> Mapping[str, Any]:
+    """dispatch_time for a hook handed the dispatch's event (its tool_use_id) and its prompt."""
+    if not transcript_path or not isinstance(tool_use_id, str) or not tool_use_id:
+        return doc
+    return dispatch_time(doc, _lib_module("command_span").transcript_span(transcript_path).recorded_at(tool_use_id))
 
 
 def artifact_freshness_satisfied(
@@ -852,14 +844,8 @@ def _meta_path(transcript_path: Path) -> Path:
 
 
 def _read_meta_tool_use_id(transcript_path: Path) -> str | None:
-    try:
-        meta = json.loads(_meta_path(transcript_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    tool_use_id = meta.get("toolUseId") if isinstance(meta, dict) else None
-    if isinstance(tool_use_id, str) and tool_use_id:
-        return tool_use_id
-    return None
+    meta = read_meta(_meta_path(transcript_path))  # subagent_restart's, the one reader of the CLI's record
+    return meta["tool_use_id"] if meta else None
 
 
 def _parent_transcript_for(transcript_path: Path) -> Path:
@@ -877,27 +863,123 @@ def _cross_check_against_parent(
     ``meta.json`` toolUseId must map to an Agent/Task tool_use block in the
     parent transcript whose ``input.prompt`` equals the first-record prompt.
 
-    Returns ``(status, failure_reason)``. Per the design, the cross-check runs
+    Returns ``(status, failure_reason, the parent record's time)``. Per the design, the cross-check runs
     "when the parent transcript is readable"; an unreadable parent yields the
     explicit skipped status, never a silent pass-as-checked."""
     tool_use_id = _read_meta_tool_use_id(transcript_path)
     if tool_use_id is None:
-        return "failed", "meta_not_found"
+        return "failed", "meta_not_found", None
     parent = _parent_transcript_for(transcript_path)
     if not parent.is_file():
-        return CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, ""
+        return CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, "", None
     try:
         calls, _results, _notifications = _read_parent_calls(parent)
     except RestartError:
-        return CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, ""
+        return CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, "", None
     call = calls.get(tool_use_id)
     if call is None:
-        return "failed", "meta_tool_use_mismatch"
+        return "failed", "meta_tool_use_mismatch", None
     tool_input = call.get("input")
     parent_prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
     if parent_prompt != prompt:
-        return "failed", "prompt_mismatch"
-    return CROSS_CHECK_OK, ""
+        return "failed", "prompt_mismatch", None
+    return CROSS_CHECK_OK, "", call.get("timestamp")
+
+
+# How the CLI hands a subagent a SendMessage (CLI 2.1.3xx, the records of 2026-11-18..21): a resumed
+# run starts with a user record of origin kind "coordinator" holding this text around the message; a
+# running child gets a queued_command attachment, origin kind "coordinator", whose prompt is the message.
+_SEND_DELIVERY_RE = re.compile(r"\AThe coordinator sent a message while you were working:\n(.*?)"
+                               r"(?:\n\nAddress this before completing your current task\.)?\Z", re.S)
+
+
+def _from_coordinator(origin: Any) -> bool:
+    return isinstance(origin, dict) and origin.get("kind") == "coordinator"
+
+
+def _record_at(raw: bytes) -> dict | None:
+    """One transcript line as a record (decoded as a text reader decodes it), None when it is none."""
+    try:
+        record = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _delivers(record: dict) -> bool:
+    """Whether a record hands the subagent its coordinator's dispatch or message (the two shapes above)."""
+    attachment = record.get("attachment")
+    if record.get("type") == "user":
+        return _from_coordinator(record.get("origin"))
+    return record.get("type") == "attachment" and isinstance(attachment, dict) \
+        and attachment.get("type") == "queued_command" and _from_coordinator(attachment.get("origin")) \
+        and isinstance(attachment.get("prompt"), str)
+
+
+def latest_delivery(transcript_path: str | Path) -> tuple[dict | None, dict | None]:
+    """(first, latest) of a subagent's own transcript: its first record (its dispatch; None when that line
+    is no record) and the last record that delivers its coordinator's dispatch or message (None when there
+    is none). The one reader of "the coordinator's latest word to this subagent, and when" (the time
+    limit, latest_send). A reverse search from the end for the origin's literal (in a text it is escaped):
+    a long transcript costs the lines after its latest delivery. OSError when it cannot be read."""
+    with open(transcript_path, "rb") as handle:
+        if not os.fstat(handle.fileno()).st_size:
+            return None, None
+        with mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            cut = data.find(b"\n")
+            first, end = _record_at(data[:cut if cut >= 0 else len(data)]), len(data)
+            while (pos := data.rfind(b'"coordinator"', 0, end)) >= 0:
+                end, stop = data.rfind(b"\n", 0, pos) + 1, data.find(b"\n", pos)
+                record = _record_at(data[end:stop if stop >= 0 else len(data)])
+                if record is not None and _delivers(record):
+                    return first, record
+    return first, None
+
+
+def latest_send(transcript_path: str | Path) -> str | None:
+    """The message of the last SendMessage a subagent's transcript shows it received, else None. A send
+    to an own subagent is a dispatch (lib/send_policy), so the latest one is the declaration its next
+    stop is judged by."""
+    try:
+        record = latest_delivery(transcript_path)[1]
+    except (OSError, ValueError):
+        return None
+    if record is None:
+        return None
+    if record.get("type") != "user":
+        return record["attachment"]["prompt"]
+    content = (record.get("message") or {}).get("content")
+    text = content if isinstance(content, str) else "".join(
+        b.get("text", "") for b in content or () if isinstance(b, dict) and b.get("type") == "text")
+    found = _SEND_DELIVERY_RE.match(text)
+    return found.group(1) if found else text
+
+
+def _after_sends(transcript_path: Path, prompt: str, status: str, at: Any) -> tuple:
+    """(prompt, status, failure, time) of the agent's latest dispatch: its first record's, or the last
+    send it received, which the parent transcript must hold as a SendMessage with that message."""
+    sent = latest_send(transcript_path)
+    if sent is None:
+        return prompt, status, "", at
+    parent = _parent_transcript_for(transcript_path)
+    try:
+        handle = open(parent, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return sent, CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, "", None
+    with handle:
+        for line in handle:
+            if '"SendMessage"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            content = (record.get("message") or {}).get("content") if isinstance(record, dict) else None
+            for block in content if isinstance(content, list) else ():
+                if isinstance(block, dict) and block.get("name") == "SendMessage" \
+                        and isinstance(block.get("input"), dict) and block["input"].get("message") == sent:
+                    return sent, CROSS_CHECK_OK, "", record.get("timestamp")
+    return sent, "failed", "send_not_in_parent", None
 
 
 def _finish_resolution(
@@ -907,6 +989,7 @@ def _finish_resolution(
     cross_check: str,
     expected_role: str | None,
     known_schema_ids: Iterable[str] | None,
+    recorded: Any = None,
 ) -> Resolved | NoObligationInPrompt | Unresolvable:
     parsed = parse_obligation(prompt, known_schema_ids=known_schema_ids)
     if isinstance(parsed, NoBlock):
@@ -924,7 +1007,7 @@ def _finish_resolution(
             reason="role_mismatch", detail=repr(parsed.obligation.get("role")), prompt=prompt
         )
     return Resolved(
-        obligation=parsed.obligation,
+        obligation=dispatch_time(parsed.obligation, recorded),
         rung=rung,
         prompt=prompt,
         transcript_path=str(transcript_path),
@@ -971,13 +1054,16 @@ def resolve_own_obligation(
             prompt = read_first_record_prompt(l0_path)
             if prompt is not None:
                 if _meta_path(l0_path).is_file():
-                    status, failure = _cross_check_against_parent(l0_path, prompt)
+                    status, failure, at = _cross_check_against_parent(l0_path, prompt)
                     if status == "failed":
                         return Unresolvable(reason=failure, detail=str(l0_path))
                 else:
-                    status = CROSS_CHECK_SKIPPED_NO_META
+                    status, at = CROSS_CHECK_SKIPPED_NO_META, None
+                prompt, status, failure, at = _after_sends(l0_path, prompt, status, at)
+                if status == "failed":
+                    return Unresolvable(reason=failure, detail=str(l0_path))
                 return _finish_resolution(
-                    prompt, "L0", l0_path, status, expected_role, known_schema_ids
+                    prompt, "L0", l0_path, status, expected_role, known_schema_ids, at
                 )
         # L0 unreadable: degrade to L1 (design ladder order).
 
@@ -996,13 +1082,17 @@ def resolve_own_obligation(
         if prompt is None:
             last_failure = ("unreadable_first_record", str(candidate))
             continue
-        status, failure = _cross_check_against_parent(candidate, prompt)
+        status, failure, at = _cross_check_against_parent(candidate, prompt)
         if status == "failed":
             # Another root may hold a healthy copy of the SAME child.
             last_failure = (failure, str(candidate))
             continue
+        prompt, status, failure, at = _after_sends(candidate, prompt, status, at)
+        if status == "failed":
+            last_failure = (failure, str(candidate))
+            continue
         return _finish_resolution(
-            prompt, "L1", candidate, status, expected_role, known_schema_ids
+            prompt, "L1", candidate, status, expected_role, known_schema_ids, at
         )
     if last_failure is not None:
         return Unresolvable(reason=last_failure[0], detail=last_failure[1])
@@ -1051,7 +1141,7 @@ def dispatch_obligations(
                 "tool_use_id": call.get("tool_use_id"),
                 "line": call.get("line"),
                 "subagent_type": tool_input.get("subagent_type"),
-                "obligation": parsed.obligation,
+                "obligation": dispatch_time(parsed.obligation, call.get("timestamp")),
                 "prompt": prompt,
             })
     return found

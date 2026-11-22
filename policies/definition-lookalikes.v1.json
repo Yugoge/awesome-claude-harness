@@ -1352,7 +1352,7 @@
   {
    "id": "temp-dir-variables",
    "source": "audit f199dfb1e families.json, different-questions",
-   "reason": "TEMP_ROOT_VARS (roots) and NAME_ROOT_VARS (directories holding state names) are distinct by design; _CONSENT_TMP_VARS and session_resources:1517 list the variables a consent command may name and those a spawned child keeps. The writer/reader splits of the named directories are families userintent-sentinel-dir and restart-grant-dir.",
+   "reason": "TEMP_ROOT_VARS (roots) and NAME_ROOT_VARS (directories holding state names) are distinct by design; _CONSENT_TMP_VARS lists the variables a consent command may name. The writer/reader splits of the named directories are families userintent-sentinel-dir and restart-grant-dir.",
    "sides": [
     [
      {
@@ -1366,13 +1366,6 @@
       "name": "<module>._CONSENT_TMP_VARS",
       "fingerprint": "a4da9d70f2719d2f",
       "at": "hooks/lib/bash_safety_rules.py:1543"
-     }
-    ],
-    [
-     {
-      "name": "spawn_owned:in",
-      "fingerprint": "b0548f5c4d06caec",
-      "at": "hooks/lib/session_resources.py:1517"
      }
     ],
     [
@@ -1728,7 +1721,7 @@
     [
      {
       "name": "<module>.REQUIRED_TOP_LEVEL_FIELDS",
-      "fingerprint": "0c5d216a4373e3de",
+      "fingerprint": "a517f82d3707508e",
       "at": "hooks/lib/obligation.py:147"
      }
     ]
@@ -1821,48 +1814,6 @@
       "name": "_consent_unpack_dirs:in",
       "fingerprint": "f1b411d842a3d7a4",
       "at": "hooks/lib/bash_safety_rules.py:2361"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "ruled-out-17-lists",
-   "source": "audit f199dfb1e families.json, ruled_out_lookalikes",
-   "reason": "expected_fields of four different signed records; BINDING_FIELDS and WORKFLOW_IDENTITY_FIELDS of two records",
-   "sides": [
-    [
-     {
-      "name": "<module>.BINDING_FIELDS",
-      "fingerprint": "fc5e6f2eadd86855",
-      "at": "hooks/lib/session_resources.py:34"
-     }
-    ],
-    [
-     {
-      "name": "<module>.WORKFLOW_IDENTITY_FIELDS",
-      "fingerprint": "c086e8e0043d4290",
-      "at": "hooks/lib/session_resources.py:45"
-     }
-    ],
-    [
-     {
-      "name": "_validate_trusted_record.expected_fields",
-      "fingerprint": "0edf2abe8f33869b",
-      "at": "hooks/lib/session_resources.py:554"
-     }
-    ],
-    [
-     {
-      "name": "_validate_session_anchor.expected_fields",
-      "fingerprint": "6c0e449b70a93088",
-      "at": "hooks/lib/session_resources.py:886"
-     }
-    ],
-    [
-     {
-      "name": "_validate_finalized_record.expected_fields",
-      "fingerprint": "f092b66847597164",
-      "at": "hooks/lib/session_resources.py:1897"
      }
     ]
    ]
@@ -2108,27 +2059,6 @@
       "name": "<module>.DOC_REGIONS[status]",
       "fingerprint": "1370eaf2a00f8342",
       "at": "scripts/generate-hero-status.py:130"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "git-grant-skippable-vs-location-options",
-   "source": "lane defs-git (git-global-value-options)",
-   "reason": "allowlist._GRANT_SKIPPABLE_GIT_VALUE_OPTS is what a short grant authorizes reading past (a policy, narrower on purpose and pinned as a subset of the parser tables by test_allowlist_git_global_opts; the core install profile ships allowlist.py without shell_parse, so it cannot import them); shell_parse.GIT_LOCATION_OPTS is which git options move the repository or work tree.",
-   "sides": [
-    [
-     {
-      "name": "<module>._GRANT_SKIPPABLE_GIT_VALUE_OPTS",
-      "fingerprint": "ab2d2270785dd616",
-      "at": "hooks/lib/allowlist.py:363"
-     }
-    ],
-    [
-     {
-      "name": "<module>.GIT_LOCATION_OPTS",
-      "fingerprint": "c17a550b6c6921c4",
-      "at": "hooks/lib/shell_parse.py:3652"
      }
     ]
    ]
@@ -2428,6 +2358,34 @@
    ]
   },
   {
+   "id": "close-target-openers-vs-dev-start-vs-refused-step",
+   "source": "lane closetests, check group on the join of 2026-11-21",
+   "reason": "close_exit.CYCLE_COMMANDS asks which openers' hook-minted task id a /close typed with no task binds (close.md: the /dev cycle's or the /do task-id), so /do is in it; prompt-workflow._DEV_COMMANDS asks which commands the ordinary /dev start runs for (_ordinary_dev_start, the start subcommand), and /do has a start of its own; stop-command-gate.refused_step asks which commands' runs may end on a REFUSED: Step line, /close included. Adding /do to _DEV_COMMANDS would run the /dev start for /do; dropping it from CYCLE_COMMANDS would leave a /do cycle unbound at /close.",
+   "sides": [
+    [
+     {
+      "name": "<module>.CYCLE_COMMANDS",
+      "fingerprint": "a34f74df68a27b94",
+      "at": "hooks/lib/close_exit.py:24"
+     }
+    ],
+    [
+     {
+      "name": "<module>._DEV_COMMANDS",
+      "fingerprint": "1600c9eb2ee79e0b",
+      "at": "hooks/prompt-workflow.py:369"
+     }
+    ],
+    [
+     {
+      "name": "refused_step:in",
+      "fingerprint": "7869dcfbe6149cc4",
+      "at": "hooks/stop-command-gate.py:414"
+     }
+    ]
+   ]
+  },
+  {
    "id": "programs-sort-output-vs-git-output",
    "source": "lane defs-programs reading",
    "reason": "SORT_OUTPUT_OPTS asks which option of sort names the file sort writes; _sd_writes_output asks whether an option of a git command (git's -o or any abbreviation git accepts of --output) sends that command's output to a file. Two programs' output options spelled alike, read with different abbreviation rules.",
@@ -2661,34 +2619,6 @@
       "name": "settings_stat:re",
       "fingerprint": "3f6d0d63ccd6b04e",
       "at": "scripts/install/land:252"
-     }
-    ]
-   ]
-  },
-  {
-   "id": "non-negative-integer-shell-pattern",
-   "source": "lane defs-git (defs-83)",
-   "reason": "All three ask, by design, whether a word is a non-negative decimal integer, each of its own input: session-tmpfs-banner.sh (a SessionStart hook) a df use percentage, userprompt-tmpfs-pressure.sh (a UserPromptSubmit hook) a df percentage and its rate counter (one _uint check), prune-orphaned-workflow-bookmarks.sh (a maintenance script) its --min-age-days value. Each runs alone and the three source nothing in common; a new sourced helper for one case pattern would add a dependency and lines to three stand-alone shell files.",
-   "sides": [
-    [
-     {
-      "name": "<script>:case",
-      "fingerprint": "cc2f2184a29512e7",
-      "at": "hooks/session-tmpfs-banner.sh:30"
-     }
-    ],
-    [
-     {
-      "name": "_uint:case",
-      "fingerprint": "cc2f2184a29512e7",
-      "at": "hooks/userprompt-tmpfs-pressure.sh:76"
-     }
-    ],
-    [
-     {
-      "name": "usage:case",
-      "fingerprint": "cc2f2184a29512e7",
-      "at": "scripts/prune-orphaned-workflow-bookmarks.sh:78"
      }
     ]
    ]

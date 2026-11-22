@@ -164,7 +164,9 @@ def test_any_other_caller_is_denied_whatever_a_prefix_allows(tmp_path, cycle, ca
 def test_the_denial_offers_no_workaround(tmp_path, cycle):
     proc = cycle.run(tmp_path, "Bash", {"command": f"printf x > {CONTEXT}"}, (cycle.dev, "dev"))
     _denial(proc)
-    assert len(proc.stderr.strip().splitlines()) == 1, proc.stderr
+    # Its one further line names the owner's re-dispatch (test_tool_policy_declared_write_means), no other route.
+    lines = proc.stderr.strip().splitlines()
+    assert len(lines) == 2 and lines[1].startswith(f"tool-policy.v1 means: ba owns {CONTEXT}; "), proc.stderr
 
 
 def test_undeclared_paths_keep_the_rows(tmp_path, cycle):
@@ -1222,11 +1224,7 @@ def test_the_raw_reads_give_what_the_text_reads_gave(tmp_path, seed):
             data = data[:at] + rng.choice(pieces) + data[at:]
         path = tmp_path / f"f{n}"
         path.write_bytes(data)
-        assert outcome(declared_paths._load_json, path) == outcome(lambda p: json.load(open(p)), path), data
         assert outcome(declared_paths._read_text, path) == outcome(lambda p: p.read_text(encoding="utf-8"), path), data
-    assert declared_paths._TEXT_ENCODING is not None  # the raw reads were the ones compared
-    for missing in (tmp_path / "missing", tmp_path):
-        assert outcome(declared_paths._load_json, missing) == outcome(lambda p: json.load(open(p)), missing)
 
 
 def test_the_declarable_shapes_decode_only_an_escaped_value(tmp_path, monkeypatch):
@@ -1283,7 +1281,7 @@ def test_a_hook_process_ends_with_the_status_and_output_it_decided(tmp_path, cyc
     # stderr are the ones it decided, a denial's and an allow's alike.
     denied = cycle.run(tmp_path, "Write", _write(CONTEXT), None)
     assert denied.returncode == 2 and denied.stderr.startswith(BLOCK) and denied.stderr.endswith("\n")
-    assert len(denied.stderr.splitlines()) == 1
+    assert len(denied.stderr.splitlines()) == 2  # the BLOCKED line and the means line
     allowed = cycle.run(tmp_path, "Write", _write("docs/dev/notes.md"), None)
     assert (allowed.returncode, allowed.stderr, allowed.stdout) == (0, "", "")
 

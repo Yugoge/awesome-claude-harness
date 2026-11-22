@@ -127,12 +127,21 @@ def _tx(path: Path, command: str | None) -> Path:
     return path
 
 
+def _log_under(home, rows, key: str) -> None:
+    """The rows, of project `key`, in the score log of a run whose HOME is `home`: where the writer's own definition
+    (score_log.log_path) puts it, whatever CLAUDE_CONFIG_DIR says."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("HOME", str(home))
+        log = score_log.log_path()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(json.dumps({**r, "project": key}) + "\n" for r in rows), encoding="utf-8")
+
+
 def _start(tmp_path: Path, agent_type: str, command: str | None, rows=(), raw: str | None = None) -> subprocess.CompletedProcess:
     project, config = tmp_path / "project", tmp_path / "cfg"
     project.mkdir(exist_ok=True)
-    (config / "logs").mkdir(parents=True, exist_ok=True)
     key = score_log.project_key(project)
-    (config / "logs" / "lifecycle.jsonl").write_text("".join(json.dumps({**r, "project": key}) + "\n" for r in rows), encoding="utf-8")
+    _log_under(os.environ["HOME"], rows, key)
     payload = {"agent_id": "a1", "agent_type": agent_type, "cwd": str(project), "session_id": "s", "transcript_path": str(_tx(tmp_path / "t.jsonl", command))}
     env = {**os.environ, "CLAUDE_CONFIG_DIR": str(config), "CLAUDE_PROJECT_DIR": str(project), "PYTHONDONTWRITEBYTECODE": "1"}
     return subprocess.run([sys.executable, str(HOOK)], input=raw if raw is not None else json.dumps(payload), capture_output=True, text=True, env=env, timeout=60)
@@ -268,9 +277,7 @@ def _codex_stop(tmp_path: Path, rows, *, flag=None, ledger=False, role="qa", com
     sub = tmp_path / "store" / "s" / "subagents" / "agent-aqa.jsonl"
     sub.parent.mkdir(parents=True)
     sub.write_text(json.dumps({"type": "user", "message": {"content": prompt}}) + "\n", encoding="utf-8")
-    (config / "logs").mkdir(parents=True)
-    key = score_log.project_key(project)
-    (config / "logs" / "lifecycle.jsonl").write_text("".join(json.dumps({**r, "project": key}) + "\n" for r in rows), encoding="utf-8")
+    _log_under(tmp_path / "home", rows, score_log.project_key(project))
     payload = {"stop_hook_active": again, "agent_id": "aqa", "agent_type": role, "session_id": "s", "cwd": str(project), "transcript_path": str(_tx(tmp_path / "t.jsonl", command)),
                "agent_transcript_path": str(sub)}
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_CONFIG_DIR": str(config), "HOME": str(tmp_path / "home"), "PYTHONDONTWRITEBYTECODE": "1"}
@@ -327,10 +334,9 @@ def test_an_error_reading_the_record_is_no_debate(tmp_path: Path) -> None:
 def test_a_record_that_cannot_be_read_is_no_rows(tmp_path: Path, monkeypatch) -> None:
     """A log with a malformed line before the last raises ScoreLogError; the readers see no rows (an empty list, not None):
     nobody is low and the main line is the one of an empty record."""
-    log = tmp_path / "logs" / "lifecycle.jsonl"
-    log.parent.mkdir()
+    log = score_log.log_path()
+    log.parent.mkdir(parents=True)
     log.write_text("not json\n" + json.dumps(_event("dev", -40)) + "\n", encoding="utf-8")
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     with pytest.raises(score_log.ScoreLogError):
         score_log.read_lines(str(log))

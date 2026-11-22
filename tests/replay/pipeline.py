@@ -15,8 +15,8 @@ command file of the tree under test (commands/<name>.md, read at run time):
 * dispatch(): a "Use Task/Agent tool with:" template of a step, its prompt
   rendered (placeholders, the orchestrator's conditional lines, the obligation
   block instantiated from the worked example or from the template's
-  "embed ... here with role=..., artifacts=[...]" sentence, dispatched_at the
-  current UTC time), and the subagent played by agents.Player;
+  "embed ... here with role=..., artifacts=[...]" sentence; no dispatched_at, as
+  the text asks), and the subagent played by agents.Player;
 * ask(): one AskUserQuestion relaying a producer question artifact (or, with the driver argument
   `ask`, none answered: the question's default taken as a recorded assumption).
 
@@ -331,7 +331,6 @@ class Orchestrator:
             ob = json.loads(m.group(0))
             if lane is not None:  # a fan-out lane dispatch: the lane values the template's adapter line names
                 ob["lane"], ob["lane_set"], ob["profile"] = lane, lane_set, self.profile
-            ob["dispatched_at"] = now
             return prompt[:lit.start()] + self._block(ob) + prompt[lit.end():]
         lines = prompt.split("\n")
         for i, line in enumerate(lines):
@@ -353,7 +352,6 @@ class Orchestrator:
                 if k not in fields:
                     raise cmdtext.TextNotFound(f"obligation instruction lacks {k}=: {line[:120]}")
                 ob[k] = fields[k]
-            ob["dispatched_at"] = now
             ob["artifacts"] = artifacts
             lines[i] = line[:line.index("embed `<obligation")] + "\n" + self._block(ob)
             return "\n".join(lines)

@@ -23,7 +23,7 @@ import re
 
 import pytest
 
-from hooks.lib import score_log
+from hooks.lib import obligation, score_log
 from tests.replay import suite
 from tests.replay.test_score_replay import OBLIGATION, clean_run, dispatches
 
@@ -77,7 +77,7 @@ def rounds(r, role: str, profile: str) -> list[dict]:
                 if block.get("type") == "tool_use" and block.get("id") == d["tool_use_id"]:
                     prompt = block["input"].get("prompt") or ""
                     found = OBLIGATION.search(prompt)
-                    ob = json.loads(found.group(1)) if found else {}
+                    ob = obligation.dispatch_time(json.loads(found.group(1)) if found else {}, rec.get("timestamp"))
                     if ob.get("role") == role and ob.get("profile") == profile:
                         out.append({**d, "prompt": prompt, "obligation": ob})
     return out

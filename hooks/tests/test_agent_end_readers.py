@@ -34,6 +34,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -146,6 +147,7 @@ def returned(m, role, doc, agent, reply):
 
 
 def background_running(m, role, doc, agent, reply):
+    m.tx.clock = datetime.now(timezone.utc) - timedelta(minutes=1)  # launched a minute ago: within its time limit
     call = m.dispatch(role, doc, background=True)
     m.launched(call, agent)
     m.say()
@@ -255,6 +257,9 @@ def test_commit_bulk_holds_its_stop_to_the_report_its_landing_analyst_stopped_wi
     stopped = _bulk(env, channel, _status(commit_status="failed", failure_code="grant_missing",
                                           failure_reason="no bulk sentinel"))
     code, text = sg.run(env)
+    if channel is background_running:  # a child of the span still runs: the stop is a wait (test_background_dispatch.py)
+        assert code == 0 and "waiting for" in text, text
+        return
     assert code == 2, text
     if stopped:
         assert "commit --bulk: changelog-analyst reports 'failed': grant_missing no bulk sentinel" in text, text
@@ -269,6 +274,9 @@ def test_commit_bulk_ends_once_its_landing_analyst_stopped_with_a_landing(env, c
     "commit --bulk: no changelog-analyst status block in this /commit" held the Stop."""
     stopped = _bulk(env, channel, _status(commit_status="committed"), planned=False)
     code, text = sg.run(env)
+    if channel is background_running:  # a child of the span still runs: the stop is a wait
+        assert code == 0 and "waiting for" in text, text
+        return
     assert (code, text) == (0, "") if stopped else (
         code == 2 and "commit --bulk: no changelog-analyst status block in this /commit" in text), text
 

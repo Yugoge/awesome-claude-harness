@@ -62,8 +62,10 @@ def _write(path, doc):
 
 
 def _fanout(dev_dir, task, lanes, lane_set=None, workers=None):
+    """Without workers the canonical stays missing: the check's own rebuild is refused (no baseline head)."""
     for lane in lanes:
-        _write(dev_dir / f"dev-report-{task}-{lane}.json", _lane_report(task, lane, lane_set or lanes))
+        report = _lane_report(task, lane, lane_set or lanes)
+        _write(dev_dir / f"dev-report-{task}-{lane}.json", report if workers is not None else {**report, "baseline_head_sha": ""})
     if workers is not None:
         return _write(dev_dir / f"dev-report-{task}.json", _canonical(task, workers))
     return dev_dir / f"dev-report-{task}.json"
@@ -211,7 +213,7 @@ def test_workers_differing_from_the_obligations_lane_set_warn(dev_dir, mode):
             "differ from the dispatch obligation's lane_set ['l1', 'l2', 'l3']") in result.stderr
     # Its producer is a hook: the finding names the dispatch that runs it (P1b E5 (a)).
     assert (f"| reached by: dispatching again the dev dispatch that declared docs/dev/dev-report-{TASK}-l1.json "
-            "(lane l1), which writes that report again in that dispatch; the write runs it") in result.stderr
+            "(lane l1), which writes that report again in that dispatch; its stop runs it") in result.stderr
 
 
 @pytest.mark.parametrize("mode", [None, "block"])

@@ -35,9 +35,9 @@ export FSWATCH_MAX_RETRIES=3       # max retries
 ```
 ~/.claude/hooks/git-fswatch.sh          # main script
 ~/.claude/hooks/fswatch-manager.sh      # management tool
-~/.claude/logs/git-fswatch.log          # log file
+~/.local/state/claude-harness/<install>/logs/git-fswatch-<repo>.log   # log file (the state root)
 ~/.claude/docs/git-fswatch.md           # full documentation
-/tmp/git-fswatch-${USER}.lock           # lock file
+~/.local/state/claude-harness/<install>/state/git-fswatch-${USER}-<repo>.lock  # lock file
 ```
 
 ---
@@ -84,7 +84,7 @@ export FSWATCH_MAX_RETRIES=3       # max retries
 **Watcher not starting**:
 ```bash
 bash ~/.claude/hooks/fswatch-manager.sh test ~/my-project
-tail -50 ~/.claude/logs/git-fswatch.log
+tail -50 ~/.local/state/claude-harness/<install>/logs/git-fswatch-<repo>.log
 ```
 
 **File changes not detected**:

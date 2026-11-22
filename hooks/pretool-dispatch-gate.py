@@ -25,7 +25,8 @@ exemptions, its failure direction; hooks/lib/gate_runner.py):
    additionalContext; it never refuses;
 9. pretool-commit-dispatch-attest.py, the witness: a changelog-analyst dispatch is
    recorded only when no rule above refused it and no consulted hook would, so the
-   record never witnesses a dispatch that was refused. It never blocks.
+   record never witnesses a dispatch that was refused. It never blocks;
+10. lib/dispatch_temp.py opened(), a witness too: a foreground dispatch's temp directory.
 
 When rules refuse, their reasons are reported together, once, with exit 2.
 """
@@ -60,6 +61,7 @@ RULES = [
     Rule("prompt-purity", str(HOOKS / "pretool-orchestrator-prompt-purity.py"), OBSERVE),
     Rule("dev-loop-before", call="lib.dev_loop_checks:advice", kind=ADVISE),
     Rule("commit-dispatch-witness", str(HOOKS / "pretool-commit-dispatch-attest.py"), WITNESS),
+    Rule("dispatch-temp", call="lib.dispatch_temp:opened", kind=WITNESS),  # the dispatch's temp directory
 ]
 
 if __name__ == "__main__":

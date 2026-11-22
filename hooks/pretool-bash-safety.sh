@@ -1,7 +1,8 @@
 #!/bin/bash
 # PreToolUse safety hook for Bash: the rules live in lib/bash_safety_rules.py, run in one interpreter per call.
 # This entry keeps the harness switch, the fail-closed interpreter check, and the pre-clean snapshot taken before a
-# /do or /allow release lets a destructive `git clean` through.
+# /do release lets a destructive `git clean` through. It runs inside hooks/pretool-launch.py, where the pre-tool
+# verdicts meet and an /allow grant releases a refusal (lib/hook_launch.release_refused).
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # no harness hook runs while /harness off holds
 
 INPUT=$(cat)
@@ -13,9 +14,9 @@ INPUT=$(cat)
   || ! grep -qs '"CLAUDE_HOME"' "$(dirname "${BASH_SOURCE[0]}")/../settings.json" || eval "$(python3 \
   "$(dirname "${BASH_SOURCE[0]}")/lib/claude_home.py" env CLAUDE_DEV_SYSTEMD \
   CLAUDE_DAEMON_RESTART_GRANT_HELPER CLAUDE_PROTECTED_DAEMON_PREFIX CLAUDE_PROTECTED_DAEMON_TARGETS \
-  CLAUDE_PROTECTED_PROCESS_FAMILY CLAUDE_HARD_BANNED_SCRIPTS 2>/dev/null)"
+  CLAUDE_HARD_BANNED_SCRIPTS 2>/dev/null)"
 export CLAUDE_DEV_SYSTEMD CLAUDE_DAEMON_RESTART_GRANT_HELPER CLAUDE_PROTECTED_DAEMON_PREFIX \
-  CLAUDE_PROTECTED_DAEMON_TARGETS CLAUDE_PROTECTED_PROCESS_FAMILY CLAUDE_HARD_BANNED_SCRIPTS
+  CLAUDE_PROTECTED_DAEMON_TARGETS CLAUDE_HARD_BANNED_SCRIPTS
 HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 CLAUDE_HOME="$(cd "$HOOKS_DIR/.." 2>/dev/null && pwd)"
 PYTHON_BIN="${CLAUDE_PYTHON_BIN:-${CLAUDE_HOME}/venv/bin/python}"
@@ -104,11 +105,6 @@ _preclean_snapshot_guard() {
 case "$VERDICT" in
   ALLOW) exit 0 ;;
   CONSENT) _preclean_snapshot_guard; exit 0 ;;
-  "SENTINEL "*)
-    _preclean_snapshot_guard
-    echo "[allow-sentinel] structured grant matched for task=${VERDICT#SENTINEL }. consume-on-any-terminal-result deferred to PostToolUse." >&2
-    printf '%s\n' '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow", "permissionDecisionReason": "/allow sentinel grant consumed (structured allowed_operations[] match)"}}'
-    exit 0 ;;
 esac
 _SAID="BLOCKED: safety-hook FAIL-CLOSED — the Python interpreter this hook depends on ($PYTHON_BIN) is unavailable or lib/bash_safety_rules.py gave no verdict, so no safety rule could be evaluated."; echo "$_SAID" >&2
 echo "REASON: repair the interpreter deployment; a call no rule could read is never allowed." >&2

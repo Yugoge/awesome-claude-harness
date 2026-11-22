@@ -273,6 +273,33 @@ def _within(ts: datetime | None, now: datetime, minutes: int) -> bool:
     return ts >= now - timedelta(minutes=minutes)
 
 
+def _recorded_write(path: str, sid: str) -> datetime | None:
+    """The timestamp the CLI wrote on the record of the last Write of `path` in session `sid`'s
+    transcript (lib/subagent_restart.config_projects), else None."""
+    try:
+        from subagent_restart import config_projects  # noqa: PLC0415 -- only the mint pays for it
+        transcripts = [t for root in config_projects() for t in root.glob(f"*/{sid}.jsonl")] if sid else []
+    except Exception:
+        return None
+    want, at = os.path.realpath(path), None
+    for transcript in transcripts:
+        try:
+            lines = transcript.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in (ln for ln in lines if '"Write"' in ln):
+            try:
+                record = json.loads(line)
+                blocks = record["message"]["content"]
+            except (ValueError, KeyError, TypeError):
+                continue
+            if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Write"
+                   and os.path.realpath(str((b.get("input") or {}).get("file_path") or "")) == want
+                   for b in blocks if isinstance(blocks, list)):
+                at = _parse_iso(record.get("timestamp")) or at
+    return at
+
+
 def _mtime_utc(path: str) -> datetime | None:
     try:
         return datetime.fromtimestamp(os.stat(path).st_mtime, timezone.utc)
@@ -348,8 +375,8 @@ def verify_pipeline_dispatch(sid: str, task_id: str, repo_root: str,
     does not possess. Read them as one conjunction:
 
       1-3. a live, well-formed manifest for THIS session and THIS task
-           (bounded by both `dispatched_at` and the file's own mtime, so
-           back-dating one field is not enough)
+           (bounded by the CLI's record of the Write that wrote it and by
+           the file's own mtime; a typed `dispatched_at` is not judged)
       4-5. a repository plan for the same task that ADMITS this exact repo
       6.   whose plan entry agrees with the repo's live branch and HEAD --
            the same triple the grant itself records and the guard re-checks
@@ -387,19 +414,17 @@ def verify_pipeline_dispatch(sid: str, task_id: str, repo_root: str,
             f"request is for {task_id!r}"
         ), evidence
 
-    dispatched_at = _parse_iso(manifest.get("dispatched_at"))
-    if not _within(dispatched_at, now, MANIFEST_WINDOW_MINUTES):
-        return False, (
-            f"manifest {path} has dispatched_at={manifest.get('dispatched_at')!r}, which is "
-            f"not inside the {MANIFEST_WINDOW_MINUTES}-minute window ending now -- re-run "
-            "/commit rather than reusing a stale pipeline manifest"
-        ), evidence
-    if not _within(_mtime_utc(path), now, MANIFEST_WINDOW_MINUTES):
-        return False, (
-            f"manifest {path} has an mtime outside the {MANIFEST_WINDOW_MINUTES}-minute "
-            "window (its dispatched_at field alone is not proof of freshness)"
-        ), evidence
-    evidence["manifest_dispatched_at"] = manifest.get("dispatched_at")
+    # The manifest's time is the CLI's record of the Write that wrote it, else its mtime; a typed
+    # `dispatched_at` (the old text asked for one) is no evidence and is not judged.
+    written, mtime = _recorded_write(path, sid), _mtime_utc(path)
+    for at, what in ((written or mtime, "the CLI's record of the Write that wrote it"), (mtime, "its mtime")):
+        if not _within(at, now, MANIFEST_WINDOW_MINUTES):
+            return False, (
+                f"manifest {path}: {what} ({at and at.isoformat()}) is not inside the "
+                f"{MANIFEST_WINDOW_MINUTES}-minute window ending now -- re-run /commit rather "
+                "than reusing a stale pipeline manifest"
+            ), evidence
+    evidence["manifest_dispatched_at"] = (written or mtime).isoformat()
 
     # Accept BOTH spellings of this one key. `commands/commit.md` names the
     # manifest's own fields in lowercase (`session_id`, `task_id`,

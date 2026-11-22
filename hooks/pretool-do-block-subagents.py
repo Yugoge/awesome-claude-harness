@@ -26,9 +26,7 @@ SEMANTICS (decision table, first match wins):
   1. tool_name not Agent/Task ................................ exit 0
   2. caller is a subagent context (lib.subagent) ............. exit 0
   3. no active /do consent flag for this session ............. exit 0
-  4. structured /allow grant for the Agent tool exists ....... exit 0
-     (human escape hatch — same match_sentinel_grant_for_tool lookup
-      pretool-subagent-enforce.py already uses)
+  4. (an owner's /allow grant releases the refusal in lib/hook_launch)
   5. tool_input.subagent_type names a role allowed below ..... exit 0
      (_read_only_role)
   6. otherwise (main agent, /do active) ...................... exit 2
@@ -95,7 +93,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import DISPATCH_TOOLS, is_subagent_context      # noqa: E402
-from lib.allowlist import has_do_consent, match_sentinel_grant_for_tool  # noqa: E402
+from lib.allowlist import has_do_consent  # noqa: E402
 
 
 def _parse_stdin() -> dict:
@@ -325,10 +323,6 @@ def _main() -> None:
             sys.exit(0)
         session_id = stdin_data.get('session_id', 'default')
         if not has_do_consent(stdin_data):
-            sys.exit(0)
-        # Human escape hatch: an explicit /allow grant for the Agent tool
-        # overrides the block (read-only; consumption stays in PostToolUse).
-        if match_sentinel_grant_for_tool(session_id, 'Agent') is not None:
             sys.exit(0)
         # A role with no dev-report duty and no Write/Edit tool cannot leave
         # the colliding dev-report.

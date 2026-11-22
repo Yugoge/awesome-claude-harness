@@ -1,18 +1,26 @@
 # Harness temp state inventory
 
-> Last updated: 2026-11-17
+> Last updated: 2026-11-21
 
 Every file or directory the harness itself keeps under `/tmp`, `/var/tmp` or `$TMPDIR`,
 with the `path:line` that creates or reads it. `hooks/lib/harness_temp_state.py` is the one
 definition of this list: `LOCATIONS` holds one entry per row below (the **Location** column),
 `classify(path)` answers which entry a path is, `is_harness_state(path)` whether it is control
-state, and `temp_roots()` / `is_in_temp_root(path)` what counts as a temp root. No hook uses the
-module yet; `hooks/tests/test_harness_temp_state.py` pins every row.
+state, and `temp_roots()` / `is_in_temp_root(path)` what counts as a temp root. The write gate's
+overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`) and the tool policy's `_protected`
+(`hooks/pretool-tool-policy.py`, the entries marked `hooks_only`) read it;
+`hooks/tests/test_harness_temp_state.py` pins every row.
 
 ## Roots
 
-- **State dir**: `hooks/lib/harness_state_dir.py:29` -- `CLAUDE_STATE_DIR` when absolute, else
-  `/tmp` (`:26`). Most rows live here.
+- **State dir**: `hooks/lib/harness_state_dir.py:44` -- `CLAUDE_STATE_DIR` when absolute, else
+  `state/` under the state root on disk, `<home>/.local/state/claude-harness/<harness home's
+  name>-<crc32 of its real path>` (`:32`, beside the refusal record's `refusals/` and the
+  harness's `logs/` and `restart-state/`). Most rows live here. Until 2026-11-21 the default was
+  `/tmp`. No hook, import or session start moves what an earlier version left there: carrying the
+  control rows (all but git-blessed-grants, daemon-restart-grant, scratch-owner, dispatch-temp-state,
+  doc-sync-notices), the score log and the restart state over is the explicit install step
+  `scripts/install/carry_state.py`, which only the configured harness may run; `/tmp` stays a name root.
 - **Temp roots**: `/tmp`, `/var/tmp`, and each absolute `TMPDIR`, `CLAUDE_TMPDIR`
   (`hooks/pretool-bash-safety.sh:17`), `CLAUDE_CODE_TMPDIR` (`settings.json` env, with `TMPDIR`
   `/var/tmp/claude-scratch`). The module realpaths each, so `/tmp` and an alias such as
@@ -34,9 +42,10 @@ module yet; `hooks/tests/test_harness_temp_state.py` pins every row.
 
 | Location | Path (below a name root) | Created / read at |
 |---|---|---|
-| sentinel-grants | `claude-grants/<task_id>.json` | `hooks/lib/allowlist.py:64`, `hooks/userprompt-consent-allowlist.sh:69`, `hooks/posttool-allowlist-consume.py:22`, `hooks/stop-cleanup-allowlist.sh:25` |
+| sentinel-grants | `claude-grants/<task_id>.json` | `hooks/lib/allowlist.py:46`, `:262` (`write_sentinel_grant`), `:305` (`release`, from `hooks/lib/hook_launch.py` `release_refused`), `hooks/userprompt-consent-allowlist.sh:53`, `hooks/stop-cleanup-allowlist.sh:25` |
 | do-consent-flag | `claude-orchestrator-consent-<sid>.flag` (matched as `claude-*-consent-*.flag`) | `hooks/prompt-workflow.py:1210`, `hooks/lib/allowlist.py:99` |
 | tool-streak | `claude-tool-streak-<sid>.json` | `hooks/lib/allowlist.py:107` |
+| tool-ran | `claude-tool-ran-<sid>.log`; no agent writes, moves or removes it (`hooks/pretool-tool-policy.py` `_protected`, `hooks_only`) | `hooks/lib/allowlist.py:167`, `hooks/posttool-orchestrator-ran.py` |
 | do-reservation | `claude-do-resv-<ts>` | `hooks/prompt-workflow.py:1189` |
 | do-task-sidecar | `claude-do-task-<sid>.json` | `hooks/prompt-workflow.py:1229` |
 | userintent-flag | `claude-<cmd>-userintent-<sid>.flag` | `hooks/prompt-workflow.py:1244`, `hooks/pretool-wrapper-userintent.py:123`, `scripts/write-commit-grant.py:397`, `hooks/pretool-bash-safety.sh:28` |
@@ -46,43 +55,49 @@ module yet; `hooks/tests/test_harness_temp_state.py` pins every row.
 | commit-manifest | `claude-commit-manifest-<sid>.json` | `hooks/lib/commit_pipeline.py:169` |
 | bulk-commit-sentinel | `claude-bulk-commit-sentinel-<sid>-<nonce>.json` | `scripts/write-bulk-commit-sentinel.py:99`, `hooks/lib/commit_pipeline.py:120` |
 | commit-event-pointer | `claude-commit-event-<key>.json` | `hooks/lib/commit_journal.py:413` |
-| agentic-commit | `agentic-commit/` (`commit-events/`, `push/`, `push-analyst/`, `merge-analyst/`, `locks/`) | `hooks/lib/commit_journal.py:113`, `scripts/write-push-gate-token.py:82`, `scripts/execute-push.py:52`, `hooks/lib/merge_grant.py:40`, `hooks/push.sh:109`, `:215`, `agents/changelog-analyst.md:172` |
+| agentic-commit | `agentic-commit/` (`commit-events/`, `push/`, `push-analyst/`, `merge-analyst/`, `locks/`) | `hooks/lib/commit_journal.py:113`, `scripts/write-push-gate-token.py:82`, `scripts/execute-push.py:52`, `hooks/lib/merge_grant.py:40`, `hooks/push.sh:109`, `:215`, `agents/changelog-analyst.md:180` |
 | git-residual-override | `claude-git-residual-override/` | `hooks/pretool-git-privilege-guard.py:1868`, `scripts/write-git-residual-override.py:42` |
 | runcode-watchdog-pid | `.runcode-watchdog-<sid>.pid` | `hooks/pretool-runcode-watchdog.py:73`, `hooks/posttool-runcode-watchdog.py:79` |
 | usage-snapshot-cache | `claude-usage-snapshot-cache.json`, `.usage-cache-*` | `hooks/userprompt-usage-snapshot.py:70`, `:80`, `:94` |
 | worktree-guard-cache | `worktree-guard-cache` | `hooks/pretool-worktree-guard.sh:26` |
 | git-fswatch-lock | `git-fswatch-<user>-<repo>.lock` | `hooks/git-fswatch.sh:36` |
-| tmpfs-pressure-counter | `claude-pressure-warn-<sid>` (and `.lock`) | `hooks/userprompt-tmpfs-pressure.sh:66` |
-| checkpoint-push-stamp | `.checkpoint-push-<hash>.ts` | `hooks/lib/checkpoint-core.sh:362` |
+| tmpfs-pressure-counter | `claude-pressure-warn-<sid>` (the short volumes last told, the time of the last reaction) | `hooks/userprompt-tmpfs-pressure.sh:46` |
+| checkpoint-push-stamp | `.checkpoint-push-<hash>.ts` | `hooks/lib/checkpoint-core.sh:368` |
+| checkpoint-overtime | `.checkpoint-overtime-<hash>` (the snapshot pause mark); no agent writes, moves or removes it (`_protected`, `hooks_only`) | `hooks/lib/bash_safety_rules.py:4999` |
+| codex-unavailable | `codex-unavailable.json`; no agent writes, moves or removes it (`_protected`, `hooks_only`) | `hooks/lib/codex_transcript.py:22`, `hooks/subagentstop-codex-enforce.py:118` |
+| report-provenance | `report-provenance/<key>.json`, `<key>.head`; no agent writes, moves or removes it (`_protected`, `hooks_only`) | `hooks/lib/report_provenance.py:110`, `:113` |
+| lane-ledger | `lane-ledger/<sid>/<agent id>.json` (and `.lock`): a dev lane's file baselines. Removed by its reader at the lane's stop once the lane's report was read; a lane that never reaches such a stop leaves it; no agent writes, moves or removes it (`_protected`, `hooks_only`) | `hooks/lib/lane_ledger.py:110` (`record`, from `hooks/pretool-lane-ledger.py`), `:157` (`at_stop`) |
+| returns-hold | `returns-hold/<sid>.json` (and an empty `.lock`): a batch of held background returns, written only while the hold is switched on (`CLAUDE_RETURNS_HOLD=on`; off unless switched on). Removed by its writer at the batch's hand-over (at most 30 min plus the next prompt after its first hold); the `.lock` stays; no agent writes, moves or removes it (`_protected`, `hooks_only`) | `hooks/lib/returns_hold.py` `_save` and `decide` (from `hooks/userprompt-launch.py`), `deadline` (from `hooks/userprompt-returns-deadline.sh`) |
 | capability-state | `claude-capability-<euid>/` | `hooks/lib/capability_state.py:206` |
 | git-blessed-grants | `claude-git-blessed/<tok>.grant` (under `${TMPDIR:-/tmp}`) | none since the minter, which nothing called, and the keystone's exemption were removed (S31); still classified |
 | daemon-restart-grant | `claude-allow-daemon-restart-<target>.flag` (under `CLAUDE_TMPDIR`) | `hooks/pretool-bash-safety.sh:25`, `:544` |
 | scratch-owner | `<sid>/.owner` (and `.owner.<pid>.tmp`) in the session scratch root | `hooks/session-scratch-init.sh:27`, `:73`, `hooks/lib/scratch_owner.py:17` |
+| dispatch-temp-state | `<sid>/.dispatch-tmp` (and `.dispatch-tmp.<pid>`) in the session scratch root; no agent writes, moves or removes it (`hooks/pretool-tool-policy.py` `_protected`) | `hooks/lib/dispatch_temp.py:31` (`_write`, `_read`), the env-file line of `hooks/session-scratch-init.sh`, `scripts/install/tmp-cleanup-install.sh` `retired` |
 | doc-sync-notices | `<sid>/doc-sync-notices-<audience>.json` in the session scratch root (`locations.session_scratch_root`) | `hooks/doc_sync/notice.py:39`, `:232`, `:266`, `:294` |
 
 ## Harness-managed scratch
 
 | Location | Path | Created / read at |
 |---|---|---|
-| claude-scratch | `/tmp/claude-scratch/<role>/` (role scratch, e.g. `qa/`), `/var/tmp/claude-scratch/<sid>/` (session scratch) | `policies/tool-policy.v1.json:167`, `hooks/session-scratch-init.sh:27`, `hooks/sessionend-scratch-sweep.sh:27`, `scripts/install/tmpfiles-claude-scratch.conf:50` |
+| claude-scratch | `/var/tmp/claude-scratch/<sid>/` (session scratch), `<sid>/<role>/` in it (a role's drafts, `<session root>/<role>/`; before policy_version 10 `/tmp/claude-scratch/<role>/`, which the tmpfiles rule ages out; there, and in the old `/tmp/agentic-commit/locks/`, a flow begun before only overwrites an existing single-link file whose path holds no link, under the role's deny prefixes, until 24 hours after the policy file reached the install: `hooks/lib/policy_registry.py` `in_flight`), `<sid>/<role>/<agent id>/` in it (a subagent's own scratch) | `policies/tool-policy.v1.json:170`, `hooks/session-scratch-init.sh:27`, `hooks/subagentstart-scratch.py`, `hooks/sessionend-scratch-sweep.sh:27`, `scripts/install/tmpfiles-claude-scratch.conf:42` |
 | codex-outputs | `/var/tmp/codex-outputs/` | `scripts/steps/codex-run.py:40`, `policies/tool-policy.v1.json:39` |
 | graphify-cache | `/var/tmp/claude-graphify/` | `scripts/graphify_lib.py:138` |
-| orchestrator-output | `/tmp/{dev-output,qa-output,iteration-context,cleanliness-output,style-output,cleaner-output,rule-output}-<epoch>.json` | `scripts/orchestrator.sh:25`, `:26`, `:27`, `:248`, `:249`, `:360`, `:426` |
 | runtime-guard-err | `runtime-guard-XXXXXX` in `CLAUDE_TMPDIR` | `hooks/pretool-bash-safety.sh:285` |
 | grepguard-probe | `grepguard-probe-*` (mkdtemp) | `hooks/pretool-grep-backtrack-guard.py:1108` |
-| checkpoint-result | `checkpoint-result.<pid>.<ns>` (mktemp fallback) | `hooks/lib/checkpoint-core.sh:645` |
+| checkpoint-result | `checkpoint-result.<pid>.<ns>` (mktemp fallback) | `hooks/lib/checkpoint-core.sh:677` |
 | hero-fixture | `claude-hero-fixture-*` (mkdtemp) | `scripts/capture-hero-run.py:294` |
-| tmp-cleanup-candidates | `/var/tmp/tmp-cleanup-cands-*` | `scripts/install/tmp-cleanup-install.sh:92` |
+| tmp-cleanup-candidates | `/var/tmp/tmp-cleanup-cands-*` | `scripts/install/tmp-cleanup-install.sh:267`, `:291` |
 
 ## Not inventoried
 
-- `/tmp/claude-0/` is Claude Code's own task directory; the harness only sweeps it
-  (`scripts/install/tmp-cleanup-install.sh:58`).
-- Names the sweep still lists but no current code writes: `contract-bookmark-*.json`,
-  `artifact-status-*.json` (`tmp-cleanup-install.sh:147`), `claude-commit-plan-*` (`:59`).
+- `<CLI temp root>/claude-<uid>/` is Claude Code's own task directory; the harness only sweeps
+  its `*.output` files, of this user and this installation's CLI temp root only
+  (`scripts/install/tmp-cleanup-install.sh:86`, `:368`).
+- `contract-bookmark-*.json`, `artifact-status-*.json` and `claude-commit-plan-*`: no current
+  code writes them, and the sweep no longer lists them.
 - Anonymous `mktemp` / `tempfile` names (`tmp.XXXXXX`) carry no harness name to match.
-- State outside the temp roots: restart state (`hooks/lib/subagent_restart.py:201`, under
-  `~/.claude`), the attribution journal (`hooks/lib/attribution_journal.py:92`), overnight state
+- State outside the temp roots: restart state (`hooks/lib/subagent_restart.py:205`, the state
+  root's `restart-state/`), the logs (the state root's `logs/`), the attribution journal (`hooks/lib/attribution_journal.py:92`), overnight state
   (`scripts/create-overnight-state.sh:688`, under the project's `.claude/`).
 
 ## Limitations

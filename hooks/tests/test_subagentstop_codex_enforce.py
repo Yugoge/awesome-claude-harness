@@ -5,10 +5,10 @@ armed the codex flag and whose ledger entry is absent. Which subagents are
 bound is no role list: it is the stopping agent's own dispatch prompt, which
 carries the line `codex_required: true` exactly where the command text asks
 the agent to consult codex (every BA / QA / dev dispatch under --codex, and
-any other dispatch whose template adds it, such as /dev-overnight's PM), or
-the dispatch template it was made from (hooks/lib/dispatch_template.py), which
-carries that line: in a --codex session a dispatch of that template without
-the line is the orchestrator's omission (P1b acceptance 5).
+any other dispatch whose template adds it, such as /dev-overnight's PM). That
+is the agents' own contract (agents/*.md "Codex:": without that line skip
+codex), so a dispatch without the line is not bound, even when the template it
+was made from shows the line (live 2026-11-21: 15 stops of 10 agents held so).
 """
 from __future__ import annotations
 
@@ -156,8 +156,17 @@ TEMPLATES_WITH_THE_LINE = [
 
 
 @pytest.mark.parametrize("command,role,profile", TEMPLATES_WITH_THE_LINE)
-def test_a_dispatch_omitting_the_line_its_template_carries_is_bound(tmp_path, command, role, profile):
+def test_a_dispatch_omitting_the_line_its_template_carries_is_not_bound(tmp_path, command, role, profile):
+    """The agent was told to skip codex, so its stop is not held (before: exit 2, CODEX_ENFORCE_BLOCKED)."""
     project, agent_id, transcript = _setup(tmp_path, role, _template_prompt(command, role, profile, line=False))
+    proc = _stop(tmp_path, project, agent_id, transcript)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+
+
+@pytest.mark.parametrize("command,role,profile", TEMPLATES_WITH_THE_LINE)
+def test_a_template_dispatch_carrying_the_line_is_held(tmp_path, command, role, profile):
+    project, agent_id, transcript = _setup(tmp_path, role, _template_prompt(command, role, profile, line=True))
     proc = _stop(tmp_path, project, agent_id, transcript)
     assert proc.returncode == 2, proc.stderr
     assert f"CODEX_ENFORCE_BLOCKED: agent {agent_id} (type={role})" in proc.stderr
@@ -185,16 +194,18 @@ def test_a_template_without_the_line_binds_nothing(tmp_path, command, role, prof
     assert proc.returncode == 0, proc.stderr
 
 
-def test_a_dispatch_carrying_no_block_is_read_in_its_command_span(tmp_path):
-    """No obligation names the command: the typed command whose span holds the
-    Agent call does (the agent meta names the call)."""
+def test_a_dispatch_carrying_no_block_is_judged_by_its_own_line_in_any_command_span(tmp_path):
+    """No obligation names the command and the typed command is /dev --codex:
+    the dispatch's own line still decides (before: the span's template bound it)."""
     prompt = _template_prompt("dev", "qa", "final_verification", line=False, block=False)
     project, agent_id, transcript = _setup(tmp_path, "qa", prompt)
     _with_parent(transcript, prompt, "qa", "/dev --codex harden add")
     proc = _stop(tmp_path, project, agent_id, transcript)
-    assert proc.returncode == 2, proc.stderr
-    _with_parent(transcript, prompt, "qa", "/do harden add")
-    assert _stop(tmp_path, project, agent_id, transcript).returncode == 0
+    assert proc.returncode == 0, proc.stderr
+    asked = _template_prompt("dev", "qa", "final_verification", line=True, block=False)
+    project, agent_id, transcript = _setup(tmp_path / "asked", "qa", asked)
+    _with_parent(transcript, asked, "qa", "/dev --codex harden add")
+    assert _stop(tmp_path / "asked", project, agent_id, transcript).returncode == 2
     graphify = "Use Agent tool with:\n- subagent_type: \"graphify\"\nGraphify enrichment: extract focused subgraph"
     project, agent_id, transcript = _setup(tmp_path / "graphify", "graphify", graphify)
     _with_parent(transcript, graphify, "graphify", "/dev --codex harden add")
@@ -233,7 +244,7 @@ def test_an_unresolved_close_obligation_is_judged_as_before(tmp_path, unresolved
     exempts nothing: its `codex_required: true` line binds it as before R11."""
     prompt = _asked_by("close", "final_verification", role="dev" if unresolved == "role_mismatch" else "qa")
     if unresolved == "invalid_obligation":
-        prompt = re.sub(r'"dispatched_at": "[^"]*", ', "", prompt)
+        prompt = re.sub(r'"profile": "[^"]*", ', "", prompt)  # a required field (dispatched_at is not)
     project, agent_id, transcript = _setup(tmp_path, "qa", prompt)
     proc = _stop(tmp_path, project, agent_id, transcript)
     assert proc.returncode == 2, proc.stderr

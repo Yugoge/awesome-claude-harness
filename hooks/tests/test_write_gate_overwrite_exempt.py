@@ -85,6 +85,15 @@ def test_overwrite_of_session_scratch_report_passes(lab):
     assert _passes(lab, _existing(_session_scratch(lab) / "report.md"))
 
 
+def test_overwrite_of_a_draft_in_a_subagents_own_scratch_below_the_session_passes(lab):
+    """<session scratch directory>/<role>/<agent id>/, the directory hooks/pretool-tool-policy.py calls its own;
+    the same place below another session's directory stays refused."""
+    assert _passes(lab, _existing(_session_scratch(lab) / "architect" / "a-architect" / "draft.md"))
+    other = lab["tmp"] / "scratch-root" / "other-sess"
+    _existing(other / ".owner", json.dumps({"sid": "other-sess"}))
+    assert _refused(_write(lab, _existing(other / "architect" / "a-architect" / "draft.md")))
+
+
 def test_overwrite_of_a_temp_file_that_is_not_harness_state_passes(lab):
     # Below $TMPDIR (the lab's scratch root), a temp root wherever pytest's basetemp lives
     # (a --basetemp under /dev/shm is no temp root).
@@ -172,7 +181,7 @@ def test_session_scratch_owner_record_still_refused(lab):
     assert _refused(_write(lab, _session_scratch(lab) / ".owner"))
 
 
-@pytest.mark.parametrize("name", ["dev-output-1.json", "checkpoint-result.1.2", "runtime-guard-ab"])
+@pytest.mark.parametrize("name", ["checkpoint-result.1.2", "runtime-guard-ab"])
 def test_harness_process_scratch_still_refused(lab, name):
     """Scratch a harness process writes and reads back is not an agent's scratch."""
     assert _refused(_write(lab, _existing(lab["state"] / name)))

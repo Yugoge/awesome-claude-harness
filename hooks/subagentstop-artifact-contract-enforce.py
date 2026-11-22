@@ -64,6 +64,7 @@ from lib import claude_home, command_span, subagent_restart
 from lib.claude_home import settings_switch
 from lib.harness_vocabulary import GATE_MODES
 from lib import contract_runtime
+from lib import declared_absence
 from lib import final_report
 from lib import dispatch_template
 from lib import obligation
@@ -281,8 +282,9 @@ AGGREGATE_CHECK = Path(__file__).resolve().parent / "pretool-aggregate-check.py"
 
 def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
     """C5 for G3's canonical_missing (pretool-aggregate-check.py _find_violations), for what this lane's report
-    repairs: the aggregator's reasons for refusing it; with every report accepted, the fan-out's newest reached disk
-    past the Write/Edit watch (a shell redirection) and its Edit runs it. A sibling's is G3's, at QA's dispatch."""
+    repairs: the aggregator's reasons for refusing it by itself. Nothing else holds the lane: a rebuild that did not
+    finish, or a sibling's report the aggregator refuses, is no edit of this lane's; G3 at the QA dispatch and the
+    Stop gate rebuild and name it to the main agent."""
     try:
         spec = importlib.util.spec_from_file_location("pretool_aggregate_check", AGGREGATE_CHECK)
         g3 = importlib.util.module_from_spec(spec)
@@ -293,17 +295,14 @@ def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
         findings = []
         for family, reports in lane_reports.items():
             label = next((label for label, path in reports.items() if path.resolve() == own), None)
-            newest = label is not None and max(p.stat().st_mtime_ns for p in reports.values()) == own.stat().st_mtime_ns
-            for code, path, problem, *_ in g3._find_violations({family: reports}, canonicals, dev_dir, task_id):
-                every = g3.aggregator_refusal(dev_dir, family) if code == "canonical_missing" else ()
-                refused = g3.own_refusal(every, label)
-                if code == "canonical_missing" and (refused or not every and newest):
+            for code, path, _problem, *_ in g3._find_violations({family: reports}, canonicals, dev_dir, task_id):
+                if code != "canonical_missing" or label is None:
+                    continue
+                refused = g3.own_refusal(g3.aggregator_refusal(dev_dir, family), label)
+                if refused:
                     findings.append({"path": report_rel, "reason": code, "errors": [
                         f"{os.path.relpath(path, project_dir)} is missing: scripts/aggregate-dev-report.py refuses this report: "
-                        f"{'; '.join(refused)}. Correct that with Edit, which runs it again, then stop again." if refused else
-                        f"{os.path.relpath(path, project_dir)}: {problem}. Its producer, hooks/posttool-lane-completeness-watch.py, "
-                        "runs on a lane report's Write or Edit, and this report, the fan-out's newest, reached disk another "
-                        "way: Read it, save it again with Edit (its timestamp), then stop again."]})
+                        f"{'; '.join(refused)}. Correct that, then stop again: the stop runs it again."]})
         return findings
     except Exception:
         return []  # a wire that cannot run judges nothing
@@ -356,7 +355,7 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
         for rec in obligation._task_records(ob.get("task_id"), project_dir, None):
             other = rec["obligation"]
             at = stamp(other.get("dispatched_at"))
-            if (rec["prompt"] == resolution.prompt or (mine and at and at > mine) or ours != (
+            if ((at >= mine if mine and at else rec["prompt"] == resolution.prompt) or ours != (
                     other.get("role"), other.get("lane"), obligation.canonical_task_id(other.get("task_id")))):
                 continue
             meta = next((m for c in subagent_restart._child_transcript_copies(rec["transcript"])  # any root's
@@ -536,6 +535,14 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, reso
             findings.append({"path": report_rel, "reason": "file_lists_differ", "errors": lines})
         elif lines:
             sys.stderr.write(f"A3.a would block: {report_rel}: file_lists_differ\n" + "".join(f"    {x}\n" for x in lines))
+        try:  # the orchestrator stop's ABSENT_DECLARED_PATH predicate, here at the lane's own end
+            gone = declared_absence.absent(project_dir, report)
+        except Exception:  # a check that cannot run judges nothing
+            gone = []
+        if gone:
+            findings.append({"path": report_rel, "reason": "absent_declared_path", "errors": [
+                f"declared but neither on disk nor deleted since baseline_head_sha: {', '.join(gone)}; "
+                "restore the file or drop it from dev.files_modified / dev.files_created"]})
     return findings
 
 
@@ -639,8 +646,8 @@ def _stale_findings(project_dir: str, ob: dict, declared: list, checked: list) -
     at = ob.get("dispatched_at")
     dispatched = obligation.parse_iso8601(at)
     if dispatched is None or dispatched.timestamp() > time.time():
-        # A dispatched_at ahead of this stop's clock is G1's clock bound to judge; here no write
-        # could ever satisfy it, so it decides nothing.
+        # A dispatched_at ahead of this stop's clock (a typed one where no record time stands in,
+        # obligation.dispatch_time): no write could ever satisfy it, so it decides nothing.
         return []
 
     def files(art):

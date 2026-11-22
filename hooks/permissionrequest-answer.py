@@ -40,11 +40,13 @@ def bash_rules(payload: dict) -> tuple[str, bool] | None:
 
 
 def denied_in_text(command: str) -> str | None:
-    """A Bash deny rule of settings.json whose command starts a word anywhere in the text: Claude Code asks, not
-    denies, for one in a part it cannot split (`...; su postgres -c "..."`); refused here as the rule says."""
-    with open(os.path.join(os.path.dirname(HOOKS), "settings.json")) as fh:
-        rules = json.load(fh).get("permissions", {}).get("deny", [])
-    for rule in rules:
+    """A Bash entry of the deny list (lib/deny_list.entries, its one reader) whose command starts a word anywhere in
+    the text: Claude Code asks, not denies, for one in a part it cannot split (`...; su postgres -c "..."`);
+    refused here as the entry says."""
+    if HOOKS not in sys.path:
+        sys.path.insert(0, HOOKS)
+    from lib.deny_list import entries
+    for rule, _ in entries():
         if not (isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")")):
             continue
         body = rule[5:-1]
@@ -82,7 +84,7 @@ def decide(payload: dict) -> tuple[str, str, bool] | None:
         if refusal is not None:
             return "deny", refusal[0], not refusal[1]
         if rule is not None:
-            return "deny", f"BLOCKED: the command holds what the deny rule {rule} of settings.json refuses.", True
+            return "deny", f"BLOCKED: the command holds what the deny-list entry {rule} refuses.", True
         if bypass or names_removal(command):
             return "allow", "", False
     elif bypass:

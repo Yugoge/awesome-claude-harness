@@ -1,10 +1,14 @@
 """A refused write to system temp or to another actor's scratch names the caller's own directory.
 
 hooks/pretool-tool-policy.py refuses every role a write under /tmp or /var/tmp (the shipped
-TMPDIR, /var/tmp/claude-scratch, included) and a write into scratch that is not the caller's own
-<project>/.claude/scratch/<...>/<role>/<agent id>/. The refusal names that own directory as a
-literal path, and the same actor's next write there, by the Write tool or a shell redirect, is
-allowed; another actor's is not. Only paths are judged: the projects are never created.
+TMPDIR, /var/tmp/claude-scratch, included) and a write into scratch that is not the caller's own.
+A subagent's own scratch directory is <session scratch directory>/<role>/<agent id>/ below the
+session scratch root (the hooks' TMPDIR), outside every project and the harness home;
+hooks/subagentstart-scratch.py makes it when the agent starts. The refusal names it as a literal
+path and advises no temp directory, and the same actor's next write there, by the Write tool or a
+shell redirect, is allowed; another actor's is not. An agent an earlier version sent to
+<project>/.claude/scratch/<session>/<role>/<agent id>/ keeps that directory. Only paths are
+judged: the projects are never created.
 """
 from __future__ import annotations
 
@@ -32,9 +36,16 @@ def run(tmp_path, project, tool, tool_input, caller=("a1b2c3d4e5f60718", "dev"))
         payload.update(agent_id=caller[0], agent_type=caller[1], subagent_type=caller[1])
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
     env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), CLAUDE_PROJECT_DIR=project,
-               CLAUDE_STATE_DIR=str(tmp_path / "state"), PYTHONDONTWRITEBYTECODE="1")
+               CLAUDE_STATE_DIR=str(tmp_path / "state"), TMPDIR=str(session_root(tmp_path)), PYTHONDONTWRITEBYTECODE="1")
     return subprocess.run([sys.executable, HOOK], input=json.dumps(payload), capture_output=True, text=True,
                           cwd=str(tmp_path), env=env, timeout=60)
+
+
+def session_root(tmp_path):
+    """The session scratch root as the hooks see it (TMPDIR), on the disk pytest's temp lies on."""
+    root = tmp_path / "session-root"
+    root.mkdir(exist_ok=True)
+    return root.resolve()
 
 
 def writes(path):
@@ -57,7 +68,8 @@ def test_refusal_names_a_literal_own_directory_the_next_write_may_use(tmp_path, 
         found = NAMED.search(refused.stderr)
         assert found, refused.stderr
         own = found.group(1)
-        assert "<" not in own and own.startswith(f"{project}/.claude/scratch/") and caller[0] in own
+        assert own == str(session_root(tmp_path) / SID / role / caller[0]), refused.stderr
+        assert not own.startswith(project + "/") and "TMPDIR" not in refused.stderr, refused.stderr
         for next_tool, next_input in writes(own):
             proc = run(tmp_path, project, next_tool, next_input, caller)
             assert proc.returncode == 0, (next_tool, proc.stderr)
@@ -74,15 +86,27 @@ def test_another_actor_is_still_refused_the_named_directory(tmp_path, project):
             assert "sibling scratch target denied" in proc.stderr or "allowed_write_path_prefixes" in proc.stderr
 
 
-def test_a_program_that_honours_tmpdir_runs_with_tmpdir_set_to_the_named_directory(tmp_path):
+def test_the_refusal_advises_no_temp_directory_and_the_command_needs_none(tmp_path):
     project = PROJECTS[0]
     refused = run(tmp_path, project, "Bash", {"command": f"cd {project}; python3 -m pytest -q > "
                                                          "/var/tmp/claude-scratch/r02-ci.txt 2>&1"})
-    assert refused.returncode == 2 and "TMPDIR=" in refused.stderr
+    assert refused.returncode == 2 and "TMPDIR" not in refused.stderr, refused.stderr
     own = NAMED.search(refused.stderr).group(1)
-    proc = run(tmp_path, project, "Bash", {"command": f"cd {project}; mkdir -p {own}; TMPDIR={own} "
-                                                      f"python3 -m pytest -q > {own}/r02-ci.txt 2>&1"})
+    proc = run(tmp_path, project, "Bash", {"command": f"cd {project}; python3 -m pytest -q > {own}/r02-ci.txt 2>&1"})
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("project", PROJECTS)
+def test_an_agent_sent_into_the_project_by_an_earlier_version_keeps_that_directory(tmp_path, project):
+    """<project>/.claude/scratch/<session>/<role>/<agent id>/ stays the agent's own (written, overwritten and
+    removed in as before); another agent's there stays refused; neither is named any more."""
+    caller, old = ("a1b2c3d4e5f60718", "dev"), f"{project}/.claude/scratch/{SID}/dev/a1b2c3d4e5f60718"
+    for tool, tool_input in writes(old):
+        proc = run(tmp_path, project, tool, tool_input, caller)
+        assert proc.returncode == 0 and "own scratch directory" not in proc.stderr, (tool, proc.stderr)
+        other = run(tmp_path, project, tool, tool_input, ("a9999999999999999", "dev"))
+        assert other.returncode == 2 and "sibling scratch target denied" in other.stderr, (tool, other.stderr)
+        assert NAMED.search(other.stderr).group(1) == str(session_root(tmp_path) / SID / "dev" / "a9999999999999999")
 
 
 def test_the_main_agents_session_scratch_is_unchanged(tmp_path):
@@ -156,3 +180,46 @@ def test_a_main_agent_write_in_its_session_scratch_is_allowed(tmp_path):
     root, _env_file = _session_scratch(tmp_path)
     proc = run(tmp_path, PROJECTS[0], "Write", {"file_path": str(root / SID / "notes.md"), "content": "x"}, None)
     assert proc.returncode == 0, proc.stderr
+
+
+# -- a subagent: its own scratch directory is made at its start, its commands' temp files stay there ---------
+START = os.path.join(ROOT, "hooks", "subagentstart-launch.py")
+
+
+def test_the_agents_own_scratch_directory_exists_when_it_starts_and_is_the_one_named(tmp_path):
+    """SubagentStart makes <session scratch directory>/<role>/<agent id>/ (the agent makes nothing), outside the
+    project; the directory a refused write names is that one."""
+    root, _env_file = _session_scratch(tmp_path)
+    project, agent = PROJECTS[0], ("a0a1a2a3a4a5a6a7", "qa")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    env.update(HOME=str(tmp_path / "home"), TMPDIR=str(root), CLAUDE_STATE_DIR=str(tmp_path / "state"))
+    payload = {"session_id": SID, "agent_id": agent[0], "agent_type": agent[1], "cwd": str(tmp_path),
+               "hook_event_name": "SubagentStart", "transcript_path": ""}
+    proc = subprocess.run([sys.executable, START], input=json.dumps(payload), capture_output=True, text=True,
+                          env=env, cwd=str(tmp_path), timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    own = root.resolve() / SID / agent[1] / agent[0]
+    assert own.is_dir() and (root / SID / ".owner").is_file()
+    env.update(CLAUDE_PROJECT_DIR=project, HOME=str(tmp_path / "home"))
+    refused = subprocess.run([sys.executable, HOOK], capture_output=True, text=True, cwd=str(tmp_path), env=env,
+                             input=json.dumps(dict(payload, hook_event_name="PreToolUse", tool_name="Write", cwd=project,
+                                                   tool_input={"file_path": "/tmp/x.py", "content": "x"})), timeout=60)
+    assert refused.returncode == 2 and NAMED.search(refused.stderr).group(1) == str(own), refused.stderr
+
+
+def test_a_subagents_command_that_sets_no_temp_directory_writes_its_temp_files_in_the_session_root(tmp_path):
+    """The CLI runs every Bash command of the session, a subagent's included, after sourcing the session's env
+    file; hooks/session-scratch-init.sh points TMPDIR there at the session's scratch directory. A command that
+    sets no TMPDIR itself (here a project test that refuses a temp root inside its project, as the project of
+    2026-11-20 does) makes its temp files under the session root: not in system temp, not in the project."""
+    root, env_file = _session_scratch(tmp_path)
+    project = tmp_path / "proj"
+    project.mkdir()
+    probe = ("import os, sys, tempfile; d = os.path.realpath(tempfile.mkdtemp(prefix='map-')); "
+             "sys.exit('temp root inside the project') if d.startswith(os.getcwd() + os.sep) else print(d)")
+    out = subprocess.run(["bash", "-c", f". {env_file}; python3 -c \"{probe}\""], capture_output=True, text=True,
+                         env={"PATH": os.environ["PATH"]}, cwd=str(project), timeout=60)
+    assert out.returncode == 0, out.stderr
+    made = out.stdout.strip()
+    assert made.startswith(str(root.resolve() / SID) + os.sep), made
+    assert not made.startswith(("/tmp/", str(project) + os.sep)), made

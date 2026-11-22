@@ -16,7 +16,6 @@ Steps 1-7, 10 and 11 are scripts in `<HARNESS_ROOT>/scripts/steps/` that print `
 ### Step 1: Initialize Workflow and Load TodoList
 
 ```bash
-python3 "<HARNESS_ROOT>/scripts/todo/test.py"
 python3 "<HARNESS_ROOT>/scripts/steps/test-prepare.py" init
 ```
 

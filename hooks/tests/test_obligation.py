@@ -526,22 +526,6 @@ def test_the_opening_tag_is_searched_from_the_one_opener(seed):
 # Pure helper coverage (S1)
 # --------------------------------------------------------------------------
 
-def test_dispatch_clock_bound_is_pure_and_parameterized():
-    dispatched = "2026-09-28T15:30:05Z"
-    now = datetime(2026, 9, 28, 15, 30, 5, tzinfo=timezone.utc)
-    assert obligation.dispatch_clock_within_bound(dispatched, now) is True
-    assert obligation.dispatch_clock_within_bound(
-        dispatched, now + timedelta(seconds=300)) is True
-    assert obligation.dispatch_clock_within_bound(
-        dispatched, now + timedelta(seconds=301)) is False
-    assert obligation.dispatch_clock_within_bound(
-        dispatched, now - timedelta(seconds=301)) is False
-    assert obligation.dispatch_clock_within_bound(
-        dispatched, now + timedelta(seconds=301), bound_seconds=400) is True
-    assert obligation.dispatch_clock_within_bound("garbage", now) is None
-    assert obligation.DISPATCH_CLOCK_BOUND_SECONDS == 300
-
-
 def test_artifact_freshness_per_kind():
     dispatched = "2026-09-28T15:30:05Z"
     base = datetime(2026, 9, 28, 15, 30, 5, tzinfo=timezone.utc)
@@ -1307,12 +1291,21 @@ def test_bare_import_form_confined_to_own_test():
     """The binding AC6 grep covers packaged/relative import forms; this
     covers the residual bare forms reachable after a sys.path insertion
     (the hooks/prompt-workflow.py:36 pattern). Patterns are assembled from
-    fragments so this file never matches itself."""
+    fragments so this file never matches itself. A bare form that is the
+    ImportError fallback right after the relative one (try: from . import
+    obligation / except ImportError:) is no second copy: it runs only where
+    the module was itself loaded without a package."""
     module_word = "obligation"
     bare_patterns = [
         re.compile(r"^\s*import\s+" + module_word + r"\b"),
         re.compile(r"^\s*from\s+" + module_word + r"\s+import\b"),
     ]
+    relative = re.compile(r"^\s*from\s+\.\s+import\s+" + module_word + r"\s*(#.*)?$")
+
+    def is_fallback(lines, i):
+        before = [line for line in lines[:i] if line.strip()][-2:]
+        return len(before) == 2 and relative.match(before[0]) and before[1].strip() == "except ImportError:"
+
     own_path = Path(__file__).resolve()
     offenders = []
     for base in ("hooks", "scripts", "tests"):
@@ -1326,8 +1319,9 @@ def test_bare_import_form_confined_to_own_test():
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            for line in text.splitlines():
-                if any(pattern.search(line) for pattern in bare_patterns):
+            lines = text.splitlines()
+            for i, line in enumerate(lines):
+                if any(pattern.search(line) for pattern in bare_patterns) and not is_fallback(lines, i):
                     offenders.append(str(path))
                     break
     assert offenders == [], offenders

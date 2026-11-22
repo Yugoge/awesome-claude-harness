@@ -33,7 +33,7 @@ SKIP_FILES = frozenset({
     'INDEX.md', 'README.md', '__init__.py', '.DS_Store',
     # Runtime telemetry, gitignored (spec-20260518-225715 Cycle 2 P2.3).
     'agent-scores.json', 'agent-scores.json.lock',
-    # The rating log logs/lifecycle.jsonl (gitignored, untracked) and its lock file.
+    # The rating log lifecycle.jsonl (under the state root's logs/, hooks/lib/score_log.py) and its lock file.
     'lifecycle.jsonl', 'lifecycle.jsonl.lock',
 })
 # File-name prefixes left out the same way: cp-state-*.json runtime telemetry and spec-2026*

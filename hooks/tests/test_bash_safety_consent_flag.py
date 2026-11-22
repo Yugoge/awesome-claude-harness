@@ -534,24 +534,27 @@ def test_the_same_tools_away_from_the_state_dir_pass(sandbox, command):
     assert proc.returncode == 0, (command, proc.stderr)
 
 
-# With the state dir at its default /tmp: commands that write nothing into /tmp itself pass; writes into it do not.
+# With the state dir at its default ({D}: the state root's state/ on disk): commands that write nothing into it
+# pass; writes into it do not.
 DEFAULT_TMP_PASS = [
-    "cd /tmp && git worktree list",
-    "cd /tmp && git gc",
-    "rsync -av --temp-dir=/tmp src/ host:/x/",
-    "rsync -av --exclude=/tmp src/ dst/",
-    "cd /tmp && git checkout-index -a --prefix=out/",
+    "cd {D} && git worktree list",
+    "cd {D} && git gc",
+    "rsync -av --temp-dir={D} src/ host:/x/",
+    "rsync -av --exclude={D} src/ dst/",
+    "cd {D} && git checkout-index -a --prefix=out/",
 ]
 DEFAULT_TMP_REFUSED = [
-    "cd /tmp && git checkout-index -a --prefix=x-",
-    "cd /tmp && git worktree add .",
-    "cd /tmp && git init",
-    "rsync -av --backup-dir=/tmp src/ dst/",
+    "cd {D} && git checkout-index -a --prefix=x-",
+    "cd {D} && git worktree add .",
+    "cd {D} && git init",
+    "rsync -av --backup-dir={D} src/ dst/",
 ]
 
 
 def run_default_state(sandbox, command):
     env = {k: v for k, v in sandbox["env"].items() if k != "CLAUDE_STATE_DIR"}
+    from lib.harness_state_dir import state_root
+    command = command.replace("{D}", os.path.join(state_root(home=env["HOME"]), "state"))
     payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": SID,
                "cwd": sandbox["repo"], "hook_event_name": "PreToolUse"}
     return subprocess.run(["bash", str(SAFETY)], input=json.dumps(payload), capture_output=True, text=True,

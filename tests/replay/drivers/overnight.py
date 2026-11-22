@@ -93,9 +93,10 @@ Driver arguments (cli.py --arg K=V):
   tz=<zone>       variant plain in the IANA time zone <zone> (P2 A20: the launch and the time-lock in
                   every timezone): TZ=<zone> in every hook's and every Bash call's environment, the
                   session's whole length; the end time typed is the zone's local clock time (HH:MM) of
-                  launch plus twice the cycle's longest wall time, rounded up to the minute, the form a
-                  local zone changes. Injected, outside the compliant transcript: the main agent's Stop
-                  once the cycle's log is written (inside the window), and again after end_time before
+                  launch plus twice the cycle's longest wall time (at least 90 times the session's start,
+                  on a slow host), rounded up to the minute, the form a local zone changes. Injected,
+                  outside the compliant transcript: the main agent's Stop as soon as the launch is checked
+                  (inside the window, however long the cycle then takes), and again after end_time before
                   the summary is written. The checks (Night.timezone_checks, out/timezone.json) raise
                   when one fails: the record's end_time is that local time in UTC (checked before the
                   window is waited for), the Stop inside the window is held by the time-lock naming
@@ -209,6 +210,9 @@ from . import dev as devdrv
 from .close import fact
 
 PIPELINE = "dev-overnight"
+# The graphify precondition's heading: "### Step 11g: ..." in a base text, the "#### ..." sub-heading of Step 11 since
+# integer steps (11g folded into 11; the Step 11 heading names the precondition without "(shared").
+G_HEAD = "Graphify Dev-Dispatch Precondition (shared"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 # (qa-fail: measured beside plain on the P1b working tree at effa0ec, scaled by plain's 813; plain, one
@@ -865,7 +869,7 @@ class Night:
         self.refused = ""               # the label of a refused dispatch (the cycle stopped there)
         # The window scales with this host's speed, read from the session's start (its SessionStart hooks):
         # a loaded host's replay reaches Step 13 about 45-60 times that later, so the decisions stay inside it.
-        started = time.monotonic() - started
+        started = self.start_s = time.monotonic() - started
         self.window_min = int(rp.args["window"]) if rp.args.get("window") else max(
             UNATTENDED_WINDOW_MIN, math.ceil(1.5 * started))
         self.decisions: list = []
@@ -884,6 +888,7 @@ class Night:
     def _rules(self):
         return [
             (r"^TS$", lambda m: self.ts),
+            (r"^RUN_STAMP$", lambda m: self.run_stamp()),
             (r"^ISO-8601", lambda m: utc_now()),
             (r"^(?:session_id|DEV_SESSION_ID)$", lambda m: self.sid),
             (r"^MAIN_ROOT$", lambda m: self.main_root),
@@ -944,8 +949,15 @@ class Night:
     def in_window(self) -> bool:
         return time.time() < self.end_epoch()
 
-    def stamp(self) -> str:
-        """A UTC second distinct from the previous dispatch's (its task id)."""
+    def run_stamp(self) -> str:
+        """RUN_STAMP: the launch's start_time as the /dev-overnight hook and Step 1's output print it."""
+        return re.sub(r"[-:Z]", "", str(self.state.get("start_time") or "")).replace("T", "-")
+
+    def stamp(self, slot: str) -> str:
+        """The dispatch's <TS>: <RUN_STAMP>-c<N>-<slot> where the text composes it so; in a text before that, a
+        UTC second distinct from the previous dispatch's (its task id)."""
+        if "<RUN_STAMP>" in self.o.text and self.run_stamp():
+            return f"{self.run_stamp()}-c{self.n}-{slot}"
         while True:
             ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
             if ts != getattr(self, "_last_ts", ""):
@@ -1033,6 +1045,11 @@ class Night:
         a, b = agents.edit_span(old, text)
         return self.o.s.edit(path, a, b, label=lab + " (Edit)", deviation=self.o.devs.at(lab + " (Edit)"))
 
+    def g_step(self) -> str:
+        """The list's step of the graphify precondition: 11g where the list still has it (a base text), else 11."""
+        o = self.o
+        return "11g" if any(o.step_name(k) == "Step 11g" for k in range(len(o.todos or []))) else "11"
+
     def todo_to(self, n) -> None:
         while not self.o.at_step(n):
             i = self.o.current()
@@ -1074,7 +1091,7 @@ class Night:
         if self.windowed:
             end = f"{self.window_min}m"
         elif self.variant == "plain" and self.tz:  # the zone's local clock time, rounded up to the minute
-            target = math.ceil((time.time() + 2 * self.cycles * CYCLE_WALL_S) / 60) * 60
+            target = math.ceil((time.time() + max(2 * self.cycles * CYCLE_WALL_S, 90 * self.start_s)) / 60) * 60
             local = dt.datetime.fromtimestamp(target, zoneinfo.ZoneInfo(self.tz))
             end = local.strftime("%H:%M")
             self.tz_launch = {"zone": self.tz, "typed": end, "utc_offset": local.strftime("%z"),
@@ -1142,7 +1159,7 @@ class Night:
     def step2(self) -> None:
         o = self.o
         self.todo_to(2)
-        self.ts = self.stamp()
+        self.ts = self.stamp("plan")
         self.rp.task(self.ts)
         plan_rel = f"{self.sdir}/test-plan.json"
         n = self.cycle  # what PM learns from the session history it reads (the retro reports)
@@ -1223,7 +1240,7 @@ class Night:
         scs = self.cycle_scenarios[self.cycle]
         for role in launch:
             self.spec_name = role
-            self.ts = self.stamp()
+            self.ts = self.stamp(role)
             self.rp.task(self.ts)
             self.report_rel = o.bind(out_tpl)
             issues = [_issue(sc, k, role) for k, sc in enumerate(scs, 1)]
@@ -1289,7 +1306,7 @@ class Night:
         o = self.o
         self.todo_to(4)
         self.cycle_number()
-        self.ts = self.stamp()
+        self.ts = self.stamp("triage")
         self.rp.task(self.ts)
         scs = self.cycle_scenarios[self.cycle]
         tri_rel = f"{self.sdir}/triage-report-cycle{self.n}.json"
@@ -1322,6 +1339,7 @@ class Night:
             self.pipes.append(Pipe(j, scs[ti], {"index": j, "timestamp_suffix": sfx, "iteration": 0,
                                                 "description": scs[ti].requirement, "location": scs[ti].rel,
                                                 "spec_path": f"{self.sdir}/spec-pipeline-{j}.md"}))
+        # OLDER_TEXT: "Cycle Contract Manifest" -- a base text's section (contract() reads it); today's text has none
         if self.o.has("Cycle Contract Manifest", "orchestrator writes the per-cycle contract manifest"):
             self.contract()
 
@@ -1659,8 +1677,8 @@ class Night:
             same = (rec.get("context_sha256") == sha and rec.get("context_path") == self.ctx_rel
                     and int(rec.get("iteration") or 0) == int(p.rec.get("iteration") or 0))
         if not same:
-            o.set_in_progress("11g", f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index}, Step 13)")
-            self.dispatch(o.template("Step 11g"), agents.Act(summary="graphify enrichment"),
+            o.set_in_progress(self.g_step(), f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index}, Step 13)")
+            self.dispatch(o.template(G_HEAD), agents.Act(summary="graphify enrichment"),
                           f"Step 11g Agent(graphify) pipeline {p.index} (Step 13)", p.sfx, atype="graphify", pipe=p)
             if os.path.isfile(os.path.join(self.project, run_rel)):
                 self.read(run_rel, f"Step 11g Read graphify-run {p.index} (Step 13)")
@@ -1668,7 +1686,7 @@ class Night:
             o.set_in_progress(13, f"{self.L}TodoWrite Step 13 in_progress (pipeline {p.index})")
         d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 12"), None) if "Agent(" in b.text))
         add = [self.gate_line(p), line]
-        g_add = re.search(r"`(Graph context file: [^`]+)`", o.section("Step 11g"))
+        g_add = re.search(r"`(Graph context file: [^`]+)`", o.section(G_HEAD))
         if g_add and status in ("ok", "degraded"):
             add.append(fill_curly(g_add.group(1).replace("${DEV_SESSION_ID}", self.sid), p.rec, {}))
         label = f"Step 13 Agent(dev) pipeline {p.index} (decision)"
@@ -1734,14 +1752,14 @@ class Night:
     def steps11g_12(self) -> None:
         o = self.o
         self.todo_to(11)
-        g_tpl = o.template("Step 11g")
+        g_tpl = o.template(G_HEAD)
         d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 12"), None) if "Agent(" in b.text))
         for k, p in enumerate(self.pipes):
             # Step 11g in progress before the graphify call (the next step in the list the first time).
             if k == 0:
-                self.todo_to("11g")
+                self.todo_to(self.g_step())
             else:
-                o.set_in_progress("11g", f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index})")
+                o.set_in_progress(self.g_step(), f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index})")
             self.ctx_rel = f"docs/dev/context-{p.sfx}.json"
             self.dispatch(g_tpl, agents.Act(summary="graphify enrichment"), f"Step 11g Agent(graphify) pipeline {p.index}",
                           p.sfx, atype="graphify", pipe=p)
@@ -1753,7 +1771,7 @@ class Night:
             o.s.say(f"pipeline {p.index}: graphify status={status}")
             o.set_in_progress(12, f"{self.L}TodoWrite Step 12 in_progress (pipeline {p.index})")
             fields = dict(d_tpl)
-            add = re.search(r"`(Graph context file: [^`]+)`", o.section("Step 11g"))
+            add = re.search(r"`(Graph context file: [^`]+)`", o.section(G_HEAD))
             if add and status in ("ok", "degraded"):
                 fields = devdrv.with_lines(fields, [fill_curly(add.group(1).replace("${DEV_SESSION_ID}", self.sid), p.rec, {})])
             self.pre_shell(d_tpl, p, f"Step 12 Bash pre-dispatch {p.index}")
@@ -1912,7 +1930,7 @@ class Night:
         else:  # a Step 17 with no plan block re-dispatches each qa_failed pipeline's dev in turn
             plan = [{"index": p.index} for p in self.failed]
         sec = o.section("Step 17")
-        g_tpl = o.template("Step 11g")
+        g_tpl = o.template(G_HEAD)
         d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 12"), None) if "Agent(" in b.text))
         q_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 15"), None) if "Agent(" in b.text))
         qa_mode = [c for c in re.findall(r"`([^`\n]+)`", sec) if "write-qa-mode.sh" in c]
@@ -1931,7 +1949,7 @@ class Night:
                     if m:
                         self.ctx_rel = m.group(1)
                 # Step 11g's precondition at the new iteration, then Step 17 in progress again.
-                o.set_in_progress("11g", f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index} iteration {it})")
+                o.set_in_progress(self.g_step(), f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index} iteration {it})")
                 self.dispatch(g_tpl, agents.Act(summary="graphify enrichment"),
                               f"Step 11g Agent(graphify) pipeline {p.index} iteration {it}", p.sfx, atype="graphify", pipe=p)
                 run_rel = f".claude/dev-registry/{self.sid}-pipeline-{p.index}/graphify/graphify-run.json"
@@ -1947,7 +1965,7 @@ class Night:
                 labels = {l.split(":", 1)[0].strip() for l in fields["prompt"].split("\n") if ":" in l}
                 add = [fill_curly(c, p.rec, {}) for c in re.findall(r"`([A-Z][\w ]* file:\s*[^`\s]+)`", sec)
                        if c.split(":", 1)[0].strip() not in labels]
-                g_add = re.search(r"`(Graph context file: [^`]+)`", o.section("Step 11g"))
+                g_add = re.search(r"`(Graph context file: [^`]+)`", o.section(G_HEAD))
                 if g_add and status in ("ok", "degraded"):
                     add.append(fill_curly(g_add.group(1).replace("${DEV_SESSION_ID}", self.sid), p.rec, {}))
                 ctx = self.ctx_rel if self.ctx_rel != f"docs/dev/context-{p.sfx}.json" else None
@@ -2018,8 +2036,6 @@ class Night:
         entry = entry.replace("<timestamp>", utc_now())
         self.log_append(entry, "Step 19 cycle log")
         if self.variant == "plain" and self.cycle >= self.cycles:
-            if self.tz:  # injected: the main agent's Stop inside the window, the time-lock's to hold
-                self.probe_stop(f"{self.L}Step 19 (injected) Stop inside the window", forged=False)
             self.idle_until_end()
         # TIME CHECK.
         code = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "TIME CHECK")
@@ -2039,7 +2055,7 @@ class Night:
         # Per-cycle commit, where the text has one (the base's; a text without it keeps the cycle's
         # work in refs/checkpoints/<branch> until the owner's post-loop flow). A command that runs
         # git: the actor env first.
-        try:
+        try:  # OLDER_TEXT: "chore(overnight)" -- the base's per-cycle commit; today's text has none
             codes = cmdtext.inline_codes(o.text, "Step 19", "chore(overnight)")
         except cmdtext.TextNotFound:
             codes = []
@@ -2077,7 +2093,7 @@ class Night:
         o = self.o
         self.todo_to(20)
         self.final_cycle = bool(getattr(self, "expired", False))
-        self.ts = self.stamp()
+        self.ts = self.stamp("retro")
         self.rp.task(self.ts)
         retro_rel = f"{self.sdir}/retro-report-cycle{self.n}.json"
         doc = {"retro_id": f"rr-{self.ts}", "session_id": self.sid, "cycle_number": self.n, "timestamp": utc_now(),
@@ -2444,7 +2460,7 @@ class Night:
         per = [(c.get("step"), c.get("role")) for c in contract.get("required_calls") or [] if not c.get("mode")]
         check("one pipeline: Step 6's builder created one, and the cycle contract renders one copy of each "
               "per-pipeline entry", len(self.pipes) == 1 and isinstance(built, list) and len(built) == 1
-              and len(per) == len(set(per)) and {"8", "10", "11g", "12", "15"} <= {s for s, _r in per},
+              and len(per) == len(set(per)) and {"8", "10", self.g_step(), "12", "15"} <= {s for s, _r in per},
               {"pipelines": len(self.pipes), "built": built and len(built), "per_pipeline_entries": per})
         made = [(d.label, d.agent_type, d.ok) for d in self.o.dispatches]
         roles = sorted(a for _l, a, _ok in made)
@@ -2597,6 +2613,9 @@ class Night:
         self.step1()
         if self.tz:
             self.timezone_launch_check()
+            # injected: the main agent's Stop inside the window, the time-lock's to hold; right after the
+            # launch, so a slow cycle cannot carry it past end_time
+            self.probe_stop("Launch (injected) Stop inside the window", forged=False)
         until = int(self.rp.args["until"]) if self.rp.args.get("until") else None
         try:
             if self.variant == "stop":

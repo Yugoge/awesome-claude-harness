@@ -29,8 +29,8 @@ supported without a project-root override.
 | `--codex` | Step 6's QA adds a Codex round on the planned per-file changes (each `PLAN_GROUPS` path vs HEAD). Without it QA reviews once itself. |
 | `--auto` | Walk every `commit_pending` parent task-id, one at a time, through Steps 3-8 (`--auto` mode below). Not `--bulk`. |
 
-`/commit` is human-only: `disable-model-invocation: true` plus the `Skill(commit)` deny in
-`settings.json`.
+`/commit` is human-only: `disable-model-invocation: true` plus the `Skill(commit)` entry of the
+deny list (`policies/cli-deny.v1.json`, refused by `hooks/pretool-deny-list.py`).
 
 ## Step-by-step workflow
 
@@ -95,8 +95,8 @@ found. Act on its JSON answer:
   fan-out, as its canonical aggregate, which the lane-completeness hook writes when a lane's dev
   writes its report; the main agent runs no aggregator) or `writer` (a product file: the dispatch
   whose own tool calls wrote it): dispatch it again, a fresh synchronous Agent call
-  (`run_in_background: false`) with the same `subagent_type`, `task_id`, `lane` and obligation and
-  a fresh `dispatched_at` (G1 refuses a re-dispatch whose obligation differs), its prompt naming
+  (`run_in_background: false`) with the same `subagent_type`, `task_id`, `lane` and obligation
+  (G1 refuses a re-dispatch whose obligation differs), its prompt naming
   the gap or finding.
 - `source` `todo_step` (no dispatch has declared the path yet): with a `template`, a fresh
   synchronous dispatch of that step's role under the same task id, from the template of the
@@ -104,7 +104,7 @@ found. Act on its JSON answer:
   is the main agent's own (as `/dev` Step 11): run it yourself under the same task id.
 - A `/do` task's do-report, and a file the answer names no owner for (`null`) in a `/do`
   task (its main agent wrote it): dispatch dev under the same task id with the obligation
-  `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call>", "artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<TASK_ID>.json", "schema": "dev-report.v2", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>`
+  `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<TASK_ID>.json", "schema": "dev-report.v2", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>`
   to complete the `/do` work, never `/do`'s own steps; its dev-report, which G2 verifies at dev's
   stop, concludes a `/do` task whose do-report is not `completed` (Step 3's call takes it), and
   the `/commit` orchestrator writes no report. That dev-report lists, beside the files dev wrote,
@@ -200,6 +200,11 @@ It prints one JSON object whose keys the script's header defines. Steps 5-7 read
   applies, never a block.
 - `control_root`, `nested_repo`, `close_report`, `session_id`, `manifest_path` and `files_at_dispatch`
   feed Step 7's prompt and the manifest below.
+- `unclaimed` (only when the plan owns no path, a cycle that declares no file): `unclaimed.paths`
+  are the control checkout's changes no open cycle claims; this `/commit` lands them, nobody is
+  asked. Paths in `claimed_by_open_cycles` stay for their cycles, and paths in
+  `claimed_by_open_commands` (edits the attribution journal credits to a command still open in
+  another session, with or without a report) stay for those sessions. Its absence changes nothing.
 
 Two outcomes are findings (Routes), each followed by this call run again: `late_repair.state`
 `invalid` (a finding on `late_repair.path`), and a `null` `repository_plan` (a malformed report,
@@ -208,9 +213,10 @@ an unattached branch, an absent HEAD, an unsupported owner, an identity mismatch
 staged while it holds.
 
 **Write the dispatch-snapshot manifest before minting any grant.** Write `manifest_path` with the
-Write tool: JSON holding `session_id`, `task_id`, `dispatched_at` (now, UTC), the complete
+Write tool (no time field: the minter takes the manifest's time from the CLI's record of that
+Write): JSON holding `session_id`, `task_id`, the complete
 `repository_plan` (with its report digest), the exact `ARTIFACT_CHAIN` JSON (when non-empty) and
-`files_at_dispatch`. With no session id (`session_id` empty) print `OPERATION_STALLED:
+`files_at_dispatch` (and `unclaimed` when present). With no session id (`session_id` empty) print `OPERATION_STALLED:
 write-commit-grant.py has no session id (CLAUDE_CODE_SESSION_ID and CLAUDE_SESSION_ID unset)`,
 record it as the session's next harness-repair item, and dispatch nothing. `write-commit-grant.py`
 refuses to mint without the manifest: a live `/commit` user-intent sentinel alone is not enough,
@@ -272,7 +278,7 @@ the Step 5 grant (its `DRYRUN` guard, `agents/changelog-analyst.md`). Capture fr
   plan computed OK, its owned paths exist and they are not already landed, the disagreement
   between the owned-edit declaration and the live bytes is a finding on the dev report (Routes),
   not a silent no-op; rerun the planning phase after the fix. Only when the plan computed OK and
-  the paths are already landed (or it lists no owned path), print `Nothing to commit (plan
+  the paths are already landed (or it lists no owned path and `unclaimed.paths` is empty), print `Nothing to commit (plan
   computed OK; dry-run found no pending change) — QA gate skipped.` (never after a failed plan
   computation), revoke the Step 5 grant (Grant hygiene below), and go to Step 7, which also
   no-ops. Dispatch no QA on an empty plan.
@@ -302,7 +308,6 @@ TASK_ID: <TASK_ID or "bulk">   BULK: <true|false>
   "role": "qa",
   "pipeline": "commit",
   "profile": "commit-qa",
-  "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>",
   "artifacts": [
     {"kind": "markdown", "path": "docs/dev/commit-qa-report-<TASK_ID or \"bulk\">.md",
      "identity_anchor": "<TASK_ID or \"bulk\">",
@@ -332,6 +337,8 @@ Judge by intelligent review — NEVER a hardcoded junk list. REJECT the commit i
   2. Secrets / sensitive content (credentials, keys, tokens, .env material).
   3. Scope contamination — files unrelated to TASK_ID (BULK=false); or, WITHIN ONE proposed
      group, files belonging to two different task-ids / unrelated subsystems (BULK=true).
+     UNCLAIMED_PATHS (<Step 5's unclaimed.paths, or none>) are admitted by the flow: never
+     scope contamination; rules 1, 2 and 4 apply to them, and a REJECT names each by path.
   4. Obvious correctness/quality defects in the diff (syntax-broken code, committed debug
      leftovers, accidental large/binary blobs).
 
@@ -358,7 +365,10 @@ That line is your verdict; nothing else carries it.
 
 **Decision phase.** The verdict is the last non-empty line of
 `docs/dev/commit-qa-report-<TASK_ID or "bulk">.md`, read verbatim: the producer-stop gate (G2)
-checked that file and that line at the QA subagent's own stop.
+checked that file and that line at the QA subagent's own stop. The privilege guard reads it again before
+a commit lands: it refuses one unless the report ends in `COMMIT: APPROVE` and is newer than the plan the
+grant was minted on (bulk: the run's sentinel, and only changelog-analyst commits). A REJECT with no commit
+made is a finished state for the Stop gate: the turn may end reporting the rejection and its reasons.
 
 **Grant hygiene** (`BULK=false`, at every unstage pause, REJECT routing and the `--dry-run` preview
 end): besides unstaging, revoke the Step 5 commit grant, so a gate under repair never leaves live
@@ -387,7 +397,9 @@ real-commit path keeps the grant: Step 7 consumes it.
        `commit-qa-report` and its verdict line) goes to the dispatch that declared the file or, for
        a product file, the dispatch whose own tool calls wrote it; a finding that names no file, or
        only a file no dispatch of the task wrote, goes to that round's own report, whose QA
-       dispatch runs again to name a path. QA never edits the subject.
+       dispatch runs again to name a path. QA never edits the subject. An offending file in
+       `unclaimed.paths` has no owner: it stays in the tree, Step 5 runs again with
+       `--leave-unclaimed <path>` for each, and the summary lists them as left.
     2. **A fresh round.** After the owners' fixes, rebuild the plan (Step 5), rerun the planning
        dry-run, and dispatch a NEW QA subagent (a fresh dispatch; no prior verdict or finding in its
        prompt) that re-judges the actual changes against HEAD. A further `COMMIT: REJECT` repeats
@@ -422,6 +434,7 @@ BULK=<true|false>
 DRYRUN=<true|false>
 FORCE=<true|false>
 QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo; non-empty whenever the planned file set was non-empty>
+UNCLAIMED_PATHS=<Step 5's unclaimed.paths (control repo, repo-relative), exact; empty when absent>
 
 <obligation v="1">
 {
@@ -429,7 +442,6 @@ QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo; non
   "role": "changelog-analyst",
   "pipeline": "commit",
   "profile": <"commit-landing" when BULK=false, else "commit-bulk">,
-  "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>",
   "artifacts": [
     {
       "kind": "response_block",
@@ -467,6 +479,10 @@ those of the agent definition; this prompt adds only these):
   yields a file outside it (the working tree changed since QA reviewed) is not committed; if the
   divergence is material (an approved file vanished, or a new non-approved candidate appeared that
   you would otherwise commit), ABORT with `failure_code: scope_violation`.
+- `UNCLAIMED_PATHS`, when non-empty, are whitelisted candidates of the control-repo entry for this
+  run: Phase 2 admits them, Phase 7's orphan rule does not apply to them, Phase 1's partition check
+  stays over `owned_paths`, and Phases 5-6 group and attribute them as any candidate. Each commit
+  holding one says so in its body: `Unclaimed: <n> file(s) no open cycle claims, landed by /commit`.
 - BULK mode: every commit message begins with `auto-bulk: end-of-cycle commit for
   <current-branch>` (the actual branch of the repo being committed). The privilege guard requires
   the Step 5 bulk sentinel for that prefix. Never use it when BULK=false.

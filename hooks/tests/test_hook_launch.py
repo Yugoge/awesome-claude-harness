@@ -77,7 +77,7 @@ def test_launchers_cover_the_events_and_time_out_after_their_rules():
         files = [f for f, _, _ in rules]
         assert len(files) == len(set(files)), hook
         for f, tools, timeout in rules:
-            assert (HOOKS / f).is_file() and f.endswith(".py"), f
+            assert (HOOKS / f).is_file() and f.endswith((".py", ".sh")), f  # .sh: run as `bash <file>`
             assert tools is None or (tools and all(t for t in tools)), f
             assert timeout > 0
 

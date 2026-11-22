@@ -3,11 +3,11 @@
 
 Usage: bash_safety_rules.py <hooks dir>  (the PreToolUse payload on stdin)
 
-Exits 2 on a refusal, its message on stderr; otherwise prints ALLOW, CONSENT (main-agent /do consent) or
-SENTINEL <task id> (a structured /allow grant). The shell entry allows CONSENT and SENTINEL after the pre-clean
-snapshot guard and refuses anything else (no token, a crash, a wrong interpreter). The runtime, commit and
-session_dirs.txt guards and the /do consent-flag rule run before the /do and /allow releases and neither releases
-them; every later rule is released by both. A view that cannot be built degrades to the raw command, so a broken
+Exits 2 on a refusal, its message on stderr; otherwise prints ALLOW or CONSENT (main-agent /do consent). The
+shell entry allows CONSENT after the pre-clean snapshot guard and refuses anything else (no token, a crash, a wrong
+interpreter). The runtime, commit and session_dirs.txt guards and the /do consent-flag rule run before the /do
+release and it does not release them; every later rule is released by it. An /allow grant releases any refusal of
+these rules where the pre-tool verdicts meet (lib/hook_launch.release_refused). A view that cannot be built degrades to the raw command, so a broken
 helper refuses more, never less.
 """
 import contextlib
@@ -4118,12 +4118,73 @@ def _local_url(value):
     return bool(value) and value[:5].lower() == "file:"
 
 
-def _word_sensitive(w, **roles):
-    """lib/sensitive_names.py's verdict on a Word: its static value with the exemptions `roles` allows, or its raw
-    text when computed."""
+def _word_sensitive(w, env=None, **roles):
+    """lib/sensitive_names.py's verdict on a Word: its static value with the exemptions `roles` allows, or, when
+    computed, its raw text or a name its wildcards can spell (_wildcard_spells_secret; `env`: the variables the
+    command sets to static values)."""
     from lib.sensitive_names import is_sensitive_name
     v = w.value()
-    return is_sensitive_name(v, **roles) if v is not None else is_sensitive_name(w.text, computed=True)
+    if v is not None:
+        return is_sensitive_name(v, **roles)
+    return is_sensitive_name(w.text, computed=True) or _wildcard_spells_secret(w, env or {}, roles)
+
+
+def _wildcard_spells_secret(w, env, roles):
+    """True when a computed word can expand to a name lib/sensitive_names.py calls sensitive although its text does
+    not spell it (`.en?`, `.e[n]v`, `{.e,x}nv`, `$a$b` with a=.e and b=nv set by the command), read with the removal
+    rule's pattern reader (lib/bash_execution_boundary.py: its brace alternatives and glob-to-regex). A literal, a
+    bracket or `?` supplies a letter, a `*` or an expansion the command does not set supplies none (`*.txt` is no
+    `.env.txt`), and a `?` or bracket never matches a leading dot. Sensitive when a basename holding a written
+    character can match an exact name (`.e*`, `.EN?`, `id_rs?`), or a secret word is spelled, not by `?` alone, into
+    a name sensitive in its role. Syntax the reader does not model (extglob, a POSIX class, a sequence) and a brace
+    at its cap keep the raw-text reading."""
+    from lib import bash_execution_boundary as beb
+    from lib.sensitive_names import EXACT_NAMES, KEY_STEMS, SECRET_WORDS, is_sensitive_name
+    variants = [[]]
+    for (kind, s, _), chunk in zip(w.segs, beb.word_chunks(w)[0]):  # an expansion's chunk is `*`
+        if kind in beb._PATTERN_SEGS and kind != "lit" and beb._UNMODELLED_PATTERN_RE.search(s.text):
+            return False
+        alts = [(False, beb._glob_escape(v)) for v in sorted(env.get(s.text, ()) if kind == "param" else ())]
+        variants = [v + [c] for v in variants for c in alts or [chunk]][:16]
+    cands = []
+    for chunks in variants:
+        got = beb._brace_expand(chunks, limit=beb._PATTERN_BRACE_CAP)
+        if len(got) >= beb._PATTERN_BRACE_CAP:
+            return False
+        cands += got
+
+    def admits(t, ch):
+        return ch != "/" if t == "?" else bool(re.match(beb._glob_to_regex(t), ch))
+
+    def fill(t):
+        return "" if t == "*" else next((c for c in "xyzXYZ019._-" if admits(t, c)), "x")
+
+    for cand in cands:
+        base = cand.rpartition("/")[2]
+        rx = re.compile(beb._glob_to_regex(base), re.IGNORECASE)
+        if re.sub(r"\[[^]]*\]|[*?]", "", base) and any(
+                rx.match(n) and not (n[0] == "." and base[:1] in "*?[") for n in EXACT_NAMES):
+            return True
+        toks, i = [], 0
+        while i < len(cand):  # glob tokens: a character, `?`, `*` or a bracket expression
+            k = cand.find("]", i + 2 + (cand[i + 1:i + 2] in "!^")) if cand[i] == "[" else -1
+            toks.append(cand[i:k + 1] if k > 0 else cand[i])
+            i = k + 1 if k > 0 else i + 1
+        for word in SECRET_WORDS + KEY_STEMS:
+            for s in (s for s, t in enumerate(toks) if t != "*"):
+                j, k, own = s, 0, 0
+                while j < len(toks) and k < len(word):
+                    t = toks[j]
+                    if t != "*":
+                        lead = word[k] == "." and t[0] in "?[" and (j == 0 or toks[j - 1] == "/")
+                        if lead or not admits(t, word[k]):
+                            break
+                        own, k = own + (t != "?"), k + 1
+                    j += 1
+                name = "".join(map(fill, toks[:s])) + word + "".join(map(fill, toks[j:]))
+                if k == len(word) and own and is_sensitive_name(name, **roles):
+                    return True
+    return False
 
 
 def _code_copy(t):
@@ -4149,7 +4210,8 @@ def sensitive_redirect(command, kept=False):
     redirection into it, or tee, cp, mv, install, rsync, ln, dd of=, curl -o, wget -O, sed -i or truncate naming
     it), 'redirect' when such a name is a word or an input redirection of a command whose output goes to a file, or
     a source operand of cp, mv, install, rsync or ln other than a source-code file; None otherwise. A word counts
-    only where it can be a source: not a grep or rg pattern, not echo's or printf's static text, and a command line
+    only where it can be a source: not a grep or rg pattern, not echo's or printf's static text, not a name pattern,
+    keyword or exclusion (_sd_name_only: find's name tests, an excluding glob, pytest -k/-m), and a command line
     a shell or a runner (docker exec, ssh, watch ...) is handed is read as the commands it holds, their output kept
     (``kept``) as its own is.
 
@@ -4166,7 +4228,8 @@ def sensitive_redirect(command, kept=False):
     source-code or Markdown/reST write target or operand of cp, mv, install, rsync, ln or sed -i
     (is_code_or_doc_operand). A proven reader (lib/bash_read_only.py) whose every redirection goes to /dev/null or
     merges a stream writes no file. A computed word (`$X`, `$(...)`, a glob) and interpreter code are judged by
-    substring on their raw text. A command the parser cannot read is judged on its raw text by substring, so it is
+    substring on their raw text, and a computed word also by the names its wildcards, braces and the variables the
+    command sets can spell (_wildcard_spells_secret: `.en?`, `{.e,x}nv`). A command the parser cannot read is judged on its raw text by substring, so it is
     refused more, never less.
     """
     from lib.sensitive_names import (RAW_FALLBACK_READ, RAW_FALLBACK_WRITE, is_code_file, is_code_or_doc_operand,
@@ -4177,6 +4240,10 @@ def sensitive_redirect(command, kept=False):
         script = parse(command)
         if script.error is not None:
             raise ValueError(script.error.code)
+        env = {}  # the variables the command sets to a static value, each with every value it is given
+        for a in (a for site in walk(script) for a in site.cmd.assignments if not a.append):
+            if a.static_value() is not None:
+                env.setdefault(a.name, set()).add(a.static_value())
         for t in write_targets(script, into=_DEFAULT_INTO):
             writer = t.mechanism.startswith("redirect") or t.mechanism.split("-", 1)[0] in _SENSITIVE_WRITERS
             if not writer or t.mode == "delete":
@@ -4186,12 +4253,12 @@ def sensitive_redirect(command, kept=False):
                     continue
                 if is_sensitive_name(t.path, report=True, template=True) and not _code_copy(t):
                     return "write"
-            elif t.word is not None and _word_sensitive(t.word):
+            elif t.word is not None and _word_sensitive(t.word, env):
                 return "write"
         for site in walk(script):
             redirs = [r for r in site.cmd.redirects if r.target is not None]
             outputs = [r for r in redirs if r.writes()]
-            if any(_word_sensitive(r.target, report=True, template=True)
+            if any(_word_sensitive(r.target, env, report=True, template=True)
                    and not is_code_or_doc_operand(r.target.value()) for r in outputs):
                 return "write"
             name = _command_name(site.cmd)
@@ -4202,7 +4269,7 @@ def sensitive_redirect(command, kept=False):
                 outputs = []  # lib/bash_read_only.py's reader, each stream it redirects into /dev/null: no file
             if not outputs and network and writes:
                 # A client writing its own output file reads a `file:` URL into it (curl file:///.env -o /tmp/y).
-                if any(_local_url(w.value()) and _word_sensitive(w) for w in site.cmd.words[1:]):
+                if any(_local_url(w.value()) and _word_sensitive(w, env) for w in site.cmd.words[1:]):
                     return "redirect"
                 continue
             if outputs or kept:
@@ -4211,6 +4278,7 @@ def sensitive_redirect(command, kept=False):
                 spec = {"grep": _SD_GREP, "egrep": _SD_GREP, "fgrep": _SD_GREP, "rg": _SD_RG}.get(name)
                 data = _sd_scan(texts, spec) or () if spec else range(len(args)) if name in PRINTERS else ()
                 skip = {id(args[k]) for k in data if k < len(args) and (spec or args[k].value() is not None)}
+                skip |= {id(args[k]) for k in _sd_name_only(name, texts) if k < len(args)}
                 for w in args if name in SHELLS or name in _OPAQUE_RUNNERS else ():
                     if any(c.isspace() for c in w.value() or "") and parse(w.value()).error is None:
                         inner = sensitive_redirect(w.value(), True)
@@ -4235,10 +4303,10 @@ def sensitive_redirect(command, kept=False):
             def sensitive(i, w):
                 if url_role and i in urls and w.value() is not None:
                     return is_sensitive_name(urls[i], url=True)
-                return _word_sensitive(w, template=template)
+                return _word_sensitive(w, env, template=template)
 
             if any(sensitive(i, w) for i, w in words) \
-                    or any(_word_sensitive(r.target) for r in redirs if not r.writes()):
+                    or any(_word_sensitive(r.target, env) for r in redirs if not r.writes()):
                 return "redirect"
         return None
     except Exception:  # noqa: BLE001
@@ -5036,7 +5104,7 @@ def snapshot_before(payload):
 def _scratch_owner(payload, removal=True):
     """The write policy's answers about the calling actor's own scratch directory: (owner test for a path, the note
     naming that directory or ""). All are hooks/pretool-tool-policy.py's own (_scratch_status, _note_own_scratch,
-    _main_scratch), loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an
+    _own_scratch), loaded as hooks/pretool-claude-config-guard.py loads that hook: the one definition of where an
     actor may write scratch files, with no second one here (the git guard's commit in it asks with removal=False).
     For a removal the owner test also passes a path inside
     the session's scratch directory (where $TMPDIR points, so where the programs any actor of the session runs
@@ -5055,7 +5123,7 @@ def _scratch_owner(payload, removal=True):
         note = io.StringIO()
         with contextlib.redirect_stderr(note):  # the note for a refused write to system temp names the directory
             policy._note_own_scratch(role, payload, os.path.join(locations.DEFAULT_TEMP_DIR, "removal"))
-        shared = removal and policy._main_scratch({"session_id": payload.get("session_id")})
+        shared = removal and policy._own_scratch(None, {"session_id": payload.get("session_id")})
     except BaseException:  # noqa: BLE001 - also a bootstrap that exits: nothing is owned
         return (lambda path: False), ""
 
@@ -5066,7 +5134,7 @@ def _scratch_owner(payload, removal=True):
         except Exception:  # noqa: BLE001
             return False
     lines = [note.getvalue().strip()]
-    if shared and shared + "/" not in lines[0]:
+    if shared and shared + "/ " not in lines[0]:  # a subagent's own directory lies inside it: not the one named
         lines.append(f"removal-policy: this session's scratch directory is {shared}/ ($TMPDIR, for every actor of "
                      "the session).")
     return owns, "\n".join(filter(None, lines))
@@ -6165,6 +6233,38 @@ def _sd_scan(args, spec, permute=True, operands=None):
     return patterns
 
 
+def _sd_name_only(name, vals):
+    """The arg indexes a program reads as a name pattern, a keyword or an exclusion, never as a file it opens: a
+    find name test when find runs and writes nothing, grep's --exclude/--exclude-dir glob, rg's `!` glob, pytest's
+    -k/-m expression (`pytest`, `python -m pytest`)."""
+    if name == "find":
+        return set() if any(v in FIND_ACTIONS for v in vals) else \
+            {k + 1 for k, v in enumerate(vals) if v in FIND_NAME_TESTS + ("-regex", "-iregex")}
+    module = re.fullmatch(r"python[\d.]*", name or "") and vals[:2] == ["-m", "pytest"]
+    pytest = module or name in ("pytest", "py.test")
+    if not pytest and name not in GREP_NAMES + ("rg",):
+        return set()
+    spec = ("km", None, ()) if pytest else _SD_RG if name == "rg" else _SD_GREP
+    short_val, long_val, found, k = spec[0], spec[2], set(), 2 if module else 0
+    while k < len(vals) and vals[k] != "--":
+        a, nxt = vals[k], vals[k + 1] if k + 1 < len(vals) else ""
+        opt, eq, v = a.partition("=")
+        if a.startswith("--") and opt in long_val:
+            negated = (v if eq else nxt)[:1] == "!"
+            if opt in ("--exclude", "--exclude-dir") or (opt in ("--glob", "--iglob") and negated):
+                found.add(k if eq else k + 1)
+            k += 1 if eq else 2
+            continue
+        for j, c in enumerate(a[1:] if a[:1] == "-" and a[:2] != "--" else "", 1):
+            if c in short_val:
+                if pytest or (c == "g" and (a[j + 1:] or nxt)[:1] == "!"):
+                    found.add(k if a[j + 1:] else k + 1)
+                k += 0 if a[j + 1:] else 1
+                break
+        k += 1
+    return found
+
+
 def _sd_git(args):
     """(allowed arg indexes, message comes from stdin) for a git call that names the file only as a search pattern
     or in a commit message; None when any part of it is not read."""
@@ -7125,18 +7225,11 @@ def decide(payload_text):
     consent_flag_rule(command, payload)
     session_dirs_rule(command)
 
-    from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command
+    from lib.allowlist import has_do_consent  # an /allow grant is released where the verdicts meet (lib/hook_launch)
     if not get("agent_id"):
         try:
             if has_do_consent(payload):
                 return "CONSENT"
-        except Exception:  # noqa: BLE001
-            pass
-    task = os.environ.get("CLAUDE_TASK_ID") or str(get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "default"))
-    if task:
-        try:
-            if match_sentinel_grant_for_bash_command(task, command) is not None:
-                return "SENTINEL " + task
         except Exception:  # noqa: BLE001
             pass
 

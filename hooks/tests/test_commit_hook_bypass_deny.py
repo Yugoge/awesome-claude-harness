@@ -833,30 +833,6 @@ def test_do_consent_does_not_bypass(sandbox, filtered_repo, harness_home, caller
                    "unregistered-settings-filter", "git commit -m x")
 
 
-@pytest.mark.parametrize("caller", sorted(CALLERS))
-def test_allow_grant_does_not_bypass(sandbox, filtered_repo, harness_home, caller):
-    tmp_path, env = sandbox
-    plain = make_repo(env, tmp_path / "plain" / "repo", declare_filter=False)
-    grants = tmp_path / "state" / "claude-grants"
-    grants.mkdir()
-    now = int(time.time())
-
-    def grant(target):
-        (grants / f"{SID}.json").write_text(json.dumps({
-            "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
-            "allowed_operations": [{"op": "git", "target": target}]}))
-
-    grant("stash")
-    assert_allowed(run_hook(sandbox, "git stash", plain, caller))  # the grant is live
-    grant("commit")
-    command = "git commit -n -m x"
-    assert_blocked(run_hook(sandbox, command, plain, caller), "commit-hook-bypass", command)
-    grant("config")
-    cw = "git config --unset filter.claude-settings.clean"
-    assert_blocked(run_hook(sandbox, cw, harness_home, caller), "config-keystone-write", cw)
-    gw = "git config --system --unset filter.claude-settings.clean"
-    assert_blocked(run_hook(sandbox, gw, plain, caller), "config-keystone-write", gw)
-    assert_allowed(run_hook(sandbox, cw, plain, caller))  # a user project's own setup
-    _modify_work_tree(env, filtered_repo)
-    assert_blocked(run_hook(sandbox, "git commit -m x", filtered_repo, caller),
-                   "unregistered-settings-filter", "git commit -m x")
+# Retired: test_allow_grant_does_not_bypass. The guard reads no /allow grant, and the owner's
+# /allow now releases any refused call in the launcher, these refusals included (C6,
+# test_allow_releases_anything.py); the refusals themselves are pinned by the tests above.

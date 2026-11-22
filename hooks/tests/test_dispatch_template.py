@@ -71,13 +71,13 @@ def test_the_template_of_the_dispatchs_own_role_and_profile_not_a_union(tmp_path
     assert [a["path"] for a in declared["artifacts"]] == ["docs/dev/qa-report-20261029-101010.json"]
     # The block alone names the template, whatever lines the prompt shares with another one.
     mixed = "Validate BA analysis for 20261029-101010.\n" + _block("qa", "final_verification")
-    assert "You are the QA subagent." in dispatch_template.template_of("toy", "qa", mixed, commands)
+    assert "You are the QA subagent." in dispatch_template._template("toy", "qa", mixed, commands)[0]
     # With no block of its own, the template whose lines the prompt carries.
     bare = "Validate BA analysis for 20261029-101010.\nYou are in BA-VALIDATION MODE."
     declared = dispatch_template.template_obligation("toy", "qa", bare, commands)
     assert [a["path"] for a in declared["artifacts"]] == ["docs/dev/ba-qa-report-20261029-101010.json"]
-    assert dispatch_template.template_of("toy", "qa", "nothing of either", commands) is None
-    assert dispatch_template.template_of("toy", "qa", "x\n" + _block("qa", "singular"), commands) is None
+    assert dispatch_template._template("toy", "qa", "nothing of either", commands) is None
+    assert dispatch_template._template("toy", "qa", "x\n" + _block("qa", "singular"), commands) is None
 
 
 def test_a_fence_naming_no_type_dispatches_the_role_it_declares(tmp_path):
@@ -137,7 +137,7 @@ def test_the_current_dev_qa_templates_carry_the_codex_line_and_request_id():
     assert '"identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}' in final
     prompt = "Use Task tool with:\n- description: \"Verify implementation quality against standards\"\n" \
              + _block("qa", "final_verification")
-    assert dispatch_template.template_of("dev", "qa", prompt) == final
+    assert dispatch_template._template("dev", "qa", prompt, None)[0] == final
 
 
 def test_a_template_declaring_its_obligation_in_a_sentence(tmp_path):

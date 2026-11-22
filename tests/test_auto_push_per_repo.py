@@ -46,7 +46,7 @@ from tests.test_git_auto_push_opt_in import (AUTO_PUSH_LIB, BRANCH, CHECKPOINT_C
                                              CHECKPOINT_LIB, CHECKPOINT_NOTE, NEGATIVE_SETTLE,
                                              POLL_INTERVAL, POSITIVE_TIMEOUT, POST_COMMIT_HOOK,
                                              PROJECT_NAME, SKIP_MARKER, Run, _combined_hook_body,
-                                             _fswatch_functions, _git, _install_post_commit,
+                                             _fswatch_functions, _fswatch_log_dir, _git, _install_post_commit,
                                              _new_repo, _origin_refs, _run,
                                              _run_session_git_init, _scratch_env)
 from tests.test_landing import env  # noqa: F401  (the landing tests' scratch-home fixture)
@@ -224,12 +224,13 @@ def test_fswatch_push_follows_the_repository_switch(tmp_path, switch):
     origin_before = _origin_refs(env, origin)
     script = ('source "$1" "$2"; loaded=$?; trap - EXIT INT TERM; '
               '[ "$loaded" -eq 0 ] || exit 90; safe_push')
+    log_dir = _fswatch_log_dir(functions, env)
     proc = _run(["bash", "-c", script, "bash", functions, repo], env, check=False)
     run = Run("fswatch", switch.id, env, repo, origin, origin_before, f"refs/heads/{BRANCH}",
               head, proc.returncode, proc.stdout + proc.stderr, time.monotonic() - NEGATIVE_SETTLE)
     assert proc.returncode == 0, run.output
     _judge(run, switch.pushes)  # safe_push is synchronous: no settling wait is needed
-    log = Path(env["HOME"]) / ".claude" / "logs" / f"git-fswatch-{repo.name}.log"
+    log = log_dir / f"git-fswatch-{repo.name}.log"  # the state root's logs/
     text = log.read_text(errors="replace") if log.exists() else ""
     skipped = [ln for ln in text.splitlines() if SKIP_MARKER in ln]
     assert len(skipped) == (0 if switch.pushes else 1), skipped

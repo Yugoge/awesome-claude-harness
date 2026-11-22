@@ -7,11 +7,15 @@ base tree taken from git history, the session loads the base's settings.json, an
 fast-forwards to the tree under test between two events, as the owner's pull of the merge does. The
 CLI keeps the hook commands it loaded; each event runs whatever file is on disk at that path.
 
-Two transitions (the base tree each time from this checkout's history; CI fetches it whole):
-  master  origin/master before P1b merges (2acc29b, P8's merge): the owner's live home today;
-  p1b     P1b's head (3f0b7a2), which P1c builds on.
+Three transitions (the base tree each time from this checkout's history; CI fetches it whole):
+  master  origin/master before P1b merges (2acc29b, P8's merge);
+  p1b     P1b's head (3f0b7a2), which P1c builds on;
+  p12     master's P12 merge (3a968cf), the oldest hook list a session that can still exist may hold.
+KEPT_LISTS names the transitions whose list a session keeps across the landing (p12); master's and
+p1b's lists name hook files this tree has retired and no session holding them can still exist, so
+they run only reloaded at the landing (again with your settings.json, below; policies/replay-hook-lists.v1.json).
 
-Per transition, with CLAUDE_OBLIGATION_STOPGATE=block in every hook's environment, and the base's
+Per kept transition, with CLAUDE_OBLIGATION_STOPGATE=block in every hook's environment, and the base's
 settings.json as the session loaded it:
   pre-merge  /dev singular in the toy repository, and a plain session in the harness home, each in a
              session that loaded the base's settings.json, the home landed before it (base
@@ -53,10 +57,6 @@ the terminal is reached, a stop held by WAITS aside (a block whose every gap is 
 block naming a WAITS failure, whole or beside gaps of its own, is its own failing check
 (test_again_with_your_settings[<case>-<transition>-dependencies]), naming the phase, until it merges.
 
-Master only, a fault whose consumer copy P1b deleted: F2 written after the landing in a session whose
-environment has no STOPGATE (master's settings.json sets none) is stopped by G2 at the dev's stop,
-through the landed settings.json's switch, with and without CLAUDE_HOME.
-
 REPLAY_WORK keeps the runs (default: pytest's temp dir); the report of each transition, with the
 A11 table, is written there as live-landing-<transition>.md.
 """
@@ -69,14 +69,18 @@ import re
 import subprocess
 import threading
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
 from tests.replay import hookrun, landing, launchdiff, sites, suite
 
 TRANSITIONS = {"master": "2acc29b0c8149c32d8e424e58c6af55d073eac20",
-               "p1b": "3f0b7a23ee9145c573678775dc67b0a230c228f4"}
+               "p1b": "3f0b7a23ee9145c573678775dc67b0a230c228f4",
+               "p12": "3a968cf823c517bcbff835a11ecdfe3c3d68c5e6"}
+# The transitions a session keeps the base's list across the landing for (D15), and those it reloads
+# this tree's at the landing (hooklist=landed); policies/replay-hook-lists.v1.json registers both.
+KEPT_LISTS = ("p12",)
+RELOADED_LISTS = ("master", "p1b")
 ENV = {"CLAUDE_OBLIGATION_STOPGATE": "block"}
 # P2 arms G1 and G3 beside P1b's STOPGATE, and the overnight guard's matcher gains AskUserQuestion (its
 # unattended deny); a landed replay loads the base's settings.json, which has neither.
@@ -84,6 +88,8 @@ P2_ENV = {"CLAUDE_OBLIGATION_GATE": "block", "CLAUDE_OBLIGATION_BARRIER": "block
 # P10 (R9): the clean settings form sets PYTHONDONTWRITEBYTECODE, so a session's hooks write no
 # bytecode into the tree; the base's settings.json has no such entry.
 P10_ENV = {"PYTHONDONTWRITEBYTECODE": "1"}
+# 2026-11-21: the CLI's cache lifetime for subagent requests (read by the CLI alone, no hook): the base has none.
+CACHE_ENV = {"CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"}
 # P9: settings.json's env arms subagentstop-cp-enforce.py as shipped (CP_ENFORCE_MODE=block); the
 # base's settings.json leaves it advisory.
 P9_ENV = {"CP_ENFORCE_MODE": "block"}
@@ -162,9 +168,9 @@ def live(request, tmp_path_factory):
 
 
 def _each(scn: suite.Scenario, cost: int):
-    """One test per transition, each its own replay key (conftest.py's CI split by cost)."""
+    """One test per kept transition, each its own replay key (conftest.py's CI split by cost)."""
     return pytest.mark.parametrize("live", [pytest.param(n, id=n, marks=pytest.mark.replay(f"{scn.name} [{n}]", cost))
-                                            for n in sorted(TRANSITIONS)], indirect=True)
+                                            for n in sorted(KEPT_LISTS)], indirect=True)
 
 
 # ---------------------------------------------------------------- reading a replay
@@ -310,7 +316,7 @@ def _base_settings(name: str) -> dict:
                                      capture_output=True, text=True, check=True).stdout)
 
 
-@pytest.mark.parametrize("name", sorted(TRANSITIONS))
+@pytest.mark.parametrize("name", sorted(KEPT_LISTS))
 def test_every_hook_a_base_session_registered_is_on_disk(name):
     """D15: a session running across the landing runs every hook command its base settings.json
     registered, at its path; each file such a command names is in this tree (stubbed, never deleted)."""
@@ -353,8 +359,6 @@ def test_a_redev_after_a_no_progress_round(live):
             [f"landed at {land.get('at')!r}; the base G2's stores on disk then: {land.get('no_progress_stores')}"]
             + _listed(r, base))
     _common(r, base)
-    if live.name == "master":  # d625284's G2 wrote its no-progress round's records (P1b deleted the writer)
-        assert land.get("no_progress_stores"), land
     stops = _stops(r, _after(r), ("Stop", "SubagentStop"))  # every stop of the /redev cycle is compliant
     assert stops and all(rc == 0 for st in stops for rc in st["rcs"].values()), stops
 
@@ -390,10 +394,16 @@ def _pre(*matchers) -> set:
 # (a) and (b) make after their landing (REACHED) and the pre-merge and harness-home sessions do not.
 POST_LAUNCH = ("PostToolUse", None)
 FAILED_LAUNCH = ("PostToolUseFailure", None)
-BASH = _pre(None, "*", "Bash", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash") \
-    | {("PostToolUse", "Bash"), POST_LAUNCH}
+# 2026-11-21: the deny list that was the CLI's own (pretool-deny-list.py), one more launcher rule every Bash
+# and Write call meets.
+DENY = "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit|Skill"
+# 2026-11-21: the lane-completeness watch's registration removed (its file an exit-0 stub, for a list that kept
+# it): every Write after the landing runs this tree's list without it.
+WATCH_GONE = ("PostToolUse", "Write|Edit|NotebookEdit|MultiEdit")
+BASH = _pre(None, "*", "Bash", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash",
+            DENY) | {("PostToolUse", "Bash"), POST_LAUNCH}
 WRITE = _pre(None, "*", "Write", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash",
-             "Write|Edit|NotebookEdit|MultiEdit") | {("PostToolUse", "Write"), POST_LAUNCH}
+             "Write|Edit|NotebookEdit|MultiEdit", DENY) | {("PostToolUse", "Write"), POST_LAUNCH, WATCH_GONE}
 # The dispatch registrations now match both dispatch tools (lib/subagent.DISPATCH_TOOLS): the base's "Agent"
 # groups are gone and "Agent|Task" ones stand in their place; an Agent dispatch reaches both keys' changes.
 AGENT = _pre(None, "*", "Agent", "Agent|Task") | {("PostToolUse", "Agent"), ("PostToolUse", "Agent|Task"),
@@ -431,17 +441,28 @@ PROMPT = ("UserPromptSubmit", None)
 _PROMPT_HOOKS = ["hooks/prompt-workflow.py", "hooks/userprompt-doc-sync-check.py",
                  "hooks/userprompt-restart-authorize.py", "hooks/userprompt-consent-allowlist.sh",
                  "hooks/userprompt-tmpfs-pressure.sh", "hooks/userprompt-bulk-commit-capability.py"]
+# 2026-11-21: the launcher's dispatch temp pointer (a dispatch whose end was never seen closes) and hold of
+# background returns, and the returns' deadline hook registered beside it: PRE and HOME reach them with every
+# prompt after their landing (REACHED), where test_again_with_your_settings runs them (hooklist) and holds
+# them to no hook error (a11); no replay checks what they do.
 _PROMPT_HOOKS_NOW = ["hooks/prompt-workflow.py", "hooks/userprompt-doc-sync-check.py",
                      "hooks/userprompt-restart-authorize.py", "hooks/userprompt-bulk-commit-capability.py",
+                     "hooks/lib/dispatch_temp.py", "hooks/lib/returns_hold.py",
+                     "hooks/userprompt-returns-deadline.sh",
                      "hooks/userprompt-consent-allowlist.sh", "hooks/userprompt-tmpfs-pressure.sh",
                      "hooks/userprompt-harness-switch.sh"]
-START = ("SubagentStart", None)  # P13-3's score injector and P2-3's roots, registered on every agent start
+# P13-3's score injector and P2-3's roots, registered on every agent start; since 2026-11-21 the agent's own
+# scratch directory (subagentstart-scratch.py), which PRE, A and B reach with each dispatch (REACHED) as above
+START = ("SubagentStart", None)
 FAILED_SKILL = ("PostToolUseFailure", "Skill")  # P13-3's codex ledger on a failed Skill call; no landing scenario calls codex
 ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
              PROMPT: (_PROMPT_HOOKS, _PROMPT_HOOKS_NOW),
-             START: ([], ["hooks/subagentstart-record.py", "hooks/prompt-workflow.py"]),
+             START: ([], ["hooks/subagentstart-record.py", "hooks/prompt-workflow.py", "hooks/subagentstart-scratch.py"]),
              FAILED_SKILL: ([], ["hooks/posttool-codex-skill-ledger.py"]),
              FAILED_LAUNCH: ([], ["hooks/posttool-orchestrator-ran.py"]),
+             # 2026-11-21: a failed dispatch's temp directory goes (lib/dispatch_temp.py); no landing replay has a
+             # dispatch fail, so none runs it
+             ("PostToolUseFailure", "Agent|Task"): ([], ["hooks/lib/dispatch_temp.py"]),
              # design A's Monitor guard: a Monitor command meets every Bash hook; no landing scenario starts a monitor
              ("PreToolUse", "Monitor"): ([], ["hooks/pretool-monitor-command.py"]),
              ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
@@ -627,21 +648,22 @@ PARTS = ("hooklist", "a11", "dependencies")
 def _yours_params():
     return [pytest.param(n, case, part, id=f"{case}-{n}-{part}",
                          marks=pytest.mark.replay(f"{scns[0].name} [{n}]", YOURS_COST[case]))
-            for case, scns in YOURS.items() for n in sorted(TRANSITIONS) for part in PARTS]
+            for case, scns in YOURS.items() for n in sorted(RELOADED_LISTS) for part in PARTS]
 
 
-@pytest.mark.parametrize("name", sorted(TRANSITIONS))
+@pytest.mark.parametrize("name", sorted(RELOADED_LISTS))
 def test_your_settings_differs_only_where_a_replay_runs_it(name):
     """This tree's settings.json registers otherwise than the base's exactly at the registrations the
     scenarios below declare they run after the landing (EXERCISES), each checked in its replay, and at
     those no scenario reaches (ELSEWHERE); its environment differs by STOPGATE=block, P2's arming of G1 and
-    G3 (P2_ENV), P10's PYTHONDONTWRITEBYTECODE (P10_ENV) and P9's CP_ENFORCE_MODE (P9_ENV) alone."""
+    G3 (P2_ENV), P10's PYTHONDONTWRITEBYTECODE (P10_ENV), P9's CP_ENFORCE_MODE (P9_ENV) and the CLI's
+    subagent cache lifetime (CACHE_ENV) alone."""
     differing = _differing(name)
     assert differing, "this tree registers as the base does: the replays with your settings.json are the replays"
     assert {k: differing.get(k) for k in ELSEWHERE} == ELSEWHERE, differing
     assert set(differing) - set(ELSEWHERE) == set().union(*EXERCISES.values()), differing
     head = _head_settings()
-    assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV | P10_ENV | P9_ENV == \
+    assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV | P10_ENV | P9_ENV | CACHE_ENV == \
         hookrun.settings_env(head) | ENV
 
 
@@ -703,43 +725,3 @@ def test_again_with_your_settings(live, case, part):
                 + "; ".join(why for ph, why, _ in WAITS if ph in phases) + ". Blocks naming it:\n"
                 + "\n".join(f"- {b['hook']} at {b['step']!r} ({b['event']}): {b.get('first')} | "
                              + "; ".join(gap for gap, _ in _gaps(b["text"])) for b in held))
-
-
-# ---------------------------------------------------------------- a fault whose consumer copy P1b deleted
-
-F2 = "invalid@agent:dev Write docs/dev/dev-report-*=dev.status:done,-dev.files_modified"
-F2_LANDED = suite.Scenario("A11 F2 after the landing, the session's env without STOPGATE", "dev",
-                           (("variant", "plain"), ("fault", F2)), ("dev",), 150)
-
-
-@pytest.mark.replay("A11 F2 after the landing [master]", F2_LANDED.cost)
-def test_g2_stops_a_deleted_copys_fault_through_the_landed_switch(request, tmp_path_factory):
-    """P1b deleted /close's re-check of dev reports once G2 blocked (its E4). A session on master loaded a
-    settings.json without CLAUDE_OBLIGATION_STOPGATE; after the landing G2 reads its switch from the
-    landed settings.json at each stop (claude_home.settings_switch), with and without CLAUDE_HOME. So F2's
-    invalid dev report, written after the landing, is stopped at the dev's own stop, the block naming
-    the report and the failing check, and the dev's next round passes."""
-    runners = [_runner(request, tmp_path_factory, "master", env={}, tag="-noenv"),
-               _runner(request, tmp_path_factory, "master", env={"CLAUDE_HOME": "{harness}"}, tag="-claude-home")]
-    land = PASS + (("land", "after:TodoWrite canonical list"),)
-    rows, lines = [], []
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        results = list(ex.map(lambda rr: rr.run(F2_LANDED, "shipped", faults=land, tag="~landed"), runners))
-    for rr, res in zip(runners, results):
-        g2 = [b for b in res.blocks if b["hook"] == G2]
-        with open(os.path.join(res.run_dir, "faults.json")) as fh:
-            fault = json.load(fh)[0]
-        rows.append(dict(_row(F2_LANDED.name, res, None), **{"CLAUDE_HOME": "CLAUDE_HOME" in rr.env,
-                                                             "repaired, rounds": (fault["repaired"], fault["rounds"])}))
-        lines += _listed(res, None)
-        assert not res.error and not res.summary.get("driver_error") and res.rc == 0, res.explain()
-        assert _landing(res).get("rc") == 0, _landing(res)
-        # the fault's one round, returned to the dev (the other blocks are the base text's, which (a) compares)
-        assert len(g2) == 1 and g2[0]["event"] == "SubagentStop" and not g2[0]["passed_by_deviation"], res.explain()
-        named = re.sub(r"\d{8}-\d{6}", "<ts>", fault["path"])  # the recorded text's ids are normalised
-        assert named in g2[0]["text"] and re.search(r"files_modified|'done'", g2[0]["text"]), g2[0]["text"]
-        assert fault["repaired"] and fault["rounds"] == 1, fault
-        # master's /dev text stops short of its terminal at Step 17's resolver in every replay of it, the
-        # base replay of (a) included; what is asked here is the fault's round at its producer
-        assert not _verdicts_after(res, "error"), res.explain()
-    _report(runners[0], rows, lines)

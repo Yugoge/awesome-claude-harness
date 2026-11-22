@@ -140,7 +140,8 @@ class TestEvaluateCommitBlessedBridge(unittest.TestCase):
         # /commit cycle would otherwise make _has_active_commit_grant() True and
         # turn this deterministic allow-path test flaky.
         with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True), \
-             patch.object(guard, "_has_active_commit_grant", return_value=False):
+             patch.object(guard, "_has_active_commit_grant", return_value=False), \
+             patch.object(guard, "_bulk_refusal", return_value=""):  # the analyst and the bulk verdict
             # Should not raise SystemExit(2)
             try:
                 guard._evaluate_commit(self.BULK_CMD, _make_data())
@@ -244,7 +245,8 @@ class TestExtractCommitMessageFFlag(unittest.TestCase):
             # test_blessed_bridge_with_sentinel_allowed) so ambient /tmp commit
             # grants can't make this allow-path test flaky.
             with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True), \
-                 patch.object(guard, "_has_active_commit_grant", return_value=False):
+                 patch.object(guard, "_has_active_commit_grant", return_value=False), \
+                 patch.object(guard, "_bulk_refusal", return_value=""):  # the analyst and the bulk verdict
                 try:
                     guard._evaluate_commit(cmd, _make_data())
                 except SystemExit as e:
@@ -615,7 +617,7 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
                                   "commit-dispatch-manifest"],
                 "minter": "scripts/write-commit-grant.py",
                 "minted_at": now.isoformat(),
-                "evidence": {},
+                "evidence": {"manifest_dispatched_at": (now - timedelta(seconds=30)).isoformat()},
             },
             "expected_consumer": {
                 "kind": "dispatched-subagent",
@@ -628,6 +630,11 @@ class TestCommitGrantRepoMatchingSelection(unittest.TestCase):
         path = Path(dirpath) / f"claude-commit-grant-{sid}-{nonce}.json"
         path.write_text(json.dumps(grant))
         os.utime(path, (mtime, mtime))
+        # The pre-commit review approved this round (commands/commit.md Step 6); docs/dev stays out of git.
+        (Path(repo_root) / "docs" / "dev").mkdir(parents=True, exist_ok=True)
+        (Path(repo_root) / "docs" / "dev" / "commit-qa-report-grant-sel-test.md").write_text("COMMIT: APPROVE\n")
+        with open(Path(repo_root) / ".git" / "info" / "exclude", "a") as handle:
+            handle.write("docs/dev/\n")
         return str(path)
 
     def _arm_dispatched_consumer(self, sid):
@@ -910,7 +917,8 @@ class TestAutoBulkDeferralBinding(unittest.TestCase):
         cmd = self._bulk_cmd(target)
         with tempfile.TemporaryDirectory() as gdir:
             foreign_path, _ = self._grant_file(gdir, foreign)
-            with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True):
+            with patch.object(guard, "_has_bulk_commit_sentinel", return_value=True), \
+                    patch.object(guard, "_bulk_refusal", return_value=""):  # the analyst and the bulk verdict
                 import glob as _glob_mod
                 real_glob = _glob_mod.glob
 

@@ -10,7 +10,7 @@ Example: `dev-scratch-1779000000`, `qa-fixtures-scratch-20260519`.
 
 ## Cleanup
 
-The daily cron at `/etc/cron.d/tmp-cleanup-daily` invokes
+The hourly cron at `/etc/cron.d/tmp-cleanup` (`scripts/install/tmp-cleanup.cron`) invokes
 `/usr/local/sbin/tmp-cleanup.sh`, which sweeps `*-scratch-[0-9]*` at the
 **>3-day** age tier. Files newer than 3 days are left alone.
 

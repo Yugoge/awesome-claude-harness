@@ -266,6 +266,15 @@ def handed_over(text: str, hook_out: str) -> dict | None:
     return json.loads(body.split("\n" + closed.group(1), 1)[0])
 
 
+def _original_block(cuts: Cuts, aid: str) -> str:
+    """restart.md step 3: the cut lane's original <obligation> block, appended after the resume message
+    ("\\n" + the block as its dispatch carried it); "" when that dispatch carried none."""
+    r = next((x for x in cuts.parked if x.sub.aid == aid), None)
+    prompt = str(((r.agent_in if r else None) or {}).get("prompt") or "")
+    m = re.search(r"<obligation v=\"1\">.*?</obligation>", prompt, re.S)
+    return "\n" + m.group(0) if m else ""
+
+
 def restart_turn(rp, s, cuts: Cuts) -> None:
     """The owner reopens the session (F5, F5f) and types /restart; the main agent runs
     commands/restart.md's procedure, then goes on with the command its subagents were cut in."""
@@ -324,7 +333,7 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
                                   "text": rp.blocks[-1]["text"][:600] if call.blocked else ""})
     sent = []
     for c in pending:  # one batch: a SendMessage per pending candidate, its exact resume message
-        msg = c["resume_message"]
+        msg = c["resume_message"] + _original_block(cuts, c["agent_id"])
         call = s.tool("SendMessage", {"to": c["agent_id"], "message": msg},
                       perform=lambda aid=c["agent_id"]: resumed(aid),
                       label=f"/restart SendMessage {c.get('description') or c.get('agent_type')}")
@@ -333,10 +342,13 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
         sent.append((c["agent_id"], msg, call.tool_use_id))
     for aid, msg, tool_use_id in sent:
         cuts.resume(aid, msg, tool_use_id)
-    status = run("status", "Wait for every resumed agent's response", timeout=600)
-    if not status.get("complete"):
-        raise Stuck(f"RESTART_INCOMPLETE: {status.get('incomplete_agent_ids')}")
-    run("finalize", "Finalize the recovery")
+    if "status" in cmds:  # an older text of restart.md: the main agent waits and finalizes with the helper
+        status = run("status", "Wait for every resumed agent's response", timeout=600)
+        if not status.get("complete"):
+            raise Stuck(f"RESTART_INCOMPLETE: {status.get('incomplete_agent_ids')}")
+        run("finalize", "Finalize the recovery")
+    # Since, step 4 runs nothing: each resumed agent's SubagentStop records its response and the last one
+    # finalizes the recovery (hooks/subagentstop-restart-track.py).
     s.say("Recovered " + ", ".join(f"{c['agent_id']} ({c['agent_transcript_path']})" for c in pending)
           + ". Continuing the interrupted command from its in-progress step.")
 
@@ -360,8 +372,12 @@ def facts(r) -> dict:
                 and e["payload"].get("agent_id") == c["agent"])
     sent = {}
     finalize = step_done = None
+    cut_ids = {c["agent"] for c in cuts}
+    called = any(x["label"] == "/restart Bash finalize" for x in inv)  # an older text's finalize call
     for e in inv:
         p, ti = e["payload"], e["payload"].get("tool_input") or {}
+        if not called and e["event"] == "SubagentStop" and p.get("agent_id") in cut_ids and e["seq"] > first:
+            finalize = e["seq"]  # since, the recorder finalizes at the last resumed agent's stop
         if e["event"] != "PreToolUse" or p.get("agent_id"):
             if e["event"] == "UserPromptSubmit" and e["seq"] > first:
                 out["human_after_cut"].append(p.get("prompt"))

@@ -252,17 +252,16 @@ def test_a_dispatch_every_rule_lets_through_is_witnessed(env):
     assert record["subagent_type"] == "changelog-analyst" and record["sid"] == "s-c7"
 
 
-def test_a_dispatch_another_hook_refuses_leaves_no_witness(env):
-    """The background rule refuses this dispatch from its own registration (the case where the
-    orchestrator forgot run_in_background: false). The gate consults it: no witness is
-    written, and the gate itself refuses nothing and repeats no reason."""
+def test_a_background_dispatch_is_witnessed_as_a_foreground_one(env):
+    """The background rule admits a dispatch with run_in_background absent (the owner's decision of
+    2026-11-21: every role may run in the background), so the gate witnesses it as it does a foreground one."""
     payload = _analyst("Commit the task.")
     del payload["tool_input"]["run_in_background"]
     own = _run(str(HOOKS / "pretool-block-background-tasks.py"), payload, env)
-    assert own.returncode == 2
+    assert own.returncode == 0, own.stderr
     gate = _run(str(HOOKS / "pretool-dispatch-gate.py"), payload, env)
-    assert gate.returncode == 0 and own.stderr.strip() not in gate.stderr
-    assert _witnesses(env) == []
+    assert gate.returncode == 0, gate.stderr
+    assert len(_witnesses(env)) == 1
 
 
 def test_a_witness_that_cannot_write_never_blocks(env):

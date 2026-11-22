@@ -74,11 +74,14 @@ mkdir -p "$CHECKPOINT_LOG_DIR"
 # AC2 (static): the add-all invocation in write_checkpoint() must remain
 # unflagged -- no ignore-bypassing option co-occurring on that logical call.
 # ============================================================================
-add_a_line=$(grep -nF '"${git_cmd[@]}" add -A' "$CORE_LIB" | head -1)
-if [ -n "$add_a_line" ] && ! printf '%s' "$add_a_line" | grep -q -- '-f'; then
+# The call runs git_cmd's arguments directly or through checkpoint_scan ("${git_cmd[@]:1}"); exactly one such line.
+add_a_lines=$(grep -nE '^[^#]*"\$\{git_cmd\[@\](:1)?\}" add -A' "$CORE_LIB")
+add_a_line=$(printf '%s\n' "$add_a_lines" | head -1)
+if [ -n "$add_a_line" ] && [ "$(printf '%s\n' "$add_a_lines" | wc -l)" -eq 1 ] \
+  && ! printf '%s' "$add_a_line" | grep -q -- '-f'; then
   _ok "AC2: git add -A in write_checkpoint carries no -f (ignore-bypass) flag"
 else
-  _fail "AC2: expected an unflagged '\"\${git_cmd[@]}\" add -A' invocation in $CORE_LIB (got: '${add_a_line}')"
+  _fail "AC2: expected one unflagged '\"\${git_cmd[@]}\" add -A' invocation in $CORE_LIB (got: '${add_a_lines}')"
 fi
 
 # ============================================================================
@@ -315,10 +318,18 @@ _written AC5 "an empty list never refuses"
 # --- AC6: the settings check in a harness-home layout -----------------------
 H="$WORKDIR/harness"
 mkdir -p "$H/hooks/lib" "$H/scripts/install"
+# The library and the sibling it cannot load without (the state root's definition), as an installation holds them.
 cp "$CORE_LIB" "$H/hooks/lib/checkpoint-core.sh"
+cp "$REPO_ROOT/hooks/lib/harness_state_dir.sh" "$H/hooks/lib/harness_state_dir.sh"
 cp "$REPO_ROOT/scripts/check-public-core.sh" "$H/scripts/check-public-core.sh"
 cp "$REPO_ROOT/scripts/install/render-settings" "$H/scripts/install/render-settings"
 H_LIB="$H/hooks/lib/checkpoint-core.sh"
+# A copy that cannot load the library (a file it needs is missing) fails here by name, not only by the cases below.
+if ( . "$H_LIB" && declare -F write_checkpoint >/dev/null ) >/dev/null 2>&1; then
+  _ok "AC6 setup: the harness-home copy loads checkpoint-core.sh"
+else
+  _fail "AC6 setup: the harness-home copy cannot load checkpoint-core.sh (a file it needs is missing from $H/hooks/lib)"
+fi
 git init -q "$H"
 git -C "$H" config user.name "Test"
 git -C "$H" config user.email "test@example.invalid"

@@ -31,9 +31,9 @@
 # repo-hash) instead of the author literal /root on a fresh non-root clone.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh"
 _CLAUDE_HOME_FALLBACK="$(claude_home_resolve || echo "$HOME")"
-# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
+# Hook runtime-state root (lib/harness_state_dir.sh: CLAUDE_STATE_DIR, else on disk); none, no push.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-  || harness_state_dir() { printf '%s\n' /tmp; }
+  || { echo "push.sh: hooks/lib/harness_state_dir.sh is missing" >&2; exit 1; }
 
 # Colors
 GREEN='\033[0;32m'

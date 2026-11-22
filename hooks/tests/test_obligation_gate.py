@@ -15,9 +15,9 @@ schemas/registry.json, allowing (advisory mode) or rejecting (block mode,
 CLAUDE_OBLIGATION_GATE=block) when it is not valid.
 
 P1 behaviour pinned here:
-  - a valid block carries a current dispatched_at (within 300 s of now) and
-    a role equal to the dispatch's subagent_type; otherwise role_mismatch,
-    dispatch_clock_out_of_bound or dispatch_clock_unverifiable;
+  - a valid block carries a role equal to the dispatch's subagent_type;
+    otherwise role_mismatch (a typed dispatched_at is never judged:
+    test_dispatch_time.py);
   - a dispatch without a block is a violation (missing_block) only inside
     the active human-typed span (hooks/lib/command_span.active_span on the
     payload's transcript_path) of a command whose templates declare an
@@ -26,7 +26,7 @@ P1 behaviour pinned here:
   - a malformed block, an unregistered schema id or a bad prompt is rejected
     only on a dispatch that span requires a block of; elsewhere the prompt
     only mentions the tag and carries no obligation (OB-L41), while a block
-    that parses is held to role and clock on every dispatch.
+    that parses is held to its role on every dispatch.
 
 Every assertion anchors on the subprocess exit code and/or stable tokens in
 stderr -- never solely on a full free-text sentence
@@ -124,9 +124,8 @@ def _unique_sid(label="gate"):
 
 
 def _written_logs(home):
-    """Files under the scratch home's logs/ directory: the gate writes none."""
-    logs = Path(home) / ".claude" / "logs"
-    return sorted(p.name for p in logs.rglob("*")) if logs.is_dir() else []
+    """Files under the scratch home's logs/ directories (the harness state root's): the gate writes none."""
+    return sorted(p.name for p in Path(home).glob(".local/state/claude-harness/*/logs/**/*"))
 
 
 # --------------------------------------------------------------------------
@@ -530,10 +529,6 @@ def _two_hours_ago():
     return stamp.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _naive_now():
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
-
-
 def _dev_report_without_identity():
     return [{"kind": "json", "path": f"docs/dev/dev-report-{TASK_ID}.json", "schema": "dev-report.v2"}]
 
@@ -559,16 +554,6 @@ VIOLATION_CASES = {
         lambda: _span_records("dev"), "qa",
         lambda: "validate the BA output\n" + _ba_qa_report_block("ba-qa-report.v9"),
         "unregistered_schema"),
-    # d: dispatched_at outside the 300 s bound.
-    "d_dispatched_at_two_hours_old": (
-        lambda: _span_records("dev"), "dev",
-        lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_two_hours_ago())),
-        "dispatch_clock_out_of_bound"),
-    # d': a naive timestamp is uncomparable with the aware clock -> fails closed.
-    "d_dispatched_at_naive_unverifiable": (
-        lambda: _span_records("dev"), "dev",
-        lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_naive_now())),
-        "dispatch_clock_unverifiable"),
     # e: obligation role differs from the dispatch's subagent_type.
     "e_role_graphify_subagent_dev": (
         lambda: _span_records("dev"), "dev",
@@ -1210,16 +1195,12 @@ def test_OB_L41_malformed_block_where_one_is_required_is_refused(tmp_path):
 @pytest.mark.parametrize("subagent_type,prompt,reason", [
     ("Explore", lambda: "summarize this example\n" + _valid_block("dev"), "role_mismatch"),
     ("general-purpose", lambda: "do work\n" + _valid_block("dev"), "role_mismatch"),
-    ("dev", lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_two_hours_ago())),
-     "dispatch_clock_out_of_bound"),
-    ("dev", lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_naive_now())),
-     "dispatch_clock_unverifiable"),
-], ids=["explore_role_mismatch", "general_purpose_role_mismatch", "stale_clock", "naive_clock"])
-def test_OB_L41_a_block_that_parses_is_held_to_role_and_clock_on_any_dispatch(
+], ids=["explore_role_mismatch", "general_purpose_role_mismatch"])
+def test_OB_L41_a_block_that_parses_is_held_to_its_role_on_any_dispatch(
         tmp_path, records, subagent_type, prompt, reason):
     """OB-L41 must-still-refuse: a block that parses is a real obligation
     whatever the span: a role that differs from the dispatch's subagent_type
-    or a stale or unverifiable dispatched_at is refused, in or out of a span."""
+    is refused, in or out of a span."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("obl41parsed")
     payload = _dispatch_payload(project, sid, records(), subagent_type=subagent_type,

@@ -10,8 +10,10 @@ payload on stdin and decides, in order:
   (3) the active span: command_span.active_span, which only a human-typed
       harness command outside CONTROL opens or replaces (never a Skill
       expansion, a scheduled prompt or a wakeup); a plain prompt continues it;
-  (4) the overnight time-lock, whatever the span and the mode: block while
-      overnight.window_open(payload), naming the time left; after end_time
+  (4) the overnight time-lock, whatever the span and the mode: while
+      overnight.window_open(payload), the wait of (8) if a background child of the
+      gated span runs (children), else block naming the time left and each lost
+      child (the gap of (8)); after end_time
       (closeout_gaps empty) or the owner's /stop, block while the wake's
       CronCreate (overnight.WAKE_PROMPT) has no later CronDelete
       (overnight.open_wakes), naming its id; a time-lock it cannot read
@@ -20,6 +22,7 @@ payload on stdin and decides, in order:
   (5b) a /close or /commit that bound no task and dispatched none, ending on a NO_TARGET: line (no_target_end:
       "Which task?" and refused flag combinations end with the candidates, nobody asked): allow;
   (5c) a gated step whose own call a hook refused, ending on its REFUSED: line (step_refused_end): allow;
+      likewise the run's other reported ends: no_owner_end, environment_end, analyst_refused_end, code_close_end;
   (6) the gaps: in a /spec or /dev-family span the text question (R7, p_text_question: a last line
       ending in "?" with a question the span neither asked with an AskUserQuestion the owner answered
       nor recorded in a spec it wrote through spec-write.py; /spec has no other gap); in a gated span the todo half and the command's predicate, each held to the
@@ -36,7 +39,12 @@ payload on stdin and decides, in order:
       (step5_refused), while git still meets it: no remote the push is
       judged on reads, or the source's merge stands in conflict;
   (7) no gap, or only OWNER_ONLY ones (a Task-id commit no grant can be minted for in this turn): allow, naming them
-      to the owner (systemMessage); advisory: `would block` and the gaps on stderr, exit 0; else the block, exit 2.
+      to the owner (systemMessage);
+  (8) the wait: each lost background child of the gated span (children, background_children: past its bound)
+      adds the gap `background dispatch <id> lost: ...`; while one runs, exit 0 with `COMMAND_GATE /<command>:
+      waiting for <ids>, still running; not complete` and the gaps (systemMessage, wait_text); else advisory:
+      `would block` and the gaps on stderr, exit 0; else the block, exit 2. The launcher's fallback reads the
+      same wait (waiting_for).
 
 Each fact comes from the one producer that writes it: the transcript through
 command_span (the CLI's record of typed prompts, tool calls and hook context,
@@ -112,10 +120,19 @@ def _repository(root) -> None:
 # ---------------------------------------------------------------- P3's disposition
 def disposition(root, task: str, stage: str) -> list[str]:
     """Gap lines at ``stage``, [] for chain_pass: the chain's own disposition_lines (P3's disposition), verbatim;
-    its instrument failure raises. The informational completeness run on demand: read here only if it can decide."""
+    its instrument failure raises. The informational completeness run on demand: read here only if it can decide.
+    A fan-out's canonical older than a lane report is rebuilt first; one the rebuild leaves stale is not read:
+    its own lines give way to one naming the newer lane reports, and the lane reports' lines stand."""
+    stale = _script("scripts/aggregate-dev-report.py").rebuild_if_stale(root, task)
     chain = _script("scripts/resolve-dev-artifact-chain.py")
     chain.FULL_COMPLETENESS_ON_DEMAND = True
-    return chain.disposition_lines(root, task, stage)
+    lines = chain.disposition_lines(root, task, stage)
+    if not stale:
+        return lines
+    own = f"artifact=docs/dev/dev-report-{task}.json "
+    return [g for g in lines if own not in g] + [
+        f"GAP {own}problem=stale_canonical: older than lane report(s) {', '.join(map(os.path.basename, stale))}; "
+        "its rebuild did not finish, so nothing in it is judged lane=-"]
 
 
 # ---------------------------------------------------------------- the text the span loaded (D15)
@@ -339,7 +356,7 @@ def _canonical(task: str) -> str:
 
 
 def _path(arg: str) -> bool:
-    return arg.endswith((".md", ".json")) or "/" in arg
+    return importlib.import_module("lib.close_exit").names_path(arg)
 
 
 def _task_of(path: str) -> str:
@@ -578,6 +595,17 @@ def no_owner_end(span, root) -> bool:
     return not unresolved and bool(lines) and not any(owed(name, g) for name, g in lines)
 
 
+def code_close_end(span, root) -> bool:
+    """A /close the UserPromptSubmit hook completed by code (lib/close_exit.py: no files, or the owner's --force):
+    its result line in the hook context of this human-typed opener, and the task's close report ending on a line
+    close-verdict classifies 'yes'. No todo list, inspector or QA is owed; an agent's echo of the line is never read."""
+    if span.command != "close":
+        return False
+    tasks = {m.group(1) for m in span._opener_context(importlib.import_module("lib.close_exit").RESULT_RE)}
+    verdict = _script("hooks/lib/close-verdict.py")
+    return len(tasks) == 1 and verdict.classify_file(Path(root) / "docs" / "dev" / f"close-report-{tasks.pop()}.md") == "yes"
+
+
 # close.md Round-open: a cause in the environment that persists. The gate's own attempt is the fact, never a line.
 ENV_ERRNOS = (errno.ENOSPC, errno.EDQUOT, errno.EROFS, errno.EACCES, errno.EPERM)
 ENV_LINE = re.compile(r"^ENVIRONMENT: (E[A-Z]+) (/\S+)", re.M)
@@ -800,8 +828,32 @@ def p_commit(span, root, payload) -> list[str]:
     family, trailer = importlib.import_module("lib.obligation").task_family, " problem=MISSING_TASK_TRAILER:"
     lines = [(task, g) for task in targets if not {canon(task), family(canon(task))} & refused
              for name in _names(names, task) for g in disposition(root, name, "commit") if owed(name, g)]
+    # Step 6: the review rejected and no commit was made, a finished state reported with the review's reasons
+    rejected = {task: review_rejected(span, root, task) for task, g in lines if trailer in g}
     held = any(trailer in g for _task, g in lines) and not _grant_mintable(span, payload)
-    return [f"{OWNER_ONLY}/commit {task}; {g}" if held and trailer in g else g for task, g in lines]
+    return [f"{OWNER_ONLY}/commit {task}; {rejected[task]}" if trailer in g and rejected[task] else
+            f"{OWNER_ONLY}/commit {task}; {g}" if held and trailer in g else g for task, g in lines]
+
+
+def review_rejected(span, root, task) -> str | None:
+    """commit.md Step 6, ``task``'s landing rejected: the span's last commit-qa dispatch for the task's family has
+    stopped, and its report, written no earlier than that dispatch, rejects (the verdict of the privilege guard's
+    one reader and judge, commit_qa_verdict); the line naming the report and the review's verdict, else None. The
+    gate reads the review's own report: no line of an agent's reply produces it."""
+    ob = importlib.import_module("lib.obligation")
+    family = ob.task_family(ob.canonical_task_id(task))
+    returns = importlib.import_module("lib.agent_returns").Returns(span)
+    last = [(call, doc) for call, doc in span.dispatches() if doc.get("profile") == "commit-qa"
+            and ob.task_family(ob.canonical_task_id(doc.get("task_id"))) == family]
+    if not last or not returns.line(last[-1][0]):
+        return None
+    doc = last[-1][1]
+    guard = _script("hooks/pretool-git-privilege-guard.py")
+    since = ob.parse_iso8601(doc.get("dispatched_at"))
+    path, line, verdict = guard.commit_qa_verdict(root, doc.get("task_id"), since and since.timestamp())
+    if verdict != "reject":
+        return None
+    return f"the review rejected this landing and no commit was made ({os.path.relpath(path, root)}): {line}"
 
 
 # Step 5: a commit's grant is minted only while the owner's /commit stands. A Task-id commit only a later /commit
@@ -894,7 +946,9 @@ def p_merge(span, root, payload) -> list[str]:
     (a fast-forward: as its new value), or the source's value at the opener is in
     DEFAULT_BRANCH ("Already up to date"), or this session's newest merge-analyst grant since the opener is
     `blocked` for the source at its tip now (Step 3 refuses; R14 leaves the risks to the owner, and a
-    grant that fault() passed binds branch, source_tip and verdict); no source: no merge entry after it. All read in the
+    grant that fault() passed binds branch, source_tip and verdict); no source: no merge entry after it. A merge
+    (or MERGE_HEAD) that took the source in counts only while that newest grant is `approved` for its ref at the
+    tip taken in (merge.md Steps 3-4; hooks/pretool-merge-verdict.py refuses the call before). All read in the
     session's worktree: a linked one keeps its own HEAD reflog, Step 0's pick, after the cleanup. Step 5's
     conflicts reported as refused (step5_refused) end it while MERGE_HEAD is at a value
     of the source, paths are unmerged and git's merge-tree of the two commits conflicts (_conflicts), the
@@ -917,11 +971,14 @@ def p_merge(span, root, payload) -> list[str]:
     landed = [(sha, m) for sha, t, m in _reflog(root, f"refs/heads/{default}")
               if t >= since and m.startswith(("merge ", "commit (merge)"))]
     head = _git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD") if "--no-commit" in args else None
+    merged = set()  # the source's values a merge after the opener took in (None: by name, no value known)
+    for sha, m in landed:
+        merged |= tips & {sha, *(_git(root, "rev-list", "--parents", "-n", "1", sha) or "").split()[2:]} if tips \
+            else ({None} if m.startswith(f"merge {ref}:") else set())
     if head:
+        merged = {head} & tips
         gaps = [] if head in tips else [f"merge: MERGE_HEAD is {head}, not {ref}'s tip"]
-    elif any(tips & {sha, *(_git(root, "rev-list", "--parents", "-n", "1", sha) or "").split()[2:]} if tips
-             else m.startswith(f"merge {ref}:") for sha, m in landed) or (
-            _ancestor(root, at, f"refs/heads/{default}") if at else not landed):
+    elif merged or (_ancestor(root, at, f"refs/heads/{default}") if at else not landed):
         gaps = []
     elif at and (grant.get("verdict"), grant.get("branch"), grant.get("source_tip")) == (
             "blocked", ref, _git(root, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}")):
@@ -930,6 +987,11 @@ def p_merge(span, root, payload) -> list[str]:
         gaps = [f"merge: no merge of {ref} into refs/heads/{default} after the /merge opener" if at else
                 f"merge: refs/heads/{default} took a merge after the opener; no merge-analyst grant of this "
                 "session since the opener names its source"]
+    if merged and not gaps and not (grant.get("verdict") == "approved" and grant.get("branch") == ref and all(
+            tip in (None, grant.get("source_tip")) for tip in merged)):
+        gaps = [f"merge: {ref} was merged into refs/heads/{default} after the /merge opener, and this session's "
+                f"newest merge-analyst grant since the opener does not approve it at that tip (verdict "
+                f"{grant.get('verdict')!r}, source_tip {grant.get('source_tip')!r})"]
     if _git(root, "ls-files", "-u"):
         gaps.append("merge: unmerged paths remain in the index")
     merging = _git(root, "rev-parse", "--verify", "-q", "MERGE_HEAD")
@@ -1267,16 +1329,21 @@ PREDICATES = {
 
 
 # ---------------------------------------------------------------- the time-lock (4)
-def window_lock(payload, record):
-    """(2, the block text with the time left, None) while the session's overnight
-    window is open (P2's overnight.window_open), else None."""
+def window_lock(payload, record, span=None):
+    """While the session's overnight window is open (P2's overnight.window_open): the wait (0, its text, None)
+    while a background child of the gated ``span`` runs (children, as at (8)); else (2, the block text with the
+    time left and each lost child's gap, None). None while the window is closed."""
     overnight = importlib.import_module("lib.overnight")
     if overnight.window_open(payload):
+        running, lost = children(span)
+        if running:  # waiting for a working child is not stopping: its end wakes the run
+            return 0, wait_text(span.command, running, lost), None
         end = overnight.parse_end_time(record.get("end_time"))
         left = max(0, int((end - datetime.now(timezone.utc)).total_seconds()) // 60) if end else 0
         return (2, f"COMMAND_GATE time-lock: overnight window open until "
                    f"{end.strftime('%Y-%m-%dT%H:%M:%SZ') if end else record.get('end_time')}, "
-                   f"{left // 60}h {left % 60}m left; continue the remaining pipelines\n", None)
+                   f"{left // 60}h {left % 60}m left; continue the remaining pipelines\n"
+                   + "".join(f"- {gap}\n" for gap in lost), None)
     return None
 
 
@@ -1292,9 +1359,10 @@ def wake_lock(transcript: str):
     return None
 
 
-def time_lock(payload) -> tuple:
+def time_lock(payload, span=None) -> tuple:
     """Step (4) as (exit code, stderr text, terminal status): a block while
-    the window is open, or after it has closed (end_time with the closeout
+    the window is open (a wait while a child of ``span`` runs: window_lock),
+    or after it has closed (end_time with the closeout
     complete, or the human's /stop) while the wake is scheduled; else exit 0
     with the session's terminal time-lock status once its window has closed
     (completed_by_deadline, or cancelled_by_user after /stop), None for a
@@ -1310,7 +1378,7 @@ def time_lock(payload) -> tuple:
         payload.get("session_id"), (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd") or os.getcwd()))
     if record is None:
         return 0, "", None
-    lock = window_lock(payload, record)
+    lock = window_lock(payload, record, span)
     if lock:
         return lock
     released = command_span.timelock_released(transcript)
@@ -1377,6 +1445,75 @@ def _block_text(command: str, gaps: list[str], hint: str = "", session=None) -> 
     return "".join(out) + left + tail
 
 
+REPORT_MINUTES, SILENCE_MINUTES = 10.0, 5.0  # the bound past the subagent time limit; how recent a growth is life
+
+
+def _seconds(stamp) -> float | None:
+    try:
+        return datetime.fromisoformat(re.sub(r"Z$", "+00:00", str(stamp))).timestamp()
+    except ValueError:
+        return None
+
+
+def background_children(span, now: float | None = None) -> tuple[list[str], list[str]]:
+    """(running, lost): the agents of the span's background dispatches whose end did not come back (the CLI's
+    own result of the launch says async_launched and no task-notification for it came: lib/agent_returns.Returns;
+    a completed, failed or stopped one has ended). One runs while its end is not due (its latest dispatch, the
+    CLI's time on the launch or on a later SendMessage of the span to it, plus the subagent time limit of
+    hooks/pretool-subagent-time-limit.py) or, within REPORT_MINUTES past that, its own transcript grew in the
+    last SILENCE_MINUTES; else it is lost. Every time is the CLI's or the clock's: no write of the agent moves
+    the bound. A dispatch a hook refused is no dispatch (Span.dispatch_calls). The launcher's fallback reads it too."""
+    returns = importlib.import_module("lib.agent_returns").Returns(span)
+    limit = _script("hooks/pretool-subagent-time-limit.py").limit_minutes() * 60
+    now = datetime.now(timezone.utc).timestamp() if now is None else now
+    sends = [c for c in span.iter_calls("SendMessage") if c.ok]
+    running, lost = [], []
+    for call in span.dispatch_calls():
+        use = span.use_result(call.id) if call.result_line else {}
+        if not (use.get("isAsync") is True or use.get("status") == "async_launched"):
+            continue
+        agent = returns.agent(call)
+        if returns.line(call) or any(e.line > call.line and (e.tool_use_id == call.id or (agent and e.agent == agent))
+                                     for e in returns.ends):
+            continue
+        starts = [_seconds(span.recorded_at(c.id)) for c in [call] + [
+            s for s in sends if agent and s.line > call.line and s.input.get("to") in {agent, call.input.get("name")} - {None}]]
+        start = max((s for s in starts if s is not None), default=None)
+        try:
+            grew = os.stat(os.path.join(os.path.splitext(span.transcript_path)[0], "subagents",
+                                        f"agent-{agent}.jsonl")).st_mtime >= now - SILENCE_MINUTES * 60
+        except (OSError, TypeError, ValueError):
+            grew = False
+        alive = start is not None and (now < start + limit or (grew and now < start + limit + REPORT_MINUTES * 60))
+        (running if alive else lost).append(agent or call.id)
+    return running, lost
+
+
+def children(span) -> tuple[list[str], list[str]]:
+    """(running, the gap of each lost one): background_children of a gated span; ([], []) in any other span or
+    on a record it cannot read, so the block holds. The one reading of the wait, at (4), at (8) and in the
+    launcher's fallback (waiting_for)."""
+    try:
+        running, lost = background_children(span) if span is not None and \
+            span.command in command_span.GATED_COMMANDS else ([], [])
+    except Exception:
+        return [], []
+    return running, [f"background dispatch {name} lost: its end never came back and it shows no life past its time "
+                     "limit; dispatch that lane again" for name in lost]
+
+
+def wait_text(command: str, running: list[str], gaps: list[str]) -> str:
+    """The wait's text, the owner's line (main's systemMessage): the command stays open and incomplete."""
+    return (f"COMMAND_GATE /{command}: waiting for {', '.join(running)}, still running; not complete\n"
+            + "".join(f"- {g}\n" for g in gaps))
+
+
+def waiting_for(payload: dict) -> list[str]:
+    """The running background children (children) of ``payload``'s gated span; [] in any other span."""
+    span = command_span.active_span(payload.get("transcript_path") or "") if payload.get("transcript_path") else None
+    return children(span)[0]
+
+
 def decide(payload: dict, mode: str = "block") -> tuple[int, str]:
     """(exit code, stderr text) of one Stop."""
     return decision(payload, mode)[:2]
@@ -1395,13 +1532,13 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     # /spec: R7 alone, never gated; a session whose loaded text asks no round is not held to R7
     asking = span is not None and _lib_round().runs_round(span)
     try:  # (4)
-        lock = time_lock(payload)
+        lock = time_lock(payload, span)
     except Exception as exc:  # a window it cannot read holds in any span and mode, as an open one does
         if not (transcript and command_span.timelock_released(transcript)):
             return 2, (f"COMMAND_GATE time-lock: gate instrument failure: {type(exc).__name__}: {exc}; "
                        "the human can type /stop\n"), None
         lock = (0, "", None)
-    if lock[0] == 2:
+    if lock[0] == 2 or lock[1]:  # a block, or the open window's wait
         return lock
     terminal = lock[2]
     if not gated and not asking:  # (5)
@@ -1413,7 +1550,7 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
         env = environment_refusal(span, root) if gated else None  # the gate's own attempt, on a claim only
         analyst = analyst_refused(span) if gated else None
         if gated and (no_target_end(span, root) or step_refused_end(span, refused) or no_owner_end(span, root)
-                      or environment_end(span, env) or analyst_refused_end(span, analyst)):
+                      or environment_end(span, env) or analyst_refused_end(span, analyst) or code_close_end(span, root)):
             return 0, "", terminal
     except Exception:  # an unread record releases nothing: the gaps below decide
         pass
@@ -1431,6 +1568,10 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if all(g.startswith(OWNER_ONLY) for g in gaps):  # (7); what only the owner's command closes is named, not held
         return 0, "".join([f"COMMAND_GATE /{span.command}: open for the owner\n" if gaps else ""]
                           + [f"- {g}\n" for g in gaps]), terminal
+    running, lost = children(span)
+    gaps += lost
+    if running:  # (8) the stop is a wait: the command stays open and incomplete
+        return 0, wait_text(span.command, running, gaps), terminal
     text = _block_text(span.command, gaps, _exit_hint(span, refused) + (
         f"A hook refused the {analyst} dispatch. To end the turn, write the line \"REFUSED: <hook> refused the "
         f"{analyst} dispatch; nothing was {'published' if span.command == 'push' else 'merged'}\", then the "

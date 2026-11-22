@@ -25,7 +25,7 @@ Then branch on the remaining text:
 - **Non-empty non-flag text**: it is the first requirement. Go to Step 3.
 - **Empty**: end: say, in the user's language (en or zh), that `/spec` was given no requirement and that `/spec <what it should be about>` starts one. Nobody is asked.
 
-No preview-and-confirm gate. The owner's intent, scope, edge cases and acceptance are asked in the requirement round (Step 3a), never in plain text.
+No preview-and-confirm gate. The owner's intent, scope, edge cases and acceptance are asked in the requirement round (Step 3), never in plain text.
 
 ### Step 2: Clarify if truly unclear (max 3 rounds)
 
@@ -35,7 +35,7 @@ Only when Section 5 cannot be sketched at all: no topic, feature or issue, no ac
 2. If Section 5 can now be sketched, go to Step 3; otherwise ask again.
 3. After the 3rd answer, proceed anyway: write whatever Section 5 content you can extract plus an `_Assumption_` note.
 
-### Step 3: Write first spec + dispatch background Explore
+### Step 3: Write first spec + dispatch background Explore, then the requirement round
 
 1. Read the template at `<HARNESS_ROOT>/templates/overnight-spec.md` at runtime (never hardcode it). If it is missing, report the error and stop.
 
@@ -43,18 +43,18 @@ Only when Section 5 cannot be sketched at all: no topic, feature or issue, no ac
    ```
    ${CLAUDE_PROJECT_DIR:-$PWD}/docs/dev/specs/spec-<YYYYMMDD-HHMMSS>.md
    ```
-   Keep it as `spec_path`. A fresh `/spec` in a new session makes a new timestamped file; follow-ups within the session append to this one.
+   Pass it to the writer (sub-step 4) with `<YYYYMMDD-HHMMSS>` as written: the writer puts its own UTC time there and prints the path; keep that printed path as `spec_path`. A fresh `/spec` in a new session makes a new timestamped file; follow-ups within the session append to this one.
 
 3. Populate the template, keeping its structure exactly:
    - `<issue_description>` → short summary of the user's requirement
-   - `<ISO-8601>` → current timestamp
+   - `<ISO-8601>` → left as written: the writer puts the same time there
    - Section 5 → user's requirement verbatim
    - every other section → `_Not yet populated._` (Section 9's two subsections keep their `<!-- consumers: [all] -->` line above the placeholder until their first entry)
 
 4. Write the spec through its one writer, `<HARNESS_ROOT>/scripts/spec-write.py`, naming it by its absolute path (the `UserPromptSubmit` hook of the `/dev`, `/dev-command` or `/dev-overnight` that implements this spec takes this session's last spec write as that run's spec, from the line the writer prints). It creates `docs/dev/specs/` if needed and refuses an existing file:
 
    ```bash
-   python3 "<HARNESS_ROOT>/scripts/spec-write.py" create --spec <spec_path> <<'SPEC_TEXT'
+   python3 "<HARNESS_ROOT>/scripts/spec-write.py" create --spec "<the path of sub-step 2, <YYYYMMDD-HHMMSS> as written>" <<'SPEC_TEXT'
    <the populated template>
    SPEC_TEXT
    ```
@@ -72,13 +72,13 @@ Only when Section 5 cannot be sketched at all: no topic, feature or issue, no ac
      prompt="Find and summarize <what the user mentioned>. Report: file paths, current behavior, relevant code snippets. Thoroughness: medium."
    )
    ```
-   Findings integrate when they arrive (Step 4); a discrepancy may surface as one targeted question but never gates the loop. While this interview's checklist has an open step, `hooks/pretool-spec-block-foreground-agent.py` exits 2 on a foreground Agent call other than the `spec`, `qa` and `ba` subagents, and the background Explore dispatch above is the one background call allowed. Both holds end when the interview is abandoned: the human's next prompt arrives while Steps 1-3a, which this command runs inside its opening turn, are still open, so finish them before that turn ends; the ledger lists it as advisory (H-026), since no host run has observed it prevent a call.
+   Findings integrate when they arrive (Step 4); a discrepancy may surface as one targeted question but never gates the loop. While this interview's checklist has an open step, `hooks/pretool-spec-block-foreground-agent.py` exits 2 on a foreground Agent call other than the `spec`, `qa` and `ba` subagents, and the background Explore dispatch above is the one background call allowed. Both holds end when the interview is abandoned: the human's next prompt arrives while Steps 1-3, which this command runs inside its opening turn, are still open, so finish them before that turn ends; the ledger lists it as advisory (H-026), since no host run has observed it prevent a call.
 
 6. Acknowledge that the spec was written, with the full `<spec_path>`, and that more requirements can be added whenever the user is ready. Brief, natural, first-person, in the user's language.
 
 Do not split, checkpoint or QA yet: finalize happens exactly once, in Step 6.
 
-### Step 3a: The requirement round (D28, D29, D32)
+#### The requirement round (D28, D29, D32)
 
 Right after Section 5's first write, the owner is asked about the requirement. The task id of every dispatch here is the spec id, `<spec-id>`: the timestamp in `spec-<spec-id>.md`. Until round 1 is asked, the dispatch gate refuses every dispatch but round 1's own producers (`ASK_FIRST`), Finalize included.
 
@@ -95,9 +95,9 @@ Right after Section 5's first write, the owner is asked about the requirement. T
      Spec: <spec_path>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
-     Obligation block (instantiate per dispatch: dispatched_at is the UTC time captured just before this Agent call):
+     Obligation block (instantiate per dispatch):
      <obligation v="1">
-     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "ba", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "markdown", "path": "docs/dev/ba-panel-<spec-id>-<angle>.md", "identity_anchor": "<spec-id>", "terminal_line_regex": "^BA PANEL [ABC]: DONE$"}]}
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "ba", "pipeline": "spec", "profile": "singular", "artifacts": [{"kind": "markdown", "path": "docs/dev/ba-panel-<spec-id>-<angle>.md", "identity_anchor": "<spec-id>", "terminal_line_regex": "^BA PANEL [ABC]: DONE$"}]}
      </obligation>
      Write your panel report only. Do not read another panel BA's report."
    ```
@@ -114,9 +114,9 @@ Right after Section 5's first write, the owner is asked about the requirement. T
      Spec: <spec_path>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
-     Obligation block (instantiate per dispatch: dispatched_at is the UTC time captured just before this Agent call):
+     Obligation block (instantiate per dispatch):
      <obligation v="1">
-     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "qa", "pipeline": "spec", "profile": "ba_validation", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "json", "path": "docs/dev/ba-panel-<spec-id>-r1.json", "schema": "requirement-round.v1", "identity": {"task_id": "<spec-id>"}}]}
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "qa", "pipeline": "spec", "profile": "ba_validation", "artifacts": [{"kind": "json", "path": "docs/dev/ba-panel-<spec-id>-r1.json", "schema": "requirement-round.v1", "identity": {"task_id": "<spec-id>"}}]}
      </obligation>"
    ```
 
@@ -219,9 +219,9 @@ Proceed to Step 6 only on a strong signal.
      Project dir: <PROJECT_ROOT>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
-     Obligation block (instantiate per dispatch: dispatched_at is the UTC time captured just before this Agent call):
+     Obligation block (instantiate per dispatch):
      <obligation v="1">
-     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "spec", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "spec_views", "path": "docs/dev/specs/<spec-id>/views", "monolith": "docs/dev/specs/spec-<spec-id>.md"}]}
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "spec", "pipeline": "spec", "profile": "singular", "artifacts": [{"kind": "spec_views", "path": "docs/dev/specs/<spec-id>/views", "monolith": "docs/dev/specs/spec-<spec-id>.md"}]}
      </obligation>
      Panel reports: docs/dev/ba-panel-<spec-id>-A.md, -B.md, -C.md; round files: docs/dev/ba-panel-<spec-id>-r1.json and any later docs/dev/requirement-round-<spec-id>-rN.json; answers: Section 5's Requirement round blocks.
      Do the agent selection, the content extraction and the checkpoint generation, in that order; each owner decision of the rounds reaches the views that act on it.
@@ -239,9 +239,9 @@ Proceed to Step 6 only on a strong signal.
      Monolith: <spec_path>
      <If codex_required = true, include the literal next line; otherwise omit it>
      codex_required: true
-     Obligation block (instantiate per dispatch: dispatched_at is the UTC time captured just before this Agent call):
+     Obligation block (instantiate per dispatch):
      <obligation v="1">
-     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "qa", "pipeline": "spec", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^SPLIT QA: (pass|fail)$"}]}
+     {"task_id": "<spec-id>", "lane": null, "lane_set": null, "role": "qa", "pipeline": "spec", "profile": "singular", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^SPLIT QA: (pass|fail)$"}]}
      </obligation>
 
      Check these criteria:

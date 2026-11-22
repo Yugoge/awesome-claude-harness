@@ -150,7 +150,7 @@ def assert_routed(r, *, typed: str, source: str, check: str, path: str | None = 
         assert new["subagent_type"] == old["subagent_type"], (old, new)
         assert _same_template(new["obligation"], old["obligation"]), \
             f"the re-dispatch's obligation differs beyond dispatched_at:\n{old['obligation']}\n{new['obligation']}"
-        assert new["obligation"]["dispatched_at"] > old["obligation"]["dispatched_at"], (old, new)
+        assert new["seq"] > old["seq"], (old, new)  # the dispatch gate's events, in their order
         assert new["session"] != old["session"], "the re-dispatch is not the later session's"
         if source == "writer":  # E6: the dispatch whose own agent wrote the product file
             assert any(w.endswith("/" + path) for w in f["writes"].get(ans["tool_use_id"], ())), (ans, path)

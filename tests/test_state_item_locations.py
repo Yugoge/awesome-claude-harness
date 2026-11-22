@@ -17,7 +17,6 @@ CLAUDE_STATE_DIR points into tmp_path on every side, so no state lands in the re
 """
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
 import re
@@ -181,17 +180,20 @@ def c01(w):
 
 
 def t07(w):
-    # writer: the CLI, <CLAUDE_CODE_TMPDIR, else TMPDIR, else /tmp>/claude-<uid>/<project>/<session>/tasks/*.output;
-    # the committed settings pin CLAUDE_CODE_TMPDIR. reader: the daily sweep's CLI-output directories.
-    text = (SCRIPTS / "install" / "tmp-cleanup-install.sh").read_text()
-    loop = re.search(r"^for cli_dir in (.*); do$", text, re.M)
-    words = loop.group(1) if loop else re.search(r'run_path "claude-0[^"]*" (\S+)', text).group(1)
-    swept = sh(f"set -f; for d in {words}; do printf '%s\\n' \"$d\"; done", {"PATH": os.environ["PATH"]})
-    pairs = []
-    for uid in (0, 1000):
-        writer = f"{SETTINGS_TMP}/claude-{uid}"
-        hit = any(fnmatch.fnmatchcase(writer, p) for p in swept.splitlines())
-        pairs.append((f"uid {uid}", writer, writer if hit else swept.replace("\n", " ")))
+    # writer: the CLI, <CLAUDE_CODE_TMPDIR, else TMPDIR, else /tmp>/claude-<uid>/<project>/<session>/tasks/*.output,
+    # in the environment the committed settings give it. reader: the sweep's CLI_DIRS, built by its own root setup
+    # in the environment it runs in (the cron file's, or the session's at the pressure hook), of its own uid.
+    script = SCRIPTS / "install" / "tmp-cleanup-install.sh"
+    setup = re.search(r'^HARNESS_HOME=.*?^\[ -n "\$CLI_ROOT" \][^\n]*$', script.read_text(), re.M | re.S).group(0)
+    cron = dict(re.findall(r"^(\w+)=(.*)$", (SCRIPTS / "install" / "tmp-cleanup.cron").read_text(), re.M))
+    pairs = [("cron CLAUDE_CODE_TMPDIR vs settings", SETTINGS_TMP, cron.get("CLAUDE_CODE_TMPDIR"))]
+    for label, extra in (("CLAUDE_CODE_TMPDIR set", {"CLAUDE_CODE_TMPDIR": "t07-cli", "TMPDIR": "t07-other"}),
+                         ("TMPDIR only", {"TMPDIR": "t07-tmp"})):
+        env = w.terminal("b", **{k: str(w.tmp / v) for k, v in extra.items()})
+        writer = str(w.tmp / next(iter(extra.values())) / f"claude-{os.getuid()}")
+        os.makedirs(writer)
+        reader = _run(["bash", "-c", setup + '\nprintf "%s\\n" "${CLI_DIRS[@]}"', str(script)], env)
+        pairs.append((label, real(writer), real(reader)))
     return pairs
 
 
@@ -220,7 +222,7 @@ def c06(w):
     # writer: hooks/git-fswatch.sh run by git-fswatch@.service (HOME only); reader: fswatch-manager.sh `logs`.
     pairs = []
     for s in "abc":
-        writer = sh(f'. {HOOKS / "lib" / "claude_home.sh"!s} 2>/dev/null; REPO_NAME=repo; '
+        writer = sh(f'. {HOOKS / "lib" / "harness_state_dir.sh"!s} 2>/dev/null; REPO_NAME=repo; '
                     f'eval "$(grep -E "^LOG_FILE=" {HOOKS / "git-fswatch.sh"!s})"; printf %s "${{LOG_FILE%/*}}"',
                     {"PATH": os.environ["PATH"], "HOME": str(w.homes[s])})
         out = subprocess.run(["bash", str(HOOKS / "fswatch-manager.sh"), "logs", "/x"], env=w.session(s),
@@ -305,9 +307,11 @@ def s34(w):
     env = w.terminal("a", CLAUDE_STATE_DIR=str(w.state))
     writer = py("from harness_state_dir import harness_state_dir; print(harness_state_dir())", env)
     text = (SCRIPTS / "install" / "tmp-cleanup-install.sh").read_text()
-    case = re.search(r"^case \"\$\{CLAUDE_STATE_DIR:-\}\" in .*$", text, re.M)
-    hook_state = re.search(r'^(SWEEP_ROOT="\$STATE_DIR" )?run_tmp "hook state', text, re.M)
-    reader = sh(case.group(0) + '; printf %s "$STATE_DIR"', env) if case and hook_state.group(1) else "/tmp"
+    # the sweep sources the shell resolver of its harness home (this tree when run from it)
+    case = re.search(r'^\. "\$HARNESS_HOME/hooks/lib/harness_state_dir\.sh" && STATE_DIR=.*$', text, re.M)
+    hook_state = re.search(r'^(\[ -z "\$STATE_DIR" \] \|\| SWEEP_ROOT="\$STATE_DIR" )?run_tmp "hook state', text, re.M)
+    reader = (sh(f'HARNESS_HOME="{REPO}"; ' + case.group(0) + '; printf %s "$STATE_DIR"', env)
+              if case and hook_state.group(1) else "/tmp")
     return [("CLAUDE_STATE_DIR set", writer, reader)]
 
 

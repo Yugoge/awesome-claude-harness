@@ -4,7 +4,7 @@ Organization and usage documentation for `scripts/`.
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 107
+- **Total files**: 106
 - **Subdirectories**: 8
 - **Naming convention**: kebab
 
@@ -60,7 +60,7 @@ Organization and usage documentation for `scripts/`.
 - `measure-hero-fold.py` - Description: Renders the document that holds the hero, docs/status.md, LOCALLY from the
 - `migrate-test-to-tests.sh` - Description: Merge test/ folder into tests/ preserving all content (idempotent)
 - `normalize-doc-names.sh` - normalize-doc-names.sh - Detect and report non-compliant documentation file names
-- `orchestrator.sh` - Description: Agent orchestration coordinator for development and cleanup workflows
+- `orchestrator.sh` - Description: Agent orchestration coordinator for the /clean workflow
 - `overnight-git-env.sh` - overnight-git-env.sh — prepare the overnight actor's git PATH + env (M11/AC9).
 - `overnight-git-selftest.sh` - overnight-git-selftest.sh — launch git-version + symref self-test (M8, M16).
 - `overnight-init.sh` - overnight-init.sh — perform the ENTIRE /dev-overnight Step 1 initialization in
@@ -89,7 +89,6 @@ Organization and usage documentation for `scripts/`.
 - `scan-project.sh` - Description: Scan project structure and detect project type
 - `seal-attribution-journal.py` - The repo tree (journals under state/attribution-journal/ AND the git object
 - `session-index.py` - Subcommands (all take --git-root):
-- `session-resources.py` - Provider-neutral CLI for the LANE-B session resource broker.
 - `size-ratchet.py` - Usage:
 - `spec-check.py` - Subcommands: check-in, register, checkpoints, mark, waive, status, check-out, unlock
 - `spec-write.py` - Every write of a spec file runs through this script: /spec's own writes (the

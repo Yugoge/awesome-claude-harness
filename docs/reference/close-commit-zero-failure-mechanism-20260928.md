@@ -95,7 +95,7 @@ Exactly one block per producer dispatch:
   "pipeline": "dev"|"redev"|"dev-command"|"dev-overnight"|"do"|"close"|"commit",
   "profile": "singular"|"fanout-lane"|"ba_validation"|"final_verification"|"overnight"
            |"do-close"|"commit-qa"|"commit-landing"|"commit-bulk"|"ad_hoc",
-  "dispatched_at": "2026-09-28T15:30:05Z", // bounded by the dispatch gate's own clock
+  "dispatched_at": "2026-09-28T15:30:05Z", // optional, never judged: the time readers use is the CLI's record of the dispatch
   "artifacts": [
     {"kind":"json", "path":"docs/dev/dev-report-20260928-153000-b.json",
      "schema":"dev-report.v2",
@@ -133,9 +133,10 @@ Field semantics:
 - **Freshness (per kind)**: json — file mtime ≥ dispatched_at − 2s AND the report's
   schema-required internal `timestamp` ≥ dispatched_at; markdown — mtime ≥ dispatched_at − 2s;
   response kinds — none (inherently produced by this run). The 2s covers filesystem timestamp
-  granularity only: dispatch gate and producers share one host clock. The dispatch gate bounds
-  |dispatched_at − gate-now| ≤ 300s, so a producer can never be handed an artificially old
-  timestamp. Deliberate forgery of the internal timestamp is the pre-existing report-content
+  granularity only: dispatch gate and producers share one host clock. dispatched_at is the
+  timestamp the CLI wrote on the transcript record of the dispatch's own tool use
+  (obligation.dispatch_time), never a typed value, so a producer can never be handed an
+  artificially old timestamp. Deliberate forgery of the internal timestamp is the pre-existing report-content
   trust boundary (pre-mortem M39), not a new surface.
 - **Retry rule**: a retry dispatch re-declares the SAME canonical artifact paths as the
   original lane. Iteration reports (`dev-report-iter<N>-*`, an optional archival convention
@@ -168,8 +169,7 @@ transcript_path. Checks (stateless plus read-only transcript reads):
    no registry FIRST-ACTION marker, commands/commit.md:300-355, so marker-sniffing is not a
    sound trigger). Non-producer types pass untouched.
 2. Exactly one well-formed obligation: grammar-valid; schema ids registered
-   (schemas/registry.json); repo-relative traversal-free paths; task_id shape;
-   |dispatched_at − now| ≤ 300s.
+   (schemas/registry.json); repo-relative traversal-free paths; task_id shape.
 3. Profile-context matrix (transcript-derived from the session's own command records):
    changelog-analyst → commit-landing/commit-bulk only, never ad_hoc (it is "dispatched
    exclusively by /commit", agents/changelog-analyst.md:2-10); qa in a /commit context →

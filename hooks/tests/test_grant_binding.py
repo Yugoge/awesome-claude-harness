@@ -64,15 +64,22 @@ def _denial(code: int, stderr: str) -> dict:
     return json.loads(stderr.splitlines()[0][len(BLOCK):])
 
 
-# State dirs: the default /tmp, one outside the temp roots, one below /tmp (pytest's tmp_path).
+# State dirs: the default (the state root's state/ for the hook's HOME, on disk), one outside the temp
+# roots, one below a temp root (pytest's tmp_path).
 @pytest.fixture(params=["default", "outside", "below-tmp"])
 def state(request, tmp_path):
     return {"default": None, "outside": "/nonexistent-p6-grant-binding/state",
             "below-tmp": str(tmp_path / "state")}[request.param]
 
 
-def _grant(analyst: str, state) -> str:
-    return f"{state or '/tmp'}/agentic-commit/{analyst}/{REPO_HASH}/{SID}/{NONCE}.json"
+def _default(home: Path) -> str:
+    sys.path.insert(0, str(ROOT / "hooks" / "lib"))
+    from harness_state_dir import state_root
+    return os.path.join(state_root(home=str(home)), "state")
+
+
+def _grant(analyst: str, state, home: Path) -> str:
+    return f"{state or _default(home)}/agentic-commit/{analyst}/{REPO_HASH}/{SID}/{NONCE}.json"
 
 
 def _writes(path: str):
@@ -121,7 +128,8 @@ def _dispatched(home: Path, repo_hash: str = REPO_HASH) -> tuple:
 @pytest.mark.parametrize("analyst", ["push-analyst", "merge-analyst"])
 @pytest.mark.parametrize("caller", [MAIN, DEV, PLUGIN], ids=["main", "dev", "plugin"])
 def test_only_the_analyst_writes_its_grant(tmp_path, state, analyst, caller):
-    home, path = tmp_path / "home", _grant(analyst, state)
+    home = tmp_path / "home"
+    path = _grant(analyst, state, home)
     for tool, tool_input in _writes(path):
         denial = _denial(*run(tool, tool_input, caller, home, state))
         assert denial["role"] == (caller or "main") and denial["target"] == path
@@ -138,31 +146,32 @@ def test_only_the_analyst_writes_its_grant(tmp_path, state, analyst, caller):
 
 
 def test_every_write_tool_and_an_unexpanded_word_are_bound(tmp_path):
-    home, path = tmp_path / "home", _grant("push-analyst", None)
+    home = tmp_path / "home"
+    path = _grant("push-analyst", None, home)
     for tool, tool_input in [("Edit", {"file_path": path, "old_string": "a", "new_string": "b"}),
                              ("MultiEdit", {"file_path": path, "edits": []}),
                              ("NotebookEdit", {"notebook_path": path, "new_source": "x"}),
                              ("Bash", {"command": 'echo x > "${STATE}/agentic-commit/push-analyst/h/s/n.json"'})]:
         assert run(tool, tool_input, DEV, home)[0] == 2, tool
     # One analyst does not write the other's grant, nor the chain-B sentinel execute-push.py writes.
-    assert run("Write", {"file_path": _grant("merge-analyst", None), "content": "{}"}, "push-analyst", home)[0] == 2
-    sentinel = f"/tmp/agentic-commit/push-analyst/{REPO_HASH}/main-chainB.validated.sentinel.json"
+    assert run("Write", {"file_path": _grant("merge-analyst", None, home), "content": "{}"}, "push-analyst", home)[0] == 2
+    sentinel = f"{_default(home)}/agentic-commit/push-analyst/{REPO_HASH}/main-chainB.validated.sentinel.json"
     assert run("Write", {"file_path": sentinel, "content": "{}"}, MAIN, home)[0] == 2
 
 
 def test_removal_and_the_rest_of_the_state_dir_are_not_bound(tmp_path):
     home = tmp_path / "home"
     # /merge Step 3's removal by the main agent (the base text), and any unlink, is no write.
-    path = _grant("merge-analyst", None)
+    path = _grant("merge-analyst", None, home)
     assert run("Bash", {"command": f'rm -f "{path}"'}, MAIN, home) == (0, "")
     # A push-analyst grant is a /push Stop input, which no caller removes (P5 review H2).
-    path = _grant("push-analyst", None)
+    path = _grant("push-analyst", None, home)
     denial = _denial(*run("Bash", {"command": f'rm -f "{path}"'}, MAIN, home))
     assert denial["target"] == path and REFUSED["push-analyst"] in denial["deny_reason"]
     # A directory under agentic-commit/ that names no role binds nobody: the lock. The push-gate token
     # is no grant either: only the protected stage (review H2) refuses its write, never the binding.
-    assert run("Bash", {"command": f'exec 9>"/tmp/agentic-commit/locks/{REPO_HASH}.lock"'}, MAIN, home) == (0, "")
-    token = f"/tmp/agentic-commit/push/{REPO_HASH}/{SID}/main.json"
+    assert run("Bash", {"command": f'exec 9>"{_default(home)}/agentic-commit/locks/{REPO_HASH}.lock"'}, MAIN, home) == (0, "")
+    token = f"{_default(home)}/agentic-commit/push/{REPO_HASH}/{SID}/main.json"
     reason = _denial(*run("Write", {"file_path": token, "content": "{}"}, MAIN, home))["deny_reason"]
     assert REFUSED["push"] in reason and "grant directory" not in reason
 
@@ -211,12 +220,26 @@ def test_general_purpose_keeps_todays_behaviour_and_a_listed_role_keeps_its_row(
 FENCE = re.compile(r"^[ \t]*```([A-Za-z]*)[^\n]*\n(.*?)^[ \t]*```", re.M | re.S)
 
 
-def _bash_blocks(agent: str, kind: str = "agents"):
+def _bash_blocks(agent: str, kind: str = "agents", places: dict | None = None):
+    """The text's bash blocks, with Rule CP-5's places (changelog-analyst) written out as ``places`` gives them."""
     text = (ROOT / kind / f"{agent}.md").read_text(encoding="utf-8")
+    for name, value in (places or {}).items():
+        text = text.replace(name, value)
     return [m.group(2) for m in FENCE.finditer(text) if m.group(1) in ("bash", "sh")]
 
 
-def _documented_writes(agent: str, state) -> list:
+def _places(state, home) -> dict:
+    """<SESSION_ROOT> and <STATE_DIR> as the hook resolves them for this run (TMPDIR, then SID; the state root)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    env.update(HOME=str(home), **({"CLAUDE_STATE_DIR": str(state)} if state else {}))
+    sd = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import harness_state_dir; "
+                         "print(harness_state_dir.harness_state_dir())", str(ROOT / "hooks" / "lib")],
+                        capture_output=True, text=True, env=env, check=True).stdout.strip()
+    return {"<SESSION_ROOT>": os.path.join(os.path.realpath(os.environ.get("TMPDIR") or "/var/tmp/claude-scratch"), SID),
+            "<STATE_DIR>": sd}
+
+
+def _documented_writes(agent: str, state, places: dict | None = None) -> list:
     """The Write targets the agent file names, its placeholders bound."""
     text = (ROOT / "agents" / f"{agent}.md").read_text(encoding="utf-8")
     sd = state or "/tmp"
@@ -224,17 +247,18 @@ def _documented_writes(agent: str, state) -> list:
         msgfiles = set(re.findall(r"MSGFILE=(\S+?commit-msg-<unique>\.txt)", text))
         annotation = re.findall(r'CLOSE_ANNOTATION="\$\{CONTROL_ROOT\}(/docs/dev/close-report-bulk-)', text)
         assert msgfiles and annotation, "the CP-1 message file and the bulk close annotation are documented"
-        return [m.replace("<unique>", "p6") for m in msgfiles] + [f"{PROJECT}{annotation[0]}bulk-1.md"]
+        return [m.replace("<unique>", "p6").replace("<SESSION_ROOT>", (places or {}).get("<SESSION_ROOT>", ""))
+                for m in msgfiles] + [f"{PROJECT}{annotation[0]}bulk-1.md"]
     grant_dir = re.search(r"^GRANT_DIR=\$\{STATE_DIR\}(/agentic-commit/[a-z-]+/)<REPO_HASH>/<SESSION_ID>$",
                           text, re.M)
     return [f"{sd}{grant_dir.group(1)}{REPO_HASH}/{SID}/{NONCE}.json"] if grant_dir else []
 
 
-# Steps of the text a running agent may still hold: the fd-9 lock spelled with the hash expanded,
-# the push-gate token's one writer, the analysts' former audit log (mkdir and append).
+# Steps of the text a running agent may still hold: the push-gate token's one writer, the analysts'
+# former audit log (mkdir and append). The fd-9 lock of a flow begun before policy_version 10, in
+# /tmp/agentic-commit/locks/, passes while that directory is there: hooks/tests/test_role_drafts_session_root.py.
 OLDER = {
-    "changelog-analyst": [f'exec 9>"/tmp/agentic-commit/locks/{REPO_HASH}.lock"',
-                          'python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "/r" --branch "main" '
+    "changelog-analyst": ['python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "/r" --branch "main" '
                           '--commit "0123abc"'],
     "push-analyst": ["mkdir -p /tmp/agentic-commit/push-analyst/audit/",
                      f"printf 'x\\n' >> /tmp/agentic-commit/push-analyst/audit/{REPO_HASH}.log"],
@@ -247,17 +271,18 @@ OLDER = {
 @pytest.mark.parametrize("agent", sorted(OLDER))
 def test_a_never_registered_analyst_keeps_every_documented_step(tmp_path, state, agent):
     home = tmp_path / "home"
-    blocks = _bash_blocks(agent)
+    places = _places(state, home) if agent == "changelog-analyst" else None
+    blocks = _bash_blocks(agent, places=places)
     assert blocks
     if agent == "changelog-analyst":
-        assert any('exec 9>"/tmp/agentic-commit/locks/${REPO_HASH}.lock"' in b for b in blocks)
+        assert any(f'exec 9>"{places["<STATE_DIR>"]}/agentic-commit/locks/${{REPO_HASH}}.lock"' in b for b in blocks)
     # The push-analyst runs from its /push dispatch, whose record binds the grant it writes (P5 review H2).
     own = _dispatched(home) if agent == "push-analyst" else None
     refused = []
     for command in blocks + OLDER[agent]:
         code, err = run("Bash", {"command": command}, agent, home, state, own)
         refused += [(command[:80], err)] if code else []
-    for path in _documented_writes(agent, state):
+    for path in _documented_writes(agent, state, places):
         code, err = run("Write", {"file_path": path, "content": "{}"}, agent, home, state, own)
         refused += [(path, err)] if code else []
     assert not refused
@@ -307,9 +332,10 @@ def test_this_trees_recovery_route_writes_its_message_file_under_its_prefixes(tm
     # recovery commit's `-F "<path>"` argument (the slimmed text); both spellings must satisfy the same rule.
     names = re.findall(r"MSGFILE=(\S+?)`", step) + re.findall(r'commit\s+--allow-empty\s+-F\s+"([^"$]+)"', step)
     assert names and not any(re.search(r"/tmp/recovery-commit-", n) for n in names), names
+    session = os.path.join(os.path.realpath(os.environ.get("TMPDIR") or "/var/tmp/claude-scratch"), SID)
     for name in names:
-        path = name.replace("<unique>", "20260101-000000-r0001x")
-        assert path.startswith("/tmp/claude-scratch/changelog-analyst/"), path
+        assert name.startswith("<SESSION_ROOT>/changelog-analyst/"), name  # its drafts directory (Rule CP-5)
+        path = name.replace("<unique>", "20260101-000000-r0001x").replace("<SESSION_ROOT>", session)
         assert run("Write", {"file_path": path, "content": "x"}, "changelog-analyst", tmp_path / "home") == (0, "")
 
 

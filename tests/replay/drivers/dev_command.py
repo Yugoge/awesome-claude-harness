@@ -92,6 +92,16 @@ KEYWORD = "test"  # the retry-signal keyword the orchestrator takes from the req
 # The step map of commands/dev-command.md: this file's step -> the /dev step it follows.
 DEV_STEP = {**{n: n for n in range(1, 11)}, 11: 12, 12: 13, 13: 14, 14: 15, 15: 16, 16: 17,
             "4a": "4a", "4b": "4b", "4c": "4c"}
+# The parts of the requirement round: Steps 4a-4c in a text before the integer step numbers, sub-headings of
+# Step 4 since (the same names in commands/dev.md and this file).
+ROUND_PART = {"4a": "Panel QA Writes Round 1", "4b": "Ask Each Round with AskUserQuestion", "4c": "BA Analysis"}
+
+
+def heading(text: str, step) -> str:
+    """The heading of Step <step> in `text`: a round part's sub-heading where the text has no lettered step."""
+    if step in ROUND_PART and not re.search(rf"^#+\s+Step {step}\b", text, re.M):
+        return ROUND_PART[step]
+    return f"Step {step}"
 # The lines of /dev's templates that commands/dev-command.md says to leave out (no test-writer or baseline here).
 OMITTED = (r"^\s*baseline_(?:head_sha|dirty_snapshot):",
            r"^\s*Generated tests \(when test-writer ran\)", r"^\s*Per-task active test manifest")
@@ -208,8 +218,15 @@ class DevCommandCycle:
         while not self.o.at_step(n):
             self.o.advance()
 
+    def round_step(self, step):
+        """The checklist item of Step <step>: a round part's is Step 4 where the text has no lettered step."""
+        return 4 if heading(self.o.text, step) != f"Step {step}" else step
+
     def step_role(self, step):
-        todo = next(t for t in self.o.todos if re.match(rf"Step {step}:", t["content"]))
+        if step in ("4a", "4b") and self.round_step(step) == 4:
+            return None  # a part of Step 4 whose item names BA's call: the template's own role (panel QA's qa)
+        step = self.round_step(step)
+        todo =next(t for t in self.o.todos if re.match(rf"Step {step}:", t["content"]))
         return (todo.get("subagent_call") or {}).get("subagent_type")
 
     def sect(self, step: int, anchor: str) -> str:
@@ -220,9 +237,9 @@ class DevCommandCycle:
     def tpl(self, step, anchor: str | None = None, index: int = 0) -> dict:
         """Step <step>'s dispatch template as the file words it: /dev's template of the mapped step, with this
         step's obligation block in place of its own and without the lines the file leaves out."""
-        fields = self.ref.template(f"Step {DEV_STEP[step]}", anchor=anchor)
+        fields = self.ref.template(heading(self.ref.text, DEV_STEP[step]), anchor=anchor)
         # only the obligation sentence: the fence's codex lines are /dev's own, already in the template taken above
-        mine = [l.strip() for b in cmdtext.blocks(self.o.section(f"Step {step}")) for l in b.text.splitlines()
+        mine = [l.strip() for b in cmdtext.blocks(self.o.section(heading(self.o.text, step))) for l in b.text.splitlines()
                 if "embed `<obligation" in l][index]
         lines = fields["prompt"].split("\n")
         at = next(i for i, l in enumerate(lines) if l.strip().startswith("Obligation block"))
@@ -324,7 +341,7 @@ class DevCommandCycle:
         if self.patterns_read:
             return
         o = self.o
-        try:
+        try:  # OLDER_TEXT: "Command Development Best Practices" -- an older text's section; absent today (except below)
             practices = o.section("Command Development Best Practices")
         except cmdtext.TextNotFound:  # the text names no patterns document (a dangling one was removed)
             practices = ""
@@ -427,7 +444,7 @@ class DevCommandCycle:
                      deviation=o.devs.at("Step 4 Glob prior tickets"))
         self.specs = [os.path.relpath(p, o.project) for p in g.response.get("filenames", [])] if g.ok else []
         self.round()
-        self.to("4c")
+        self.to(self.round_step("4c"))
         content = _ba_content(self.tid)
         mapping = _round.analysis(self.rp, o.project, self.tid, "AC-01")
         content["context.v1"]["requirement"].update(mapping["requirement"])
@@ -450,13 +467,13 @@ class DevCommandCycle:
             o.dispatch(self.tpl(4, anchor="Mode: panel"), act, f"Step 4 Agent(ba) panel {angle}", self.tid,
                        subagent_type=self.step_role(4))
         self.angle = None
-        self.to("4a")
+        self.to(self.round_step("4a"))
         doc = _round.with_paths(_round.round1(self.tid, panel=_round.panel()), self.tid)
         o.dispatch(self.tpl("4a"), agents.Act(content={"requirement-round.v1": doc}, summary="panel QA"),
                    "Step 4a Agent(qa) panel QA", self.tid, subagent_type=self.step_role("4a"))
         rel = f"docs/dev/ba-panel-{self.tid}-r1.json"
         self.round_files.append(rel)
-        self.to("4b")
+        self.to(self.round_step("4b"))
         call, _tin = _round.ask(o, rel, f"requirement-round:{self.tid}:r1", "Step 4b AskUserQuestion r1")
         ans = f"docs/dev/requirement-answers-{self.tid}-r1.json"
         if not os.path.isfile(os.path.join(o.project, ans)):

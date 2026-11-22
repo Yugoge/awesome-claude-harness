@@ -58,11 +58,8 @@ def meta_agent(transcript_path, tool_use_id: str) -> str:
     main = Path(transcript_path)
     for pattern in (f"{main.stem}/subagents/agent-*.meta.json", "*/subagents/agent-*.meta.json"):
         for meta in main.parent.glob(pattern):
-            try:
-                if json.loads(meta.read_text(encoding="utf-8")).get("toolUseId") == tool_use_id:
-                    return meta.name[len("agent-"):-len(".meta.json")]
-            except (OSError, ValueError, AttributeError):
-                continue
+            if (_lib("subagent_restart").read_meta(meta) or {}).get("tool_use_id") == tool_use_id:
+                return meta.name[len("agent-"):-len(".meta.json")]
     return ""
 
 

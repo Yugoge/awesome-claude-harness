@@ -42,6 +42,7 @@ def world(tmp_path: Path) -> tuple[Path, dict]:
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8",
            "HOME": str(tmp_path / "user-home"), "CLAUDE_CONFIG_DIR": str(tmp_path / "config"),
            "CLAUDE_STATE_DIR": str(tmp_path / "state"), "TMPDIR": str(tmp_path / "tmp"),
+           "CHECKPOINT_LOG_DIR": str(tmp_path / "config" / "logs"),
            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
            "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
            "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.invalid"}

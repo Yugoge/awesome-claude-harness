@@ -78,8 +78,9 @@ def test_consent_is_the_main_agents_alone(tmp_path, existing, agent_id):
 
 def test_one_interpreter_decides_consent_and_the_caller(tmp_path):
     # A new file's Write: the tool name, the bulk-sentinel target, the path, the task id, then consent and
-    # the caller in one process; the main agent adds its session id and the sentinel-grant lookup.
+    # the caller in one process. The main agent's session id and sentinel-grant lookup (two more) are
+    # retired_hooks.CUT's: the per-file grant they read is gone, so the main agent starts as many.
     new = tmp_path / "new.txt"
     assert _run(tmp_path, _write(new, agent_id="a1"), consent=False)[::2] == (0, 5)
-    assert _run(tmp_path, _write(new), consent=False)[::2] == (0, 7)
+    assert _run(tmp_path, _write(new), consent=False)[::2] == (0, 5)
     assert _run(tmp_path, _write(new), consent=True)[::2] == (0, 5)

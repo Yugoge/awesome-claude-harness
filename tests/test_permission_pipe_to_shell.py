@@ -153,7 +153,9 @@ STILL_RUNS = [
 
 @functools.lru_cache(maxsize=1)
 def _permissions() -> dict:
-    return json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+    perms = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+    policy = json.loads((REPO / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"]
+    return dict(perms, deny=perms["deny"] + policy)  # the hook rule's deny list joins the CLI's own
 
 
 def _then() -> dict:

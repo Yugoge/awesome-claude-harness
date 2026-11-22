@@ -215,7 +215,8 @@ def test_a_bypass_check_that_did_not_load_is_named(box):
 
 # (iii) The refusal's ways to proceed work while the hook is broken.
 
-@pytest.mark.parametrize("bypass", ["live_overnight", "do_consent", "grant"])
+# "grant" is gone: the hook reads no /allow grant; the launcher releases its refusal.
+@pytest.mark.parametrize("bypass", ["live_overnight", "do_consent"])
 def test_each_bypass_named_in_the_refusal_lifts_it(box, bypass):
     hook = box.hooks_copy("parser-raises-when-called")
     assert box.run(hook, "git worktree add ../wt").returncode == 2

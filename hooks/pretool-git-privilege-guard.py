@@ -9,7 +9,8 @@ Refused for an agent:
   - git commit, unless a /commit grant bound to the commit's repository,
     branch and HEAD authorizes it, or its subject is
     `auto-bulk: end-of-cycle commit for <branch>` while a /commit --bulk
-    sentinel is live, or its repository lies wholly in the caller's own scratch
+    sentinel is live (either one only with this round's `COMMIT: APPROVE` of
+    the pre-commit review: _task_verdict_refusal, _bulk_refusal), or its repository lies wholly in the caller's own scratch
     directory (_own_scratch_commit). Stderr literal: `BLOCKED: agent git commit`.
   - git merge (any form; /merge merges inside hooks/merge.sh, whose subprocess
     no hook sees). Stderr literal: `BLOCKED: agent git merge`.
@@ -20,7 +21,8 @@ Refused for an agent:
   - direct ref mutation (`git update-ref`, branch force/delete/rename, a
     writable HEAD symbolic-ref change) and commit-object plumbing.
 
-/allow grants one matching call. /do consent (hooks/lib/allowlist.py
+An /allow grant releases any refusal of this guard where the pre-tool verdicts
+meet (lib/hook_launch.release_refused); the guard reads none. /do consent (hooks/lib/allowlist.py
 has_do_consent: main agent, one turn) releases the rules on git merge,
 forbidden plumbing, hard reset and direct ref mutation, and adds none. What one
 of them refuses without it stays refused when it can move the protected
@@ -143,7 +145,7 @@ if __name__ == '__main__':
     sys.excepthook = _refuse_on_load_failure
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib.allowlist import has_do_consent, match_sentinel_grant_for_bash_command  # noqa: E402
+from lib.allowlist import has_do_consent  # noqa: E402
 from lib.agent_resolver import resolve_agent_type  # noqa: E402
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.git_command_classifier import (  # noqa: E402
@@ -198,15 +200,6 @@ def _get_session_id(data):
         return str(sid)
     except Exception:
         return ''
-
-
-def _check_git_allowlist(command: str, data: dict) -> bool:
-    """True when a /allow grant matches this command (read-only; subagents included)."""
-    sid = _get_session_id(data)
-    if not sid:
-        return False
-    task_id = os.environ.get('CLAUDE_TASK_ID') or sid
-    return match_sentinel_grant_for_bash_command(task_id, command) is not None
 
 
 def _load_grant(grant_path):
@@ -931,11 +924,12 @@ def _block_default_deny_commit(msg):
         'For human-driven commits, a human types /commit (or '
         '/allow git commit for one call).\n'
         'Main agent may bypass with /allow <pattern> before the git commit command.\n'
+        'Landing is not the agent\'s: list what must be committed in the report; write no landing script.\n'
     )
 
 
 def _has_bulk_commit_sentinel(data):
-    """True when a live bulk-commit sentinel authorizes an auto-bulk commit now.
+    """The live bulk-commit sentinel that authorizes an auto-bulk commit now, else None.
 
     /commit --bulk's UserPromptSubmit hook (scripts/write-bulk-commit-sentinel.py)
     writes it before dispatching changelog-analyst; it is not spent, so every
@@ -958,10 +952,10 @@ def _has_bulk_commit_sentinel(data):
             if path in seen:
                 continue
             seen.add(path)
-            if commit_pipeline.bulk_commit_sentinel_live(
-                    commit_pipeline.safe_read_json(path)):
-                return True
-    return False
+            record = commit_pipeline.safe_read_json(path)
+            if commit_pipeline.bulk_commit_sentinel_live(record):
+                return record
+    return None
 
 
 def _has_active_commit_grant(command=''):
@@ -1100,6 +1094,73 @@ def _own_scratch_commit(command, data):
     return True, note
 
 
+QA_APPROVE, QA_REJECT = 'COMMIT: APPROVE', 'COMMIT: REJECT'  # commands/commit.md Step 6: its report's last line
+# A file's mtime comes from the kernel's coarse clock and can trail a timestamp taken just before the write.
+QA_CLOCK_SLACK = 1.0
+
+
+def commit_qa_verdict(root, name, since):
+    """(path, last non-empty line or None when unreadable, verdict) of the commit review's report
+    <root>/docs/dev/commit-qa-report-<name>.md: verdict 'approve' or 'reject' when the line is QA_APPROVE or
+    begins with QA_REJECT and the report is no older than ``since`` (epoch seconds; None: no round), else None.
+    Its one reader and judge: this guard before a commit, the Stop gate's /commit predicate
+    (stop-command-gate.review_rejected) after the review rejected."""
+    path = os.path.join(str(root), 'docs', 'dev', f'commit-qa-report-{name}.md')
+    try:
+        with open(path, encoding='utf-8', errors='replace') as fp:
+            rows = [row.strip() for row in fp.read().splitlines() if row.strip()]
+        line, mtime = (rows[-1] if rows else ''), os.stat(path).st_mtime
+    except OSError:
+        return path, None, None
+    if since is None or mtime < since - QA_CLOCK_SLACK:
+        return path, line, None
+    return path, line, 'approve' if line == QA_APPROVE else 'reject' if line.startswith(QA_REJECT) else None
+
+
+def _verdict_refusal(roots, name, since):
+    """Why the review does not approve this commit, or '': the report of the first root holding one ends in
+    QA_APPROVE and is no older than ``since`` (epoch seconds: the plan the grant was minted on, the bulk run's
+    sentinel), so a verdict of an earlier attempt does not count."""
+    path, line, verdict = next((v for v in (commit_qa_verdict(r, name, since) for r in roots if r)
+                                if v[1] is not None), commit_qa_verdict(roots[0] or '.', name, since))
+    if verdict == 'approve':
+        return ''
+    why = ('no such report' if line is None else f'its verdict line is {line!r}' if line != QA_APPROVE
+           else 'it is older than the plan this commit was authorized on: an earlier attempt\'s verdict')
+    return (f'\nBLOCKED: the pre-commit review does not approve this commit.\n  report: {path}\n  {why}\n'
+            'commands/commit.md Step 6: only this round\'s `COMMIT: APPROVE` lands a commit. After a REJECT, '
+            'route its findings and run a fresh round (plan, review), or end the turn reporting the rejection '
+            'and its reasons.\n')
+
+
+def _task_verdict_refusal(grant):
+    """_verdict_refusal for a /commit <task> grant: the report in the plan's control root (the manifest the
+    grant's evidence names, else the plan's repository), dated against the plan's dispatched_at."""
+    evidence = (grant.get('minted_by') or {}).get('evidence') or {}
+    manifest = commit_pipeline.safe_read_json(str(evidence.get('manifest_path') or '')) or {}
+    plan = manifest.get('repository_plan') or manifest.get('REPOSITORY_PLAN')
+    control = plan.get('control_root') if isinstance(plan, dict) else None
+    since = commit_pipeline._parse_iso(evidence.get('manifest_dispatched_at'))
+    return _verdict_refusal([control, evidence.get('plan_repo_root'), grant.get('repo_root')],
+                            grant.get('task_id'), since and since.timestamp())
+
+
+def _bulk_refusal(command, data, sentinel):
+    """Why this auto-bulk commit may not land, or '': only the changelog-analyst /commit --bulk dispatched makes
+    it, and the bulk review's report (in the control root, the project's repository, else the commit's own)
+    approves it with a verdict of this run (no older than the sentinel)."""
+    if not str(data.get('agent_id') or '').strip() or resolve_agent_type(data) != 'changelog-analyst':
+        return ('\nBLOCKED: an auto-bulk commit is made only by the changelog-analyst /commit --bulk '
+                'dispatches, not by this caller.\n')
+    records = _commit_records(command)
+    target = _commit_target_git_output(_commit_target_dir(records[0]), 'rev-parse', '--show-toplevel') \
+        if records else ''
+    project = _git_output(['-C', os.environ.get('CLAUDE_PROJECT_DIR') or _hook_cwd(data),
+                           'rev-parse', '--show-toplevel'])
+    since = commit_pipeline._parse_iso(sentinel.get('created_at')) if isinstance(sentinel, dict) else None
+    return _verdict_refusal([project, target], 'bulk', since and since.timestamp())
+
+
 def _evaluate_commit(command, data):
     global _COMMIT_NOTE
     owned, _COMMIT_NOTE = _own_scratch_commit(command, data)
@@ -1109,7 +1170,8 @@ def _evaluate_commit(command, data):
     if _auto_bulk_subject(command, cwd):
         # The auto-bulk subject authorizes nothing by itself: a live /commit --bulk
         # sentinel must back it, and a pending /commit grant for this target goes first.
-        if _has_bulk_commit_sentinel(data):
+        sentinel = _has_bulk_commit_sentinel(data)
+        if sentinel:
             if _has_active_commit_grant(command):
                 _block(
                     '\nDEFERRED: auto-bulk commit skipped — an active single-use '
@@ -1118,6 +1180,9 @@ def _evaluate_commit(command, data):
                     'A /commit cycle is in progress; auto-bulk will retry on the '
                     'next scheduled cycle.\n'
                 )
+            refusal = _bulk_refusal(command, data, sentinel)
+            if refusal:
+                _block(refusal)
             return
         _block(
             '\nBLOCKED: auto-bulk commit requires a bulk-commit sentinel.\n'
@@ -1126,8 +1191,6 @@ def _evaluate_commit(command, data):
             '<state dir>/claude-bulk-commit-sentinel-<sid>-<nonce>.json (30 min TTL).\n'
             'To run bulk commits: invoke /commit --bulk from your Claude session.\n'
         )
-    if _check_git_allowlist(command, data):
-        return
     # /commit writes one repository-bound grant per repository of its plan, so the
     # grant is selected by the commit's target, not by recency.
     live = [(path, grant) for path, grant in _collect_commit_grant_candidates()
@@ -1139,7 +1202,8 @@ def _evaluate_commit(command, data):
             # this target. A refusal is kept and the next grant tried, so one stale
             # grant cannot shadow a valid one; the first refusal is reported.
             refusal = (_grant_provenance_refusal(grant, grant_path, data)
-                       or _task_id_refusal(grant, grant_path, command, data))
+                       or _task_id_refusal(grant, grant_path, command, data)
+                       or _task_verdict_refusal(grant))
             if refusal:
                 provenance_refusal = provenance_refusal or refusal
                 continue
@@ -1170,8 +1234,6 @@ def _evaluate_merge(command, data):
     at the merge-analyst's own Write of it (hooks/posttool-allowlist-consume.py,
     hooks/lib/merge_grant.py) and read verbatim by /merge.
     """
-    if _check_git_allowlist(command, data):
-        return
     _block(
         '\nBLOCKED: agent git merge - only /merge may merge, through its '
         'wrapper hooks/merge.sh.\n'
@@ -1325,8 +1387,6 @@ def _moves_protected_branch(command, invocations):
 
 
 def _evaluate_protected_move(command, data):
-    if _check_git_allowlist(command, data):
-        return
     _block(
         '\nBLOCKED: agent git ref move - this merge, plumbing, hard reset or ref '
         'mutation, refused without /do, can move the protected branch (%s), or the '
@@ -1372,14 +1432,10 @@ def _evaluate_push(command, invocations, data):
             + 'Safety policy allows normal /push branch publication only; '
             'automatic backup must use namespaced recovery refs.\n'
         )
-    if _check_git_allowlist(command, data):
-        return
     _block_default_deny_push(command)
 
 
 def _evaluate_reset_hard(command, invocations, data):
-    if _check_git_allowlist(command, data):
-        return
     reset_inv = next((inv for inv in invocations if inv.subcommand == 'reset'), None)
     target = _extract_reset_target(reset_inv) if reset_inv else ''
     _block(
@@ -1391,8 +1447,6 @@ def _evaluate_reset_hard(command, invocations, data):
 
 
 def _evaluate_direct_ref_mutation(command, data):
-    if _check_git_allowlist(command, data):
-        return
     _block(
         '\nBLOCKED: agent direct git ref mutation - update-ref and '
         'branch force/delete/rename are forbidden.\n'
@@ -1659,8 +1713,6 @@ def _writes_checkpoint_ref(command, invocations):
 
 
 def _evaluate_checkpoint_write(command, data):
-    if _check_git_allowlist(command, data):
-        return
     _block(
         '\nBLOCKED: agent git checkpoint ref write - a git fetch or pull whose '
         'refspec writes under refs/checkpoints/ (an operand, --refmap, a '
@@ -1691,8 +1743,6 @@ def _looks_like_git_forbidden_plumbing(invocations):
 
 
 def _evaluate_forbidden_plumbing(command, data):
-    if _check_git_allowlist(command, data):
-        return
     _block(
         '\nBLOCKED: agent direct git plumbing is forbidden (R6).\n'
         'Command excerpt: %s\n' % command[:200]
@@ -1897,8 +1947,6 @@ def _evaluate_hidden_git(command, data, do_consent):
             continue
         pushes = [[_unquote_token(t) for t in inv.args] for inv in invocations
                   if inv.subcommand == 'push']
-        if not any(_push_forces_or_deletes(a) for a in pushes) and _check_git_allowlist(command, data):
-            continue
         _block(
             '\nBLOCKED: agent %s hidden in %s.\n' % (what, origin)
             + 'Command excerpt: %s\n' % command[:200]
@@ -2005,10 +2053,6 @@ def _evaluate_command(command, data, do_consent=False):
     # --show-current-patch) is not judged by the subcommand's rule.
     invocations = _without_read_only(command, invocations)
     if not invocations:
-        return
-    # An /allow grant settles every command but a push, whose force/delete refusal
-    # no grant lifts (_evaluate_push).
-    if not _looks_like_git_push(invocations) and _check_git_allowlist(command, data):
         return
     if (do_consent and any(rule(invocations) for rule in _DO_RELEASED)
             and _moves_protected_branch(command, invocations)):

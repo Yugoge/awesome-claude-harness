@@ -194,33 +194,6 @@ def _declared_paths(obligation_doc: dict) -> list:
             if isinstance(a, dict) and isinstance(a.get("path"), str) and a["path"]]
 
 
-_TEXT_ENCODING = None  # the encoding open() reads a text file with in this process, once one was opened
-
-
-def _load_json(path):
-    """json.load(open(path)): the same document, or an error of the same class
-    (OSError, ValueError), from raw reads once the encoding open() decodes with
-    in this process is known (the first file is read by open() itself). The
-    line ends open() would translate cannot change what json.loads makes of
-    the text: between tokens they are whitespace, inside a string an error."""
-    global _TEXT_ENCODING
-    if _TEXT_ENCODING is None:
-        with open(path) as fh:
-            _TEXT_ENCODING = fh.encoding
-            return json.load(fh)
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        chunks = []
-        while True:
-            chunk = os.read(fd, 1 << 16)
-            if not chunk:
-                break
-            chunks.append(chunk)
-    finally:
-        os.close(fd)
-    return json.loads(b"".join(chunks).decode(_TEXT_ENCODING))
-
-
 def _plain_agent_id(agent_id) -> bool:
     return isinstance(agent_id, str) and 0 < len(agent_id) <= 128 and set(agent_id) <= _AGENT_ID_CHARS
 
@@ -584,18 +557,14 @@ def _started_dispatches(transcript) -> list:
             continue
         # _agent_files' two paths, spelled once per dispatch as strings
         agent_transcript, meta = f"{prefix}agent-{agent_id}.jsonl", prefix + name
-        try:
-            doc = _load_json(meta)
-        except (OSError, ValueError):
-            continue
-        ident = doc.get("toolUseId") if isinstance(doc, dict) else None
-        if not isinstance(ident, str) or not ident:
+        doc = obligation.read_meta(meta)  # subagent_restart's, the one reader of the CLI's record
+        if doc is None:
             continue
         prompt = obligation.read_first_record_prompt(agent_transcript)
         if prompt is not None:
-            kind = doc.get("agentType")
-            calls.append(command_span.Call(id=ident, name="Agent", line=-1, result_line=0, ok=False, input={
-                "prompt": prompt, "subagent_type": kind if isinstance(kind, str) and kind else _DEFAULT_SUBAGENT_TYPE}))
+            calls.append(command_span.Call(id=doc["tool_use_id"], name="Agent", line=-1, result_line=0, ok=False,
+                                           input={"prompt": prompt,
+                                                  "subagent_type": doc["agent_type"] or _DEFAULT_SUBAGENT_TYPE}))
     return calls
 
 

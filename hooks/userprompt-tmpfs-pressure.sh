@@ -1,38 +1,18 @@
 #!/bin/bash
-# userprompt-tmpfs-pressure.sh — UserPromptSubmit hook (4th block, appended).
+# userprompt-tmpfs-pressure.sh — UserPromptSubmit hook; hooks/session-tmpfs-banner.sh runs it at SessionStart.
 #
-# Layer 1.5 of the tmpfs-pressure prevention plan (dev-20260519-161035).
-# On each user prompt, when /tmp and/or /dev/shm exceed 75% utilization, emit
-# a non-blocking warning showing df -h plus the top-5 largest directories under
-# EACH pressured mount (one block per pressured mount). Rate-limit to AT MOST
-# 3 emissions per session.
+# The space notice. scripts/install/tmp-cleanup-install.sh --pressure watches the volumes a session needs and,
+# while one is short of space, removes what the harness owns and is provably dead (the rule is in its header),
+# then prints the notice: on stdout, which both events add to the model's context. One notice per change of
+# the set of short volumes: the last set is kept in <state dir>/claude-pressure-warn-<session token>. When that
+# file cannot be written the notice still prints, says so, and comes again at the next prompt.
+# Non-blocking: exits 0 on every path.
 #
-# Non-blocking: exits 0 unconditionally; never blocks the user prompt.
-# `df` and `du` are invoked via PATH lookup (bare commands) per OBJ-5 so the
-# QA test driver's PATH-shim layer can substitute synthetic >75% scenarios
-# without risking real tmpfs fill.
-#
-# Token derivation priority (session identity for the rate-limit counter):
-#   1. stdin JSON `session_id` field (preferred; guaranteed unique per session)
-#   2. CLAUDE_SESSION_ID env var
-#   3. hashed PPID+process-start-time fallback (last resort)
-#
-# Counter file: <state dir>/claude-pressure-warn-<sanitized_token>
-# Lock file:    <state dir>/claude-pressure-warn-<sanitized_token>.lock
-# Both are regular files (flock primitive is the SOLE acceptable lock per OBJ-3;
-# atomic-mkdir is FORBIDDEN — lock directories would never match the M3
-# `-type f` hook-state sweep predicate and would leak indefinitely). Both
-# are swept by /usr/local/sbin/tmp-cleanup.sh via the `claude-pressure-warn-*`
-# wildcard at the >7d hook-state tier.
+# Session token: the payload's `session_id`, else CLAUDE_SESSION_ID, else a hash of PPID and its start time.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 set -u
 
-THRESHOLD=75
-RATE_LIMIT=3
-
-# ── Token derivation ─────────────────────────────────────────────────
-# UserPromptSubmit hook receives a JSON envelope on stdin (same as prompt-workflow.py).
 # Bounded read so a never-closing stdin cannot hang the hook (codex review F2).
 INPUT=""
 IFS= read -r -t 1 -d '' INPUT 2>/dev/null || true
@@ -61,99 +41,25 @@ if [ -z "$SANITIZED" ]; then
   SANITIZED=$(printf '%s' "$SID" | sha256sum | cut -c1-32)
 fi
 
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-  || harness_state_dir() { printf '%s\n' /tmp; }
-COUNTER_FILE="$(harness_state_dir)/claude-pressure-warn-${SANITIZED}"
-LOCK_FILE="${COUNTER_FILE}.lock"
+HOOKS="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+. "$HOOKS/lib/harness_state_dir.sh" 2>/dev/null
+COUNTER_FILE="$(harness_state_dir 2>/dev/null)/claude-pressure-warn-${SANITIZED}"
 
-# ── Pressure detection ───────────────────────────────────────────────
-# df --output=pcent emits a 2-line header + per-mount lines on most GNU coreutils;
-# we strip the header with `tail -n +2`. The `Use%` column comes with a trailing
-# percent sign that we strip. PATH-resolved bare `df` per OBJ-5. Wrapped in
-# `timeout 2s` so a hung df cannot block the hook (codex review F2).
-_uint() {  # a non-negative decimal integer
-  case "$1" in
-    ''|*[!0-9]*) return 1 ;;
-  esac
-}
-pressured=()
-mapfile -t df_pct < <(timeout 2s df --output=pcent /tmp /dev/shm 2>/dev/null | tail -n +2 | tr -d '% ' || true)
-mounts=(/tmp /dev/shm)
-
-for i in 0 1; do
-  pct="${df_pct[$i]:-0}"
-  _uint "$pct" || pct=0
-  if [ "$pct" -gt "$THRESHOLD" ]; then
-    pressured+=("${mounts[$i]}")
-  fi
-done
-
-# Neither mount over threshold → silent exit (do NOT consume a rate-limit slot).
-if [ "${#pressured[@]}" -eq 0 ]; then
-  exit 0
-fi
-
-# ── Atomic rate-limit decision via flock ─────────────────────────────
-# fd 9 MUST be opened INSIDE the command substitution via a redirected
-# brace-group (codex F1). The trailing-redirection form
-# `decision=$(...) 9>"$LOCK_FILE"` is REJECTED because fd 9 is not reliably
-# visible to commands running inside the command substitution in that shape.
-#
-# The lock-protected critical section returns either `emit` or `skip` to the
-# parent shell via stdout. The parent shell short-circuits on `skip` — a bare
-# `exit 0` inside the subshell only exits the subshell, not the parent hook.
-decision=$(
-  {
-    # Bounded flock (-w 1) so contention with a long-running concurrent hook
-    # invocation or with the daily cleanup script's xargs rm on this lock file
-    # cannot block the user prompt (codex review F1). On contention we skip
-    # the warning rather than waiting — the next prompt re-tries.
-    flock -x -w 1 9 || { printf 'skip'; exit 0; }
-    n=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
-    _uint "$n" || n=0
-    if [ "$n" -ge "$RATE_LIMIT" ]; then
-      # F7: refresh saturated counter's mtime so the >7d hook-state sweep
-      # cannot delete an actively-saturated counter mid-session and reset
-      # the ≤3/session guarantee for long-lived sessions. This is NOT slot
-      # consumption — only mtime refresh.
-      # arch-3 (spec R5a): ENOSPC/EISDIR guard — if write fails, skip rather
-      # than crashing the subshell. 2>/dev/null placed before > so EISDIR stderr
-      # is suppressed before the output redirect is evaluated (Bash left-to-right).
-      printf '%s\n' "$n" 2>/dev/null > "$COUNTER_FILE" || { printf 'skip'; exit 0; }
-      printf 'skip'
-    else
-      # arch-3 (spec R5a): ENOSPC/EISDIR guard — if counter write fails, emit
-      # 'skip' so the warning is suppressed rather than misfiring on every prompt.
-      if ! printf '%s\n' "$((n + 1))" 2>/dev/null > "$COUNTER_FILE"; then
-        printf 'skip'
-        exit 0
-      fi
-      printf 'emit'
-    fi
-  } 2>/dev/null 9> "$LOCK_FILE"
-)
-
-[ "$decision" = "emit" ] || exit 0
-
-# ── Emit the warning ─────────────────────────────────────────────────
-echo
-echo "[tmpfs-pressure] WARN: one or more tmpfs mounts above ${THRESHOLD}% — non-blocking notice"
-# df -h wrapped in `timeout 2s` so a hung df cannot block the hook (codex F2).
-timeout 2s df -h /tmp /dev/shm 2>/dev/null || true
-for mount in "${pressured[@]}"; do
-  echo "--- top-5 dirs under ${mount} ---"
-  # GNU du -sh --max-depth=1 is broken — -s conflicts with --max-depth=1.
-  # Use -xh --max-depth=1, filter the root row by awk on the path column,
-  # sort by size descending, head -5. The outer `timeout 5s` covers the
-  # ENTIRE pipeline (du + awk + sort + head) per codex review F2 so a
-  # hung sort or stalled head also cannot exceed the time bound.
-  # PATH-resolved bare `du` per OBJ-5.
-  timeout 5s bash -c "du -xh --max-depth=1 '$mount' 2>/dev/null \
-    | awk -v m='$mount' '\$2 != m' \
-    | sort -hr \
-    | head -5" \
-    || true
-done
-echo
+# The file: the set of short volumes last told, then the time of the last reaction.
+PREV="" LAST=0
+{ IFS= read -r PREV; IFS= read -r LAST; } 2>/dev/null < "$COUNTER_FILE"
+case "$PREV" in "short:"*) ;; *) PREV="short:" ;; esac  # none recorded (or an older counter): nothing was short
+# 4.5 s: the program's own bounds (df 2 s, removals, du 1 s) inside the SessionStart hook's 5 s.
+OUT=$(timeout 4.5s bash "$HOOKS/../scripts/install/tmp-cleanup-install.sh" --pressure "$PREV" "$LAST" 2>/dev/null)
+case "$OUT" in
+  "short:"*$'\n'*) ;;
+  *) echo "[space] The check of free space did not finish (scripts/install/tmp-cleanup-install.sh); run df -h."; exit 0 ;;
+esac
+SIG="${OUT%%$'\n'*}" REST="${OUT#*$'\n'}"
+REACTED="${REST%%$'\n'*}" BODY="${REST#"${REST%%$'\n'*}"}"
+[ "$SIG" = "$PREV" ] && [ "$REACTED" = "$LAST" ] && exit 0
+[ -z "$BODY" ] || printf '%s\n' "${BODY#$'\n'}"
+printf '%s\n%s\n' "$SIG" "$REACTED" 2>/dev/null > "$COUNTER_FILE" || [ -z "$BODY" ] \
+  || echo "[space] This notice could not record itself in $COUNTER_FILE, so it comes again at the next prompt."
 
 exit 0

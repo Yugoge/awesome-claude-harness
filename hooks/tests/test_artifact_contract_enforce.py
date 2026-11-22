@@ -273,9 +273,8 @@ def _valid_dev_report_v2(task_id: str) -> dict:
 
 
 def _written_logs(home_dir: Path) -> list[str]:
-    """Files under the scratch home's logs/ directory: the hook writes none."""
-    logs = home_dir / ".claude" / "logs"
-    return sorted(p.name for p in logs.rglob("*")) if logs.is_dir() else []
+    """Files under the scratch home's logs/ directories (the harness state root's): the hook writes none."""
+    return sorted(p.name for p in home_dir.glob(".local/state/claude-harness/*/logs/**/*"))
 
 
 def _resolution(home_dir: Path, project_dir: Path, session_id: str, agent_id: str, role: str):
@@ -1948,6 +1947,7 @@ def test_l2_ac4_unplannable_blocks_plannable_passes(tmp_path):
         f'<obligation v="1">\n{json.dumps(s.obligation, indent=2)}\n</obligation>',
         [("Edit", {"file_path": str(s.project / "src.txt"), "old_string": "alpha", "new_string": "beta"}, True),
          ("Write", {"file_path": str(s.project / "ghost.txt"), "content": "ghost\n"}, True)])
+    (s.project / "ghost.txt").write_text("ghost\n", encoding="utf-8")  # the Write's file is on disk
     rep = _l2_dev_report(s.task)
     rep["dev"]["files_modified"] = ["src.txt", "ghost.txt"]
     _l2_write(s, rep)
@@ -3285,15 +3285,34 @@ def _c5_setup(tmp_path, *, l1=True, l1_newer=False, canonical=False, own_fault=N
     return s
 
 
-def test_c5_lane_report_completing_the_set_unseen_by_the_watch_is_returned_at_its_stop(tmp_path):
+def test_c5_a_rebuild_that_did_not_finish_does_not_hold_the_newest_lane(tmp_path):
+    """Every report is accepted but no rebuild has run (cut off, or never reached): no edit of this lane's clears
+    that, so its stop is not held; G3 and the Stop gate rebuild it (tests/test_aggregate_at_lane_stop.py)."""
     s = _c5_setup(tmp_path)
     proc = _l2_stop(s)
-    assert proc.returncode == 2, proc.stderr
-    assert "OBLIGATION_STOPGATE_BLOCKED" in proc.stderr
-    assert f"{s.art_path}: canonical_missing" in proc.stderr  # the stopping lane's own report
-    assert f"{s.canonical}: the canonical aggregate of lanes l1, l2 is missing" in proc.stderr
-    assert "posttool-lane-completeness-watch.py" in proc.stderr
-    assert "save it again with Edit" in proc.stderr  # what the receiver does
+    assert proc.returncode == 0, proc.stderr
+    assert "canonical_missing" not in proc.stderr
+    assert not (s.project / s.canonical).exists()
+
+
+# The owner's rule: whether a lane can end depends only on what that lane may change. A sibling's bad report,
+# whether the aggregator refuses it or accepts it, holds the sibling and the main agent, never this lane.
+C5_SIBLING_BAD = {
+    "request_id_prose": {"request_id": "see the lane write manifest (3 entries)"},  # the dead-end replay's case
+    "snapshot_prose": {"baseline_dirty_snapshot": "see the lane write manifest (3 entries)"},
+    "head_empty": {"baseline_head_sha": ""},
+}
+
+
+@pytest.mark.parametrize("rebuilt", [False, True], ids=["no-rebuild", "rebuilt"])
+@pytest.mark.parametrize("case", sorted(C5_SIBLING_BAD))
+def test_c5_a_lane_stops_cleanly_while_its_siblings_report_is_bad(tmp_path, case, rebuilt):
+    s = _c5_setup(tmp_path, l1_fault=C5_SIBLING_BAD[case])
+    if rebuilt:
+        _c5_edit(s, _c5_report(s.task, "l2"))  # this lane's own save, then its stop's rebuild
+    proc = _l2_stop(s)
+    assert proc.returncode == 0, proc.stderr
+    assert "canonical_missing" not in proc.stderr
 
 
 def test_c5_canonical_on_disk_passes(tmp_path):
@@ -3356,12 +3375,14 @@ C5_REFUSALS = {  # own report's fault, the sibling's fault, the reason the produ
 
 
 def _c5_edit(s, report):
-    """The lane's own Edit of its report: the file changes and the lane-completeness watch runs on it."""
+    """The lane's own write of its report, then its stop's rebuild (the chain's aggregate-rebuild rule, before G2)."""
     _l2_write(s, report)
-    payload = {"tool_name": "Edit", "tool_input": {"file_path": str(s.project / s.art_path)}}
-    subprocess.run([sys.executable, str(REPO_ROOT / "hooks" / "posttool-lane-completeness-watch.py")],
-                   input=json.dumps(payload), capture_output=True, text=True, timeout=60,
-                   env={**os.environ, "CLAUDE_PROJECT_DIR": str(s.project), "HOME": str(s.home)})
+    sys.path.insert(0, str(REPO_ROOT / "hooks"))
+    try:
+        from lib import aggregate_rebuild
+        aggregate_rebuild.aggregator().rebuild_if_stale(s.project, s.cycle)
+    finally:
+        sys.path.remove(str(REPO_ROOT / "hooks"))
 
 
 @pytest.mark.parametrize("l1_newer", [False, True], ids=["own-newest", "sibling-newest"])
@@ -3369,13 +3390,13 @@ def _c5_edit(s, report):
 def test_c5_own_report_the_producer_refuses_is_named_with_its_reason_until_repaired(tmp_path, case, l1_newer):
     own_fault, l1_fault, reason = C5_REFUSALS[case]
     s = _c5_setup(tmp_path, own_fault=own_fault, l1_fault=l1_fault, l1_newer=l1_newer)
-    _c5_edit(s, _c5_report(s.task, "l2", own_fault))  # the watch runs and the producer refuses
+    _c5_edit(s, _c5_report(s.task, "l2", own_fault))  # the rebuild runs and the producer refuses
     assert not (s.project / s.canonical).exists()
     first = _l2_stop(s)
     assert first.returncode == 2, first.stderr
     assert f"{s.art_path}: canonical_missing" in first.stderr
     assert reason in first.stderr, first.stderr
-    assert "scripts/aggregate-dev-report.py" in first.stderr and "save it again with Edit" not in first.stderr
+    assert "scripts/aggregate-dev-report.py" in first.stderr and "did not finish" not in first.stderr
     again = _l2_stop(s)  # the same stop over the same unrepaired report: the same block, every time
     assert (again.returncode, again.stderr) == (2, first.stderr)
     _c5_edit(s, _c5_report(s.task, "l2"))  # the lane corrects its own report

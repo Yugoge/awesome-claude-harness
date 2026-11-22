@@ -1,20 +1,38 @@
 #!/usr/bin/env bash
 # /usr/local/sbin/tmp-cleanup.sh
 #
-# Daily cleanup of /tmp and /var/tmp/codex-outputs/.
+# Hourly cleanup (scripts/install/tmp-cleanup.cron): first the short-space rule, then the age rules.
 #
 # Usage:
-#   tmp-cleanup.sh            # delete (called from cron)
-#   tmp-cleanup.sh --dry-run  # list candidates only (stdout)
+#   tmp-cleanup.sh                  # remove (called from cron; silent)
+#   tmp-cleanup.sh --dry-run        # list candidates only (stdout)
+#   tmp-cleanup.sh --pressure PREV LAST  # the short-space rule (not again within REACT_EVERY s of LAST),
+#                                   # then the space notice when the set of short volumes differs from PREV
+#                                   # (hooks/userprompt-tmpfs-pressure.sh)
 #
-# Categories + retention:
+# Short-space rule. Watched: the volumes holding the state root (hooks/lib/harness_state_dir.sh), the session
+# root (hooks/session-scratch-init.sh's), the CLI's command output root (both: hooks/lib/locations.py, from this
+# process's environment) and the harness home. A volume is
+# short at SHORT_PCT% used or with less than FLOOR_BYTES free (at most a quarter of its size). While one is short,
+# what is on it and provably dead goes, if no live process uses it (its cwd or an open file): the temp entries of
+# a session root whose owner mark (.owner) names a process proven gone, never its control state, which goes by
+# its own age rule only; the command output (*.output, >10 min) of a session with no owner mark not proven gone;
+# a live session's dispatch temp directories its dispatch_temp.py retired. "Gone" and "in use" are
+# hooks/lib/dispatch_temp.py's (judge); where it cannot tell (no /proc, no process id recorded) nothing that
+# depends on it goes, and the notice says so. A role directory (agents'
+# own scratch and drafts, which a resumed session needs) is never removed with its root: of any session, those
+# untouched for 24 h go, oldest first, while the volume stays short. Nothing else of a live
+# session, nothing without this harness's owner mark, nothing in a project or in the harness home.
+#
+# Age rules:
 #   codex outputs / prompts            >1 day
 #   Playwright Chrome profiles         >1 day
-#   hook state files                   >7 days  (under the state dir: CLAUDE_STATE_DIR, else /tmp)
+#   hook state files                   >7 days  (under the state dir: hooks/lib/harness_state_dir.sh)
 #   dev/test scratch dirs              >3 days  (incl. *-scratch-[0-9]*)
 #   broader stale build/deploy/etc     >7 days
 #   <CLI temp root>/claude-<uid>/**/*.output >1 day (deep, carve-out — see below)
 #   /var/tmp/codex-outputs/            >7 days
+#   session roots, whole directories   role dirs >7 days; a dead session's other entries >3 days
 #
 # EXCLUSION-FIRST: a single shared EXCLUDE_PRUNE bash array is applied as
 # `\( ... \) -prune -o \( <predicates> -print \)` at the start of EVERY
@@ -30,13 +48,187 @@
 
 set -uo pipefail
 
-DRY_RUN=0
-[[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
+DRY_RUN=0 PRESSURE=0 PREV="" LAST=0
+case "${1:-}" in
+  --dry-run) DRY_RUN=1 ;;
+  --pressure) PRESSURE=1; PREV="${2:-}"; [[ "${3:-}" =~ ^[0-9]+$ ]] && LAST=$3 ;;
+esac
 
-# Output: a dry run lists its candidates to whoever runs it; a real run (cron) stays
-# silent, as it always has. No log file is kept: nothing reads one (P1b E12).
-if [ "$DRY_RUN" -ne 1 ]; then
+# Output: a dry run lists its candidates to whoever runs it, --pressure prints the notice to its hook; a
+# real run (cron) stays silent, as it always has. No log file is kept: nothing reads one (P1b E12).
+if [ "$DRY_RUN" -ne 1 ] && [ "$PRESSURE" -ne 1 ]; then
   exec >/dev/null 2>&1
+fi
+exec 2>/dev/null
+
+SHORT_PCT=90
+REACT_EVERY=60  # seconds between two reactions at prompts: a prompt is not slowed by more than one
+FLOOR_BYTES=$((1024 * 1024 * 1024))
+
+# The harness home: this file's when it runs from one (the hook), else the settings' ${CLAUDE_HOME:-$HOME/.claude}.
+HARNESS_HOME=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd -P)
+[ -f "$HARNESS_HOME/hooks/lib/harness_state_dir.sh" ] || HARNESS_HOME="${CLAUDE_HOME:-${HOME:-}/.claude}"
+STATE_DIR=""
+. "$HARNESS_HOME/hooks/lib/harness_state_dir.sh" && STATE_DIR="$(harness_state_dir)"
+# The roots of this process's own installation, from its environment through hooks/lib/locations.py (the one place
+# for locations): the session root and the CLI's command output root (<root>/claude-<uid>/<project>/<session>/
+# tasks/*.output), of this user only. Nothing else is listed, measured or removed from; without an answer, none.
+ROOTS=$(timeout 5s python3 -I -c 'import sys
+sys.path.insert(0, sys.argv[1]); import locations as L; print(L.session_scratch_root()); print(L.cli_temp_root())' \
+  "$HARNESS_HOME/hooks/lib") || ROOTS=""
+SESSION_ROOT="${ROOTS%%$'\n'*}" CLI_ROOT="${ROOTS#*$'\n'}"
+[ "$CLI_ROOT" != "$ROOTS" ] || CLI_ROOT=""
+[ -f "$SESSION_ROOT/.owner" ] && SESSION_ROOT="${SESSION_ROOT%/*}"  # TMPDIR is one session's own directory
+case "$SESSION_ROOT/" in  # never a root in a project or in the harness home
+  "${CLAUDE_PROJECT_DIR:-//}"/*|*/.claude/scratch/*|"$HARNESS_HOME"/*|/) SESSION_ROOT="" ;;
+esac
+CLI_DIRS=()
+[ -n "$CLI_ROOT" ] && [ -d "$CLI_ROOT/claude-$(id -u)" ] && CLI_DIRS=("$CLI_ROOT/claude-$(id -u)")
+WATCH=("$STATE_DIR" "$SESSION_ROOT" "$CLI_ROOT" "$HARNESS_HOME")
+# The hook state names: swept by age below (their one lifetime: a session's process being gone is none).
+HOOK_STATE=( \( -name 'claude-tool-streak-*.json'
+     -o -name 'claude-orchestrator-consent-*.flag'
+     -o -name 'claude-do-task-*.json'
+     -o -name 'claude-do-resv-*'
+     -o -name 'claude-commit-grant-*.json'
+     -o -name 'claude-pressure-warn-*' \) )
+
+# volumes: one line per volume holding a watched path, "<device> <short 0|1> <avail> <size> <use%> <mount>".
+volumes() {
+  local p paths=()
+  for p in "${WATCH[@]}"; do
+    [ -n "$p" ] || continue
+    while [ ! -e "$p" ] && [ -n "$p" ]; do p="${p%/*}"; done
+    paths+=("${p:-/}")
+  done
+  timeout 2s df -B1 --output=avail,size,pcent,target "${paths[@]}" | tail -n +2 \
+    | awk -v pct="$SHORT_PCT" -v floor="$FLOOR_BYTES" '{ t = $0; sub(/^ *[^ ]+ +[^ ]+ +[^ ]+ +/, "", t)
+        if (seen[t]++) next; f = $2 / 4; if (f > floor) f = floor; u = $3 + 0
+        print (u >= pct || $1 < f) ? 1 : 0, $1, $2, u, t }' \
+    | while read -r s a z u t; do printf '%s %s %s %s %s %s\n' "$(stat -c %d "$t" || echo -)" "$s" "$a" "$z" "$u" "$t"; done
+}
+on_short() { case " $SHORT_DEVS " in *" $(stat -c %d "$1") "*) return 0 ;; esac; return 1; }
+
+# judge <path>...: VERDICT[<path>] by hooks/lib/dispatch_temp.py's one definition: of an .owner alive|gone|unknown
+# (its process), of anything else used|unused|unknown (a live process's cwd or open file at or below it);
+# CONTROL[<path>] when it is a session's control state. Without that file or /proc: unknown, counted in UNSURE.
+declare -A VERDICT CONTROL
+UNSURE=0
+judge() {
+  local v
+  [ "$#" -gt 0 ] || return 0
+  while IFS= read -r -d '' v; do
+    case ${v%% *} in control) CONTROL[${v#* }]=1 ;; *) VERDICT[${v#* }]=${v%% *} ;; esac
+  done < <(timeout 5s python3 "$HARNESS_HOME/hooks/lib/dispatch_temp.py" --judge "$@")
+  for v; do [ "${VERDICT[$v]:-unknown}" = unknown ] && VERDICT[$v]=unknown && UNSURE=$((UNSURE + 1)); done
+}
+
+# retired <live session dir>: its dispatch temp directories hooks/lib/dispatch_temp.py retired ("kept", line 2 of
+# its .dispatch-tmp), to CANDS; the module drops a listed directory that is gone.
+retired() {
+  local line="" k ks=()
+  { read -r _; read -r line; } < "$1/.dispatch-tmp"
+  [[ "$line" =~ \"kept\":\ \[([^]]*)\] ]] && IFS=, read -ra ks <<<"${BASH_REMATCH[1]}"
+  for k in "${ks[@]}"; do
+    k="${k%\"}"; k="$1/${k##*/}"
+    [[ "${k##*/}" == dispatch-* && -d "$k" && ! -L "$k" ]] && CANDS+=("$k") PROBES+=("$k")
+  done
+}
+# react: remove (a dry run lists) what is on a short volume and provably dead; REMOVED holds what went.
+REMOVED=()
+# ours <.owner>: this harness's mark for its directory.
+ours() {
+  local d="${1%/.owner}" REC=""
+  [ -f "$1" ] && [ ! -L "$1" ] && [ ! -L "$d" ] || return 1
+  read -r -d '' REC < "$1"
+  [[ "$REC" =~ \"sid\":\ *\"([^\"]*)\" && "${BASH_REMATCH[1]}" == "${d##*/}" && "${d##*/}" =~ ^[A-Za-z0-9_.-]{1,128}$ \
+     && "${d##*/}" != *..* ]]
+}
+# split <session dir>: ROLES, its role directories (each holds an agent's own <role>/<agent id>/, as
+# hooks/sessionend-scratch-sweep.sh keeps them), and REST, its other entries but the .owner.
+split() {
+  local e; ROLES=() REST=()
+  for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    [ -e "$e" ] || [ -L "$e" ] || continue
+    [ "${e##*/}" = .owner ] && continue
+    if [ -d "$e" ] && [ ! -L "$e" ] && compgen -G "$e/a[0-9a-f]*/" >/dev/null; then ROLES+=("$e"); else REST+=("$e"); fi
+  done
+}
+# untouched <path>: seconds since anything in it was last written (a whole directory, never one file in it).
+untouched() { echo $(( NOW - $(find "$1" -printf '%T@\n' | sort -n | tail -1 | cut -d. -f1) )); }
+# short_now <path>: its volume is still short (unreadable: not).
+short_now() {
+  timeout 2s df -B1 --output=avail,size,pcent "$1" | awk -v pct="$SHORT_PCT" -v floor="$FLOOR_BYTES" \
+    'NR == 2 { f = $2 / 4; if (f > floor) f = floor; exit !($3 + 0 >= pct || $1 < f) } END { if (NR < 2) exit 1 }'
+}
+react() {
+  local owner d sid f i owners=() live=" " roles=()
+  CANDS=() PROBES=()  # what may go, and the path whose use decides it
+  for owner in "${SESSION_ROOT:-/nonexistent}"/*/.owner; do ours "$owner" && owners+=("$owner"); done
+  judge "${owners[@]}"
+  for owner in "${owners[@]}"; do
+    d="${owner%/.owner}"
+    [ "${VERDICT[$owner]}" = gone ] || live+="${d##*/} "  # alive, or cannot tell: not gone
+    on_short "$d" || continue
+    split "$d"; roles+=("${ROLES[@]}")  # its role directories: below
+    if [ "${VERDICT[$owner]}" = gone ]; then CANDS+=("${REST[@]}") PROBES+=("${REST[@]}"); else retired "$d"; fi
+  done
+  for d in "${CLI_DIRS[@]}"; do
+    on_short "$d" || continue
+    while IFS= read -r -d '' f; do
+      sid="${f%/tasks/*}"
+      case "$live" in *" ${sid##*/} "*) continue ;; esac
+      CANDS+=("$f") PROBES+=("$sid")
+    done < <(find "$d" -mindepth 4 -maxdepth 4 -path "$d/*/*/tasks/*.output" -type f -mmin +10 -print0)
+  done
+  judge "${PROBES[@]}" "${roles[@]}"
+  for i in "${!CANDS[@]}"; do
+    f=${CANDS[i]} d=${PROBES[i]}
+    [ "${VERDICT[$d]}" = unused ] && [ -z "${CONTROL[$d]:-}" ] || continue  # control state: its age rule only
+    if [ "$DRY_RUN" -eq 1 ]; then echo "short space, dead: $f"; else timeout 5s rm -rf -- "$f" && REMOVED+=("$f"); fi
+  done
+  # Role directories, live session or not: untouched for 24 h, oldest first, while their volume stays short.
+  while read -r d f; do
+    [ "$d" -ge 86400 ] && [ "${VERDICT[$f]}" = unused ] || continue
+    if [ "$DRY_RUN" -eq 1 ]; then echo "short space, untouched 24h: $f"
+    elif short_now "$f"; then timeout 5s rm -rf -- "$f" && REMOVED+=("$f"); fi
+  done < <(for f in "${roles[@]}"; do echo "$(untouched "$f") $f"; done | sort -rn)
+}
+
+VOLS=$(volumes)
+SHORT_DEVS=$(awk '$2 == 1 && $1 != "-" { printf "%s ", $1 }' <<<"$VOLS")
+printf -v NOW '%(%s)T' -1
+REACTED=$LAST
+if [ -n "$SHORT_DEVS" ] && { [ "$PRESSURE" -ne 1 ] || [ $((NOW - LAST)) -ge "$REACT_EVERY" ]; }; then
+  react; REACTED=$NOW
+fi
+
+if [ "$PRESSURE" -eq 1 ]; then
+  # The notice. Its first two lines are the set of short volumes and the time of the last reaction, which the
+  # hook keeps; the rest only when the set changed.
+  [ "${#REMOVED[@]}" -eq 0 ] || VOLS=$(volumes)
+  sig="short:$(awk '$2 == 1 { printf " %s", $6 }' <<<"$VOLS")"
+  printf '%s\n%s\n' "$sig" "$REACTED"
+  [ "$sig" = "$PREV" ] && exit 0
+  for m in ${PREV#short:}; do
+    case "$sig " in *" $m "*) ;; *) echo "[space] OK: $m has room again." ;; esac
+  done
+  [ "${#REMOVED[@]}" -eq 0 ] || echo "[space] removed ${#REMOVED[@]} dead harness entries, among them: ${REMOVED[*]:0:3}"
+  [ "$UNSURE" -eq 0 ] || echo "[space] could not judge $UNSURE harness entries (whether their session's process is" \
+    "gone or a process uses them: no /proc, or no process id recorded), so they were kept."
+  while read -r dev s a z u t; do
+    [ "$s" = 1 ] || continue
+    echo "[space] SHORT: $t has $(numfmt --to=iec "$a") free of $(numfmt --to=iec "$z") (${u}% used; short at" \
+      "${SHORT_PCT}% or under $(numfmt --to=iec $(( z / 4 < FLOOR_BYTES ? z / 4 : FLOOR_BYTES ))) free)."
+    dirs=(); for p in "${WATCH[@]}"; do [ -d "$p" ] && [ "$(stat -c %d "$p")" = "$dev" ] && dirs+=("$p"); done
+    [ "${#dirs[@]}" -gt 0 ] || dirs=("$t")
+    echo "[space] largest on $t (what the harness may not remove):"
+    timeout 1s du -xak -d1 "${dirs[@]}" | awk -F'\t' 'NR == FNR { r[$0]; next } !($2 in r)' \
+      <(printf '%s\n' "${dirs[@]}") - | sort -rn | head -5 | awk -F'\t' '{ printf "  %8dK  %s\n", $1, $2 }'
+  done <<<"$VOLS"
+  [ "$sig" = "short:" ] || echo "[space] To free it: delete or move what you no longer need among these; a" \
+    "session whose command output is on a full volume needs a restart (resume the same session) once there is room."
+  exit 0
 fi
 
 echo
@@ -60,33 +252,17 @@ EXCLUDE_PRUNE=( \(
 \) -prune )
 
 # ── Run helper for /tmp top-level categories ──────────────────────────
-# Rewritten 2026-05-19 (codex F3): the prior shape appended `-print` /
-# `-exec rm -rf {} +` AFTER the caller's find expression, which short-circuits
-# the EXCLUDE_PRUNE branch and would act on excluded paths. The new shape
-# accepts the right-hand non-prune predicate as positional arguments and
-# injects the action INSIDE that branch via shell composition:
+# The caller's predicates go INSIDE the non-prune branch, the action with them:
 #   find /tmp -maxdepth 1 "${EXCLUDE_PRUNE[@]}" -o \( <args> -print \)
-#
-# Per-category logging (AC6 / codex F6): we ALWAYS print the candidates first
-# (this is the "what was removed" log line per category) — for real runs the
-# rm follows; for dry-run nothing else happens. This shape satisfies AC6's
-# "log either candidate paths OR per-category removed_count" requirement: we
-# choose candidate-paths-before-rm, applied uniformly across all sweep
-# categories.
+# Each category prints its candidates first; a real run then removes them.
 run_tmp() {
   local desc="$1"; shift
   echo "--- $desc ---"
   if [ "$DRY_RUN" -eq 1 ]; then
-    # Codex review F5: removed `| head -200` truncation — AC4/AC5 require
-    # ALL candidates from every populated tier to be observable on stdout
-    # (truncating after 200 entries would mask candidates from later tiers
-    # in the same run and weaken the AC verification).
+    # Every candidate of every tier is listed: no truncation.
     find "${SWEEP_ROOT:-/tmp}" -maxdepth 1 "${EXCLUDE_PRUNE[@]}" -o \( "$@" -print \) 2>/dev/null || true
   else
-    # Codex review F4: candidate temp files MUST NOT live under /tmp — the
-    # purpose of this run is to FREE /tmp, and if /tmp is at ENOSPC the
-    # mktemp would itself fail before any deletion happens. /var/tmp is on
-    # the disk-backed root fs.
+    # Candidate lists live on /var/tmp, not /tmp: a full /tmp must not stop its own cleanup.
     local tmpfile
     tmpfile=$(mktemp -p /var/tmp tmp-cleanup-cands-XXXXXX 2>/dev/null) || {
       echo "WARN: cannot create candidate temp file under /var/tmp; skipping category"
@@ -109,10 +285,8 @@ run_path() {
   local path="$1"; shift
   echo "--- $desc ---"
   if [ "$DRY_RUN" -eq 1 ]; then
-    # Codex review F5: removed `| head -200` (same rationale as run_tmp).
     find "$path" "$@" -print 2>/dev/null || true
   else
-    # Codex review F4: candidate temp files under /var/tmp, not /tmp.
     local tmpfile
     tmpfile=$(mktemp -p /var/tmp tmp-cleanup-cands-XXXXXX 2>/dev/null) || {
       echo "WARN: cannot create candidate temp file under /var/tmp; skipping category"
@@ -131,28 +305,15 @@ run_tmp "codex artifacts >1d in /tmp" \
   \( -name 'codex-output-*' -o -name 'codex-prompt-*' -o -name 'openai-codex' \)
 
 # ── Playwright Chrome profiles (>1 day) — 50-150MB each, never reused ──
-# NOTE: `chrome-debug-profile` literal REMOVED from this list (2026-05-19) —
-# it is now protected by the shared EXCLUDE_PRUNE clause above. Removing the
-# literal here eliminates dead code (EXCLUDE_PRUNE prunes it first anyway).
+# (`chrome-debug-profile` is kept by EXCLUDE_PRUNE.)
 run_tmp "Playwright profiles >1d in /tmp" \
   -mtime +1 \
   \( -name 'ui-specialist-chrome-*' \)
 
 # ── Hook state files (>7 days) — small but accumulate; sessions long dead ──
-# Includes `claude-pressure-warn-*` (added 2026-05-19) which sweeps BOTH the
-# Layer-1.5 counter files (regular file) AND their paired `.lock` files
-# (also regular file — flock is the SOLE acceptable lock primitive per OBJ-3
-# specifically because the resulting lock file matches `-type f`).
-# The state dir is hooks/lib/harness_state_dir.sh's: CLAUDE_STATE_DIR when absolute, else /tmp.
-case "${CLAUDE_STATE_DIR:-}" in /*) STATE_DIR="${CLAUDE_STATE_DIR%/}" ;; *) STATE_DIR=/tmp ;; esac
-SWEEP_ROOT="$STATE_DIR" run_tmp "hook state >7d in $STATE_DIR" \
-  -mtime +7 -type f \
-  \( -name 'claude-tool-streak-*.json' \
-     -o -name 'claude-orchestrator-consent-*.flag' \
-     -o -name 'claude-do-task-*.json' \
-     -o -name 'claude-do-resv-*' \
-     -o -name 'claude-commit-grant-*.json' \
-     -o -name 'claude-pressure-warn-*' \)
+# The state dir is hooks/lib/harness_state_dir.sh's (STATE_DIR above); without it this category is skipped.
+[ -z "$STATE_DIR" ] || SWEEP_ROOT="$STATE_DIR" run_tmp "hook state >7d in $STATE_DIR" \
+  -mtime +7 -type f "${HOOK_STATE[@]}"
 
 # ── Dev/test scratch (>3 days) — known transient patterns only ──
 # Patterns added 2026-05-19:
@@ -199,14 +360,11 @@ run_tmp "broader stale >7d in /tmp" \
 # ── CLI task outputs: deep .output sweep (>1 day) ──
 # CARVE-OUT: this query does NOT use EXCLUDE_PRUNE — its purpose is to
 # descend INTO claude-<uid> (which EXCLUDE_PRUNE protects at the top level of /tmp).
-# The CLI writes <CLAUDE_CODE_TMPDIR, else TMPDIR, else /tmp>/claude-<uid>/<project>/<session>/tasks/*.output:
-# the shipped settings pin CLAUDE_CODE_TMPDIR=/var/tmp/claude-scratch, a session without them uses /tmp.
-# -mindepth 2 skips the claude-<uid> root itself; -type f ensures directories
-# named *.output (if any) cannot match. -mtime +1 is the verified-safe
-# threshold (BA+QA observed lsof intersection (open AND >1d) = 0).
-for cli_dir in /tmp/claude-[0-9]* "${CLAUDE_CODE_TMPDIR:-/var/tmp/claude-scratch}"/claude-[0-9]*; do
-  [ -d "$cli_dir" ] && run_path "CLI task outputs >1d in $cli_dir" "$cli_dir" \
-    -mindepth 2 -type f -name '*.output' -mtime +1
+# CLI_DIRS: the CLI's command output directories (above). -mindepth 2 skips the claude-<uid> root
+# itself; -type f ensures directories named *.output (if any) cannot match. -mtime +1 is the
+# verified-safe threshold (BA+QA observed lsof intersection (open AND >1d) = 0).
+for cli_dir in "${CLI_DIRS[@]}"; do
+  run_path "CLI task outputs >1d in $cli_dir" "$cli_dir" -mindepth 2 -type f -name '*.output' -mtime +1
 done
 
 # ── /var/tmp/codex-outputs (>7 days) — on disk, less urgent but still bounded ──
@@ -214,6 +372,27 @@ done
 # preserved per AC7. Its delta IS counted toward `freed_total` below.
 run_path "codex-outputs >7d in /var/tmp" /var/tmp/codex-outputs \
   -mindepth 1 -mtime +7
+
+# ── Session roots (hooks/session-scratch-init.sh's .owner), by whole directory, never one file inside one ──
+# A role directory untouched for 7 days; of a session whose process is gone, its other entries untouched for
+# 3 days, and the root once only its .owner is left. (tmpfiles-claude-scratch.conf leaves session roots to this.)
+echo "--- session roots by age in ${SESSION_ROOT:-(none)} ---"
+owners=() olds=()
+for owner in "${SESSION_ROOT:-/nonexistent}"/*/.owner; do ours "$owner" && owners+=("$owner"); done
+judge "${owners[@]}"
+for owner in "${owners[@]}"; do
+  split "${owner%/.owner}"
+  for f in "${ROLES[@]}"; do [ "$(untouched "$f")" -ge 604800 ] && olds+=("$f"); done
+  if [ "${VERDICT[$owner]}" = gone ]; then
+    for f in "${REST[@]}"; do [ "$(untouched "$f")" -ge 259200 ] && olds+=("$f"); done
+    [ $(( ${#ROLES[@]} + ${#REST[@]} )) -eq 0 ] && [ "$(untouched "$owner")" -ge 259200 ] && olds+=("${owner%/.owner}")
+  fi
+done
+judge "${olds[@]}"
+for f in "${olds[@]}"; do
+  [ "${VERDICT[$f]}" = unused ] || continue
+  echo "$f"; [ "$DRY_RUN" -eq 1 ] || timeout 5s rm -rf -- "$f"
+done
 
 # ── Freed-bytes summary ────────────────────────────────────────────────
 after_tmp=$(df --output=avail /tmp 2>/dev/null | tail -1 || echo 0)

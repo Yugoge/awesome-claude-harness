@@ -64,7 +64,7 @@ SESSION_ID=<SESSION_ID>
 REPO_HASH=<REPO_HASH>
 
 <obligation v="1">
-{"task_id": null, "lane": null, "lane_set": null, "role": "push-analyst", "pipeline": "push", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^push-analyst grant written: \\S+\\.json$"}]}
+{"task_id": null, "lane": null, "lane_set": null, "role": "push-analyst", "pipeline": "push", "profile": "ad_hoc", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^push-analyst grant written: \\S+\\.json$"}]}
 </obligation>
 ```
 

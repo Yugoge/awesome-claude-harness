@@ -404,8 +404,8 @@ def usage_limit(env):
 
 @pytest.mark.parametrize("prompt", ["restart", "continue"])
 def test_a2_a_dev_cut_by_a_usage_limit_is_held_through_ten_text_only_stops(env, prompt):
-    steps = dev_span(env, done=10)  # Step 8: BA-QA iteration loop, in progress
-    assert steps[10]["content"].startswith("Step 8: ")
+    steps = dev_span(env, done=7)  # Step 8: BA-QA iteration loop, in progress
+    assert steps[7]["content"].startswith("Step 8: ")
     usage_limit(env)
     if prompt == "restart":
         env.tx.command("restart")
@@ -796,6 +796,7 @@ def test_a6_merge_holds_once_the_default_branch_merged_the_source(env, repo, typ
     opener_now(env, "merge", "feature" if typed else "")
     assert run(env)[0] == 2  # unmerged
     git(repo, "checkout", "-q", "master")
+    write_grant(env, repo, "feature")  # Steps 2-4: approved at this tip
     git(repo, "merge", "-q", "--no-ff", "--no-edit", "feature")
     assert run(env) == (0, "")
     git(repo, "branch", "-q", "-D", "feature")  # the wrapper's cleanup
@@ -822,6 +823,7 @@ def test_a6_merge_no_commit_needs_merge_head_at_the_source(env, repo):
     commit(repo, "o.txt")
     git(repo, "checkout", "-q", "master")
     opener_now(env, "merge", "--no-commit feature")
+    write_grant(env, repo, "feature")
     git(repo, "merge", "-q", "--no-commit", "--no-ff", "other")
     assert run(env)[0] == 2
     git(repo, "merge", "--abort")
@@ -838,6 +840,7 @@ def test_a6_a7_an_analyst_prompt_naming_a_merged_tip_does_not_count_and_a_later_
     env.tx.tool("Agent", {"subagent_type": "merge-analyst", "prompt": f"SOURCE_TIP={merged_elsewhere}\n"
                           "DEFAULT_BRANCH=master\n"})
     assert run(env)[0] == 2
+    write_grant(env, repo, "feature")
     git(repo, "checkout", "-q", "master")
     git(repo, "merge", "-q", "--no-ff", "--no-edit", "feature")
     git(repo, "checkout", "-q", "feature")
@@ -981,10 +984,10 @@ def test_a6_a_grant_that_is_no_json_object_is_none_as_the_check_on_its_write_rem
     os.utime(grant, (stamp, stamp))
     git(repo, "checkout", "-q", "master")
     git(repo, "merge", "-q", "--no-ff", "--no-edit", "feature")
-    if on == "master":
-        code, text = run(env)
-        assert code == 2 and "no merge-analyst grant of this session since the opener names its source" in text
-        write_grant(env, repo, "feature")
+    code, text = run(env)  # on the source, git's pick names it; a landed merge then owes the approval
+    assert code == 2 and ("no merge-analyst grant of this session since the opener names its source" if on == "master"
+                          else "feature was merged into refs/heads/master after the /merge opener") in text, text
+    write_grant(env, repo, "feature")
     assert run(env) == (0, "")
 
 
@@ -992,6 +995,7 @@ def test_a6_a_grant_that_is_no_json_object_is_none_as_the_check_on_its_write_rem
 def test_a6_merge_no_commit_finalized_or_aborted_decides_as_a_committed_merge(env, repo, finish):
     branches(repo, "feature")
     opener_now(env, "merge", "--no-commit feature")
+    write_grant(env, repo, "feature")
     git(repo, "merge", "-q", "--no-commit", "--no-ff", "feature")
     assert run(env) == (0, "")
     if finish == "commit":  # merge.sh's printed finalize
@@ -1053,7 +1057,7 @@ def test_a6_bare_merge_from_a_linked_worktree_holds_once_steps_pick_merged_also_
         env, linked, diverged, grant):
     """Bare /merge in the linked worktree: unmerged 2; merged by merge.sh (a fast-forward, or a merge
     commit when the default branch moved) and cleaned up (branch, its reflog and the overnight-state
-    record gone) 0; with or without the merge-analyst's grant of Step 2, which names the pick too."""
+    record gone) 0 with the merge-analyst's approval of Step 2, which names the pick too; without it 2."""
     if diverged:
         git(env.project, "checkout", "-q", "master")
         commit(env.project, "m.txt")
@@ -1067,7 +1071,8 @@ def test_a6_bare_merge_from_a_linked_worktree_holds_once_steps_pick_merged_also_
     merge_sh(linked, "overnight-x")
     assert git(linked, "rev-parse", "--verify", "-q", "refs/heads/overnight-x", check=False) == ""
     assert not list(Path(os.environ["CLAUDE_PROJECT_DIR"], ".claude").glob("overnight-state-*.json"))
-    assert run(env) == (0, "")
+    code, text = run(env)
+    assert (code, text) == (0, "") if grant else code == 2 and "overnight-x was merged into" in text, text
     assert pick in git(linked, "rev-list", "--parents", "-n", "1", "master").split()
 
 
@@ -1079,6 +1084,7 @@ def test_a6_bare_merge_from_a_linked_worktree_of_another_branch_than_steps_pick_
     code, text = run(env)
     assert code == 2 and "no merge of overnight-x into refs/heads/master" in text
     assert "checkout: moving from overnight-x to master" in git(linked, "reflog", "show", "--format=%gs", "HEAD")
+    write_grant(env, linked, "overnight-x")
     merge_sh(linked, "overnight-x")  # the pick merged too: the gap closes
     assert run(env) == (0, "")
 
@@ -1089,6 +1095,7 @@ def test_a6_bare_merge_no_commit_from_a_linked_worktree_needs_merge_head_at_step
     code, text = run(env)
     assert code == 2 and "MERGE_HEAD is" in text
     git(linked, "merge", "--abort")
+    write_grant(env, linked, "overnight-x")
     merge_sh(linked, "--no-commit", "overnight-x")
     assert run(env) == (0, "")
 
@@ -3299,6 +3306,7 @@ def test_rc2_merge_conflicts_refused_end_with_their_report(env, repo):
 def test_rc2_the_owner_resolving_the_conflicts_completes_the_merge(env, repo):
     conflicting(repo, "feature")
     opener_now(env, "merge", "feature")
+    write_grant(env, repo, "feature")
     merge_step5(env, repo)
     assert run(env) == (0, "")
     (Path(repo) / "base.txt").write_text("resolved\n")
@@ -3657,3 +3665,50 @@ def test_owner_only_an_intent_past_the_grant_writers_window_mints_nothing(env):
     old = datetime.now().timestamp() - 60 * (window + 1)
     os.utime(flag, (old, old))
     assert run(env)[0] == 0
+
+
+# /commit Step 6, the review rejected: an agent that obeys `COMMIT: REJECT` and makes no commit ends its turn; the
+# rejection and the review's reasons are named for the owner. The gate reads the review's own report, dated no
+# earlier than the span's last commit-qa dispatch for the task, which has stopped.
+REJECT = "COMMIT: REJECT - f.txt is not ready to land"
+
+
+def reviewed(env, line, mtime=None, review=True):
+    """/commit <task> typed, no Task-id commit yet, a commit-qa review dispatched (``review``) and its report."""
+    task_file(env)
+    env.tx.command("commit", FAMILY)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    if review:
+        env.tx.dispatch(FAMILY, role="qa", pipeline="commit", profile="commit-qa", artifacts=[
+            {"kind": "markdown", "path": f"docs/dev/commit-qa-report-{FAMILY}.md", "identity_anchor": FAMILY,
+             "terminal_line_regex": "^COMMIT: (APPROVE|REJECT)"}])
+    report = env.project / "docs" / "dev" / f"commit-qa-report-{FAMILY}.md"
+    report.write_text(f"# pre-commit QA\n\n- f.txt: reviewed\n\n{line}\n")
+    if mtime is not None:
+        os.utime(report, (mtime, mtime))
+    env.tx.say("The review rejected the landing; nothing was committed.")
+
+
+def test_review_rejected_and_no_commit_ends_the_turn_with_the_reasons(env):
+    reviewed(env, REJECT)
+    assert run(env) == (0, f"COMMAND_GATE /commit: open for the owner\n- {gate.OWNER_ONLY}/commit {FAMILY}; the "
+                           f"review rejected this landing and no commit was made (docs/dev/commit-qa-report-"
+                           f"{FAMILY}.md): {REJECT}\n")
+
+
+@pytest.mark.parametrize("case", ["approved", "no-review-dispatched", "earlier-attempt"])
+def test_review_rejected_only_this_rounds_reject_of_the_review_ends_it(env, case):
+    """An approval owes the commit; a report no review of the span wrote, or one older than the span's review
+    (an earlier attempt's), is no rejection of this round."""
+    reviewed(env, "COMMIT: APPROVE" if case == "approved" else REJECT, review=case != "no-review-dispatched",
+             mtime=(T0 - timedelta(hours=1)).timestamp() if case == "earlier-attempt" else None)
+    code, text = run(env)
+    assert code == 2 and "problem=MISSING_TASK_TRAILER" in text and "review rejected" not in text, (case, text)
+
+
+def test_review_rejected_other_gaps_of_the_cycle_still_hold(env):
+    reviewed(env, REJECT)
+    env.fake.answers[(FAMILY, "commit")] += [gap(f"docs/dev/close-report-{FAMILY}.md", "INVALID_CLOSE_VERDICT",
+                                                 "expected 'yes'")]
+    code, text = run(env)
+    assert code == 2 and "review rejected this landing" in text and "INVALID_CLOSE_VERDICT" in text, text

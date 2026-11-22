@@ -275,12 +275,6 @@ def test_do_does_not_lift_the_version_refusal(tmp_path):
     assert not _verdict(s.monitor(), VERSION_REFUSED)
 
 
-def test_an_allow_grant_naming_monitor_passes_an_old_cli(tmp_path):
-    s = Session(tmp_path, "2.1.313")
-    s.allow("Monitor")
-    assert s.monitor().returncode == 0
-
-
 def test_the_version_check_reads_nothing_for_other_tools(tmp_path):
     s = Session(tmp_path, "2.1.313")
     assert s.bash().returncode == 0
@@ -308,14 +302,14 @@ def test_the_no_background_rule_does_not_cover_monitor(session):
         assert session.run(BACKGROUND, tool, {}).returncode == 0
 
 
-def test_bash_safety_stays_a_settings_level_bash_matcher():
-    """The CLI hands a Monitor command, as a Bash call, only to hooks registered under a Bash matcher
-    in settings.json (measured on 2.1.325); a rule inside the matcher-less launcher sees tool_name
-    Monitor instead. pretool-bash-safety.sh is the hook the Monitor allowance relies on."""
-    settings = json.loads((ROOT / "settings.json").read_text())
-    bash_blocks = [b for b in settings["hooks"]["PreToolUse"] if b.get("matcher") == "Bash"]
-    commands = [h.get("command", "") for b in bash_blocks for h in b.get("hooks", [])]
-    assert any("pretool-bash-safety.sh" in c for c in commands), commands
+def test_bash_safety_judges_a_monitor_command_too():
+    """A rule inside the matcher-less launcher sees tool_name Monitor, not Bash (measured on 2.1.325).
+    pretool-bash-safety.sh is now a Bash rule of the launcher (so the owner's /allow can release its
+    refusal), and the Monitor allowance relies on pretool-monitor-command.py running it on a
+    Monitor's command."""
+    rule = "Rule('bash-safety', 'pretool-bash-safety.sh', ('Bash',))"
+    assert rule in (ROOT / "hooks" / "pretool-launch.py").read_text()
+    assert rule in (ROOT / "hooks" / "pretool-monitor-command.py").read_text()
 
 
 def _set_literal(node: ast.expr):
@@ -337,7 +331,11 @@ def test_the_whitelist_is_exactly_the_documented_set():
     read_only = {"LSP", "TaskOutput", "BashOutput", "ReadMcpResourceTool", "ListMcpResourcesTool"}
     assert sets["ALWAYS_ALLOWED"] == expected
     assert sets["READ_ONLY_ALLOWED"] == read_only
-    assert sets["BASH_CAPPED"] == {"Bash", "Monitor"}
+    imported = {a.asname: (n.module, a.name) for n in tree.body if isinstance(n, ast.ImportFrom) for a in n.names}
+    assert imported["BASH_CAPPED"] == ("lib.allowlist", "COMMAND_TOOLS")  # the one definition of the set
+    assert _set_literal(next(n.value for n in ast.parse((GATE.parent / "lib" / "allowlist.py").read_text()).body
+                             if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "COMMAND_TOOLS")) \
+        == {"Bash", "Monitor"}
     assert sets["PERMANENTLY_BLOCKED"] == {"EnterPlanMode", "ExitPlanMode"}
     line = next(ln for ln in (ROOT / "CLAUDE.md").read_text().splitlines() if ln.startswith("- Always allowed:"))
     head = line.split(".", 1)[0].replace("- Always allowed:", "")

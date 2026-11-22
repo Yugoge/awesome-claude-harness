@@ -139,6 +139,14 @@ def is_inside(path, directory, cwd: Optional[str] = None) -> bool:
     return inside(path, directory, cwd) is not None
 
 
+def unlinked(directory) -> Optional[str]:
+    """Absolute ``directory`` when no component of it is a link and it is a directory or not yet made, else None:
+    a directory a path must lie in with every link resolved (inside) to count as within it."""
+    full = absolute(directory) if isinstance(directory, str) and os.path.isabs(directory) else None
+    ok = full and _real(full) == full and (os.path.isdir(full) or not os.path.lexists(full))
+    return full if ok else None
+
+
 # -- devices -------------------------------------------------------------------------------
 def device_name(path: str) -> Optional[str]:
     """The name of absolute normal ``path`` below the device directory ("" for it), else None."""
@@ -210,13 +218,23 @@ def session_scratch_root() -> str:
     return _real(root) or root
 
 
-def session_scratch_dir(session_id) -> Optional[str]:
+def cli_temp_root() -> str:
+    """The root the CLI writes its command output under (<root>/claude-<uid>/<project>/<session>/tasks/):
+    an absolute $CLAUDE_CODE_TMPDIR, else an absolute $TMPDIR, else the default, real."""
+    named = [os.environ.get("CLAUDE_CODE_TMPDIR") or "", os.environ.get("TMPDIR") or ""]
+    root = next((v for v in named if os.path.isabs(v)), DEFAULT_TEMP_DIR)
+    return _real(root) or root
+
+
+def session_scratch_dir(session_id, *agent) -> Optional[str]:
     """The session's scratch directory, <session_scratch_root()>/<session id>, which
-    hooks/session-scratch-init.sh creates; None for an id that is no single name."""
-    sid = session_id if isinstance(session_id, str) else ""
-    if not sid.strip(".") or os.path.basename(sid) != sid:
+    hooks/session-scratch-init.sh creates; given (role, agent id), a subagent's own scratch directory,
+    <session scratch directory>/<role>/<agent id>, which hooks/subagentstart-scratch.py creates. None
+    when a part is no single name."""
+    parts = [part if isinstance(part, str) else "" for part in (session_id, *agent)]
+    if not all(part.strip(".") and os.path.basename(part) == part for part in parts):
         return None
-    return os.path.join(session_scratch_root(), sid)
+    return os.path.join(session_scratch_root(), *parts)
 
 
 def in_system_temp(path, cwd: Optional[str] = None) -> bool:

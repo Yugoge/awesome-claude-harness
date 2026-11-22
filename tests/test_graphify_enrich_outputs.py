@@ -2,7 +2,7 @@
 graphify-query.py check their results against their schemas before writing (P10 A17).
 
 The script reads the context file it is given and never writes it; it writes the run
-record (with the fingerprint /dev-overnight Step 11g compares) on every path and the
+record (with the fingerprint /dev-overnight Step 11 compares) on every path and the
 focused subgraph dev's and QA's dispatches name only when enrichment produced one; the
 graph cache it refreshes is written by graphify-maintain.py alone. Every run here uses a
 stub graphify binary and a cache root under the test's own tmp_path.
@@ -125,7 +125,7 @@ def test_enrichment_writes_its_own_two_files_and_never_the_context(tmp_path):
     assert validate(focused, "graphify-focused-subgraph.v1")["ok"]
 
 
-def test_run_record_carries_the_step_11g_fingerprint(tmp_path):
+def test_run_record_carries_the_step_11_fingerprint(tmp_path):
     proj, context, env = _project(tmp_path)
     _seed_cache(tmp_path, env)
     proc = _enrich(proj, env, "--pipeline-index", "2", "--iteration", "1")

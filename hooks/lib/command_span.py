@@ -194,8 +194,8 @@ class AgentEnd(namedtuple("AgentEnd", "line agent tool_use_id status result")):
 # How the CLI delivers a task-notification to the main session (CLI 2.1.326, recorded in
 # tests/fixtures/cli): as the turn it opens for it, a user record of origin kind
 # "task-notification" whose content is the notification, or, while a turn runs, inside it as an
-# attachment of type queued_command whose commandMode is "task-notification". Neither can be
-# typed, and a subagent's own record (isSidechain) is not the session's. The header tags are read
+# attachment of type queued_command whose commandMode is "task-notification"; one the harness held
+# comes back in the hand-over (HANDOVER) of a later prompt's hook context. None can be typed, and a subagent's own record (isSidechain) is not the session's. The header tags are read
 # each the first of its name; the <result> after them is the agent's own text, read whole: from its
 # opening tag to the notification's last closing one, whatever tags that text holds.
 _NOTIFICATION = b"<task-notification>"
@@ -216,7 +216,14 @@ def _notification_text(record) -> str | None:
                 and attachment.get("commandMode") == "task-notification"
                 and isinstance(attachment.get("prompt"), str)):
             return attachment["prompt"]
+        held = HANDOVER.search(_prompt_hook_text(attachment) or "")  # the prompt's hook context, in its one parser
+        if held:  # notices the harness held (lib/returns_hold.py) and handed over: delivered with this prompt
+            return held.string[held.start():]
     return None
+
+
+# The head of lib/returns_hold.py's hand-over: the UserPromptSubmit context that carries each notice it held, verbatim.
+HANDOVER = re.compile(r"^HELD RETURNS \(\d+\): returns of background children held since ", re.M)
 
 
 # A record is decoded only when it can matter, so a long session's transcript
@@ -607,10 +614,21 @@ class Span:
 
     def dispatches(self) -> list:
         """(call, obligation) of each dispatch_calls() call whose prompt parses to an obligation, in span order,
-        however its call came back: whether and when its agent stopped is agent_returns.Returns' reading."""
+        however its call came back (agent_returns.Returns reads whether its agent stopped), at its record's time."""
         ob = _obligation()
         parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.dispatch_calls())
-        return [(call, found.obligation) for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+        return [(call, ob.dispatch_time(found.obligation, self.recorded_at(call.id)))
+                for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+
+    def recorded_at(self, ident: str) -> str | None:
+        """The timestamp the CLI wrote on the record of tool use ``ident``, or None."""
+        try:
+            lines, floor = self._lines()
+            found = _first_use(lines, (b'"tool_use"',), (), floor, ident)
+        except (OSError, TypeError, ValueError):
+            return None
+        stamp = (_decode(lines.data[found[0]:found[1]]) or {}).get("timestamp") if isinstance(found, tuple) else None
+        return stamp if isinstance(stamp, str) else None
 
     def obligations(self) -> list:
         """(call, obligation) of each ok Agent/Task dispatch whose prompt parses to an obligation, in span order."""

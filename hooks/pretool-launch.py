@@ -37,6 +37,7 @@ RULES = (
     Rule('orchestrator-gate', 'pretool-orchestrator-gate.py'),
     Rule('block-background-tasks', 'pretool-block-background-tasks.py'),
     Rule('do-block-subagents', 'pretool-do-block-subagents.py'),
+    Rule('subagent-time-limit', 'pretool-subagent-time-limit.py', timeout=10),
     Rule('read-size-guard', 'pretool-read-size-guard.py'),
     Rule('workflow-gate', 'pretool-workflow-gate.py'),
     Rule('write-gate', 'pretool-write-gate.py', None, timeout=70, matcher_spelling='*'),
@@ -45,12 +46,22 @@ RULES = (
     Rule('cp-checkin', 'pretool-cp-checkin.py', ('Read',), after=('write-gate',)),  # writes agent-index.json tool-policy reads
     Rule('quality-gate', 'pretool-quality-gate.py', ('Write', 'Edit', 'MultiEdit')),
     Rule('attribution-pre', 'pretool-attribution-pre.py', ('Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'), timeout=30),
+    Rule('lane-ledger', 'pretool-lane-ledger.py', ('Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'), timeout=10),
     Rule('todo-validate', 'pretool-todo-validate.py', ('TodoWrite',)),
     Rule('block-branch-pr-worktree', 'pretool-block-branch-pr-worktree.py', ('Bash',)),
     Rule('dispatch-gate', 'pretool-dispatch-gate.py', DISPATCH_TOOLS),
     Rule('runcode-watchdog', 'pretool-runcode-watchdog.py', ('mcp__playwright__browser_run_code',)),
     Rule('git-privilege-guard', 'pretool-git-privilege-guard.py', ('Bash',)),
-    Rule('monitor-command', 'pretool-monitor-command.py', ('Monitor',), timeout=360),
+    Rule('merge-verdict', 'pretool-merge-verdict.py', ('Bash',), timeout=20),
+    Rule('monitor-command', 'pretool-monitor-command.py', ('Monitor',), timeout=450),
+    # The deny list that was the CLI's own (policies/cli-deny.v1.json): decided, recorded and releasable here.
+    Rule('deny-list', 'pretool-deny-list.py', ('Bash', 'Read', 'Grep', 'Glob', 'Edit', 'Write', 'MultiEdit',
+                                               'NotebookEdit', 'Skill'), timeout=10),
+    # The shell hooks, each as `bash <file>`: every pre-tool refusal of the harness comes together here,
+    # where an /allow grant releases one (lib/hook_launch.release_refused).
+    Rule('bash-safety', 'pretool-bash-safety.sh', ('Bash',)),
+    Rule('block-enterworktree', 'pretool-block-enterworktree.sh', ('EnterWorktree',)),
+    Rule('worktree-guard', 'pretool-worktree-guard.sh'),
 )
 
 if __name__ == "__main__":

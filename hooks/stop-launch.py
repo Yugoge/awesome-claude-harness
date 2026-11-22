@@ -4,7 +4,9 @@ stderr. When the coordinator cannot decide (another exit, a timeout, a launch er
 file), decide alone on the two stdlib modules loaded by path, the transcript reader
 (hooks/lib/command_span.py: the latest human-typed command, read over the whole transcript) and
 the overnight window (hooks/lib/overnight.py's window_open), so a broken coordinator or
-stop_contract.py leaves this file deciding: CLAUDE_COMMAND_GATE=off allows; an open window, or a
+stop_contract.py leaves this file deciding: CLAUDE_COMMAND_GATE=off allows; a gated latest command,
+the overnight window open or not, while a background child of it runs, as the gate reads it (stop-command-gate.py's
+waiting_for, loaded by path), is a wait: exit 0 naming the failure and the child; else an open window, or a
 gated latest command, blocks naming the failure and /stop; else allow. The coordinator it runs is
 marked (CLAUDE_STOP_LAUNCHER=1), which arms its gate (arming option 1). Stated loss: a
 broken module it loads is the one case it cannot decide; its checks then count as not holding."""
@@ -29,9 +31,9 @@ COORDINATOR_TIMEOUT = 280  # under the registration's 300 s
 RECORDER = HOOKS / "lib" / "refusal_record.py"  # the refusal record's writer, a process of its own (record)
 
 
-def _load(name: str):
+def _load(name: str, path: Path | None = None):
     try:
-        spec = importlib.util.spec_from_file_location(name, HOOKS / "lib" / f"{name}.py")
+        spec = importlib.util.spec_from_file_location(name, path or HOOKS / "lib" / f"{name}.py")
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module  # overnight.py reaches the reader by this name
         spec.loader.exec_module(module)
@@ -58,6 +60,15 @@ def fallback(raw: bytes, reason: str) -> int:
     reader, overnight = _load("command_span"), _load("overnight")
     window = _holds(lambda: overnight.window_open(payload))
     gated = _holds(lambda: reader.active_command(payload.get("transcript_path")) in reader.GATED_COMMANDS)
+    try:  # the gate's own reading of a running background child, window open or not: a wait, as the gate decides it
+        running = _load("stop_command_gate", HOOKS / "stop-command-gate.py").waiting_for(payload) if gated else []
+    except Exception:
+        running = []
+    if running:
+        text = f"COMMAND_GATE instrument failure: {reason}; waiting for {', '.join(running)}, still running; not complete\n"
+        sys.stderr.write(text)
+        sys.stdout.write(json.dumps({"systemMessage": text}) + "\n")
+        return 0
     if window or gated:
         text = f"COMMAND_GATE instrument failure: {reason}. The gate is broken; the human can type /stop\n"
         sys.stderr.write(text)

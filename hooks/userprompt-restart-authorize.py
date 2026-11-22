@@ -229,6 +229,10 @@ def main() -> int:
     invoked, args = split_invocation(payload.get("prompt"))
     session_id = payload.get("session_id")
     transcript_path = payload.get("transcript_path")
+    if not invoked:  # a resumed child's notification or any later prompt: how the recovery stands
+        settled = restart.settle(str(session_id or ""))
+        if settled:
+            print(settled)
     if not invoked and is_stop(payload.get("prompt")):
         return revoke_on_stop(session_id)
     wake = not invoked

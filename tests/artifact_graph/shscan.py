@@ -29,7 +29,18 @@ from .values import Unk, Str, Num, Lst
 ROOT_SHELL_FUNCTIONS = {
     ("hooks/lib/harness_state_dir.sh", "harness_state_dir"): "state",
     ("hooks/lib/claude_home.sh", "claude_home_resolve"): "harness",
+    # Reading of code shape, not of behaviour: the state root's own text is a crc32 in bash arithmetic and a printf
+    # format the evaluator cannot run (it read `<home>/.local/state/claude-harness/lib-%08x`), so its logs/ files
+    # matched no shown path. What it prints is HOME's fixed part and the install's name and crc, as the Python twin
+    # (harness_state_dir.py state_root) reads.
+    ("hooks/lib/harness_state_dir.sh", "harness_state_root"):
+        P.tok("home") + "/.local/state/claude-harness/" + P.tok("*") + "-" + P.tok("*"),
 }
+
+
+def _root_value(root: str) -> V.Val:
+    """A root token by name, or the template a resolver prints (one with a token in it)."""
+    return V.s(root if P.L in root else P.tok(root))
 
 _PREFIX_CMDS = {"command", "builtin", "exec", "nohup", "nice", "sudo", "time", "stdbuf", "setsid", "flock"}
 _DECL = {"local", "declare", "typeset", "export", "readonly"}
@@ -704,13 +715,13 @@ class ShWalk:
             return Unk("assembled:stdout")
         root = self._root_function(name)
         if root:
-            return V.s(P.tok(root))
+            return _root_value(root)
         fr = self.an.find_func(self.f, name)
         if fr is not None:
             g, fd = fr
             root = ROOT_SHELL_FUNCTIONS.get((g.component, name))
             if root:
-                return V.s(P.tok(root))
+                return _root_value(root)
             s = self.an.summary(g, fd)
             b = self._binding(args, n)
             return V.subst_val(s.printed, b) if not isinstance(s.printed, Unk) else s.printed

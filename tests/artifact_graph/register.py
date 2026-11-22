@@ -4,9 +4,15 @@ policies/artifact-check-accepted-reads.v1.json, tracked in the tree under test, 
 look-alike definitions (policies/definition-lookalikes.v1.json). Each entry names a position at which an
 artifact may be read to decide: the artifact (its key in the map) and the hook event and tool of the call,
 and carries a reason, required. A 6-move or 6-recheck violation on that artifact is covered when every
-decision it reports was taken at the entry's event and tool, whichever reader the check names (a merged
+decision it reports was taken at a position an entry on that artifact names, whichever reader the check names (a merged
 gate's change is charged to its refusing rules that read the path) and whichever mutation it measured. Nothing else is coverable: a
 violation of rules 1, 2, 4, 5, 7 or 8 is reported whatever the register holds.
+
+Several entries may cover one violation together, one per position (a read measured at the stops of a dev, a qa
+and a spec: three entries). Why: what the register accepts is a position with its reason, and a violation is
+measured at every position its decisions were taken; requiring one entry to equal all of them made a read at
+several accepted positions uncoverable, though each position carries its own reason. A decision at a
+position no entry names still leaves the violation reported, and each entry is still stale on its own.
 
 The register cannot go stale silently: an entry that covers no current violation is a violation of its own
 (register-stale), as is an entry that does not parse or carries no reason (register-invalid). The check
@@ -47,22 +53,34 @@ def load(tree: str) -> tuple[list[dict], list[str]]:
     return good, problems
 
 
-def covers(e: dict, v) -> bool:
-    return (v.rule in COVERABLE and v.artifact == e["artifact"] and bool(v.at)
-            and all(at == (e["event"], e["tool"]) for at in v.at))
+def covering(entries: list[dict], v) -> list[dict]:
+    """The entries that together cover `v`: one per position of its decisions, each on its artifact; [] when
+    a position (or the rule) has none."""
+    if v.rule not in COVERABLE or not v.at:
+        return []
+    out = []
+    for at in dict.fromkeys(v.at):
+        e = next((e for e in entries if v.artifact == e["artifact"] and at == (e["event"], e["tool"])), None)
+        if e is None:
+            return []
+        out.append(e)
+    return out
 
 
 def apply(vs: list, entries: list[dict], problems: list[str], make) -> tuple[list, list]:
-    """(the violations left, the ones covered as (violation, entry)). `make(rule, artifact, message)` builds a
-    Violation: the register's own problems and its stale entries are added to those left."""
+    """(the violations left, the ones covered as (violation, entry); several entries covering one violation
+    together appear as one entry whose index and reason join theirs). `make(rule, artifact, message)` builds
+    a Violation: the register's own problems and its stale entries are added to those left."""
     left, covered, used = [], [], set()
     for v in vs:
-        e = next((e for e in entries if covers(e, v)), None)
-        if e is None:
+        es = covering(entries, v)
+        if not es:
             left.append(v)
-        else:
-            covered.append((v, e))
-            used.add(e["index"])
+            continue
+        covered.append((v, es[0] if len(es) == 1 else {
+            "artifact": v.artifact, "index": ", ".join(str(e["index"]) for e in es),
+            "reason": " | ".join(e["reason"] for e in es)}))
+        used.update(e["index"] for e in es)
     left += [make("register-invalid", PATH, p) for p in problems]
     left += [make("register-stale", PATH, f"entry {e['index']} ({e['artifact']} at {e['event']} {e['tool']}) "
                   "covers no current violation: remove it")

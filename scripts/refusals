@@ -8,6 +8,8 @@
         listed with the snapshot taken before it ran (the last 20; --json: all). One that another hook
         refused (a refusal record of the same session, event and tool-call id) never ran: it is counted
         apart again, as let through by the removal policy and refused by another hook, and not listed.
+        A background return the harness held and handed over is no refusal either: counted apart and
+        listed with when it was held and for how many seconds (the last 20; --json: all).
     refusals reconcile [--since T] [--until T] [--dir DIR] [--transcripts DIR ...] [--refusals FILE]
         The record against the hook refusals the session transcripts hold for the period, by tool-call
         id; a blocked stop has none and pairs by session, agent and time. Every difference is printed;
@@ -76,7 +78,13 @@ def records(folder: str, since: str, until: str) -> tuple[list, int]:
                     damaged += bool(line.strip())
                 elif since <= record["ts"] < until:
                     key = (record.get("kind"), record.get("session"), record.get("event"), record.get("tool_use_id"))
-                    if key[3] and key in at:
+                    if key[3] and record.get("kind") == R.RELEASED and (R.REFUSAL, *key[1:]) in at:
+                        at[key] = at.pop((R.REFUSAL, *key[1:]))  # a released call is no refusal
+                    held = next((i for i, x in enumerate(out) if R.same(x, record)), None) \
+                        if record.get("kind") == R.HELD else None
+                    if held is not None:  # a held return is no refusal
+                        out[held] = R.merge(out[held], record)
+                    elif key[3] and key in at:
                         out[at[key]] = R.merge(out[at[key]], record)
                     else:
                         at[key] = len(out)
@@ -102,6 +110,8 @@ def _unproven(found: list) -> tuple[list, list]:
 def summary(found: list) -> dict:
     """The counts the owner asked for, most frequent first."""
     refused = [r for r in found if r.get("kind") == R.REFUSAL]
+    released = [r for r in found if r.get("kind") == R.RELEASED]
+    held = [r for r in found if r.get("kind") == R.HELD]
     unproven, elsewhere = _unproven(found)
 
     def count(rows, key) -> list:
@@ -122,6 +132,11 @@ def summary(found: list) -> dict:
         "by_day": sorted(collections.Counter(r["ts"][:10] for r in refused).items()),
         "by_provider": count(refused, lambda r: [r.get("provider") or "unknown"]),
         "unproven_by_rule": count(unproven, _rules),
+        "held": len(held), "held_returns": [{"ts": r["ts"], "seconds": r.get("held_seconds"), "session": r.get("session"),
+                                             "agent": (re.search(r"<task-id>([^<]*)</task-id>", str(r.get("refused")))
+                                                       or [None, None])[1]} for r in held],
+        "released": len(released), "released_calls":[{"ts": r["ts"], "tool": r.get("tool"), "rules": _rules(r),
+                                                       "refused": str(r.get("refused") or "")[:120]} for r in released],
         "unproven_calls": [{"ts": r["ts"], "refused": str(r.get("refused") or "")[:120],
                             "snapshot": next((ln for ln in str(r.get("message") or "").splitlines()
                                               if ln.startswith("snapshot: ")), "snapshot: not recorded")}
@@ -144,6 +159,10 @@ def render(s: dict, since: str, until: str, folder: str, damaged: int) -> str:
     if s["unproven_calls"]:
         lines += ["", f"let through unproven, the last {min(20, len(s['unproven_calls']))} (--json: all), each with its snapshot"]
         lines += [f"  {x['ts']}  {x['refused']!r}\n      {x['snapshot']}" for x in s["unproven_calls"][-20:]]
+    lines += ["", f"background returns held, then handed over (not refusals): {s['held']}"]
+    lines += [f"  {x['ts']}  held {x['seconds']} s  {x['agent']}  in {x['session']}" for x in s["held_returns"][-20:]]
+    lines += ["", f"released by an /allow grant (not refusals): {s['released']}"]
+    lines += [f"  {x['ts']}  {x['tool']}  {'; '.join(x['rules'])}  {x['refused']!r}" for x in s["released_calls"][-20:]]
     repeats = sum(x["times"] for x in s["loops"])
     lines += ["", f"loops (one actor, the identical refusal more than once): {len(s['loops'])}, holding {repeats} refusals"]
     for x in s["loops"]:

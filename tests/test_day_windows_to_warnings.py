@@ -100,19 +100,30 @@ def test_an_older_session_is_listed_apart_with_its_age_and_a_warning(accounts):
 def test_an_older_candidate_nobody_resumed_holds_back_no_finalize_and_one_resumed_does(accounts):
     sid = accounts["sid"]
     view = restart.prepare_state(sid, project_dir=accounts["project"], cross_account=True)
+
+    def respond(agent_id):
+        restart.observe_subagent_stop({"session_id": sid, "agent_id": agent_id,
+                                       "last_assistant_message": "done\nRECOVERY_STATUS: completed"})
+
     for item in view["candidates"]:
         restart.mark_dispatched(sid, item["agent_id"])
-        restart.observe_subagent_stop({"session_id": sid, "agent_id": item["agent_id"],
-                                       "last_assistant_message": "done\nRECOVERY_STATUS: completed"})
-    done = restart.get_status(sid)
-    assert done["complete"] is True and done["incomplete_agent_ids"] == []
-    assert set(restart.completed_resumes(sid)) == {"agent-own", "agent-copy"}
-    older = done["older_candidates"][0]
+    respond("agent-own")
+    # the older candidate nobody resumed is not waited for: only agent-copy is
+    assert restart.get_status(sid)["incomplete_agent_ids"] == ["agent-copy"]
+    older = view["older_candidates"][0]
     assert restart.authorize_send_message(_send(sid, older)) == (True, "validated /restart recovery")
     restart.mark_dispatched(sid, "agent-older")
-    assert restart.get_status(sid)["incomplete_agent_ids"] == ["agent-older"]
+    respond("agent-copy")
+    # the resumed older candidate holds the finalize back (the hooks finalize at the last response)
+    held = restart.get_status(sid)
+    assert held["complete"] is False and held["incomplete_agent_ids"] == ["agent-older"]
+    assert "finalized_at" not in json.loads(restart.state_path(sid).read_text(encoding="utf-8"))
     with pytest.raises(restart.RestartError):
         restart.finalize(sid)
+    respond("agent-older")
+    assert set(restart.completed_resumes(sid)) == {"agent-own", "agent-copy", "agent-older"}
+    assert "finalized_at" in json.loads(restart.state_path(sid).read_text(encoding="utf-8"))
+    assert not restart.grant_path(sid).exists()
 
 
 def test_the_byte_bound_names_what_it_did_not_read(accounts, monkeypatch):

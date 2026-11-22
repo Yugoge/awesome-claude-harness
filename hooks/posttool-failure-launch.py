@@ -17,12 +17,14 @@ try:
     from lib.hook_launch import Rule, main
 except Exception:
     from lib.hook_launch_fallback import Rule, main
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 
 EVENT = "PostToolUseFailure"
 RULES = (
     Rule('orchestrator-ran', 'posttool-orchestrator-ran.py', timeout=10),  # the calls that ran (pretool-orchestrator-gate.py)
     Rule('allowlist-consume', 'posttool-allowlist-consume.py', ('Bash',)),
     Rule('codex-skill-ledger', 'posttool-codex-skill-ledger.py', ('Skill',)),
+    Rule('dispatch-temp', 'lib/dispatch_temp.py', DISPATCH_TOOLS, timeout=10),  # a failed dispatch's temp directory goes
 )
 
 if __name__ == "__main__":

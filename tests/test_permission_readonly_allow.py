@@ -189,7 +189,9 @@ HOME_FORMS = {"git -C ~ log": ("ask", "allow", "allow"), "git -C ~/src log": ("a
 
 # ------------------------------------------------------------------ the model
 def _now() -> dict:
-    return json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+    perms = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+    policy = json.loads((REPO / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"]
+    return dict(perms, deny=perms["deny"] + policy)  # the hook rule's deny list joins the CLI's own
 
 
 def _perms() -> dict:

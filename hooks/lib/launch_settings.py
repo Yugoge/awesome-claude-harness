@@ -17,6 +17,7 @@ import re
 
 DEFAULT_TIMEOUT = 60
 COMMAND = 'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/%s"'
+SHELL_COMMAND = 'bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/%s"'  # a launcher's shell rule (hooks/pretool-launch.py)
 _HOOK = re.compile(r"""/(hooks/[^"'\s]+\.py)""")
 
 
@@ -126,7 +127,7 @@ def expand(settings: dict, root: str) -> dict:
                     kept = []
                 for path, tools, timeout in rules(root, launcher):
                     spelled = spellings(root, launcher).get(path)
-                    hook = {"type": "command", "command": COMMAND % path}
+                    hook = {"type": "command", "command": (SHELL_COMMAND if path.endswith(".sh") else COMMAND) % path}
                     if timeout != DEFAULT_TIMEOUT:
                         hook["timeout"] = timeout
                     group = {"hooks": [hook]}

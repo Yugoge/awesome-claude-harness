@@ -54,7 +54,7 @@ The orchestrator gate also sees each Bash call, with its rate limit that `/do` l
 
 #### Hook chain reference
 
-Note: the privilege guard is the hook that exits 2 on an agent commit or push. The Bash hooks of one event run in parallel (`hooks/pretool-orchestrator-gate.py` says so where it cannot see another hook's verdict), so none sees another's verdict: the diagram above shows what each does, not an order. A `Monitor` call's shell command meets the same Bash hooks: the CLI hands it to `pretool-bash-safety.sh` as a Bash call, and `pretool-monitor-command.py` hands it to the launcher's Bash rules and the write gate (an unreadable command is refused).
+Note: the privilege guard is the hook that exits 2 on an agent commit or push. The Bash hooks of one event run in parallel (`hooks/pretool-orchestrator-gate.py` says so where it cannot see another hook's verdict), so none sees another's verdict: the diagram above shows what each does, not an order. A `Monitor` call's shell command meets the same Bash hooks: `pretool-monitor-command.py` hands it, as a Bash call, to the launcher's Bash rules (`pretool-bash-safety.sh` among them) and the write gate (an unreadable command is refused).
 
 | Hook | Event | Covered operations | Default | Break-glass |
 |---|---|---|---|---|

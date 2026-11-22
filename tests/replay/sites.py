@@ -1044,7 +1044,9 @@ class Enumerator:
 
     def _walk(self, start: str, role: str) -> dict[str, str]:
         """The files one process reaches from `start`: its children, imports, loads and sources. A gate
-        table's own rule files are no load of the gate: _closure follows them as rules."""
+        table's own rule files are no load of the gate: _closure follows them as rules. A file one of the
+        process's files starts as a process is a child even where another of its files imports or loads it
+        (the walk's order aside): its own code runs there as a process of its own."""
         roles = {start: role}
         todo = [start]
         while todo:
@@ -1058,7 +1060,7 @@ class Enumerator:
                 if roles[rel] in ("main", "child", "rule"):
                     self.children[rel] = procs
                     for f in procs:
-                        if f not in roles:
+                        if roles.get(f) in (None, "import"):
                             roles[f] = "child"
                             todo.append(f)
                 nxt = [f for f in m.imported_files() if f.startswith("hooks/")] + [f for f in loads if f not in table]
@@ -1067,7 +1069,7 @@ class Enumerator:
                     procs = m.run_files()
                     self.children[rel] = procs
                     for f in procs:
-                        if f not in roles:
+                        if roles.get(f) in (None, "import"):
                             roles[f] = "child"
                             todo.append(f)
                 nxt = m.sourced()
@@ -1079,9 +1081,12 @@ class Enumerator:
 
     def _closure(self, hook: str) -> dict[str, str]:
         """The hook's files with their role; a refusing rule of a gate table it holds (in its file or a
-        module it imports) runs as the gate's process (role `rule`), with what that rule file reaches."""
-        roles = self._walk(hook, "main")
-        rules = [r for rel in list(roles) if isinstance(self.module(rel), PyModule)
+        module it imports) runs as the gate's process (role `rule`), with what that rule file reaches.
+        An imported module's table counts only where code the hook can call names it (reachable())."""
+        roles = self.roles[hook] = self._walk(hook, "main")
+        held = [rel for rel in roles if isinstance(self.module(rel), PyModule) and self.module(rel).rule_table()]
+        reach = self.reachable(hook) if any(roles[rel] == "import" for rel in held) else set()
+        rules = [r for rel in held if roles[rel] != "import" or self._names_table(hook, rel, reach)
                  for r in self.module(rel).rule_table() if r.relays]
         self.rules[hook] = rules
         own, tools, via = set(roles), {}, {}
@@ -1095,6 +1100,23 @@ class Enumerator:
                     roles[f] = role
         self.tools[hook], self.via[hook] = tools, via
         return roles
+
+    def _names_table(self, hook: str, rel: str, reach: set) -> bool:
+        """Whether code the hook can call names the RULES of `rel`, a module it reaches as an import (by
+        import, or `rel`'s own code outside what its import skips). A file it only runs as a process (a
+        gate its library hands to an interpreter) holds no rule of the hook: the hook relays that exit."""
+        return (rel, "RULES") in reach or self._loads_name(hook, rel, {"RULES"}, reach)
+
+    def _loads_name(self, hook: str, rel: str, names: set, reach: set) -> bool:
+        """Whether a scope of `rel` the hook can call reads one of `names` (module code its import skips aside)."""
+        mod = self.py[rel]
+        for f, name in reach:
+            scope = mod.ast if name == "<module>" else mod.funcs.get(name)
+            if f == rel and scope is not None and any(
+                    isinstance(n, ast.Name) and n.id in names and isinstance(n.ctx, ast.Load)
+                    and _guard(mod, n, self.roles[hook].get(rel) != "import", [hook]) for n in _walk_scope(scope)):
+                return True
+        return False
 
     def _regs(self, hook: str, rel: str) -> list[tuple[str, str, str]]:
         """The registrations (hook, event, matcher) that reach `rel`: the hook's own, narrowed to the

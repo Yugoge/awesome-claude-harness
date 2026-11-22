@@ -40,7 +40,8 @@ NON_DISPLAY_PREFIXES = ("capture-hero-run:",)
 # first one.
 RAIL = ["blocked", "granted", "consumed"]
 
-CONSUMPTION_MARKER = "[ALLOW-SENTINEL] grant CONSUMED for task_id="
+# The pre-tool launcher's release notice: the release spends the grant (hooks/lib/hook_launch.py).
+CONSUMPTION_MARKER = "[allow] RELEASED by the owner's /allow grant ("
 
 # The `granted` transition. This MUST be a string the capture actually emits: the arc
 # enters the granted stage the moment the verifier installs the single-use grant, and

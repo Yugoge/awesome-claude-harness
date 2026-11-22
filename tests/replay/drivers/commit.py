@@ -533,6 +533,8 @@ class CommitRun:
                 cands = self.candidates(sub, repo, report_rel, status_paths)
                 if approved:
                     cands = [p for p in cands if p in (approved.get(root) or [])]
+                if order == 0:
+                    self.places(sub)
                 if dryrun:
                     self.dry_stage(sub, root, cands, order)
                     plan_groups.append({"repo": root, "commit_message": self.subject(), "files": cands})
@@ -616,6 +618,22 @@ class CommitRun:
             return "feat(commands): add the project test command"
         return "fix(toy): add validates its arguments"
 
+    def places(self, sub) -> None:
+        """Rule CP-5's block as the text spells it, before the first Write or lock: its two lines bind
+        <SESSION_ROOT> and <STATE_DIR> (self.bind) wherever the text names them."""
+        self.bind = {}
+        found = [b.text for b in cmdtext.blocks(self.analyst_text, "Command-line purity", "bash")
+                 if "harness_state_dir" in b.text]
+        if found:
+            c = sub.bash(found[0], "Rule CP-5: the session root and the state root", label=f"{sub.role} Bash places")
+            lines = ((c.response.get("stdout") or "") if c.ok else "").split("\n")
+            self.bind = dict(zip(("<SESSION_ROOT>", "<STATE_DIR>"), [l.strip() for l in lines if l.strip()]))
+
+    def placed(self, text: str) -> str:
+        for k, v in getattr(self, "bind", {}).items():
+            text = text.replace(k, v)
+        return text
+
     def dry_stage(self, sub, root: str, cands: list, order: int) -> None:
         """A dry run (Phase 4): in one Bash process the index copied as it is (`cp -p`) to the temporary index
         the text names under the role's scratch, GIT_INDEX_FILE exported to the copy, the candidate set staged
@@ -623,15 +641,16 @@ class CommitRun:
         sec = cmdtext.section(self.analyst_text, "Phase 4: Pre-staged verification")
         if "GIT_INDEX_FILE" not in sec:
             raise cmdtext.TextNotFound("Phase 4 names no temporary index (GIT_INDEX_FILE) for a dry run")
-        m = re.search(r"`(/tmp/claude-scratch/changelog-analyst/)`[^`]*`(dryrun-index-<unique>)`", sec)
+        m = re.search(r"`([^`]*/changelog-analyst/)`[^`]*`(dryrun-index-<unique>)`", sec)
         if not m:
             raise cmdtext.TextNotFound("Phase 4 names no dry-run index copy under the role's scratch")
         q = shlex.quote(root)
         # The path `git rev-parse --path-format=absolute --git-path index` prints in the toy clone, spelled literally.
         idx = os.path.join(root, ".git", "index")
-        copy = m.group(1) + m.group(2).replace("<unique>", f"{self.tid}-{order}")
+        drafts = self.placed(m.group(1))
+        copy = drafts + m.group(2).replace("<unique>", f"{self.tid}-{order}")
         add = "\n".join(f"git -C {q} add -- {shlex.quote(p)}" for p in cands)
-        sub.bash(f"mkdir -p {m.group(1).rstrip('/')}\ncp -p {shlex.quote(idx)} {copy}\n"
+        sub.bash(f"mkdir -p {drafts.rstrip('/')}\ncp -p {shlex.quote(idx)} {copy}\n"
                  f"export GIT_INDEX_FILE={copy}\n{add}\ngit -C {q} diff --cached --stat",
                  "Dry run: stage the candidate set into a temporary copy of the index",
                  label=f"{sub.role} Bash dry-run stage {order}")
@@ -653,13 +672,13 @@ class CommitRun:
         if not tpl:
             raise cmdtext.TextNotFound("Phase 8 names no `MSGFILE=` message path")
         tpl = tpl.group(1)
-        msgfile = (tpl.replace("<TASK_ID-or-bulk>", tid).replace("<short-rand>", rand)
-                   .replace("<unique>", f"{tid}-{rand}"))
+        msgfile = self.placed(tpl.replace("<TASK_ID-or-bulk>", tid).replace("<short-rand>", rand)
+                              .replace("<unique>", f"{tid}-{rand}"))
         stat = sub.bash(f"git -C {q} diff --stat HEAD -- " + " ".join(shlex.quote(p) for p in cands),
                         "Phase 6: the diff stat of the candidate set", label=f"{sub.role} Bash diff stat {order}")
         message = f"{self.subject()}\n\nTask-id: {tid}\n{(stat.response.get('stdout') or '') if stat.ok else ''}"
         sub.write(msgfile, message, label=f"{sub.role} Write MSGFILE {order}")
-        lock = cmdtext.block(self.analyst_text, "Phase 3: Serialization", lang="bash", index=0)
+        lock = self.placed(cmdtext.block(self.analyst_text, "Phase 3: Serialization", lang="bash", index=0))
         commit = next(b.text for b in cmdtext.blocks(self.analyst_text, "Phase 8: Execute commit", "bash")
                       if "commit -F" in b.text)
         reads = next(b.text for b in cmdtext.blocks(self.analyst_text, "Phase 8: Execute commit", "bash")

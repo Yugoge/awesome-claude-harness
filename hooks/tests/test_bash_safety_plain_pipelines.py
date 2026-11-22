@@ -51,7 +51,7 @@ def sandbox(tmp_path_factory):
            "CLAUDE_PYTHON_BIN": sys.executable, "CLAUDE_HOOK_BOUNDARY_TIMEOUT": "120s",
            "CLAUDE_PROTECTED_RUNTIME_FILE": str(runtime)}
     return {"env": env, "repo": str(repo), "session": str(tmp / SID), "other": str(tmp / OTHER_SID),
-            "tmp": str(tmp), "own": str(repo / ".claude" / "scratch" / SID / "dev" / AGENT)}
+            "tmp": str(tmp), "own": str(tmp / SID / "dev" / AGENT)}
 
 
 def run(sandbox, command, caller=None, session_id="bash-safety-plain-pipelines"):
@@ -162,7 +162,7 @@ MUST_REFUSE = [
     # a numbered process
     ("if true; then kill 4242; fi", KILL_PID),
     ("ls | sort; kill 4242", KILL_PID),
-    # the protected process family
+    # a kill by name
     ("pkill -f claude", KILLALL),
     ("if true; then pkill -f claude; fi", KILLALL),
     ("ls | sort; pkill -f claude", KILLALL),

@@ -14,6 +14,11 @@ hooks, fswatch daemon, manual `/checkpoint`) are written to
 advanced by automated snapshots. `git blame` on any line therefore points
 to a real semantic commit. The checkpoint ref stays local unless
 `GIT_AUTO_PUSH` is exactly `1` (the shipped `settings.json` sets `0`).
+A snapshot is of a project at the top of its own repository's working tree: a
+project in a folder below a larger repository, or in no repository, gets none
+(the ref and its recovery are the whole repository's). Each tree scan of a
+snapshot ends after `CHECKPOINT_SCAN_TIMEOUT` seconds (45), with every process
+it started.
 
 ---
 
@@ -82,9 +87,9 @@ that maps there.
 
 ## Log file locations
 
-- `~/.claude/logs/checkpoint.log` — CAS retries, build failures,
+- `~/.local/state/claude-harness/<install>/logs/checkpoint.log` (the state root, `hooks/lib/harness_state_dir.sh`) — CAS retries, build failures,
   empty-repo bootstraps.
-- `~/.claude/logs/checkpoint-push.log` — background push failures. The
+- `~/.local/state/claude-harness/<install>/logs/checkpoint-push.log` — background push failures. The
   push runs only when `GIT_AUTO_PUSH` is exactly `1`, at most once per 30
   seconds per repo, and never uses `-f` (CAS guarantees the ref chain is
   always fast-forward).
@@ -148,7 +153,7 @@ failure, a `cat-file` failure — also **blocks** the push rather than
 allowing it.
 
 On a match, the upload never happens and a distinct `[ALERT]` line is
-appended to `~/.claude/logs/checkpoint-push.log` naming the blocking
+appended to `~/.local/state/claude-harness/<install>/logs/checkpoint-push.log` naming the blocking
 object, e.g.:
 
 ```

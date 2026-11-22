@@ -359,6 +359,17 @@ def _full_start(fixture: dict, prompt: str) -> dict:
     return started
 
 
+def _start_text(item: dict) -> str:
+    """The start's output without the space notice: that one reads this host's volumes and comes once per
+    change of the set of short ones in a session (hooks/userprompt-tmpfs-pressure.sh), not once per start."""
+    kept, in_list = [], False
+    for line in item["aggregate"]["combined_user_visible_output"].splitlines(keepends=True):
+        in_list = in_list and line.startswith(" ") or line.startswith("[space] largest on ")
+        if not (in_list or line.startswith("[space] ")):
+            kept.append(line)
+    return "".join(kept)
+
+
 def _full_progress(fixture: dict, frontier: int) -> tuple[dict, dict]:
     """One TodoWrite as the CLI records it: tool_use, PreToolUse, tool_result, PostToolUse."""
     pre_payload = configured_payload(fixture, "PreToolUse", frontier=frontier)
@@ -511,13 +522,13 @@ def test_r03_fresh_start_first_progress_and_exact_replay_matrix(
 
     start_bytes = _artifact_bytes(fixture)
     immediate = _full_start(fixture, prompt)
-    assert immediate["aggregate"]["combined_user_visible_output"] == started["aggregate"]["combined_user_visible_output"]
+    assert _start_text(immediate) == _start_text(started)
     assert _artifact_bytes(fixture) == start_bytes
     assert _current_identity(fixture) == first_identity
 
     fixture["env"]["CLAUDE_DEV_CLOCK_ISO"] = "2037-03-04T05:07:09Z"
     later = _full_start(fixture, prompt)
-    assert later["aggregate"]["combined_user_visible_output"] == started["aggregate"]["combined_user_visible_output"]
+    assert _start_text(later) == _start_text(started)
     assert _artifact_bytes(fixture) == start_bytes
     assert _current_identity(fixture) == first_identity
 

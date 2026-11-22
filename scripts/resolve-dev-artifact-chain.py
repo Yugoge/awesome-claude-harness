@@ -492,51 +492,15 @@ def _find_undeclared_lane_artifacts(
                 )
 
 
-def _declared_union(canonical: dict[str, Any]) -> list[str]:
-    """Return the canonical dev-report's declared file union, order-preserving.
-
-    Tolerates a malformed canonical: a non-dict ``dev``, a non-list file list,
-    or a non-string entry contributes nothing rather than raising.  ``validate_dev``
-    already reports those shapes under their own error codes.
-    """
-    dev = canonical.get("dev")
-    if not isinstance(dev, dict):
-        return []
-    union: list[str] = []
-    for key in ("files_modified", "files_created"):
-        entries = dev.get(key)
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if isinstance(entry, str) and entry and entry not in union:
-                union.append(entry)
-    return union
-
-
 def _check_declared_paths_exist(
     validator: ChainValidator, canonical: dict[str, Any], result: dict[str, Any]
 ) -> None:
-    """Every path the canonical declares must exist on disk.
-
-    Reached by both the singular and the fan-out branch: a report claiming files
-    it did not produce must not be admitted, whichever way it was assembled.
-    Existence is deliberately the weakest defensible predicate -- a directory or
-    a symlink, including a broken one, counts as present, because the claim under
-    test is "the report named a path that is not there", not "it named a regular
-    file".  Read-only: the resolver never creates the paths it looks for.
-
-    One error per absent path, so the report enumerates every miss rather than
-    aggregating them into a single opaque failure.
+    """Every path the canonical declares exists on disk or was deleted since its
+    baseline (hooks/lib/declared_absence.py, the predicate the lane's own stop
+    applies too), on both the singular and the fan-out branch.  Read-only; one
+    error per absent path, so the report enumerates every miss.
     """
-    missing: list[str] = []
-    for declared in _declared_union(canonical):
-        target = validator.root / declared
-        try:
-            present = target.exists() or target.is_symlink()
-        except OSError:
-            present = False
-        if not present:
-            missing.append(declared)
+    missing = _harness_lib("declared_absence").absent(validator.root, canonical)
     result["checks"]["declared_paths_exist"] = not missing
     for declared in missing:
         validator.error(

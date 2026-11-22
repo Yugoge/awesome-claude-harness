@@ -234,7 +234,7 @@ def run_process(rule: Rule, raw: bytes, timeout: float | None = None) -> Result:
     """The hook as its own process, as the CLI ran it."""
     t0 = time.monotonic()
     try:
-        p = subprocess.run([sys.executable, rule.file], input=raw, capture_output=True,
+        p = subprocess.run(["bash" if rule.path.endswith(".sh") else sys.executable, rule.file], input=raw, capture_output=True,
                            timeout=timeout if timeout is not None else rule.timeout)
         return Result(rule, p.returncode, p.stdout.decode("utf-8", "replace"),
                       p.stderr.decode("utf-8", "replace"), time.monotonic() - t0, "process")
@@ -342,9 +342,12 @@ class Dispatch:
         self.results = done
         code, out, err = combine(self.event, done)
         self.record()
+        released = release_refused(self.event, done, self.raw, code, out, err)
+        if released[0] == code:
+            refused(self.event, done, self.raw, code)
+        code, out, err = released
         _write(self.real[0], out)
         _write(self.real[1], err)
-        refused(self.event, done, self.raw, code)
         from lib.rule_runner import _REAL_OS_EXIT
         _REAL_OS_EXIT(code)
 
@@ -394,6 +397,81 @@ def refused(event: str, results, raw: bytes, code) -> None:
         pass
 
 
+def release_refused(event: str, results, raw: bytes, code, out: str, err: str):
+    """The one place an /allow grant lets a refusal through: a PreToolUse answer that refuses (``code``
+    2), whichever rules refused, goes to lib/allowlist.release; when the session's grant fits the call
+    it is spent and the answer is the other rules' answer with a notice for the owner (systemMessage)
+    and the agent (additionalContext), and the refusal record holds the call as released. Any other
+    answer (another event, no refusal, no grant, a fault) is returned as it came."""
+    if event != "PreToolUse" or code != 2:
+        return code, out, err
+    try:
+        from . import allowlist
+        payload = json.loads(raw)
+        grant = allowlist.release(payload)
+        if grant is None:
+            return code, out, err
+        refusing = [(r, alone[2]) for r in results for alone in [combine(event, [r])] if alone[0] == 2]
+        c2, o2, e2 = combine(event, [r for r in results if not any(r is x for x, _ in refusing)])
+        merged = _json(o2) or {}
+        said = next((ln.strip() for _, t in refusing for ln in t.splitlines() if ln.strip()), "")
+        notice = (f"[allow] RELEASED by the owner's /allow grant ({allowlist.describe(grant['scope'])}): the "
+                  f"{payload.get('tool_name')} call refused by {', '.join(r.rule.path for r, _ in refusing)}"
+                  f"{' (' + said[:200] + ')' if said else ''}. The grant is spent: the next refused call is refused."
+                  f"{snapshot_before_clean(payload)}")
+        hso = merged.get("hookSpecificOutput") if isinstance(merged.get("hookSpecificOutput"), dict) else {}
+        hso = {**hso, "hookEventName": event,
+               "additionalContext": "\n".join(t for t in (hso.get("additionalContext"), notice) if t)}
+        merged["hookSpecificOutput"] = hso
+        merged["systemMessage"] = "\n".join(t for t in (merged.get("systemMessage"), e2.rstrip("\n") if c2 == 1 else "",
+                                                       notice) if t)
+        try:
+            from . import refusal_record
+            refusal_record.report(raw, [(r.rule.file, t) for r, t in refusing],
+                                  os.path.join(HOOKS, os.path.basename(sys.argv[0])), kind=refusal_record.RELEASED)
+        except Exception:
+            pass
+        return 0, json.dumps(merged) + "\n", e2 if c2 != 1 else ""
+    except Exception:  # noqa: BLE001 - a fault releases nothing
+        return code, out, err
+
+
+def snapshot_before_clean(payload) -> str:
+    """The pre-clean snapshot /do's release takes (hooks/pretool-bash-safety.sh _preclean_snapshot_guard), taken
+    for a released call too: a command lib/git_clean_guard reads as a destructive `git clean` of the call's working
+    directory gets lib/checkpoint-core.sh write_checkpoint there before it runs. Returns the notice's sentence on it
+    ("" for no clean). A snapshot that cannot be taken does not take the release back: the sentence says why."""
+    from . import allowlist
+    ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    command = ti.get("command")
+    if payload.get("tool_name") not in allowlist.COMMAND_TOOLS or not isinstance(command, str):
+        return ""
+    try:
+        from . import git_clean_guard
+        verdict, reason = git_clean_guard.decide(command)
+    except Exception as exc:  # noqa: BLE001 - unclassifiable: no snapshot, said
+        verdict, reason = "DENY", f"the pre-clean guard could not classify the command ({type(exc).__name__})"
+    if verdict == "NONE":
+        return ""
+    if verdict != "SNAPSHOT":
+        return f" No pre-clean snapshot was taken: {reason}."
+    cwd = payload.get("cwd")
+    script = ('. "$1" || exit 90; mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null; write_checkpoint "" "$2"; rc=$?; '
+              '[ -z "$checkpoint_left_out" ] || rc="3 (it left out $checkpoint_left_out)"; printf "%s\\n%s\\n" "$rc" '
+              '"$checkpoint_ref"')
+    try:
+        p = subprocess.run(["bash", "-c", script, "snapshot", os.path.join(HOOKS, "lib", "checkpoint-core.sh"),
+                            f"pre-clean WIP snapshot before granted: {command}"], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, cwd=cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None)
+        rc, ref = (p.stdout.split("\n") + ["", ""])[:2]
+    except (OSError, ValueError) as exc:
+        rc, ref, p = f"none: {exc}", "", None
+    if rc == "0" and ref:
+        return f" Untracked work was snapshotted to {ref} before the clean; recover with 'git show {ref}:<path>'."
+    return (f" The pre-clean snapshot FAILED (write_checkpoint rc={rc or (p and p.returncode)}; see the checkpoint log): "
+            "untracked work the clean removes may be unrecoverable.")
+
+
 def record_fd():
     """The descriptor the replay runner asked the results on, taken out of the environment."""
     value = os.environ.pop(RECORD_ENV, "")
@@ -421,7 +499,11 @@ def main(event: str, rules, raw: bytes | None = None) -> int:
         from lib import hook_launch_fallback
         code, out, err = hook_launch_fallback.minimal(d.results)
     d.record()
+    released = release_refused(event, d.results, raw, code, out, err)
+    if released[0] != code:
+        code, out, err = released
+    else:
+        refused(event, d.results, raw, code)
     _write(1, out)
     _write(2, err)
-    refused(event, d.results, raw, code)
     return code

@@ -23,21 +23,21 @@ NC='\033[0m'
 NOTICE="$(bash "$(dirname "${BASH_SOURCE[0]}")/../scripts/install/land" 2>/dev/null)" || NOTICE=""
 notice() { [ -z "$NOTICE" ] || printf '{"systemMessage": "%s"}\n' "$NOTICE"; }
 
-# Check if this is a git repository
-if ! git rev-parse --git-dir > /dev/null 2>&1; then
-  echo -e "${YELLOW}⚠️  Not a git repository. Skipping checkpoint.${NC}"
-  notice; exit 0
-fi
-
-# Fast exit if nothing changed (keeps Stop hook chatter minimal)
-if [[ -z "$(git status --porcelain)" ]]; then
-  echo -e "${GREEN}✅ No changes to checkpoint.${NC}"
-  notice; exit 0
-fi
-
 # Source and delegate to the shared library
 # shellcheck source=lib/checkpoint-core.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
+
+# The project is snapshotted only at the top of its own repository, never a larger one's
+if ! checkpoint_project_top; then
+  echo -e "${YELLOW}⚠️  Not a git repository (or not the top of its repository). Skipping checkpoint.${NC}"
+  notice; exit 0
+fi
+
+# Fast exit if nothing changed (keeps Stop hook chatter minimal); a scan past its bound goes on to the snapshot
+if STATUS=$(checkpoint_scan status --porcelain) && [[ -z "$STATUS" ]]; then
+  echo -e "${GREEN}✅ No changes to checkpoint.${NC}"
+  notice; exit 0
+fi
 
 SANITIZED=$(git branch --show-current 2>/dev/null | tr '/' '-')  # the ref as write_checkpoint names it
 REF="refs/checkpoints/${SANITIZED:-detached-$(git rev-parse --short HEAD 2>/dev/null || echo empty)}"
@@ -54,7 +54,7 @@ if write_checkpoint "" "stop hook: auto-commit.sh"; then
     echo -e "${GREEN}   Tip: $(git rev-parse --short "$TIP")${NC}"
   fi
 elif [ "$?" -ne 3 ]; then  # 3: refused, nothing written: the notice below (systemMessage), never a Stop block
-  echo -e "${RED}❌ Checkpoint failed. See ~/.claude/logs/checkpoint.log${NC}"
+  echo -e "${RED}❌ Checkpoint failed. See ${CHECKPOINT_LOG_FILE}${NC}"
   exit 1
 fi
 [ -z "$checkpoint_notice" ] || NOTICE="${checkpoint_notice}${NOTICE:+; $NOTICE}"  # refused or a file left out

@@ -47,7 +47,7 @@ The Stop gate (`hooks/stop-command-gate.py`) exits 2 until the report validates 
 
 **`TASK_ID`** is the id in the hook's `[/do] task-id minted: <id>` line. The hook is the only mint: never mint one, and never take the newest `claude-orchestrator-consent-*.flag` in the state dir (two concurrent `/do` sessions would alias onto one id and overwrite each other's do-reports). To read it back for the current session (after a compaction):
 1. `SID = $CLAUDE_CODE_SESSION_ID` (fallback `$CLAUDE_SESSION_ID`).
-2. Read `task_id` from the session-keyed sidecar `claude-do-task-$SID.json` in the state dir (`$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`: `. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"; harness_state_dir`), the path the minted line printed.
+2. Read `task_id` from the session-keyed sidecar `claude-do-task-$SID.json` in the state dir (`. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"; harness_state_dir`), the path the minted line printed.
 
 Use this `TASK_ID` for the do-report filename and every downstream `/close <TASK_ID>` and `/commit <TASK_ID>`.
 

@@ -52,7 +52,7 @@ echo "📝 Writing checkpoint to refs/checkpoints/<branch>..."
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/checkpoint-core.sh"
 
 if ! write_checkpoint "" "manual: /checkpoint" "$SUMMARY"; then
-  echo -e "${RED}❌ Failed to create checkpoint. See ~/.claude/logs/checkpoint.log${NC}"
+  echo -e "${RED}❌ Failed to create checkpoint. See ${CHECKPOINT_LOG_FILE}${NC}"
   exit 1
 fi
 [ -z "$checkpoint_notice" ] || echo "⚠️  $checkpoint_notice"
@@ -82,7 +82,7 @@ echo ""
   || harness_auto_push() { return 1; }  # the lib's push decides the same way (no reader, no push)
 if harness_auto_push .; then
   echo -e "${YELLOW}ℹ${NC}  Background push of ${REF} is rate-limited (1/30s)."
-  echo "   See ~/.claude/logs/checkpoint-push.log for push errors."
+  echo "   See ${CHECKPOINT_PUSH_LOG_FILE} for push errors."
 else
   echo -e "${YELLOW}ℹ${NC}  ${REF} is local only: automatic push is off for this repository (enable with git config harness.autoPush true, or export GIT_AUTO_PUSH=1)."
 fi

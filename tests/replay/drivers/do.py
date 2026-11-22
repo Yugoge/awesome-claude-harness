@@ -119,6 +119,7 @@ class DoTurn:
     # ------------------------------------------------------------ steps
     def start(self) -> None:
         o = self.o
+        # OLDER_TEXT: ""blocked"" -- a Step 5 from before P5 named a blocked terminal; variant=blocked plays only that text
         if self.status == "blocked" and '"blocked"' not in o.section("Step 5"):
             raise cmdtext.TextNotFound("this /do text's Step 5 names one terminal, do.status completed: "
                                        "a compliant /do cannot end blocked (variant=blocked plays a text from before P5)")

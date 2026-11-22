@@ -1243,3 +1243,59 @@ def test_a_gate_rule_whose_read_is_holes_alone_stands_for_nothing_a_rule_names(t
     alone = [r for r in holes if r.get("component") != "hooks/rec-guard.py" or r["kind"] != "deciding"]
     assert measured(alone) == {"hooks/any-guard.py"}
     assert C._holes_only("<*>") and C._holes_only("<proj>/<*>") and not C._holes_only("<proj>/docs/x-<ts>.json")
+
+
+def test_a_gate_rule_that_only_routes_on_a_file_is_no_decider_of_the_gates_block(tmp_path):
+    """A change of a merged gate's decision on a file is the answer of a refusing rule whose own deciding
+    read on it can refuse (exit 2, a block, a non-zero exit, a raise). A rule whose every deciding read on
+    it only routes (on a missing file it moves on) cannot give that block and does not stand for it, so it
+    is no second decider. Two rules that can both refuse on it are still two deciders (rule (4)); and
+    with no rule able to refuse, every deciding rule still stands for the change."""
+    settings = _registered(("PostToolUse", "Bash", "hooks/rec-writer.py"),
+                           ("PreToolUse", "*", "hooks/write-gate.py"))
+    root = make_tree(tmp_path, {
+        "hooks/lib/gates.py": GATE_LIB,
+        "hooks/write-gate.py": GATE_HEAD + (
+            'RULES = [\n'
+            '    Rule("route", str(HOOKS / "route-guard.py")),\n'
+            '    Rule("rec", str(HOOKS / "rec-guard.py")),\n'
+            ']\n'),
+        "hooks/rec-writer.py": hook('open(harness_state_dir() + "/claude-rec.json", "w").write("{}")\n'),
+        "hooks/route-guard.py": REC_GUARD,
+        "hooks/rec-guard.py": REC_GUARD,
+    }, settings)
+    st = derive(root)
+    key = "<state>/claude-rec.json"
+    assert [r for r in st.records if r["kind"] == "deciding" and r.get("component") == "hooks/route-guard.py"
+            and C._refuses(r)]
+
+    def measured(records):
+        st.records[:] = records
+        run = C.Run("fake", "shipped", "")
+        run.env = {"CLAUDE_STATE_DIR": "/sbx/state"}
+        run.events = [{"comp": "hooks/write-gate.py", "origin": "hooks/write-gate.py", "actor": "main", "op": "read",
+                       "pattern": key, "event": 1, "bulk": False, "raw": "/sbx/state/claude-rec.json"}]
+        run.invocations = {1: {"seq": 1, "event": "PreToolUse", "label": "Ask", "payload": {"tool_name": "Ask"}}}
+        run.differential = {"units": [{"seq": 1, "event": "PreToolUse", "label": "Ask", "tool": "Ask",
+                                       "origin": "hooks/write-gate.py", "kind": "hook", "reproduced": True,
+                                       "runs": [{"pattern": key, "raw": "/sbx/state/claude-rec.json",
+                                                 "readers": ["hooks/write-gate.py"], "changed": True, "how": "removed"}]}]}
+        m = C.derive(str(root), st, [run])
+        vs = C.violations(m, st.records)
+        return {d.who for d in m.artifacts[key].decisions if d.source == "differential"}, rules_on(vs, key)
+
+    def routes(records, comps):
+        return [dict(r, decision="route", code=None) if r["kind"] == "deciding" and r.get("component") in comps
+                else r for r in records]
+
+    both = list(st.records)
+    # both rules can refuse on the file: two deciders with rules of their own, reported (rule (4))
+    who, rules = measured(both)
+    assert who == {"hooks/route-guard.py", "hooks/rec-guard.py"} and "4-one-rule" in rules
+    # one rule only routes on it: the gate's block is the other's alone, and no rule (4) line
+    who, rules = measured(routes(both, {"hooks/route-guard.py"}))
+    assert who == {"hooks/rec-guard.py"} and "4-one-rule" not in rules
+    # neither can refuse on it: both still stand for the gate's change, as before
+    who, _rules = measured(routes(both, {"hooks/route-guard.py", "hooks/rec-guard.py"}))
+    assert who == {"hooks/route-guard.py", "hooks/rec-guard.py"}
+    assert C._refuses({"decision": "exit", "code": 1}) and not C._refuses({"decision": "exit", "code": 0})

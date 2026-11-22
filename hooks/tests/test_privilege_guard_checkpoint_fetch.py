@@ -215,9 +215,5 @@ def test_the_refusal_names_a_destination_that_passes(box):
     assert "refs/remotes/" in proc.stderr, proc.stderr
 
 
-@pytest.mark.parametrize("who", sorted(AGENTS))
-def test_an_allow_grant_lifts_the_refusal_once(box, who):
-    box.grant("fetch")
-    command = "git fetch origin master:refs/checkpoints/master"
-    proc = box.run(command, **AGENTS[who])
-    assert proc.returncode == 0, proc.stderr
+# Retired: test_an_allow_grant_lifts_the_refusal_once. The guard reads no /allow grant; the
+# owner's /allow releases the refused call in the launcher (test_allow_releases_anything.py).

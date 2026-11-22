@@ -1,8 +1,8 @@
 """The register of accepted deciding reads (tests/artifact_graph/register.py).
 
 A rule (6) violation on an entry's artifact whose decisions were all taken at its event and tool (whichever
-reader and mutation) is not reported and is
-counted as covered; an entry needs a reason; an entry that covers no current violation fails the check
+reader and mutation), or at the positions of several entries together, one per position, is not reported
+and is counted as covered; an entry needs a reason; an entry that covers no current violation fails the check
 as stale; no other rule can be covered. The tree's own register (policies/) loads, every entry with a
 reason, and the mutation tests (test_mutations.py) run the check with it present.
 """
@@ -91,3 +91,34 @@ def test_an_entry_covers_every_reader_and_mutation_at_its_position():
     mixed = C.Violation("6-move", FLAG, "x", reader="hooks/a.py", how="removed",
                         at=(("SessionStart", "startup"), ("Stop", "")))
     assert R.apply([mixed], [dict(entry(), index=0)], [], C.Violation)[0][0] is mixed  # a decision elsewhere too
+
+
+AT3 = (("SubagentStop", "dev"), ("SubagentStop", "qa"), ("SubagentStop", "spec"))
+
+
+def _stops(*tools, artifact=FLAG):
+    return [dict(entry(event="SubagentStop", tool=t, artifact=artifact), index=i) for i, t in enumerate(tools)]
+
+
+def test_entries_one_per_position_cover_a_read_measured_at_several_together():
+    v = C.Violation("6-recheck", FLAG, "x", reader="hooks/a.py", how="invalid", at=AT3)
+    left, covered = R.apply([v], _stops("dev", "qa", "spec"), [], C.Violation)
+    assert not left and len(covered) == 1 and covered[0][0] is v
+    assert covered[0][1]["index"] == "0, 1, 2" and covered[0][1]["reason"].count("|") == 2
+
+
+@pytest.mark.parametrize("tools", [("dev", "qa"), ("dev", "qa", "resume")])
+def test_a_position_no_entry_names_leaves_the_read_reported(tools):
+    v = C.Violation("6-recheck", FLAG, "x", reader="hooks/a.py", how="invalid", at=AT3)
+    left, covered = R.apply([v], _stops(*tools), [], C.Violation)
+    assert not covered and left[0] is v
+    assert sum(x.rule == "register-stale" for x in left) == len(tools)  # each entry stale on its own
+
+
+def test_an_entry_beside_a_joint_cover_is_still_stale_alone():
+    v = C.Violation("6-recheck", FLAG, "x", reader="hooks/a.py", how="invalid", at=AT3)
+    entries = _stops("dev", "qa", "spec", "resume") + [dict(entry(event="SubagentStop", tool="qa",
+                                                                  artifact="<state>/claude-other.flag"), index=4)]
+    left, covered = R.apply([v], entries, [], C.Violation)
+    assert len(covered) == 1
+    assert sorted(x.message.split(" (")[0] for x in left if x.rule == "register-stale") == ["entry 3", "entry 4"]

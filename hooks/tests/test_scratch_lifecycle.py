@@ -286,6 +286,20 @@ class TmpfilesAgeByTests(unittest.TestCase):
         self.assertFalse(orphan.exists(), "orphan dir must be reaped by the age floor")
         self.assertTrue(live.exists(), "live-owner dir must survive")
 
+    def test_no_single_file_inside_a_session_root_is_aged(self):
+        scratch = self.root / "var" / "tmp" / "claude-scratch"
+        session = scratch / "0a1b2c3d-0000-4000-8000-000000000001"
+        _write_owner(session, session.name)
+        (session / "qa" / "a1f").mkdir(parents=True)
+        (session / "qa" / "a1f" / "notes").write_text("fresh")
+        old = [session / "qa" / "draft.md", session / "top.txt"]
+        for path in old:
+            path.write_text("old")
+            os.utime(path, (time.time(), time.time() - 4 * 86400))
+        result = self._clean(CLAUDE_SCRATCH_CONF)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(p.exists() for p in old), "the age rule of tmp-cleanup-install.sh judges whole dirs")
+
     def test_ac9_var_tmp_bound_and_nested_scratch_rule_coexist(self):
         var_tmp = self.root / "var" / "tmp"
         scratch = var_tmp / "claude-scratch"

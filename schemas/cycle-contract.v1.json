@@ -48,7 +48,7 @@
           "step": {
             "type": "string",
             "minLength": 1,
-            "description": "The canonical todo step label (e.g. '8', '11g', '20')."
+            "description": "The canonical todo step label (e.g. '8', '11', '20')."
           },
           "role": {
             "type": "string",

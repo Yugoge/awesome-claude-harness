@@ -4,8 +4,9 @@ PreToolUse Hook: Orchestrator Gate (Unified)
 
 Three-tier policy for the main agent:
   1. ALWAYS_ALLOWED whitelist tools pass, but Bash is capped at 5 calls
-     (6th blocked) until an Agent dispatch or the next prompt resets the
-     count; other tools between the Bash calls do not. A Bash command that
+     (6th blocked) until a foreground Agent dispatch or the next human prompt
+     resets the count; other tools between the Bash calls, a background launch
+     and a task-notification wake do not. A Bash command that
      lib/bash_read_only proves read-only (OB-L03) passes uncounted. The built-in
      read-only tools of READ_ONLY_ALLOWED (LSP, TaskOutput/BashOutput,
      ReadMcpResourceTool, ListMcpResourcesTool) pass too and are not
@@ -16,13 +17,17 @@ Three-tier policy for the main agent:
      Bash-matcher hooks on Monitor's command; the version is the one the
      CLI writes on the session's latest transcript record, and a session
      whose version cannot be read is refused (fail closed). /do does not
-     lift that refusal; an /allow grant naming Monitor passes one call.
+     lift that refusal; the owner's /allow releases one refused call
+     (lib/hook_launch.release_refused).
   2. Non-whitelist tools are allowed once TOTAL per tool name per turn
      (2nd same-name call blocked regardless of intervening tool calls).
      A Write, Edit, MultiEdit or NotebookEdit of a file inside the session's
      own scratch directory (the harness's <TMPDIR>/<sid> or the CLI's
      scratchpad; scratch_write) passes uncounted (OB-L04); any other file,
      a gate-read artifact or harness state file included, counts.
+     A SendMessage to one of the session's own subagents is a dispatch and,
+     as a background launch, passes uncounted and resets nothing
+     (own_subagent_send); any other send counts.
      Inside the session's open /dev-overnight window (lib/overnight
      window_open) an Agent dispatch also resets these counts: the unattended
      session is one turn, so there the turn's budget is the one between two
@@ -33,8 +38,8 @@ Three-tier policy for the main agent:
      included: the calls of one message pass PreToolUse together, so a
      dispatch in the same message would otherwise refill the budget.
   3. PERMANENTLY_BLOCKED (EnterPlanMode, ExitPlanMode) are blocked even
-     with /do consent; an /allow grant naming the tool is the one way
-     through. One exception (OB-L45): ExitPlanMode passes, uncounted, while
+     with /do consent; the owner's /allow, which releases the next refused
+     call, is the one way through. One exception (OB-L45): ExitPlanMode passes, uncounted, while
      the payload's own top-level permission_mode, which the CLI sets and the
      model cannot, is exactly "plan" (user_plan_mode): the user put the session
      in plan mode, and ExitPlanMode is how the plan is put to them. It passes
@@ -42,17 +47,19 @@ Three-tier policy for the main agent:
      user answers each call. tool_input never counts as plan mode.
 
 bash_consecutive is a Bash-ONLY accumulator: only a Bash or Monitor call
-(BASH_CAPPED) increments it. An Agent (subagent) dispatch resets it to
+(BASH_CAPPED) increments it. A foreground Agent (subagent) dispatch (run_in_background
+false; a background launch returns at once and resets nothing) resets it to
 {"last_tool": "Agent", "count": 0} (and, inside an open overnight window,
 empties per_tool_counts but the retrieval tools' entries), and
 hooks/prompt-workflow.py removes the whole
-state file (per_tool_counts too) at each prompt. Every other tool
+state file (per_tool_counts too) at each prompt but a task-notification wake. Every other tool
 (Read, TodoWrite, Glob, Grep, and any non-whitelist tool) leaves
 bash_consecutive byte-unchanged — interleaving a non-Agent tool between
 Bash calls does NOT launder the streak. The Agent-clear lives in main()
-and fires on the PreToolUse Agent attempt BEFORE the /allow and /do
-short-circuits, so a subagent dispatch resets the streak even under
-consent/grant.
+and fires on the PreToolUse Agent attempt BEFORE the /do short-circuit, so a
+foreground subagent dispatch resets the streak even under consent. An /allow
+grant is not read here: the launcher releases a refused call after all
+pre-tool verdicts are in (lib/hook_launch.release_refused).
 
 Subagents (lib.subagent.is_subagent_context) are fully exempt and do NOT
 update the streak state.
@@ -67,7 +74,7 @@ origin/master's (2acc29b's) wording; the rule and the counts are the same.
 
 A counted call that did not run gives its slot back (OB-L02). The gate
 counts at PreToolUse, before the verdicts of the other hooks (the launcher's
-other rules, pretool-bash-safety.sh in its own process) are known, so each
+other rules, pretool-bash-safety.sh among them) are known, so each
 counted call is kept in "reserved" by the tool_use_id the CLI sets, and every
 later counted call first settles them: a call that ran is in the log
 hooks/posttool-orchestrator-ran.py appends on the CLI's PostToolUse or
@@ -105,7 +112,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.subagent import DISPATCH_TOOLS, is_subagent_context  # noqa: E402
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
 from lib.allowlist import (  # noqa: E402
-    has_do_consent, match_sentinel_grant_for_tool, read_tool_ran, tool_streak_path, write_tool_streak)
+    has_do_consent, read_tool_ran, state_entry_failure, tool_streak_path,
+    write_tool_streak)
+# Tools that share Bash's cap and counter (bash_consecutive): each runs an arbitrary shell command.
+from lib.allowlist import COMMAND_TOOLS as BASH_CAPPED  # noqa: E402
 
 ALWAYS_ALLOWED = {
     "Agent",
@@ -151,9 +161,6 @@ RETRIEVAL_TOOLS = frozenset({
     "mcp__plugin_context7_context7__get-library-docs",
     "mcp__plugin_context7_context7__query-docs",
 })
-
-# Tools that share Bash's cap and counter (bash_consecutive): each runs an arbitrary shell command.
-BASH_CAPPED = {"Bash", "Monitor"}
 
 # Before this CLI version, "hooks matching Bash [were] not running on shell commands started by the
 # Monitor tool" (CLI changelog 2.1.314); from it on, a Bash-matcher hook gets each Monitor command as a
@@ -223,12 +230,15 @@ def _parse_streak_state(data) -> dict:
 
 
 def read_streak_state(state_file: Path) -> dict:
+    """The record, or a fresh count when there is none. A record that cannot be
+    read, or is empty or not JSON (what a failed write leaves), raises OSError;
+    a JSON one of another shape is a fresh count."""
     try:
-        if state_file.exists():
-            return _parse_streak_state(json.loads(state_file.read_text()))
-    except (ValueError, OSError, json.JSONDecodeError):
-        pass
-    return _fresh_state()
+        return _parse_streak_state(json.loads(state_file.read_text()))
+    except FileNotFoundError:
+        return _fresh_state()
+    except ValueError:
+        raise OSError("it is empty or not JSON") from None
 
 
 # How much of the transcript's end settle() reads: a reserved call is of this
@@ -331,10 +341,9 @@ def update_streak(session_id: str, tool_name: str, data: dict | None = None) -> 
         return 1  # never blocked, never counted; no state write (NB2 no-clobber)
 
     data = data if isinstance(data, dict) else {}
-    state = read_streak_state(tool_streak_path(session_id))
-
     if tool_name in ALWAYS_ALLOWED:
         if tool_name in BASH_CAPPED:
+            state = read_streak_state(tool_streak_path(session_id))
             settle(state, session_id, data.get("transcript_path"))
             bash = state["bash_consecutive"]
             if bash["last_tool"] == "Bash":
@@ -364,6 +373,7 @@ def update_streak(session_id: str, tool_name: str, data: dict | None = None) -> 
         # leave bash_consecutive byte-identical (the unchanged value read from
         # disk) — do NOT reset or rebuild it. Persist ONLY the per_tool_counts
         # increment.
+        state = read_streak_state(tool_streak_path(session_id))
         settle(state, session_id, data.get("transcript_path"))
         counts = state["per_tool_counts"]
         counts[tool_name] = counts.get(tool_name, 0) + 1
@@ -508,6 +518,16 @@ def scratch_write(tool_name: str, data: dict) -> bool:
         return stat.S_ISREG(st.st_mode) and st.st_nlink == 1
     except Exception:
         return False
+
+
+def own_subagent_send(data: dict) -> bool:
+    """The send's `to` names one of this session's own subagents, by agent id or name, as
+    lib/send_policy.children (the definition its decide() reads) holds them."""
+    from lib.send_policy import children
+    to = (data.get("tool_input") or {}).get("to")
+    kids, names = children(data.get("transcript_path"))
+    key = to.split(" [", 1)[0] if isinstance(to, str) else ""
+    return key in kids or key in names
 
 
 def overnight_window_open(data: dict) -> bool:
@@ -676,15 +696,17 @@ def main():
     # /restart exception: multiple SendMessage calls are required to resume ALL
     # interrupted children, so the normal once-per-tool-per-turn budget cannot be
     # used. The shared verifier binds the session capability, parent
-    # transcript, target agent id, prepared state, and exact fixed message. Any
-    # failure falls through to the ordinary non-whitelist budget; the independent
-    # background-task hook then denies the unauthorized send.
+    # transcript, target agent id, prepared state, and exact fixed message (it
+    # also admits a --cross-account candidate, which is no own subagent).
+    # A send to an own subagent is a dispatch (lib/send_policy rule 2) and counts as one: no slot. The
+    # resumed child runs in the background, and a background launch resets nothing, so neither does it.
+    # Any other send takes the ordinary budget of one per turn.
     if tool_name == "SendMessage":
         try:
             from lib.subagent_restart import authorize_send_message
 
             restart_ok, _restart_reason = authorize_send_message(data)
-            if restart_ok:
+            if restart_ok or own_subagent_send(data):
                 sys.exit(0)
         except Exception:
             pass
@@ -707,6 +729,9 @@ def main():
     # The retrieval tools' counts are kept even there: the calls of one
     # message all pass PreToolUse together, so a dispatch in the same message
     # would refill their budget before any of them ran.
+    # A background launch returns at once, so it resets nothing (the owner's decision of 2026-11-21).
+    if tool_name in DISPATCH_TOOLS and (data.get("tool_input") or {}).get("run_in_background") is not False:
+        sys.exit(0)
     if tool_name in DISPATCH_TOOLS:
         try:
             state = read_streak_state(tool_streak_path(sid))
@@ -723,17 +748,9 @@ def main():
             pass
         sys.exit(0)
 
-    # /allow bypass: explicit user grant for a specific tool (checked BEFORE
-    # PERMANENTLY_BLOCKED — intentional asymmetry: /allow is a true break-glass
-    # that the local user explicitly granted; /do bypasses only streak limits
-    # and fires AFTER perm-blocked, so /do cannot rescue perm-blocked tools).
-    # Note: /allow CAN rescue even perm-blocked tools (e.g., EnterPlanMode) if
-    # the user explicitly /allow-ed that tool name. This is by design.
-    try:
-        if match_sentinel_grant_for_tool(sid, tool_name) is not None:
-            sys.exit(0)
-    except Exception:
-        pass
+    # An /allow grant releases any refusal of this gate, perm-blocked tools included,
+    # where the pre-tool verdicts meet (lib/hook_launch.release_refused); /do bypasses
+    # only streak limits and fires AFTER perm-blocked.
 
     if tool_name in PERMANENTLY_BLOCKED:
         # OB-L45: the user switched the session into plan mode (the CLI's own
@@ -790,7 +807,15 @@ def main():
     if tool_name == "Bash" and read_only_bash(data):
         sys.exit(0)
 
-    count = update_streak(sid, tool_name, data)
+    try:
+        count = update_streak(sid, tool_name, data)
+    except OSError as e:  # the record cannot be read or written (read_streak_state, write_tool_streak)
+        sys.stderr.write(
+            f"[Orchestrator Gate] BLOCKED: {tool_name} is a counted call and the call-limit record cannot be "
+            f"used: {state_entry_failure(tool_streak_path(sid), e)}.\nThe call limits cannot be enforced until "
+            f"that is repaired (free space on that volume or make that directory writable; an empty or damaged "
+            f"record goes at the next prompt), so every counted call is refused until then.\n")
+        sys.exit(2)
     enforce_streak_limit(tool_name, count, data)
     sys.exit(0)
 

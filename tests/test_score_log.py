@@ -432,13 +432,15 @@ def test_the_scored_identity_is_the_role_except_for_the_close_pipelines_qa(role,
     assert score_log.identity(role, pipeline) == expected
 
 
-def test_log_path_follows_the_config_directory_variable_and_creates_nothing(tmp_path: Path, monkeypatch) -> None:
+def test_log_path_is_under_the_state_root_whatever_the_config_directory_and_creates_nothing(
+        tmp_path: Path, monkeypatch) -> None:
+    import harness_state_dir
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
-    assert score_log.log_path() == tmp_path / "config" / "logs" / "lifecycle.jsonl"
-    home_log = tmp_path / "home" / ".claude" / "logs" / "lifecycle.jsonl"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "")  # empty and unset both fall back to ~/.claude
-    assert score_log.log_path() == home_log
+    home_log = Path(harness_state_dir.state_root(), "logs", "lifecycle.jsonl")
+    assert home_log.is_relative_to(tmp_path / "home" / ".local" / "state" / "claude-harness")
+    for value in (str(tmp_path / "config"), ""):  # one log per install, whichever account runs
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", value)
+        assert score_log.log_path() == home_log
     monkeypatch.delenv("CLAUDE_CONFIG_DIR")
     assert score_log.log_path() == home_log
     assert list(tmp_path.iterdir()) == []
