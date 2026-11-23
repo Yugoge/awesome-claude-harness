@@ -33,12 +33,14 @@ Evidence asymmetry, stated plainly because it bounds what this module
 proves. The two sides do not have equal strength, and the mint side is the
 weaker one BY CONSTRUCTION, not by oversight:
 
-  * The dispatch-snapshot manifest (`claude-commit-manifest-<sid>.json`) is
-    authored by the /commit orchestrator itself via Bash, because /commit
-    Step 5 mints BEFORE it dispatches anything (`commands/commit.md` Step 5
-    -> Step 7) -- so at mint time no dispatch has happened yet and no
-    hook-written witness of one can exist. The manifest is therefore
-    orchestrator-forgeable in principle. What `verify_pipeline_dispatch()`
+  * The dispatch-snapshot manifest (`claude-commit-manifest-<sid>-plan.json`)
+    is written by /commit Step 5's plan call (scripts/steps/commit-plan.py)
+    from the plan it computed; a session holding the older Step 5 text still
+    writes `claude-commit-manifest-<sid>.json` by hand, and that is read too.
+    /commit Step 5 mints BEFORE it dispatches anything (`commands/commit.md`
+    Step 5 -> Step 7) -- so at mint time no dispatch has happened yet and no
+    hook-written witness of one can exist. Both files lie in the agent-writable
+    state root, so a manifest is forgeable in principle. What `verify_pipeline_dispatch()`
     buys is that forging it is no longer cheap: the manifest must be
     mutually consistent with FOUR artifacts the bypass path does not have
     (a repository plan admitting this exact repo at its live branch/HEAD, a
@@ -165,8 +167,26 @@ def state_dir() -> str:
 
 
 def manifest_path(sid: str) -> str:
-    """Dispatch-snapshot manifest path for `sid` (/commit Step 5)."""
+    """Where a session holding the old /commit Step 5 text writes the manifest by hand (still read)."""
     return str(Path(state_dir()) / f"{MANIFEST_PREFIX}{sid}.json")
+
+
+def planned_manifest_path(sid: str) -> str:
+    """The manifest /commit Step 5's plan call (scripts/steps/commit-plan.py) writes for `sid`."""
+    return str(Path(state_dir()) / f"{MANIFEST_PREFIX}{sid}-plan.json")
+
+
+def write_planned_manifest(sid: str, body: dict) -> str:
+    """Write `body` to planned_manifest_path(sid) whole (a fresh file renamed over the name, so a
+    planted link or a reader mid-write never sees a partial manifest); returns the path."""
+    path = planned_manifest_path(sid)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    fresh = f"{path}.{secrets.token_hex(6)}.tmp"
+    fd = os.open(fresh, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(body, handle)
+    os.replace(fresh, path)
+    return path
 
 
 def attestation_path(sid: str, nonce: str) -> str:
@@ -375,8 +395,9 @@ def verify_pipeline_dispatch(sid: str, task_id: str, repo_root: str,
     does not possess. Read them as one conjunction:
 
       1-3. a live, well-formed manifest for THIS session and THIS task
-           (bounded by the CLI's record of the Write that wrote it and by
-           the file's own mtime; a typed `dispatched_at` is not judged)
+           (bounded by the file's own mtime and, for one an agent wrote with
+           the Write tool, by the CLI's record of that Write; a typed
+           `dispatched_at` is not judged)
       4-5. a repository plan for the same task that ADMITS this exact repo
       6.   whose plan entry agrees with the repo's live branch and HEAD --
            the same triple the grant itself records and the guard re-checks
@@ -386,18 +407,27 @@ def verify_pipeline_dispatch(sid: str, task_id: str, repo_root: str,
       8.   and a close-report for the task (existence only -- see
            `_close_report_exists`)
 
-    Fails closed on every unreadable, malformed or mismatched input.
+    Fails closed on every unreadable, malformed or mismatched input. Two manifests are read: the one
+    the plan call wrote, then the one a session holding the old Step 5 text wrote by hand; the first
+    that passes every check is the evidence, else the plan call's reason (the hand one's when the
+    plan call wrote none).
     """
     now = now or datetime.now(timezone.utc)
-    evidence: dict = {}
+    results = [_verify_manifest(p, sid, task_id, repo_root, branch, expected_head, now)
+               for p in (planned_manifest_path(sid), manifest_path(sid))]
+    return next((r for r in results if r[0]), results[0] if os.path.lexists(planned_manifest_path(sid))
+                else results[1])
 
-    path = manifest_path(sid)
+
+def _verify_manifest(path, sid, task_id, repo_root, branch, expected_head, now):
+    """verify_pipeline_dispatch's checks on the one manifest at `path`."""
+    evidence: dict = {}
     manifest = safe_read_json(path)
     if not isinstance(manifest, dict):
         return False, (
             f"no readable /commit dispatch-snapshot manifest at {path} -- a grant may "
-            "only be minted from inside a real /commit pipeline run, which writes this "
-            "manifest (commands/commit.md Step 5) BEFORE it mints"
+            "only be minted from inside a real /commit pipeline run, whose plan call "
+            "(commands/commit.md Step 5, scripts/steps/commit-plan.py) writes the manifest BEFORE it mints"
         ), evidence
     evidence["manifest_path"] = path
     evidence["manifest_sha256"] = file_sha256(path)

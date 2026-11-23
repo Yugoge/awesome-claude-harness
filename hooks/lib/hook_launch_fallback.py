@@ -4,8 +4,9 @@ A dispatcher (hooks/<event>-launch.py) uses this when its own code cannot run:
 lib/hook_launch.py does not import, or its runner fails. The standard library
 only, so a fault in the dispatcher's other modules never skips a hook. The hooks'
 answers combine through lib/hook_launch.combine when that module loads; else a
-refusal from any hook is still a refusal (exit 2, every refusal's reason), and
-otherwise the first answer a hook printed is passed on.
+refusal from any hook is still a refusal (exit 2, every refusal's reason), a stop
+a stop, and otherwise the first answer a hook printed is passed on; the other hooks'
+contexts and messages go with each of these (``minimal``).
 """
 from __future__ import annotations
 
@@ -72,10 +73,24 @@ def _run(rule, raw):
         return _Result(rule, 1, "", f"{rule.path}: could not start: {exc}\n", time.monotonic() - t0)
 
 
-def minimal(results):
+def _plain_context(event) -> bool:
+    """Whether `event`'s plain stdout reaches the model (lib/hook_launch's set); yes when the event is not
+    named or that module cannot load: a plain text is then delivered rather than dropped."""
+    try:
+        sys.path.insert(0, HOOKS)
+        from lib.hook_launch import PLAIN_CONTEXT_EVENTS
+    except Exception:
+        return True
+    return event is None or event in PLAIN_CONTEXT_EVENTS
+
+
+def minimal(results, event=None):
     """Exit status, stdout and stderr of `results` without lib/hook_launch.combine: a refusal from any
-    hook refuses; else the first answer printed is passed on."""
-    refusals = []
+    hook refuses; else a stop stops; else the first answer printed is passed on. The other hooks' texts
+    for the model and the user (contexts, messages; plain stdout on the events whose plain stdout reaches
+    the model, or on any when that cannot be told: `_plain_context`) go with it, each once, as combine
+    delivers them: after the refusals on stderr, in the stop's systemMessage, else merged into one JSON."""
+    refusals, stops, printed, ctxs, msgs, said = [], [], [], [], [], []
     for r in results:
         if r.code == 2:
             refusals.append(r.stderr)
@@ -84,18 +99,40 @@ def minimal(results):
             out = json.loads(r.stdout) if r.code == 0 and r.stdout.strip().startswith("{") else None
         except ValueError:
             out = None
-        if isinstance(out, dict):
-            hso = out.get("hookSpecificOutput") if isinstance(out.get("hookSpecificOutput"), dict) else {}
-            if hso.get("permissionDecision") == "deny":
-                refusals.append(str(hso.get("permissionDecisionReason") or ""))
-            elif out.get("decision") == "block":
-                refusals.append(str(out.get("reason") or ""))
+        o = out if isinstance(out, dict) else {}
+        hso = o.get("hookSpecificOutput") if isinstance(o.get("hookSpecificOutput"), dict) else {}
+        if hso.get("permissionDecision") == "deny":
+            refusals.append(str(hso.get("permissionDecisionReason") or ""))
+        elif o.get("decision") == "block":
+            refusals.append(str(o.get("reason") or ""))
+        elif o.get("continue") is False:
+            stops.append(o)
+        elif r.code == 0 and r.stdout.strip():
+            printed.append((r, o))
+            plain = not isinstance(out, dict) and _plain_context(event)
+            mine = event is None or hso.get("hookEventName") in (None, event)
+            c = [r.stdout.strip()] if plain else [str(hso["additionalContext"])] if hso.get("additionalContext") \
+                and mine else []
+            m = [str(o["systemMessage"])] if o.get("systemMessage") else []
+            ctxs, msgs, said = ctxs + c, msgs + m, said + c + m
+    texts = [t for i, t in enumerate(said) if t not in said[:i]]
+    if stops:
+        stop = {**stops[0], "systemMessage": "\n".join([str(stops[0].get("systemMessage") or "")] * bool(
+            stops[0].get("systemMessage")) + texts)} if texts else stops[0]
+        return 0, json.dumps(stop) + "\n", ""
     if refusals:
-        return 2, "", "".join(t if t.endswith("\n") else t + "\n" for t in refusals if t)
-    printed = [r.stdout for r in results if r.code == 0 and r.stdout.strip()]
+        return 2, "", "".join(t if t.endswith("\n") else t + "\n" for t in refusals + texts if t)
     errors = "".join(r.stderr for r in results if r.code not in (0, 2))
+    if len(printed) > 1:  # one JSON answer: the first one's fields, every hook's contexts and messages
+        first = dict(printed[0][1])
+        if ctxs:
+            first["hookSpecificOutput"] = {**(first.get("hookSpecificOutput") or {}), "additionalContext": "\n".join(
+                ctxs), "hookEventName": (first.get("hookSpecificOutput") or {}).get("hookEventName") or event}
+        if msgs:
+            first["systemMessage"] = "\n".join(msgs)
+        return 0, json.dumps(first) + "\n", errors
     if printed:
-        return 0, printed[0], errors
+        return 0, printed[0][0].stdout, errors
     return (1 if errors else 0), "", errors
 
 
@@ -107,7 +144,7 @@ def run(event, rules, raw, record_fd=None) -> int:
         from lib.hook_launch import combine
         code, out, err = combine(event, results)
     except Exception:
-        code, out, err = minimal(results)
+        code, out, err = minimal(results, event)
     if record_fd is not None:
         lines = "".join(json.dumps({"hook": "hooks/" + r.rule.path, "matcher": r.rule.matcher,
                                     "timeout": r.rule.timeout, "rc": r.code, "stdout": r.stdout,

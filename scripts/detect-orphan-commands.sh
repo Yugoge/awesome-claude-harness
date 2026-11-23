@@ -5,25 +5,20 @@
 
 set -euo pipefail
 
-# Parameters
 PROJECT_ROOT="${1:-.}"
 HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # install location, resolved before the cd below
 
-# Navigate to project root
 cd "$PROJECT_ROOT"
 
-# Get .claude directory (check both local and global)
 CLAUDE_DIR="${PROJECT_ROOT}/.claude"
 GLOBAL_CLAUDE_DIR="$HARNESS_HOME"
 
 # One-time command patterns
 ONE_TIME_PATTERNS=("-fix" "-migrate" "-patch" "-migration" "-cleanup" "-repair")
 
-# Initialize JSON output
 orphan_commands=""
 total_count=0
 
-# Function to check if command has one-time pattern
 has_one_time_pattern() {
     local command_name="$1"
 
@@ -37,18 +32,15 @@ has_one_time_pattern() {
     echo "false"
 }
 
-# Function to check if command has corresponding todo script
 has_todo_script() {
     local command_name="$1"
 
-    # Check in global todo scripts
     if [[ -f "${GLOBAL_CLAUDE_DIR}/scripts/todo/${command_name}.py" ]] || \
        [[ -f "${GLOBAL_CLAUDE_DIR}/scripts/todo/${command_name}.sh" ]]; then
         echo "true"
         return
     fi
 
-    # Check in local todo scripts
     if [[ -f "${CLAUDE_DIR}/scripts/todo/${command_name}.py" ]] || \
        [[ -f "${CLAUDE_DIR}/scripts/todo/${command_name}.sh" ]]; then
         echo "true"
@@ -58,7 +50,6 @@ has_todo_script() {
     echo "false"
 }
 
-# Function to get last modified time
 get_last_modified() {
     local file="$1"
     local current_time
@@ -69,7 +60,6 @@ get_last_modified() {
     echo "${days_ago} days ago"
 }
 
-# Function to get days since modified
 get_days_since_modified() {
     local file="$1"
     local current_time
@@ -79,7 +69,6 @@ get_days_since_modified() {
     echo $(( (current_time - file_mtime) / 86400 ))
 }
 
-# Function to check if command was used recently in git log
 check_recent_usage() {
     local command_name="$1"
     local days_threshold="${2:-90}"
@@ -104,7 +93,6 @@ check_recent_usage() {
     echo "false"
 }
 
-# Function to determine severity
 get_severity() {
     local has_pattern="$1"
     local has_todo="$2"
@@ -119,7 +107,6 @@ get_severity() {
     fi
 }
 
-# Function to determine reason
 get_reason() {
     local has_pattern="$1"
     local has_todo="$2"
@@ -140,7 +127,6 @@ get_reason() {
         reasons+=("unused for ${days_ago} days")
     fi
 
-    # Join reasons
     local result=""
     for reason in "${reasons[@]}"; do
         if [[ -n "$result" ]]; then
@@ -153,24 +139,20 @@ get_reason() {
     echo "$result"
 }
 
-# Scan commands in local .claude/commands/ directory
 if [[ -d "${CLAUDE_DIR}/commands" ]]; then
     for command_file in "${CLAUDE_DIR}/commands/"*.md; do
         [[ ! -f "$command_file" ]] && continue
 
         command_name=$(basename "$command_file" .md)
 
-        # Skip INDEX.md and README.md
         [[ "$command_name" == "INDEX" ]] && continue
         [[ "$command_name" == "README" ]] && continue
 
-        # Check criteria
         has_pattern=$(has_one_time_pattern "$command_name")
         has_todo=$(has_todo_script "$command_name")
         days_ago=$(get_days_since_modified "$command_file")
         recent_usage=$(check_recent_usage "$command_name")
 
-        # Determine if orphan
         is_orphan=false
 
         # Criteria 1: One-time pattern + no todo script
@@ -188,7 +170,6 @@ if [[ -d "${CLAUDE_DIR}/commands" ]]; then
             reason=$(get_reason "$has_pattern" "$has_todo" "$days_ago" "$recent_usage")
             severity=$(get_severity "$has_pattern" "$has_todo" "$days_ago")
 
-            # Build JSON object
             if [[ -n "$orphan_commands" ]]; then
                 orphan_commands="${orphan_commands},"
             fi
@@ -207,24 +188,20 @@ if [[ -d "${CLAUDE_DIR}/commands" ]]; then
     done
 fi
 
-# Scan commands in global ~/.claude/commands/ directory
 if [[ -d "${GLOBAL_CLAUDE_DIR}/commands" ]]; then
     for command_file in "${GLOBAL_CLAUDE_DIR}/commands/"*.md; do
         [[ ! -f "$command_file" ]] && continue
 
         command_name=$(basename "$command_file" .md)
 
-        # Skip INDEX.md and README.md
         [[ "$command_name" == "INDEX" ]] && continue
         [[ "$command_name" == "README" ]] && continue
 
-        # Check criteria
         has_pattern=$(has_one_time_pattern "$command_name")
         has_todo=$(has_todo_script "$command_name")
         days_ago=$(get_days_since_modified "$command_file")
         recent_usage=$(check_recent_usage "$command_name")
 
-        # Determine if orphan
         is_orphan=false
 
         # Criteria 1: One-time pattern + no todo script
@@ -242,7 +219,6 @@ if [[ -d "${GLOBAL_CLAUDE_DIR}/commands" ]]; then
             reason=$(get_reason "$has_pattern" "$has_todo" "$days_ago" "$recent_usage")
             severity=$(get_severity "$has_pattern" "$has_todo" "$days_ago")
 
-            # Build JSON object
             if [[ -n "$orphan_commands" ]]; then
                 orphan_commands="${orphan_commands},"
             fi
@@ -261,7 +237,6 @@ if [[ -d "${GLOBAL_CLAUDE_DIR}/commands" ]]; then
     done
 fi
 
-# Output JSON
 cat <<EOF
 {
   "orphan_commands": [${orphan_commands}

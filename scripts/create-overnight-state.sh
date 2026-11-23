@@ -13,6 +13,7 @@
 # Exit: 0=success, 1=error
 
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib" && pwd)/claude_home.sh"
 
 # --- M3-ORDERING: neutralise the actor marker for THIS SCRIPT'S OWN git calls ---
 # Every git invocation this launcher issues runs in the PRE-STATE region: no
@@ -142,10 +143,8 @@ fi
 # every reading.
 NOW_EPOCH="$(date +%s)"
 
-# --- Start time ---
 START_TIME="$(date -u -d "@$NOW_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
 
-# --- End time parsing ---
 parse_end_time() {
     local input="$1"
 
@@ -241,7 +240,7 @@ fi
 # --- Repo identity + MAIN_HEAD capture (side-effect-free; may precede worktree) ---
 # M1/round-3: only side-effect-free repo-identity discovery and MAIN_HEAD capture
 # may run before worktree creation. Everything fallible (spec/focus/view) runs AFTER.
-MAIN_ROOT="$("${GIT_UNMARKED[@]}" -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || echo '')"
+MAIN_ROOT="$(unset CLAUDE_OVERNIGHT_ACTOR; claude_repo_top "$PROJECT_DIR" || echo '')"  # M3-ORDERING: unmarked, as every git call here; never the filesystem root
 if [[ -z "$MAIN_ROOT" ]]; then
     echo "Error: --project-dir is not inside a git repo: $PROJECT_DIR" >&2
     exit 1

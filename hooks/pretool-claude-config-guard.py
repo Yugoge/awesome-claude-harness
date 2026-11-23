@@ -63,9 +63,13 @@ _HOOK_PATTERNS = [shape.format(r'\.claude/hooks/') for shape in _WRITE_SHAPES]
 _CMD_PATTERNS = [shape.format(r'\.claude/commands/') for shape in _WRITE_SHAPES]
 
 
+_CALL_CWD = []  # the payload's cwd (main), the directory the call itself runs in
+
+
 def _project_dir() -> Path:
-    """Return the active project directory."""
-    return Path(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+    """Return the active project directory: $CLAUDE_PROJECT_DIR, else the directory of the call (the payload's cwd),
+    not the one this hook process happens to run in."""
+    return Path(os.environ.get('CLAUDE_PROJECT_DIR') or (_CALL_CWD or [os.getcwd()])[0])
 
 
 def _sentinel_present() -> bool:
@@ -1248,6 +1252,9 @@ def main() -> None:
         sys.exit(0)
 
     try:
+        cwd = data.get('cwd')
+        if isinstance(cwd, str) and os.path.isabs(cwd):
+            _CALL_CWD[:] = [cwd]
         if _sentinel_present():
             sys.exit(0)
         tool_name = data.get('tool_name', '') or ''

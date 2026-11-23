@@ -26,13 +26,13 @@ The ungated session's bookmark is a stale /dev one (an earlier command of that s
 others name their own command. P5 (R18, R20) took every Claude-path reader off the bookmark: the
 previous list is the transcript's (command_span.last_todos), the lock is the transcript's
 (todo_canonical.checklist). So A21's outcome must not move with the bookmark: for each shape, every
-event of A21's pipeline (each Stop under the pre-update hook list and under this tree's; a
+event of A21's pipeline (each Stop under this tree's hook list (the pre-update list's events are
+retired, policies/replay-hook-lists.v1.json: no running session holds it); a
 PreToolUse TodoWrite, compliant and a 2-step skip, in the /dev cycle; a PreToolUse Read, Grep,
 Glob, Bash and Edit in each session) gives every hook the verdict, exit code and output it gives
 with no bookmark; no hook errs or prints a traceback; pretool-tool-policy.py and
 pretool-todo-validate.py accept the compliant TodoWrite (each read from the hook that reports it
-under the list that runs the event: under this tree's, tool-policy is a rule of the write gate since
-P12, sites.reporter) and the skip stays refused by pretool-todo-validate.py (a stale last_todos
+under this tree's list: tool-policy is a rule of the write gate since P12, sites.reporter) and the skip stays refused by pretool-todo-validate.py (a stale last_todos
 neither blocks the compliant list nor admits the skip); A21's Stop outcomes hold as stated. Read,
 Grep and Glob pass the checklist-not-started lock in every session (OB-L39); Bash and Edit are held
 by it only where a span's checklist is unwritten, never by an old lock.
@@ -46,8 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from tests.replay import hookrun, sites
-from tests.replay.test_live_arming import (DO_ID, REPO, SID, SPANS, World, _blocked, _healthy, current_settings,
-                                           pre_update_settings)
+from tests.replay.test_live_arming import DO_ID, REPO, SID, SPANS, World, _blocked, _healthy, current_settings
 
 SHAPES = ("none", "pre-P5", "pre-P1b, in step", "pre-P1b, sequence lock", "pre-P1b, count lock", "torn")
 COMMAND = {"dev": "dev", "do": "do", "merge": "merge", "window": "dev-overnight", "ungated": "dev"}
@@ -135,10 +134,9 @@ def _probes(world: SeededWorld) -> dict:
 def _events(world: SeededWorld) -> dict:
     """A21's pipeline on ``world``, each event run with the old files freshly seeded: label -> event."""
     out = {}
-    old, new = pre_update_settings(), current_settings()
     steps = world.canonical("dev")
     probes = _probes(world)
-    for which, settings in (("pre-update", old), ("this tree", new)):
+    for which, settings in (("this tree", current_settings()),):
         for name in SID:
             world.seed()
             out[f"Stop {name} ({which})"] = world.run_stop(name, settings)
@@ -239,9 +237,8 @@ def test_a21_old_bookmarks_change_no_hook_outcome(runs, shape):
 
 @pytest.mark.parametrize("shape", SHAPES)
 def test_a21_with_old_bookmarks_the_outcome_is_a21s(runs, shape):
-    """A21's outcome with the shape seeded: no hook errs or prints a traceback; the pre-update list
-    holds no span (`would block` on the coordinator's stderr), this tree's list enforces each gated
-    span, the open window blocks under both, the ungated session stops; pretool-tool-policy.py and
+    """A21's outcome with the shape seeded: no hook errs or prints a traceback; this tree's list
+    enforces each gated span, the open window blocks, the ungated session stops; pretool-tool-policy.py and
     pretool-todo-validate.py accept the compliant TodoWrite, the 2-step skip stays refused by
     pretool-todo-validate.py; Read, Grep and Glob pass in every session (the checklist-not-started
     lock lets them through, OB-L39); a Bash or an Edit is held by the workflow gate only by an
@@ -249,14 +246,11 @@ def test_a21_with_old_bookmarks_the_outcome_is_a21s(runs, shape):
     _world, events = runs[shape]
     sick = {label: _healthy(e) for label, e in events.items() if _healthy(e)}
     assert not sick, sick
-    for which in ("pre-update", "this tree"):
+    for which in ("this tree",):
         for name in SID:
             event = events[f"Stop {name} ({which})"]
             if name == "window":
                 assert _blocked(event) and "overnight window open until" in event["hooks"][0]["stderr"], event
-            elif which == "pre-update":
-                assert not _blocked(event), (name, event["hooks"])
-                assert ("would block" in event["hooks"][0]["stderr"]) == (name in SPANS), event["hooks"][0]
             elif name in SPANS:
                 launcher = event["hooks"][0]
                 assert launcher["rc"] == 2 and launcher["stderr"].startswith(f"COMMAND_GATE /{name}: not complete"), \
@@ -284,8 +278,7 @@ def test_a21_with_old_bookmarks_the_outcome_is_a21s(runs, shape):
                 else:
                     assert gate[0]["verdict"] == "ok", why
         # the hooks that report NAMED's verdicts under the list `which` runs
-        named = [sites.reporter(str(REPO), h, pre_update_settings() if which == "pre-update" else current_settings())
-                 for h in NAMED]
+        named = [sites.reporter(str(REPO), h, current_settings()) for h in NAMED]
         ok = {h["hook"]: h for h in events[f"TodoWrite dev compliant ({which})"]["hooks"] if h["hook"] in named}
         assert sorted(ok) == sorted(named) and all(h["verdict"] == "ok" for h in ok.values()), ok
         skip = {h["hook"]: h for h in events[f"TodoWrite dev 2-step skip ({which})"]["hooks"]}

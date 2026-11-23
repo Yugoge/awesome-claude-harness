@@ -92,9 +92,9 @@ STATES = {
                         _result(2)],
     # Gate 4's fact: the BA dispatch after its step went in_progress, and one before it did.
     "ba-after-start": [_opener(), _use(1, _frontier(0)), _result(1), _use(2, _frontier(3)), _result(2),
-                       _uses((5, "Agent", {"subagent_type": "ba", "prompt": "p"})), _result(5)],
+                       _uses((5, "Agent", {"subagent_type": "ba", "prompt": "Mode: analysis"})), _result(5)],
     "ba-before-start": [_opener(), _use(1, _frontier(0)), _result(1),
-                        _uses((5, "Agent", {"subagent_type": "ba", "prompt": "p"})), _result(5),
+                        _uses((5, "Agent", {"subagent_type": "ba", "prompt": "Mode: analysis"})), _result(5),
                         _use(2, _frontier(3)), _result(2)],
     # The first call that has an id is where ``before`` cuts, wherever another one has it too.
     "id-used-twice": [_opener(), _use(1, _frontier(0)), _result(1), _use(2, _frontier(1)), _result(2),
@@ -285,7 +285,7 @@ def _long_session(tmp_path, rounds=60, typed_again=True):
     if typed_again:
         records += [_opener(args="later")]
         records += [_use(900, _frontier(0)), _result(900), _use(901, _frontier(1)), _result(901),
-                    _uses((902, "Agent", {"subagent_type": "ba", "prompt": "p"})), _result(902)]
+                    _uses((902, "Agent", {"subagent_type": "ba", "prompt": "Mode: analysis"})), _result(902)]
     return _write(tmp_path / "long.jsonl", records), records
 
 
@@ -372,7 +372,7 @@ def _dispatched_by_lines(state, step):
         if now == "in_progress" and was != "in_progress":
             start = call.result_line
         was = now
-    kind = step["subagent_call"]["subagent_type"]
+    kind = _required_role(step)
     return start is not None and any(c.result_line > start and c.input.get("subagent_type") == kind
                                      for c in state.span.calls("Agent", "Task") if c.ok)
 
@@ -418,3 +418,11 @@ def test_obligation_loads_without_tempfile_or_hashlib():
     out = subprocess.run([sys.executable, "-c", code, str(HOOKS)], capture_output=True, text=True, check=True,
                          env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
     assert out.stdout.strip() == "[]"
+
+
+def _required_role(step):
+    """The subagent type of the call a canonical step requires (a list states every call of the step, the
+    requirement round's included: scripts/todo/dev.py ROUND_CALLS; its optional entries are not required)."""
+    call = step.get("subagent_call")
+    return next((c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+                 if isinstance(c, dict) and not c.get("optional")), None)

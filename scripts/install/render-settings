@@ -873,10 +873,11 @@ def load_settings(home):
     return settings, problem and problem.replace(os.path.join(home, ""), "", 1)
 
 
-def clean_source(home):
-    """The clean form's bytes: the index blob, else HEAD's, else the working file."""
+def clean_source(home, checkout=None):
+    """The clean form's bytes: the index blob, else HEAD's, else the working file. `checkout`: the
+    caller's own answer to is_checkout, for a caller that must use one answer throughout."""
     source = None
-    if is_checkout(home):
+    if is_checkout(home) if checkout is None else checkout:
         source = blob(home, ":" + SETTINGS)
         if source is None:
             source = blob(home, "HEAD:" + SETTINGS)
@@ -1001,13 +1002,13 @@ def check_hook_paths(home, working, overlay):
     env = dict(os.environ)
     env.update({k: v for k, v in _d(working.get("env")).items() if isinstance(v, str)})
     # Only a command of the clean form or of a module is echoed; any other may be personal.
-    docs = [parse(clean_source(home)) or {}] + list(MODULES.values())
+    checkout = is_checkout(home)  # one answer: a git call that failed once must not split the check
+    docs = [parse(clean_source(home, checkout)) or {}] + list(MODULES.values())
     kit = {(event, key) for d in docs for event, gs in _d(d.get("hooks")).items()
            for key in _hook_keys(gs)}
     mine = {(event, key) for event, gs in _d(_layer_of(overlay or {}).get("hooks")).items()
             for key in _hook_keys(gs)}
     public = {key for _, key in kit} - {key for _, key in mine}
-    checkout = is_checkout(home)
     if not checkout:  # the clean form read is the working file, which holds the overlay's too
         kit -= mine
     root = os.path.realpath(home)

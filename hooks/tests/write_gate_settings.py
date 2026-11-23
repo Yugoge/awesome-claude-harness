@@ -1,7 +1,6 @@
 """P12's registration change in settings.json (L4 #25, L5 #26), and the write guards it replaced.
 
-At the P12 base (retired_hooks.BASE) settings.json registers 78 hooks of 77 files; the tracked file
-registers 52 of 51:
+From the P12 base (retired_hooks.BASE) to the tracked settings.json:
 
 - L4: the seven write guards' PreToolUse registrations (REPLACED) go, and hooks/pretool-write-gate.py
   is registered once, on every tool, with a 70 s timeout, where the first one stood; the five anti-loop
@@ -72,7 +71,6 @@ GATES = (
     ("PostToolUse", "Agent|Task", "posttool-dispatch-record.py", "dev-loop-after"),
     ("SubagentStop", "*", "subagentstop-producer-gate.py", None),
 )
-BASE_COUNT = 78
 
 _HOME = "${CLAUDE_HOME:-$HOME/.claude}/hooks/"
 OLD_GUARDS = (  # (matcher, file, timeout) at the base; 60 is the CLI's default timeout

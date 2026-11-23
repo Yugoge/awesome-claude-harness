@@ -330,17 +330,23 @@ def test_slot_lock_timeout_exits_75_and_frees_other_callers():
     with project() as root:
         d = build(root, 2, 6)
         before = slot_bytes(d)
+        # What a run of the script costs here without any wait (status takes no lock): a run that waits the 0.3 s it
+        # is given stays far below that cost plus the 10 s default wait, on a slow runner as on a fast one, since a
+        # slow runner stretches both runs alike.
         with held(os.path.join(d, slot_name(0) + ".lock")):
+            t = time.monotonic()
+            assert run_sc(root, ["status", "--spec-id", SPEC])[0] == 0
+            free = time.monotonic() - t
             for label in ("mark", "waive", "check-out", "check-in-bump"):
                 t = time.monotonic()
-                rc, out, err = run_sc(root, cmd_args(label, 0, 2), timeout=6, SPEC_CHECK_LOCK_TIMEOUT_SECONDS=LOCK_WAIT)
+                rc, out, err = run_sc(root, cmd_args(label, 0, 2), SPEC_CHECK_LOCK_TIMEOUT_SECONDS=LOCK_WAIT)
                 took = time.monotonic() - t
                 assert rc == 75, f"{label}: exit {rc} (want 75): {err[:200]}"
                 assert "lock" in err.lower() and "retry" in err.lower(), f"{label}: message {err!r}"
-                assert out == "" and took < 5, f"{label}: stdout {out!r}, took {took:.1f}s"
+                assert out == "" and took < 2 * free + 5, f"{label}: stdout {out!r}, took {took:.1f}s ({free:.1f}s at once)"
             assert slot_bytes(d) == before
             # the timed-out callers released the directory lock: the other slot is still markable
-            rc, out, err = run_sc(root, cmd_args("mark", 1, 1), timeout=6, SPEC_CHECK_LOCK_TIMEOUT_SECONDS=LOCK_WAIT)
+            rc, out, err = run_sc(root, cmd_args("mark", 1, 1), SPEC_CHECK_LOCK_TIMEOUT_SECONDS=LOCK_WAIT)
             assert rc == 0, f"a stuck slot froze an unrelated slot: rc={rc} {err[:200]}"
 
 
@@ -379,8 +385,8 @@ def test_lock_timeout_env_invalid_means_default_and_zero_tries_once():
 def test_status_is_lock_free_while_the_directory_lock_is_held():
     with project() as root:
         d = build(root, 1, 3)
-        with held(os.path.join(d, LOCK_NAME)):
-            rc, out, err = run_sc(root, ["status", "--spec-id", SPEC], timeout=3)
+        with held(os.path.join(d, LOCK_NAME)):  # a status that took the lock would give up at once (exit 75)
+            rc, out, err = run_sc(root, ["status", "--spec-id", SPEC], SPEC_CHECK_LOCK_TIMEOUT_SECONDS="0")
         assert rc == 0 and "cp-01" in out, f"status was blocked by a held lock: rc={rc} {err[:200]}"
 
 

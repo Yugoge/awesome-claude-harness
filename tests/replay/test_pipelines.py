@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from tests.replay import suite
+from tests.replay.drivers.dev import S
 
 CASES = [pytest.param(suite.replay_key(scn, s), id=f"{scn.name}-{s}",
                       marks=pytest.mark.replay(suite.replay_key(scn, s), scn.cost))
@@ -95,14 +96,14 @@ def test_dev_question_pauses_and_the_same_role_resumes(replays, key):
     # every question but P13-1's requirement round (Step 4b, asked before BA's analysis since #38)
     asked = [ev["label"] for ev in evs if ev.get("event") == "PostToolUse" and ev.get("tool") == "AskUserQuestion"
              and not str(ev.get("label", "")).startswith("Step 4b ")]
-    assert asked == ["Step 12 AskUserQuestion"], asked
+    assert asked == [f"Step {S.validate_dev} AskUserQuestion"], asked
     dev_writes = [ev["label"] for ev in evs if ev.get("event") == "PostToolUse" and ev.get("agent_type") == "dev"
                   and ev.get("tool") in ("Write", "Edit")]
     first = dev_writes.index(next(w for w in dev_writes if "docs/dev/dev-report-" in w or "toy/" in w))
     assert first == 1 and "docs/dev/producer-question-" in dev_writes[0] and dev_writes[0].endswith("-dev.json"), \
         dev_writes
     stops = [ev["label"] for ev in evs if ev.get("event") == "SubagentStop" and ev.get("agent_type") == "dev"]
-    assert stops == ["Step 10 Agent(dev) stop", "Step 12 Agent(dev) clarification round 1 stop"], stops
+    assert stops == [f"Step {S.dev} Agent(dev) stop", f"Step {S.validate_dev} Agent(dev) clarification round 1 stop"], stops
     main_stops = [ev["label"] for ev in evs if ev.get("event") == "Stop"]
     assert main_stops == ["Stop"], main_stops
     assert not r.blocks and not r.hook_errors and r.reached(), r.explain()

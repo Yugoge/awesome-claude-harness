@@ -405,10 +405,10 @@ Read `docs/dev/overnight/<session_id>/triage-report-cycle<N>.json`. PM already f
 Create the pipeline definitions, one per `fix` issue, zero-indexed:
 
 ```bash
-python3 "<HARNESS_ROOT>/scripts/build-pipelines-from-triage.py" <triage-report> <addressed-issues> <timestamp> <session_id> | tee docs/dev/overnight/<session_id>/pipelines.json
+python3 "<HARNESS_ROOT>/scripts/build-pipelines-from-triage.py" <triage-report> <addressed-issues> - <session_id> | tee docs/dev/overnight/<session_id>/pipelines.json
 ```
 
-The builder keeps only `fix` issues absent from addressed-issues and emits one pipeline per issue: `index`, `triage_index`, `description`, `location`, `severity`, `category`, `agents_flagged`, `phase=pending`, `iteration=0`, `status=active`, `timestamp_suffix=<ts>-<index>`, `tier`, `pm_recommended=true` and `spec_path`.
+The builder keeps only `fix` issues absent from addressed-issues and emits one pipeline per issue: `index`, `triage_index`, `description`, `location`, `severity`, `category`, `agents_flagged`, `phase=pending`, `iteration=0`, `status=active`, `timestamp_suffix=<ts>-<index>`, `tier`, `pm_recommended=true` and `spec_path`. The `-` makes `<ts>` the cycle's own stamp: the `created_at` of this cycle's contract (`cycle-<N>/cycle-contract.json` beside the triage report, written by the hook when PM TRIAGE returned), so you type no time, every reader of the cycle sees the same `<ts>` and every cycle has its own.
 
 **Announce pipeline creation**:
 

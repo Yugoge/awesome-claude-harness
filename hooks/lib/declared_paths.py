@@ -182,7 +182,7 @@ def _could_be_declared(shapes, forms: list) -> bool:
         return True
     for kind, value in shapes:
         for form in forms:
-            if (kind == "parts" and value and _covers(value, form)
+            if (kind == "parts" and value and _may_cover(value, form)
                     or kind == "last" and value in form
                     or kind == "ends" and any(part.endswith(value) for part in form)):
                 return True
@@ -456,7 +456,7 @@ def _obligation_may_declare(prompt: str, targets) -> bool:
                     continue
             parts = _parts(path)
             if (parts and ".." not in parts and not path.startswith("/")
-                    and any(_covers(parts, form) for forms in targets for form in forms)):
+                    and any(_may_cover(parts, form) for forms in targets for form in forms)):
                 return True
         return False
     except Exception:
@@ -593,6 +593,13 @@ def _caller_dispatches(data: dict, transcript, calls: list) -> set:
 
 
 def _covers(declared: tuple, target: tuple) -> bool:
+    """Whether a declared path names ``target`` (a _target_forms form, below the project root): the file
+    itself or one below the declared directory, never a file of that name in a subfolder."""
+    return target[:len(declared)] == declared
+
+
+def _may_cover(declared: tuple, target: tuple) -> bool:
+    """The filters' looser test (a run of the target's parts anywhere): it keeps every target _covers may name."""
     n = len(declared)
     return any(target[i:i + n] == declared for i in range(len(target) - n + 1))
 
@@ -602,9 +609,14 @@ def _target_forms(target: str, data: dict) -> list:
     path = os.path.expanduser(target)
     if not os.path.isabs(path):
         path = os.path.join(base, path)
-    forms = {os.path.normpath(path)}
+    forms, roots = {os.path.normpath(path)}, {os.path.normpath(base)}
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        roots.add(os.path.normpath(os.environ["CLAUDE_PROJECT_DIR"]))
     try:
         forms.add(os.path.realpath(path))
+        roots |= {os.path.realpath(r) for r in roots}
     except OSError:
         pass
-    return [_parts(f) for f in forms]
+    # A declared path is relative to the dispatch's project: a target's parts below that root, none outside it.
+    return list({_parts(os.path.relpath(f, r)) for f in forms for r in roots
+                 if f == r or f.startswith(r.rstrip(os.sep) + os.sep)})

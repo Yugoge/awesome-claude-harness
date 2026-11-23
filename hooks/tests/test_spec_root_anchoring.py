@@ -152,10 +152,13 @@ def test_views_guard_reads_relative_targets_from_the_call_directory(proj):
     assert _bash("echo x > state.lock.json", proj / "tests/fixtures/specs/demo") == 0
 
 
-def test_views_guard_keeps_the_spec_check_exemption(proj):
-    cmd = ("python3 ~/.claude/scripts/spec-check.py mark --spec-id s1 --agent qa --agent-id a "
-           "--cp-id cp-1 > .claude/specs/s1/cp-state-qa.json")
+def test_views_guard_keeps_the_spec_check_exemption(proj, monkeypatch):
+    # the exemption is the harness's own spec-check.py (here CLAUDE_HOME is this tree; the home's
+    # dot-claude holds no checker), and covers its words, not the shell's redirect of its output
+    monkeypatch.setenv("CLAUDE_HOME", str(ROOT))
+    cmd = 'python3 "$CLAUDE_HOME/scripts/spec-check.py" mark --spec-id s1 --agent qa --agent-id a --cp-id cp-1'
     assert _bash(cmd, proj) == 0
+    assert _bash(cmd + " > .claude/specs/s1/cp-state-qa.json", proj) == 2
     cmd = ('python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py" checkpoints '
            '"Write -> docs/dev/specs/s1/views/dev.md"')
     assert _bash(cmd, proj) == 0

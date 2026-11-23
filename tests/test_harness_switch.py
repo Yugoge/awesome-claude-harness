@@ -18,6 +18,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -806,40 +807,96 @@ def rule_budget(name: str) -> float:
     return float(run([PY, "-c", code, str(ROOT / "hooks"), name], ROOT).stdout)
 
 
-def timed_gate(home, proj, command, actor="main"):
+def timed_gate(home, proj, command, actor="main", scale=None):
     """The gate's result and the CPU seconds its run used (the process and its children): what the run costs, apart
     from how busy the runner is. Wall time under xdist was 10.49 s on the slowest CI runner for a run of 3 s here
-    (2026-11-20)."""
+    (2026-11-20). ``scale``: the gate runs with every rule's budget times ``scale`` (SCALED_GATE)."""
     def used():
         r = resource.getrusage(resource.RUSAGE_CHILDREN)
         return r.ru_utime + r.ru_stime
     start = used()
-    proc = gate(home, proj, "Bash", {"command": command}, actor)
+    if scale is None:
+        proc = gate(home, proj, "Bash", {"command": command}, actor)
+    else:
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(proj), "session_id": "S1"}
+        if actor == "subagent":
+            payload["agent_id"] = "sub-1"
+        (home.path / "scaled-gate.py").write_text(SCALED_GATE % scale)
+        proc = home.hook("scaled-gate.py", payload)
     return proc, used() - start
+
+
+# The write gate with a clock as fast as the runner that measured its budgets: each rule's wall budget (seconds of that
+# runner, test_write_gate.py::test_budgets_cover_the_measured_times) times this runner's slowness. A rule that
+# outgrows its budget still overruns here by the same factor; a slow or busy runner alone no longer does.
+SCALED_GATE = '''import dataclasses, os, runpy, sys
+gate = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks", "pretool-write-gate.py")
+sys.path.insert(0, os.path.dirname(gate))
+import lib.write_gate as write_gate
+write_gate.RULES = tuple(dataclasses.replace(r, budget=r.budget * %r) for r in write_gate.RULES)
+sys.argv = [gate]
+runpy.run_path(gate, run_name="__main__")
+'''
+# Wall seconds of an unpadded ordinary write through the gate on the runner the budgets were measured on (one CPU,
+# 2026-11-22: 0.21-0.34 CPU s).
+BUDGET_RUNNER_WALL = 0.35
+
+
+@pytest.fixture(scope="module")
+def slowness(guard_home, tmp_path_factory):
+    """How much slower than BUDGET_RUNNER_WALL this runner is now (never below 1): the least of three unpadded runs."""
+    p = tmp_path_factory.mktemp("slowness") / "proj"
+    (p / ".claude").mkdir(parents=True)
+    (p / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    walls = []
+    for _ in range(3):
+        start = time.monotonic()
+        proc, _ = timed_gate(guard_home, p, "echo '{\"env\": {}}' > notes.txt", scale=1.0)
+        walls.append(time.monotonic() - start)
+        assert proc.returncode == 0, proc.stderr
+    return max(1.0, min(walls) / BUDGET_RUNNER_WALL)
+
+
+# How many unpadded gate runs the gate's work beside the rule may cost for a padded command: the other rules and
+# Python's start, measured against this runner's own unpadded run, so a slower CPU raises both alike. Here
+# (2026-11-22, one CPU) an unpadded ordinary write took 0.21-0.34 CPU s and a 5000-padded one 3.0-3.3 CPU s.
+GATE_RUNS = 20
+
+
+@pytest.fixture(scope="module")
+def unpadded_cpu(guard_home, tmp_path_factory):
+    """CPU seconds of an unpadded ordinary write through the same gate, in this run: the least of three."""
+    p = tmp_path_factory.mktemp("unpadded") / "proj"
+    (p / ".claude").mkdir(parents=True)
+    (p / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    runs = [timed_gate(guard_home, p, "echo '{\"env\": {}}' > notes.txt") for _ in range(3)]
+    assert all(proc.returncode == 0 for proc, _ in runs), [proc.stderr for proc, _ in runs]
+    return min(took for _, took in runs)
 
 
 @pytest.mark.parametrize("pads", [300, 1000, 5000])
 @pytest.mark.parametrize("actor", ["main", "subagent"])
-def test_a_padded_settings_write_is_refused_within_the_budget(guard_home, proj, pads, actor):
+def test_a_padded_settings_write_is_refused_within_the_budget(guard_home, proj, pads, actor, unpadded_cpu, slowness):
     (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
-    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + ENV_WRITE, actor)
+    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + ENV_WRITE, actor, scale=slowness)
     assert proc.returncode == 2 and "harness-switch: this Bash command" in proc.stderr, proc.stderr
     assert "Claude Code settings file" in proc.stderr and "budget" not in proc.stderr, proc.stderr  # its own refusal
     # The gate enforces the rule budget itself (no "budget" line above); the whole gate process also
-    # starts Python and runs the other rules: its CPU seconds are held, not its wall time on a shared runner.
-    assert took < rule_budget("harness-switch") + 5.0, took  # the whole gate, the rule's run inside it
+    # starts Python and runs the other rules: its CPU seconds are held to GATE_RUNS unpadded runs of this runner.
+    assert took < rule_budget("harness-switch") + GATE_RUNS * unpadded_cpu, (took, unpadded_cpu)
 
 
 @pytest.mark.parametrize("pads", [300, 1000, 5000])
 @pytest.mark.parametrize("target", ["notes.txt", "config/settings.json"])
-def test_a_padded_ordinary_write_is_still_allowed(guard_home, proj, pads, target):
+def test_a_padded_ordinary_write_is_still_allowed(guard_home, proj, pads, target, unpadded_cpu, slowness):
     (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
     (proj / "config").mkdir()
-    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + "echo '{\"env\": {}}' > " + target)
+    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + "echo '{\"env\": {}}' > " + target,
+                            scale=slowness)
     assert proc.returncode == 0 and "harness-switch" not in proc.stderr and "budget" not in proc.stderr, proc.stderr
     # The gate enforces the rule budget itself (no "budget" line above); the whole gate process also
-    # starts Python and runs the other rules: its CPU seconds are held, not its wall time on a shared runner.
-    assert took < rule_budget("harness-switch") + 5.0, took
+    # starts Python and runs the other rules: its CPU seconds are held to GATE_RUNS unpadded runs of this runner.
+    assert took < rule_budget("harness-switch") + GATE_RUNS * unpadded_cpu, (took, unpadded_cpu)
 
 
 @pytest.mark.parametrize("command", [

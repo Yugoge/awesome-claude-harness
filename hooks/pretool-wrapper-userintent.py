@@ -74,7 +74,9 @@ except Exception:  # pragma: no cover - fail-soft when lib missing
 #      awk/perl/ruby code that calls nothing, git readers, shellcheck, `bash -n`
 #      with no later `+n`, `command -v`, `type`, `which`), a commit/PR message,
 #      a print-only interpreter string, or a run target that resolves to a file
-#      that is not the harness home's wrapper (a project's own scripts/stop.sh).
+#      that is not the harness home's wrapper (a project's own scripts/stop.sh;
+#      a loop `S=~/.claude/scripts; for s in a b; do bash $S/$s.sh; done` over a
+#      list and literal assignments the guard reads in full: _loop_resolved).
 # A mention that is not proven harmless next to a run the guard cannot read (a
 # computed command word, piped stdin, opaque interpreter code, an unknown cwd)
 # is refused as well. The single-use sentinel is consumed only on a refused or
@@ -3164,9 +3166,50 @@ class _Scan:
                         return True
         return False
 
+    def _literal_var(self, name, depth=0):
+        """Every value a variable takes when the command sets it only by plain assignments of
+        literal text (`S=~/.claude/scripts`, `export C=/h; S=$C/scripts`), none of them computed,
+        appended or holding a space or glob, and no other word of the command names it (`read S`,
+        `printf -v S`, `unset S`); None otherwise."""
+        vals = self._assign_map().get(name)
+        if not vals or depth > 3 or name in self._loop_values():
+            return None
+        own = re.compile(r'\$\{?' + re.escape(name) + r'(?!\w)')
+        bare = re.compile(r'(?<![\w$])' + re.escape(name) + r'(?!\w)')
+        for site in self.sites:
+            for w in self._words(site.cmd):
+                t = w.raw.text if getattr(w, 'raw', None) is not None else (w.text or '')
+                if not re.match(re.escape(name) + r'=', t) and bare.search(own.sub('', t)):
+                    return None
+        out = []
+        for val in vals:
+            if val is None:
+                return None
+            acc = ['']
+            for k, p in enumerate(val.parts):
+                if p.kind == 'lit':
+                    t = p.text or ''
+                    if k == 0 and p.quote == _sp.BARE and t[:1] == '~' and (len(t) == 1 or t[1] == '/'):
+                        t = self.home + t[1:]
+                    choices = [t]
+                elif p.kind == 'param' and re.match(r'^\{?HOME\}?$', p.text or '') and self.home:
+                    choices = [self.home]
+                elif p.kind == 'param' and re.match(r'^\{?[A-Za-z_]\w*\}?$', p.text or ''):
+                    choices = self._literal_var((p.text or '').strip('{}'), depth + 1)
+                    if choices is None:
+                        return None
+                else:
+                    return None
+                acc = [a + c for a in acc for c in choices][:self._ALT_CAP]
+            if any(re.search(r'[\s*?\[]', v) for v in acc):
+                return None
+            out.extend(acc)
+        return out
+
     def _loop_resolved(self, word):
         """The values a run target takes when every computed part of it is a for-loop variable whose
-        list the guard reads in full (`scripts/todo/$c.py` over `for c in dev close ...`); None otherwise."""
+        list the guard reads in full (`scripts/todo/$c.py` over `for c in dev close ...`) or a variable
+        the command sets to literal text only (`S=~/.claude/scripts; ... $S/$s.sh`); None otherwise."""
         loopvals = self._loop_values()
         out = ['']
         try:
@@ -3178,6 +3221,9 @@ class _Scan:
                 choices = [p.text or '']
             elif p.kind == 'param' and isinstance(loopvals.get((p.text or '').strip('{}')), list):
                 choices = loopvals[(p.text or '').strip('{}')]
+            elif p.kind == 'param' and re.match(r'^\{?[A-Za-z_]\w*\}?$', p.text or '') and \
+                    self._literal_var((p.text or '').strip('{}')) is not None:
+                choices = self._literal_var((p.text or '').strip('{}'))
             else:
                 return None
             out = [a + b for a in out for b in choices]

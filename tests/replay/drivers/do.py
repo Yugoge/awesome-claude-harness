@@ -65,6 +65,11 @@ from .. import cmdtext
 from ..pipeline import Deviations, Orchestrator
 
 PIPELINE = "do"
+# /do's steps by what each is, from its own canonical list (scripts/todo/do.py; drivers/dev.py Steps: a step gone raises)
+from .dev import Steps  # noqa: E402
+DO = Steps(command="do", what={"understand": ("Understand requirements", None), "develop": ("Develop", None),
+                               "codex": ("Codex audit", None), "summary": ("Summary", None),
+                               "report": ("Write do-report", None)})
 # The artifact check's cost of this driver (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 COST = 289
@@ -120,8 +125,8 @@ class DoTurn:
     def start(self) -> None:
         o = self.o
         # OLDER_TEXT: ""blocked"" -- a Step 5 from before P5 named a blocked terminal; variant=blocked plays only that text
-        if self.status == "blocked" and '"blocked"' not in o.section("Step 5"):
-            raise cmdtext.TextNotFound("this /do text's Step 5 names one terminal, do.status completed: "
+        if self.status == "blocked" and '"blocked"' not in o.section(f"Step {DO.report}"):
+            raise cmdtext.TextNotFound(f"this /do text's Step {DO.report} names one terminal, do.status completed: "
                                        "a compliant /do cannot end blocked (variant=blocked plays a text from before P5)")
         o.slash(self.task, label="/do")
         m = re.search(r"task-id minted:\s*(\S+)", o.hook_out)
@@ -140,12 +145,12 @@ class DoTurn:
     def step2(self) -> None:
         o, s = self.o, self.o.s
         for rel, _old, _new in self.edits:
-            self.call(s.read, os.path.join(o.project, rel), label=self.label(f"Step 2 Read {rel}"))
+            self.call(s.read, os.path.join(o.project, rel), label=self.label(f"Step {DO.develop} Read {rel}"))
         if self.left == "none":
             s.say("Stopping here at your request: toy.add is unchanged.")
             return
         for rel, old, new in self.made:
-            c = self.call(s.edit, os.path.join(o.project, rel), old, new, label=self.label(f"Step 2 Edit {rel}"))
+            c = self.call(s.edit, os.path.join(o.project, rel), old, new, label=self.label(f"Step {DO.develop} Edit {rel}"))
             if c.ok:
                 self.files_modified.append(rel)
         if self.left == "half":
@@ -155,10 +160,10 @@ class DoTurn:
             s.say("The toy tests stay unrun: running them was not authorized.")
             return
         self.call(s.bash, "python3 -m pytest -q -p no:cacheprovider", "Run the toy tests",
-                  label=self.label("Step 2 Bash pytest"))
+                  label=self.label(f"Step {DO.develop} Bash pytest"))
 
     def step3(self) -> None:
-        self.o.s.say("Step 3 skipped: --codex was not passed.")
+        self.o.s.say(f"Step {DO.codex} skipped: --codex was not passed.")
 
     def step4(self) -> None:
         if self.status == "blocked":
@@ -171,10 +176,10 @@ class DoTurn:
     def sidecar_command(self) -> str:
         """Step 5's TASK_ID resolution as the text's numbered list spells it: SID from the
         environment, then the sidecar the text names (in the state dir where the text says so)."""
-        sec = self.o.section("Step 5")
+        sec = self.o.section(f"Step {DO.report}")
         codes = re.findall(r"`([^`\n]+)`", sec)
         # "1. `SID = $X` (fallback `$Y`)": the variables in the order the item names them.
-        sid_vars = [v for c in cmdtext.inline_codes(self.o.text, "Step 5", "SID = ") for v in re.findall(r"\$([A-Z_]+)", c)]
+        sid_vars = [v for c in cmdtext.inline_codes(self.o.text, f"Step {DO.report}", "SID = ") for v in re.findall(r"\$([A-Z_]+)", c)]
         sidecar = next(c for c in codes if "claude-do-task-$SID.json" in c)
         sid = "SID=\"${%s}\"" % ":-$".join(sid_vars)
         if sidecar.startswith("/"):
@@ -182,30 +187,30 @@ class DoTurn:
             # CLAUDE_STATE_DIR is another directory, and the hook printed where it wrote the sidecar.
             where = os.path.dirname(sidecar)
             if self.printed_dir and where != self.printed_dir:
-                self.rp.respellings.append({"step": self.label("Step 5 Bash sidecar"), "name": "do sidecar dir",
-                                            "where": "commands/do.md Step 5 (the hook's printed state dir)",
+                self.rp.respellings.append({"step": self.label(f"Step {DO.report} Bash sidecar"), "name": "do sidecar dir",
+                                            "where": f"commands/do.md Step {DO.report} (the hook's printed state dir)",
                                             "count": 1})
                 sidecar = os.path.join(self.printed_dir, os.path.basename(sidecar))
             return f'{sid}\ncat "{sidecar}"'
         state = next((c for c in codes if "harness_state_dir" in c and c.startswith(".")), None)
         if state is None:
-            raise cmdtext.TextNotFound("Step 5 names the sidecar by name but no state-dir resolution")
+            raise cmdtext.TextNotFound(f"Step {DO.report} names the sidecar by name but no state-dir resolution")
         return f'{sid}\n{state.split(";")[0].strip()}\ncat "$(harness_state_dir)/{sidecar}"'
 
     def step5(self) -> None:
         o, s = self.o, self.o.s
         c = self.call(s.bash, self.sidecar_command(), "Read the session-keyed do sidecar",
-                      label=self.label("Step 5 Bash sidecar"))
+                      label=self.label(f"Step {DO.report} Bash sidecar"))
         try:
             got = json.loads(c.response.get("stdout", "")).get("task_id") if c.ok else None
         except ValueError:
             got = None
         if got and got != self.tid:
             raise RuntimeError(f"the sidecar names task id {got}, the hook printed {self.tid}")
-        sec = o.section("Step 5")
+        sec = o.section(f"Step {DO.report}")
         paths = [p for p in re.findall(r"`(docs/dev/do-report-<TASK_ID>\.json)`", sec)]
         self.report_rel = (paths[0] if paths else "docs/dev/do-report-<TASK_ID>.json").replace("<TASK_ID>", self.tid)
-        doc = json.loads(o.block("Step 5", lang="json"))
+        doc = json.loads(o.block(f"Step {DO.report}", lang="json"))
         for k, v in list(doc.items()):
             if v == "<TASK_ID>":
                 doc[k] = self.tid
@@ -217,21 +222,29 @@ class DoTurn:
         # A text that has the hook pre-write a skeleton tells the agent to rewrite it; else the agent
         # writes the whole report.
         if "skeleton" in sec and os.path.exists(path):
-            self.call(s.read, path, label=self.label("Step 5 Read do-report skeleton"))
-        self.call(s.write, path, text, label=self.label("Step 5 Write do-report"))
+            self.call(s.read, path, label=self.label(f"Step {DO.report} Read do-report skeleton"))
+        self.call(s.write, path, text, label=self.label(f"Step {DO.report} Write do-report"))
 
     def summary(self) -> str:
         """do.summary: what blocked a `blocked` report (Step 5)."""
         return SUMMARY[self.left if self.status == "blocked" else self.status]
 
+    def to(self, n: int) -> None:
+        """Advance the checklist until Step n is in_progress, one completion per TodoWrite, each labelled by the
+        step it completes (a step the text adds between is completed on the way)."""
+        o = self.o
+        while not o.at_step(n):
+            k = int(re.match(r"Step (\d+)", o.todos[o.current()]["content"]).group(1))
+            o.advance(label=self.label(f"TodoWrite Step {k} done, Step {k + 1} in_progress"))
+
     def run(self) -> str:
         o = self.o
         self.start()
         self.step1()
-        for n, fn in ((2, self.step2), (3, self.step3), (4, self.step4), (5, self.step5)):
-            o.advance(label=self.label(f"TodoWrite Step {n - 1} done, Step {n} in_progress"))
+        for n, fn in ((DO.develop, self.step2), (DO.codex, self.step3), (DO.summary, self.step4), (DO.report, self.step5)):
+            self.to(n)
             fn()
-        o.advance(label=self.label("TodoWrite Step 5 done"))
+        o.advance(label=self.label(f"TodoWrite Step {DO.report} done"))
         ev = o.s.stop(f"/do {self.tid} {self.status}: {self.summary()} do-report {self.report_rel}. "
                       f"Next: /close {self.tid}", label="/do Stop", deviation=o.devs.at("/do Stop"))
         try:

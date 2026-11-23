@@ -1208,3 +1208,49 @@ def test_OB_L41_a_block_that_parses_is_held_to_its_role_on_any_dispatch(
     result = _run_hook(home, project, payload, switch="block")
     assert result.returncode == 2, result.stderr
     assert BLOCK_BANNER in result.stderr and f"reason={reason}" in result.stderr, result.stderr
+
+
+# --------------------------------------------------------------------------
+# R17 and a prohibition: panels dispatched side by side each name the others'
+# reports only to forbid reading them; that is no input, so no ordering holds.
+# --------------------------------------------------------------------------
+
+def _panel(angle, forbidden_lines, inputs=()):
+    """A BA panel dispatch as commands/dev.md writes one: its own report, a DO NOT list."""
+    report = f"docs/dev/ba-panel-{TASK_ID}-{angle}.md"
+    doc = _obligation_doc(role="ba", artifacts=[{"kind": "markdown", "path": report,
+                                                   "identity_anchor": TASK_ID}])
+    text = [f"Input file: {path}" for path in inputs]
+    text += ["Write your panel report only.", _block(doc), "", "DO NOT:",
+             "- modify, create or delete any file other than your own panel report;"]
+    text += [f"- {line};" for line in forbidden_lines]
+    return "ba", "\n".join(text)
+
+
+def _others(angle):
+    return [f"docs/dev/ba-panel-{TASK_ID}-{other}.md" for other in "ABC" if other != angle]
+
+
+def test_R17_panel_naming_the_running_panels_only_to_forbid_reading_them_passes(tmp_path):
+    home, project = _dirs(tmp_path)
+    steps = [("toolu_pa", _panel("A", [f"read {p}" for p in _others("A")]), False),
+             ("toolu_pb", _panel("B", [f"read {p}" for p in _others("B")]), False)]
+    result = _order_run(home, project, steps, _panel("C", [f"read {p}" for p in _others("C")]))
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+
+
+def test_R17_a_path_named_as_input_stays_held_when_a_prohibition_names_it_too(tmp_path):
+    home, project = _dirs(tmp_path)
+    panel_a = f"docs/dev/ba-panel-{TASK_ID}-A.md"
+    steps = [("toolu_pa", _panel("A", []), False)]
+    result = _order_run(home, project, steps, _panel("C", [f"read {panel_a}"], inputs=[panel_a]))
+    assert result.returncode == ORDER_EXIT, result.stderr
+    assert f"reason=producer_not_stopped artifact={panel_a}" in result.stderr
+
+
+def test_R17_a_prohibition_to_modify_a_path_does_not_hide_the_dependency_on_it(tmp_path):
+    home, project = _dirs(tmp_path)
+    panel_a = f"docs/dev/ba-panel-{TASK_ID}-A.md"
+    steps = [("toolu_pa", _panel("A", []), False)]
+    result = _order_run(home, project, steps, _panel("C", [f"modify {panel_a}"]))
+    assert result.returncode == ORDER_EXIT, result.stderr

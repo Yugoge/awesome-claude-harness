@@ -7,11 +7,13 @@ role's name, resolved per write (hooks/lib/policy_registry.py placed). The chang
 `*/tmp/claude-scratch/<role>/`, a glob that matched any directory tree ending in tmp/claude-scratch/<role>/
 (the system temp directory's, /var/tmp's own claude-scratch/<role>/, one in a project or a home), and the lock
 was `/tmp/agentic-commit/locks/*`. A dispatch begun before still rewrites a file it left at its old place, and
-the changelog-analyst still takes its old lock there (policy_registry.in_flight); nothing new is made there.
+the changelog-analyst still takes its old lock there (policy_registry.in_flight); nothing new is made there, but
+by a /commit of a session begun before the policy's arrival: its message file and its lock, as the old text makes them.
 
 Each case runs the real hook as a subprocess, the project outside every temp root and never created. The
 in-flight and full-volume cases run it in a private mount namespace whose /tmp is a small tmpfs of the test's
-own (unshare -rm); they are skipped where no such namespace can be made.
+own (as root, else a user namespace, else passwordless sudo, as on CI: hooks/tests/_private_ns.py); they are
+skipped where none of these works, and fail so on GitHub Actions.
 """
 from __future__ import annotations
 
@@ -25,6 +27,9 @@ import uuid
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _private_ns  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "pretool-tool-policy.py"
@@ -43,9 +48,13 @@ OLD_LOCK = ('mkdir -p /tmp/agentic-commit/locks\n'
             'exec 9>"/tmp/agentic-commit/locks/${REPO_HASH}.lock"\nflock -w 30 -x 9 || exit 1\n')
 # The private /tmp of the namespace cases: what a flow begun before left there, then (FULL=1) no space left.
 PREPARE = r'''
+exec 3<"$KEEP"  # the test's own dir: bound back at its path when it lies under /tmp (CI's runner)
 mount -t tmpfs -o size=256k,mode=1777 none /tmp || exit 97
+case "$KEEP/" in /tmp/*) { mkdir -p "$KEEP" && mount -c --bind /proc/self/fd/3 "$KEEP"; } || exit 97;; esac
+exec 3<&-
 if [ "$LINKED" = 1 ]; then mkdir -p /tmp/real/agentic-commit && ln -s /tmp/real/agentic-commit /tmp/agentic-commit; fi
 mkdir -p /tmp/claude-scratch/changelog-analyst /tmp/claude-scratch/qa/proj/src /tmp/agentic-commit/locks /tmp/elsewhere/sub
+if [ "$BARE" = 1 ]; then rmdir /tmp/agentic-commit/locks /tmp/agentic-commit; fi
 printf old > /tmp/claude-scratch/changelog-analyst/commit-msg-old.txt
 printf old > /tmp/claude-scratch/qa/notes.md
 printf old > /tmp/claude-scratch/qa/a.md && ln /tmp/claude-scratch/qa/a.md /tmp/claude-scratch/qa/linked.md
@@ -88,23 +97,17 @@ def run(place, role, tool, tool_input, state=OUTSIDE_STATE, ns=None, hours=None,
     if hours is not None:
         argv = [sys.executable, "-c", WITH_HOURS, str(HOOK), str(hours)]
     if ns:
-        argv = ["unshare", "-rm", "--propagation", "private", "sh", "-c", PREPARE, "sh"] + argv
         env["FULL"], env["LINKED"] = ("1" if ns == "full" else "0"), ("1" if ns == "linked" else "0")
+        env["BARE"] = "1" if ns == "bare" else "0"  # no /tmp/agentic-commit yet: the old text's mkdir -p is to come
+        env["KEEP"] = os.path.dirname(place["tmpdir"])  # tmp_path: the session root and HOME stay where they are
+        argv = _private_ns.unshare_argv(_private_ns.require("the private-/tmp cases"), env,
+                                        ["sh", "-c", PREPARE, "sh"] + argv)
     proc = subprocess.run(argv, input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=60)
     if ns and proc.returncode in (97, 98):
-        pytest.skip(f"no private /tmp could be made here (rc {proc.returncode}): {proc.stderr[:200]}")
+        # a namespace can be made here (the way above), so a setup that fails is a defect, not a skip
+        pytest.fail(f"the private /tmp could not be set up (rc {proc.returncode}): {proc.stderr[:200]}")
     assert not Path(PROJECT).parent.exists(), "the policy check must not create the project"
     return proc.returncode, (proc.stderr.splitlines() or [""])[0]
-
-
-def _ns_available() -> bool:
-    try:
-        return subprocess.run(["unshare", "-rm", "true"], capture_output=True, timeout=10).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
-needs_ns = pytest.mark.skipif(not _ns_available(), reason="no private mount namespace (unshare -rm) here")
 
 
 def write(path):
@@ -189,7 +192,6 @@ def test_the_commit_message_and_lock_are_at_their_new_places(place, tmp_path, st
 
 
 # ---------------------------------------------------------------- a flow in flight, /tmp free or full
-@needs_ns
 @pytest.mark.parametrize("ns", ["free", "full"])
 def test_a_flow_begun_before_finishes_at_its_old_places(place, ns):
     ca = "changelog-analyst"
@@ -203,14 +205,61 @@ def test_a_flow_begun_before_finishes_at_its_old_places(place, ns):
     assert run(place, "qa", "Bash", {"command": OLD_LOCK}, ns=ns, hours=OPEN)[0] == 2
 
 
-@needs_ns
+def began(place, offset_s, sid=SID):
+    """The session's .owner as hooks/session-scratch-init.sh writes it, ``offset_s`` from the policy's arrival."""
+    at = time.gmtime((ROOT / "policies" / "tool-policy.v1.json").stat().st_mtime + offset_s)
+    owner = Path(place["tmpdir"]) / SID / ".owner"
+    owner.parent.mkdir(parents=True, exist_ok=True)
+    owner.write_text(json.dumps({"sid": sid, "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", at)}), encoding="utf-8")
+
+
+NEW_MSG = "/tmp/claude-scratch/changelog-analyst/commit-msg-20000101-000000-r0001x.txt"
+
+
+@pytest.mark.parametrize("ns", ["free", "bare"])
+def test_a_commit_begun_before_makes_its_message_and_lock_at_the_old_places(place, ns):
+    began(place, -3600)
+    assert run(place, "changelog-analyst", *write(NEW_MSG), ns=ns, hours=OPEN) == (0, "")
+    assert run(place, "changelog-analyst", "Bash", {"command": OLD_LOCK}, ns=ns, hours=OPEN) == (0, "")
+
+
+@pytest.mark.parametrize("why, offset_s, sid, hours", [
+    ("a session begun after the arrival", 60, SID, OPEN),
+    ("a session begun within the arrival's second", 0, SID, OPEN),
+    ("a .owner naming another session", -3600, OTHER_SID, OPEN),
+    ("the window closed", -3600, SID, 0),
+    ("no .owner", None, SID, OPEN),
+])
+def test_nothing_new_at_the_old_places_but_for_a_session_begun_before(place, why, offset_s, sid, hours):
+    if offset_s is not None:
+        began(place, offset_s, sid)
+    assert run(place, "changelog-analyst", *write(NEW_MSG), ns="bare", hours=hours)[0] == 2, why
+    assert run(place, "changelog-analyst", "Bash", {"command": OLD_LOCK}, ns="bare", hours=hours)[0] == 2, why
+
+
+@pytest.mark.parametrize("role, tool_input", [
+    ("qa", write("/tmp/claude-scratch/qa/commit-msg-20000101-000000-r0001x.txt")),       # another role
+    ("qa", ("Bash", {"command": OLD_LOCK})),
+    ("spec", write("/tmp/claude-scratch/spec/commit-msg-x.txt")),
+    ("changelog-analyst", write("/tmp/claude-scratch/qa/commit-msg-x.txt")),             # another place
+    ("changelog-analyst", write("/tmp/claude-scratch/changelog-analyst/notes.txt")),
+    ("changelog-analyst", write("/tmp/claude-scratch/changelog-analyst/sub/commit-msg-x.txt")),
+    ("changelog-analyst", write("/tmp/claude-scratch/changelog-analyst/commit-msg-x.md")),
+    ("changelog-analyst", write("/tmp/agentic-commit/locks/0123456789abcdef.lock")),
+    ("changelog-analyst", write("/tmp/agentic-commit/other.lock")),
+    ("changelog-analyst", write("/tmp/claude-scratch/changelog-analyst/${REPO_HASH}.lock")),
+])
+def test_a_session_begun_before_makes_nothing_else_there(place, role, tool_input):
+    began(place, -3600)
+    assert run(place, role, *tool_input, ns="bare", hours=OPEN)[0] == 2, (role, tool_input)
+
+
 def test_the_deny_prefixes_hold_at_the_old_place(place):
     old_project = "/tmp/claude-scratch/qa/proj"  # a project under the old place: qa's /src/ denial holds there
     code, err = run(place, "qa", *write(old_project + "/src/x.py"), ns="free", hours=OPEN, project=old_project)
     assert code == 2 and "denied_write_path_prefixes" in err, err
 
 
-@needs_ns
 @pytest.mark.parametrize("role, tool_input, ns", [
     ("qa", write("/tmp/claude-scratch/qa/mid/sub/f.md"), "free"),       # a link in a middle component
     ("ba", write("/tmp/claude-scratch/ba/sub/f.md"), "free"),           # the role's old directory a link
@@ -220,7 +269,6 @@ def test_a_link_in_any_component_closes_the_old_place(place, role, tool_input, n
     assert run(place, role, *tool_input, ns=ns, hours=OPEN)[0] == 2
 
 
-@needs_ns
 @pytest.mark.parametrize("tool_input, new", [
     (write("/tmp/claude-scratch/changelog-analyst/commit-msg-old.txt"), "{drafts}/"),
     (("Bash", {"command": OLD_LOCK}), OUTSIDE_STATE + "/agentic-commit/locks/"),
@@ -244,7 +292,6 @@ def test_the_window_runs_from_the_policy_files_arrival(tmp_path, monkeypatch):
     assert policy_registry._in_flight_until() == 0.0  # no policy read: the window is closed
 
 
-@needs_ns
 @pytest.mark.parametrize("role", ["changelog-analyst", "qa"])
 def test_the_new_places_decide_alike_with_tmp_full(place, role):
     path = os.path.join(drafts(place, role), "draft.md")

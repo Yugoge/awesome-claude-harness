@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness_state_dir import harness_state_dir  # noqa: E402
+import locations  # noqa: E402  (the filesystem root is no top)
 
 VERDICTS = ("approved", "blocked")
 
@@ -112,7 +113,7 @@ def fault(path: str) -> str:
         return "`repo_root` is missing"
     if hashlib.sha256(os.path.realpath(repo_root).encode()).hexdigest()[:16] != repo_hash:
         return f"`repo_root` {repo_root!r} does not hash to the path's REPO_HASH {repo_hash!r}"
-    toplevel = _git(repo_root, "rev-parse", "--show-toplevel")
+    toplevel = locations.repo_top(repo_root)
     if not toplevel or os.path.realpath(toplevel) != os.path.realpath(repo_root):
         return f"`repo_root` {repo_root!r} is not the top level of a git repository"
     ref, default_branch = grant.get("branch"), grant.get("default_branch")

@@ -43,6 +43,8 @@ import pytest
 
 from tests.replay import cmdtext, hookrun, sandbox, schemagen, sites, suite
 from tests.replay import test_faults as tf
+from tests.replay.drivers.dev import S as DEV_STEPS
+from tests.replay.drivers.overnight import N as NIGHT_STEPS
 from tests.test_landing import append_allow, cli_write, env, git, landing_log, run  # noqa: F401
 
 TREE_UNDER_TEST = Path(__file__).resolve().parents[2]  # the tree under test
@@ -315,7 +317,7 @@ def test_fanout_wedge(replays, shape, settings):
     r = replays.get(key(shape, settings))
     assert not r.error and not r.summary.get("driver_error"), r.explain()
     assert not r.hook_errors, "a hook error:\n" + r.explain()
-    sibling = _dispatched(r, "Step 10 [l2] Agent(dev)")
+    sibling = _dispatched(r, f"Step {DEV_STEPS.dev} [l2] Agent(dev)")
     assert sibling, "the sibling lane's dev never ran:\n" + r.explain()
     sib_stops = tf.stops(r, sibling)
     assert sib_stops and not any(s["blocked"] for s in sib_stops), \
@@ -337,7 +339,7 @@ def test_fanout_wedge(replays, shape, settings):
 
 # ------------------------------------------- R-E1, E1: the v1 contract against the v2 obligation
 OVERNIGHT = next(s for s in suite.COMPLIANT if s.name == "/dev-overnight")
-E1 = {"F3a": ("dev", "Step 12"), "F3q": ("qa", "Step 15")}  # the fault: (role, the step dispatching it)
+E1 = {"F3a": ("dev", f"Step {NIGHT_STEPS.dev}"), "F3q": ("qa", f"Step {NIGHT_STEPS.qa}")}  # the fault: (role, the step dispatching it)
 E1_STEP = dict(E1.values())
 _OBLIGATION = re.compile(r'<obligation\s+v="1"\s*>\s*(\{.*?\})\s*</obligation>', re.S)
 _SID = "e1-replay-session"

@@ -112,7 +112,7 @@ def _sandbox(tmp_path):
     return repo, env
 
 
-def _run(command, cwd, env, subagent):
+def _run(command, cwd, env, subagent, hook_cwd=None):
     payload = {"session_id": "hidden-git-0001", "tool_name": "Bash",
                "tool_input": {"command": command}, "cwd": str(cwd),
                "hook_event_name": "PreToolUse", "transcript_path": "",
@@ -120,7 +120,7 @@ def _run(command, cwd, env, subagent):
     if subagent:
         payload.update(agent_id="agent-hidden-git", agent_type="general-purpose")
     return subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
-                          text=True, capture_output=True, cwd=str(cwd), env=env, timeout=120)
+                          text=True, capture_output=True, cwd=str(hook_cwd or cwd), env=env, timeout=120)
 
 
 @pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
@@ -149,6 +149,35 @@ def test_the_harness_wrappers_are_not_read(tmp_path, subagent):
                     'bash "%s" feature' % (HOOKS / "merge.sh")):
         proc = _run(command, ROOT, env, subagent)
         assert proc.returncode == 0, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
+def test_a_script_is_read_in_the_calls_directory_not_the_hooks(tmp_path, subagent):
+    # The call runs in the repository, whose push.sh pushes; the hook process runs in another directory,
+    # whose push.sh is harmless, or which has none. The script named relative is read where the call runs.
+    repo, env = _sandbox(tmp_path)
+    harmless, empty = tmp_path / "harmless", tmp_path / "empty"
+    for d in (harmless, empty):
+        d.mkdir()
+    (harmless / "push.sh").write_text(SCRIPTS["scripts/harmless.sh"])
+    (harmless / "push.sh").chmod(0o755)
+    for hook_dir in (repo, harmless, empty):
+        for command in ("bash push.sh", "./push.sh", "source push.sh", "bash %s" % (repo / "push.sh")):
+            proc = _run(command, repo, env, subagent, hook_cwd=hook_dir)
+            assert proc.returncode == 2 and "BLOCKED" in proc.stderr, (hook_dir, command, proc.stderr)
+    # and the other way round: the call runs where push.sh is harmless, the hook where it pushes
+    for command in ("bash push.sh", "./push.sh", "bash %s" % (harmless / "push.sh")):
+        proc = _run(command, harmless, env, subagent, hook_cwd=repo)
+        assert proc.returncode == 0, (command, proc.stderr)
+    # A cd in the command moves where the script is read: to the literal directory it names; a cd the guard
+    # cannot follow leaves the relative script unproven, refused, never read as empty.
+    (harmless / "sub").mkdir()
+    (harmless / "sub" / "push.sh").write_text(SCRIPTS["push.sh"])
+    for command, rc in (("cd sub && bash push.sh", 2), ("cd sub; ./push.sh", 2), ("(cd sub) && bash push.sh", 0),
+                        ('cd "$D" && bash push.sh', 2), ('cd "$D" && bash %s' % (harmless / "push.sh"), 0)):
+        for hook_dir in (harmless, empty):
+            proc = _run(command, harmless, env, subagent, hook_cwd=hook_dir)
+            assert proc.returncode == rc, (hook_dir, command, proc.stderr)
 
 
 def test_hidden_git_texts_reads_code_and_scripts(tmp_path):

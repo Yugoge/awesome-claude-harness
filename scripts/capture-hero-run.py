@@ -372,8 +372,11 @@ def main() -> int:
 
         # Duration measured from the raw capture (never from the SVG's dur attribute).
         duration = parse_ts(lines[-1]) - parse_ts(lines[0]) if len(lines) >= 2 else 0.0
-        if not (10.0 <= duration <= 15.0):
-            failures.append(f"raw duration {duration:.3f}s outside [10,15]")
+        # Lower bound only: the demo's own pauses between first and last line take 10.4 s, so a
+        # shorter run did not run them; a busy host only lengthens a real run. The upper bound is
+        # the committed recording's, checked on that file (verify-hero-provenance.py).
+        if duration < 10.0:
+            failures.append(f"raw duration {duration:.3f}s under 10 s")
 
         # No grant belonging to the demo outlives the run.
         if GRANT_PATH.exists():

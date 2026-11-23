@@ -22,10 +22,12 @@ or a views-shaped path outside every spec root (`/tmp/deps.lock.json`, a test fi
 Every `>`/`>>` in the raw text is read as a redirect target too (as the base guard read it),
 so a command the shell parser cannot read is still checked.
 
-Whitelist: a command that runs `.claude/scripts/spec-check.py` (or its quoted CLAUDE_HOME channel
-spelling), by name or as python's first argument, is the legal writer: its own words and
-redirections are not read (an --action text may hold `-> <view>`). Every other command of the
-same line is read as it is alone; the script's name in a comment or an argument exempts nothing.
+Whitelist: a command that runs this harness's own `scripts/spec-check.py` (the file beside this
+hook's directory, matched by real path from every directory the command may run in, in any
+spelling the hook can expand: absolute, `~/`, `$HOME`, the CLAUDE_HOME channel), by name or as
+python's first argument, is the legal writer: its words are not scanned as raw text (an --action
+text may hold `-> <view>`). Its redirections are the shell's writes and are read as any other's.
+A script of that name elsewhere, or a word that only holds its path, exempts nothing.
 
 Fail-open on a payload that is not JSON. Exit 0 = allow, exit 2 = block.
 """
@@ -65,12 +67,8 @@ BLOCK_PATTERNS = [
 _RAW_REDIRECT = re.compile(REDIRECT_OPS + r"\s*([^\s;&|<>()]+)")
 _MAX_DIRS = 64
 
-# The spellings of spec-check.py a command may run it by (_checker_spans)
-WHITELIST_PATTERNS = [
-    re.compile(r"\.claude/scripts/spec-check\.py"),
-    re.compile(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/spec-check\.py"'),  # the quoted CLAUDE_HOME channel
-    re.compile(r"bin/spec-check\.py"),  # legacy path; retained for compatibility with old invocations
-]
+# `${NAME:-$HOME/rest}`, the default the CLAUDE_HOME channel spells (_word_path)
+_HOME_DEFAULT = re.compile(r"([A-Za-z_]\w*):-\$\{?HOME\}?(/[^$`\\]*)?")
 
 
 def _load_stdin():
@@ -89,18 +87,50 @@ def _extract_command(data):
     return tool_input.get("command") or ""
 
 
-def _checker_spans(script):
+def _word_path(word):
+    """The path a word names as the shell expands it with this hook's environment, or None when
+    that is not certain: a leading bare `~`, `$NAME` and `${NAME:-$HOME/rest}` are put in; any
+    other expansion, or a put-in value the shell would split or glob, gives None."""
+    out = []
+    for k, p in enumerate(word.parts):
+        if p.kind == "lit":
+            out.append(os.path.expanduser(p.text) if k == 0 and p.quote == _sp.BARE else p.text)
+            continue
+        m = _HOME_DEFAULT.fullmatch(p.text) if p.kind == "param" else None
+        if m:
+            v = os.environ.get(m.group(1)) or (os.environ.get("HOME") or "") + (m.group(2) or "")
+        elif p.kind == "param" and re.fullmatch(r"[A-Za-z_]\w*", p.text):
+            v = os.environ.get(p.text)
+        else:
+            return None
+        if not v or (p.quote == _sp.BARE and re.search(r"[\s*?\[]", v)):
+            return None
+        out.append(v)
+    return "".join(out) or None
+
+
+def _runs_checker(word, dirs):
+    """Whether a program word is this harness's own spec-check.py from every directory it may run in."""
+    text = _word_path(word)
+    if not text or not text.endswith("spec-check.py"):
+        return False
+    real = os.path.realpath(SPEC_CHECK)
+    bases = [""] if os.path.isabs(text) else dirs
+    return all(os.path.realpath(os.path.join(d, text)) == real for d in bases)
+
+
+def _checker_spans(script, dirs):
     """(context, span) of each simple command that runs spec-check.py, the cp-state writer: the
-    script is the command's own name or python's first argument (after flags that take no value,
-    as -u or -B; -c and -m run something else), spelled as WHITELIST_PATTERNS."""
+    program the command runs (its own name, or python's first argument after flags that take no
+    value, as -u or -B; -c and -m run something else) is the file SPEC_CHECK, the script beside this
+    hook, at its real place. A copy elsewhere, or a path that only holds its name, runs another."""
     out = []
     for site in _sp.walk(script):
         res = _sp.resolve(site.cmd)
         operand = [w for w in res.args if not re.fullmatch(r"-[bBdEIOqsSuvx]+", w.raw.text)][:1] \
             if re.fullmatch(r"python[\d.]*", res.name or "") else []
         for word in ([res.head] if res.head is not None else []) + operand:
-            raw = word.raw.text
-            if raw.rstrip("'\"").endswith("spec-check.py") and any(p.search(raw) for p in WHITELIST_PATTERNS):
+            if _runs_checker(word, dirs):
                 out.append((site.context, site.cmd.span))
                 break
     return out
@@ -224,12 +254,11 @@ def _into_dir_texts(script, dirs):
     return out
 
 
-def _target_texts(command, checker=()):
-    """The path text of every non-delete write target the parser finds, the checker's own aside."""
+def _target_texts(command):
+    """The path text of every non-delete write target the parser finds: the checker's redirections
+    are the shell's writes, not the checker's, and are read as any other."""
     out = []
     for t in _write_targets(command):
-        if t.word is not None and any(c == t.context and a <= t.word.span[0] < b for c, (a, b) in checker):
-            continue
         if t.path is not None:
             out.append(t.path)
         elif t.word is not None:
@@ -246,10 +275,10 @@ def _matches_block(command, call_dir):
     if _sp is not None and _write_targets is not None:
         try:
             script = _sp.parse(command)
-            spans = _checker_spans(script) if "spec-check.py" in command and script.error is None else []
-            texts += _target_texts(command, spans)
-            checker = spans  # the raw text is read around the checker only once the parser's targets are in
             dirs = _cd_dirs(script, call_dir)
+            spans = _checker_spans(script, dirs) if "spec-check.py" in command and script.error is None else []
+            texts += _target_texts(command)
+            checker = spans  # the raw text is read around the checker only once the parser's targets are in
         except Exception:
             pass
         try:

@@ -247,9 +247,11 @@ Rebuild the project and confirm the running app reflects dev's changes before an
 
 Skip, with documented rationale, only when the changes touch no deployed file (offline scripts, hooks, agent definitions, documentation).
 
-### Step 10: UI/E2E Testing via Playwright MCP (MANDATORY for ALL user-facing changes)
+### Step 10: UI/E2E Testing in a browser (MANDATORY for ALL user-facing changes)
 
 Open the product in a browser, perform real user actions, assert real outcomes and let the results decide pass or fail. "Code looks correct" is not a QA result.
+
+Use the browser tools your session has, whichever provider supplies them: your row admits them all as `<browser tools>` (one definition, `BROWSER_TOOLS` in `hooks/lib/policy_registry.py`). The operation names below are Playwright's; with another provider take its equivalent (Paseo's `browser_screenshot`, `browser_fill`). A file a browser tool writes (a screenshot's `filename`) is judged as your Write, so name one in your own scratch or under `docs/dev/overnight/`; a file it uploads to a page is judged as your Read.
 
 - **Run it** for any change affecting what a user sees or triggers: frontend files, backend API endpoints, pipeline or processing code (trigger it through the UI and verify it completes), business logic (verify the user-facing result), configuration (verify the app still works). "Backend only" and "no frontend files" are not skip reasons. With any doubt, run it.
 - **Skip it** only when the change affects nothing a user can see or trigger: offline scripts users never invoke, documentation-only, test-only, hook or agent definition files.

@@ -163,7 +163,10 @@ fi
 # sessions may hold uncommitted edits here right now -- so the checks below
 # give that shape the equivalent safety the linked shape gets for free.
 MAIN_WORKTREE_PATH="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')"
-CURRENT_TOPLEVEL="$(git rev-parse --show-toplevel)"
+CURRENT_TOPLEVEL="$(claude_repo_top .)" || {  # a merge is a writer: it writes nothing below a top that is the root
+  echo "merge.sh: not inside a git work tree whose top is below the filesystem root: nothing is merged" >&2
+  exit 1
+}
 IS_IN_PLACE=false
 if [ -n "$MAIN_WORKTREE_PATH" ] && [ "$(realpath "$MAIN_WORKTREE_PATH" 2>/dev/null)" = "$(realpath "$CURRENT_TOPLEVEL" 2>/dev/null)" ]; then
   IS_IN_PLACE=true

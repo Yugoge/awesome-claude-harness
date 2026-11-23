@@ -69,13 +69,15 @@ runs in CI does not.
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
 
 # ---------------------------------------------------------------------------
 # THE SINGLE DECLARED SOURCE.
@@ -1332,12 +1334,7 @@ def main(argv=None):
     if args.root:
         root = Path(args.root)
     else:
-        try:
-            root = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                                       capture_output=True, text=True, timeout=30,
-                                       check=True).stdout.strip())
-        except Exception:  # noqa: BLE001
-            root = Path.cwd()
+        root = Path(locations.repo_top(os.getcwd()) or Path.cwd())  # never the filesystem root
     # Resolved once and written back, so companion-document existence resolves against the
     # SAME root a negative fixture was built in.
     args.root = str(root)

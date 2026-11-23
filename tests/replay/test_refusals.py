@@ -8,21 +8,27 @@ gate's step5_refused, while git holds the conflict) and reaches no merge.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from tests.replay import suite
+from tests.replay.drivers.merge import M
+from tests.replay.drivers.push import PushSteps
+
+PUSH = PushSteps(open(os.path.join(suite.REPO, "commands", "push.md"), encoding="utf-8").read())
 
 REFUSALS = (
     (suite.Scenario("/merge self-merge", "merge", (("variant", "plain"), ("ref", "master")), ("merge",), 30),
-     "merge refusal", "Step 1", "name the ref to merge", False),
+     "merge refusal", f"Step {M.snapshot}", "name the ref to merge", False),
     (suite.Scenario("/merge missing ref", "merge", (("variant", "plain"), ("ref", "no-such-ref")), ("merge",), 30),
-     "merge refusal", "Step 1", "name the ref to merge", False),
+     "merge refusal", f"Step {M.snapshot}", "name the ref to merge", False),
     (suite.Scenario("/merge conflict", "merge", (("variant", "conflict"),), ("merge",), 90),
-     "merge refusal", "Step 5", "I resolve the conflicts myself, then you continue", False),
+     "merge refusal", f"Step {M.merge}", "I resolve the conflicts myself, then you continue", False),
     (suite.Scenario("/push no token", "push", (("after", "none"),), ("push",), 60),
-     "push refusal", "Step 5", "run /commit first", False),
+     "push refusal", PUSH.push, "run /commit first", False),
     (suite.Scenario("/push detached HEAD", "push", (("after", "none"), ("detached", "1")), ("push",), 40),
-     "push refusal", "Step 2", "check out the branch to push", False),
+     "push refusal", PUSH.snapshot, "check out the branch to push", False),
 )
 CASES = [pytest.param(suite.replay_key(scn, "shipped"), key, step, action, reached, id=scn.name,
                       marks=pytest.mark.replay(suite.replay_key(scn, "shipped"), scn.cost))

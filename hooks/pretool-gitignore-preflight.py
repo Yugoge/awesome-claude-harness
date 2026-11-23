@@ -747,13 +747,18 @@ def get_repo_root():
 
 
 def is_gitignored(path, repo_root):
-    """Return True if git considers the path gitignored (exit 0 = ignored)."""
+    """Return True if git considers the path gitignored (exit 0 = ignored), asked in the path's own
+    repository (its nearest existing directory; a relative path is below repo_root), whichever project
+    cites it. Exit 1 = not ignored; 128 = the path lies in no repository: no ignore rule holds it."""
+    full = os.path.normpath(os.path.join(repo_root, path))
+    where = os.path.dirname(full)
+    while not os.path.isdir(where) and where != os.path.dirname(where):
+        where = os.path.dirname(where)
     result = subprocess.run(
-        ['git', 'check-ignore', '--no-index', '--quiet', '--', path],
-        cwd=repo_root,
+        ['git', 'check-ignore', '--no-index', '--quiet', '--', full],
+        cwd=where,
         capture_output=True,
     )
-    # exit 0 = ignored, exit 1 = not ignored, exit 128 = error (treat as not ignored)
     return result.returncode == 0
 
 

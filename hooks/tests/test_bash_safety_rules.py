@@ -703,3 +703,22 @@ def test_a_reader_with_a_glob_operand_beside_a_protected_name_still_reads(sandbo
     cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
     r = run(sandbox, SAFETY, cmd)
     assert r.returncode == 0, (cmd, r.stderr)
+
+
+@pytest.mark.parametrize("spelling", ["plain", "after-cd", "through-link", "through-tmpdir"])
+def test_a_write_of_the_daemon_grant_file_is_refused_at_every_spelling(sandbox, tmp_path, spelling):
+    """g-locfind1 F3: the daemon-restart grant file is refused for where the write lands (as the commit grant is,
+    location-rules U9), not for how its path is spelt: after a cd into its folder, through a link to the folder, or
+    through $TMPDIR."""
+    grants = Path(sandbox["tmp"]) / "daemon-grants"
+    grants.mkdir(exist_ok=True)
+    (tmp_path / "link").symlink_to(grants)
+    name = "claude-allow-daemon-restart-x.flag"
+    command = {"plain": f"touch {grants}/{name}", "after-cd": f"cd {grants} && touch {name}",
+               "through-link": f"touch {tmp_path}/link/{name}",
+               "through-tmpdir": f'touch "$TMPDIR/daemon-grants/{name}"'}[spelling]
+    env = dict(sandbox["env"], CLAUDE_DAEMON_RESTART_SENTINEL_DIR=str(grants))
+    r = run(dict(sandbox, env=env), SAFETY, command)
+    assert r.returncode == 2 and "daemon-restart-sentinel-write" in r.stderr, (command, r.stderr)
+    read = run(dict(sandbox, env=env), SAFETY, f"cd {grants} && cat {name}")
+    assert read.returncode == 0, read.stderr

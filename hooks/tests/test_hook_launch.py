@@ -191,17 +191,20 @@ def test_runs_nest_and_an_inner_os_exit_ends_only_the_inner_hook(tmp_path):
 
 
 def test_an_inner_budget_and_an_outer_budget_each_stop_their_own_run(tmp_path):
-    slow = _hook(tmp_path, "slow", "time.sleep(30)\n")
+    # The outer run's own end is read from a file the outer would write after its long sleep, not from a clock: the
+    # outer budget only has to be long enough for the inner run to finish on a slow runner.
+    ended = tmp_path / "outer-ended"
+    slow = _hook(tmp_path, "slow", "time.sleep(300)\n")
     outer = _hook(tmp_path, "outer2", f"""
         sys.path.insert(0, {str(HOOKS)!r})
         from lib.rule_runner import run_rule
         r = run_rule({slow!r}, b'{{}}', 0.3)
         print(r.overrun); sys.stdout.flush()
         time.sleep(30)
+        open({str(ended)!r}, 'w').write('the outer ran past its budget')
         """)
-    start = time.monotonic()
-    run = run_rule(outer, b"{}", 2.0)
-    assert run.overrun and run.stdout == "True\n" and time.monotonic() - start < 10
+    run = run_rule(outer, b"{}", 8.0)
+    assert run.overrun and run.stdout == "True\n" and not ended.exists()
 
 
 # ------------------------------------------------------------------ the launcher
@@ -233,7 +236,7 @@ def _run(launcher, payload, env=None, timeout=60):
 
 @pytest.mark.parametrize("bad", [
     "raise RuntimeError('crash')\n",
-    "time.sleep(30)\n",
+    "time.sleep(300)\n",
     "sys.stdout.flush(); os._exit(0)\n",
     "print('{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"allow\"}}')\n",
     "while True:\n    try:\n        time.sleep(30)\n    except BaseException:\n        pass\n",
@@ -245,10 +248,9 @@ def test_one_hooks_failure_never_turns_anothers_refusal_into_an_allow(tmp_path, 
     for order in ((b, refuse, allow), (refuse, b, allow)):
         launcher = _launcher(tmp_path, "PreToolUse", [(os.path.basename(p), p, ("Bash",), 1)
                                                        for p in order])
-        start = time.monotonic()
+        # a launcher that waited for the hook that sleeps 300 s or never ends would run into _run's 60 s guard
         code, out, err = _run(launcher, {"tool_name": "Bash", "tool_input": {"command": "ls"}})
         assert code == 2 and "no: refused" in err, (bad, order, code, out, err)
-        assert time.monotonic() - start < 20
 
 
 def test_a_timeout_is_a_non_blocking_error_and_the_later_hooks_still_run(tmp_path):
@@ -395,6 +397,43 @@ def test_answers_combine_as_the_cli_combines_parallel_hooks():
     assert combine("PreToolUse", [_r(0, "plain\n", "quiet\n")]) == (0, "plain\n", "quiet\n")
 
 
+def test_a_refusal_or_a_stop_carries_the_other_hooks_warnings():
+    """A hook that records it warned stays silent afterwards (pretool-worktree-guard.sh, doc_sync/notice.py),
+    so its warning is delivered with whatever answer ends the call: after the refusals on stderr, in rule order,
+    each text once; with a stop, in its systemMessage."""
+    warn = _r(0, _j(additionalContext="lesson", top={"systemMessage": "told"}))
+    assert combine("PreToolUse", [warn, _r(2, "", "no\n"), _r(0, _j(additionalContext="lesson"))]) == \
+        (2, "", "no\nlesson\ntold\n")
+    assert combine("UserPromptSubmit", [_r(0, "plain\n"), _r(2, "", "no\n")]) == (2, "", "no\nplain\n")
+    assert combine("PreToolUse", [_r(0, "plain\n"), _r(2, "", "no\n")]) == (2, "", "no\n")
+    code, out, _ = combine("PostToolUse", [_r(0, json.dumps({"continue": False, "systemMessage": "s"})),
+                                           _r(0, _j("PostToolUse", top={"systemMessage": "told"}))])
+    assert (code, json.loads(out)) == (0, {"continue": False, "systemMessage": "s\ntold"})
+
+
+def test_the_fallback_delivers_the_other_hooks_warnings_as_combine_does():
+    """lib/hook_launch_fallback.minimal answers when combine cannot: a warning a rule gave still reaches the
+    agent, with a refusal (stderr, as combine gives it), with a stop, and next to another hook's answer."""
+    from lib.hook_launch_fallback import minimal
+    warn = _r(0, _j(additionalContext="lesson", top={"systemMessage": "told"}))
+    code, _, err = minimal([warn, _r(2, "", "no\n")])  # no event named (hook_launch.main's call): still delivered
+    assert code == 2 and err == "no\nlesson\ntold\n"
+    for event, results in (("PreToolUse", [warn, _r(2, "", "no\n"), _r(0, _j(additionalContext="lesson"))]),
+                           ("UserPromptSubmit", [_r(0, "plain\n"), _r(2, "", "no\n")]),
+                           ("PreToolUse", [_r(0, "plain\n"), _r(2, "", "no\n")])):
+        assert minimal(results, event) == combine(event, results), (event, results)
+    code, out, _ = minimal([_r(0, json.dumps({"continue": False, "systemMessage": "s"})),
+                            _r(0, _j("PostToolUse", top={"systemMessage": "told"}))], "PostToolUse")
+    assert (code, json.loads(out)) == (0, {"continue": False, "systemMessage": "s\ntold"})
+    code, out, _ = minimal([_r(0, _j("PostToolUse", additionalContext="first")),
+                            _r(0, _j("PostToolUse", additionalContext="second", top={"systemMessage": "told"}))],
+                           "PostToolUse")
+    j = json.loads(out)
+    assert code == 0 and j["hookSpecificOutput"]["additionalContext"] == "first\nsecond" and j["systemMessage"] == "told"
+    one = _j(additionalContext="ctx")
+    assert minimal([_r(0, one)], "PreToolUse") == (0, one, "")  # one answer alone: as it is
+
+
 # ------------------------------------------------------------------ at once (lib/rule_fork)
 
 from lib import rule_fork  # noqa: E402
@@ -443,7 +482,7 @@ FAILURES = {
     "uncaught exception": "raise RuntimeError('crash')\n",
     "os._exit(0)": "sys.stdout.write('partial'); sys.stdout.flush(); os._exit(0)\n",
     "allow JSON": "print('{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"allow\"}}')\n",
-    "past its timeout": "time.sleep(30)\n",
+    "past its timeout": "time.sleep(300)\n",
     "ignores its timeout": "while True:\n    try:\n        time.sleep(30)\n    except BaseException:\n        pass\n",
     "dies by a signal": "import signal\nos.kill(os.getpid(), signal.SIGKILL)\n",
     "C-level exit 2": "sys.stderr.write('not a refusal\\n'); sys.stderr.flush(); getattr(__import__('posix'), '_exit')(2)\n",
@@ -457,9 +496,9 @@ def test_a_refusal_stands_next_to_a_failing_hook_run_at_once_in_either_order(tmp
     say = _hook(tmp_path, "say", _ctx("said"))
     for order in ((bad, refuse, say), (refuse, bad, say)):
         launcher = _launcher(tmp_path, "PreToolUse", [(os.path.basename(p), p, ("Bash",), 1) for p in order])
-        code, out, err, recs, took = _recorded(launcher, PRE)
-        assert code == 2 and err == "no: refused\n" and out == "", (name, order, code, out, err)
-        assert took < 8, (name, took)
+        # a launcher that waited for the hook that sleeps 300 s or never ends would run into _recorded's 60 s guard
+        code, out, err, recs, _ = _recorded(launcher, PRE)
+        assert code == 2 and err == "no: refused\nsaid\n" and out == "", (name, order, code, out, err)
         assert [r["hook"] for r in recs] == ["hooks/" + p for p in order]
         assert {r["how"] for r in recs} == {"fork"}, recs
         rec = recs[order.index(bad)]
@@ -484,13 +523,26 @@ def test_a_fork_that_ends_without_an_answer_is_a_non_blocking_error(tmp_path, na
     assert "ended without an answer" in j["systemMessage"]
 
 
+def _meet(tmp_path, group, name, n, text, event="PreToolUse") -> str:
+    """A hook body: it names itself in a directory shared by its group, waits until `n` hooks have, and says `text`
+    only if all `n` were there at once (else `text` + "-alone" after 30 s, a hang guard and not a time anyone is held
+    to). Hooks that run one after another cannot all be there: the first would meet no one."""
+    d = tmp_path / f"meet-{group}"
+    return (f"d = {str(d)!r}\nos.makedirs(d, exist_ok=True)\nopen(os.path.join(d, {name!r}), 'w').close()\n"
+            f"end = time.monotonic() + 30\n"
+            f"while len(os.listdir(d)) < {n} and time.monotonic() < end:\n    time.sleep(0.01)\n"
+            f"if len(os.listdir(d)) >= {n}:\n" + textwrap.indent(_ctx(text, event), "    ")
+            + "else:\n" + textwrap.indent(_ctx(text + "-alone", event), "    "))
+
+
 def test_the_hooks_run_at_the_same_time(tmp_path):
-    rules = [(f"s{i}", _hook(tmp_path, f"s{i}", "time.sleep(1.0)\n" + _ctx(f"s{i}")), None, 10) for i in range(4)]
+    rules = [(f"s{i}", _hook(tmp_path, f"s{i}", _meet(tmp_path, "four", f"s{i}", 4, f"s{i}")), None, 60)
+             for i in range(4)]
     launcher = _launcher(tmp_path, "PreToolUse", rules)
-    code, out, err, recs, took = _recorded(launcher, PRE)
+    code, out, err, recs, _ = _recorded(launcher, PRE)
+    # each hook said its name only after all four were there: the four ran together, not one after another
     assert code == 0 and json.loads(out)["hookSpecificOutput"]["additionalContext"] == "s0\ns1\ns2\ns3"
-    assert took < 2.5, took  # one sleep, not four
-    assert [r["how"] for r in recs] == ["fork"] * 4 and all(r["ms"] >= 950 for r in recs), recs
+    assert [r["how"] for r in recs] == ["fork"] * 4, recs
 
 
 def _mixed(tmp_path, refuse: bool):
@@ -523,7 +575,7 @@ def test_the_answer_is_read_in_rule_order_byte_for_byte_as_one_after_another(tmp
            [(r["rc"], r["stdout"], r["stderr"]) for r in in_order[3]]
     code, out, err = at_once[:3]
     if refuse:
-        assert (code, out, err) == (2, "", "refused first\nrefused last\n")
+        assert (code, out, err) == (2, "", "refused first\nrefused last\nthird\nm3\n")
     else:
         hso = json.loads(out)["hookSpecificOutput"]
         assert code == 0 and hso["additionalContext"] == "first\nthird\nfourth"
@@ -533,18 +585,25 @@ def test_the_answer_is_read_in_rule_order_byte_for_byte_as_one_after_another(tmp
 
 def test_a_rule_waits_for_the_rule_it_names_and_starts_at_once_without_it(tmp_path):
     flag = tmp_path / "written"
+    done, saw = tmp_path / "read-done", tmp_path / "other-saw"
     write = _hook(tmp_path, "write", f"time.sleep(0.5); open({str(flag)!r}, 'w').write('written')\n")
     read = _hook(tmp_path, "read", f"print(open({str(flag)!r}).read() if os.path.exists({str(flag)!r}) "
-                                   "else 'missing')\n")
-    other = _hook(tmp_path, "other", "time.sleep(0.5)\n")
-    launcher = _launcher(tmp_path, "PreToolUse", [("write", write, ("Read",), 5), ("other", other, None, 5),
-                                                  ("read", read, None, 5, {"after": ("write",)})])
-    code, out, err, recs, took = _recorded(launcher, {"tool_name": "Read"})
-    assert (code, out) == (0, "written\n") and took < 2.5
+                                   f"else 'missing')\nsys.stdout.flush()\nopen({str(done)!r}, 'w').close()\n")
+    # `other` ends only once `read` has: if `read` waited for `other`, `other` would give up (30 s guard) without it
+    other = _hook(tmp_path, "other", f"end = time.monotonic() + 30\n"
+                                     f"while not os.path.exists({str(done)!r}) and time.monotonic() < end:\n"
+                                     f"    time.sleep(0.01)\n"
+                                     f"open({str(saw)!r}, 'w').write('yes' if os.path.exists({str(done)!r}) else 'no')\n")
+    launcher = _launcher(tmp_path, "PreToolUse", [("write", write, ("Read",), 60), ("other", other, None, 60),
+                                                  ("read", read, None, 60, {"after": ("write",)})])
+    code, out, err, recs, _ = _recorded(launcher, {"tool_name": "Read"})
+    assert (code, out) == (0, "written\n")
     flag.unlink()
-    code, out, err, recs, took = _recorded(launcher, {"tool_name": "Bash"})  # `write` not selected
+    done.unlink()
+    saw.unlink()
+    code, out, err, recs, _ = _recorded(launcher, {"tool_name": "Bash"})  # `write` not selected
     assert (code, out) == (0, "missing\n") and [r["how"] for r in recs] == ["fork", "fork"]
-    assert recs[1]["ms"] < 400  # it did not wait for `other` either
+    assert saw.read_text() == "yes", "`read` did not run while `other` was still running"
 
 
 def _tables() -> dict:
@@ -603,9 +662,16 @@ def _script(tmp_path, body) -> str:
 def test_no_fork_inside_a_run_with_a_watchdog_thread(tmp_path):
     probe = _hook(tmp_path, "probe", f"sys.path.insert(0, {str(HOOKS)!r})\nfrom lib import rule_fork\n"
                                      "print(rule_fork.can_fork())\n")
+    # The first run's watchdog thread has returned when run_rule does, but the kernel ends the thread a moment later
+    # (on one CPU, 6 in 300 runs still counted two threads): the second run starts once the process has one.
     assert _script(tmp_path, f"""
+        import time
+        from lib import rule_fork
         from lib.rule_runner import run_rule
-        print(run_rule({probe!r}, b"{{}}", 5.0).stdout.strip(), run_rule({probe!r}, b"{{}}", 5.0, watchdog=False).stdout.strip())
+        first = run_rule({probe!r}, b"{{}}", 5.0).stdout.strip()
+        while rule_fork._kernel_threads() > 1:
+            time.sleep(0.001)
+        print(first, run_rule({probe!r}, b"{{}}", 5.0, watchdog=False).stdout.strip())
         """) == "False True\n"
     assert _alone(probe)[1] == "True\n"
 
@@ -621,12 +687,12 @@ def test_a_forked_hook_starts_with_one_thread(tmp_path):
 
 
 def test_a_stuck_fork_is_ended_alone_and_a_helper_in_its_own_session_lives_on(tmp_path):
-    alive, pidfile = tmp_path / "helper-alive", tmp_path / "stuck.pid"
+    helperpid, pidfile, graceful = tmp_path / "helper.pid", tmp_path / "stuck.pid", tmp_path / "slow-finally"
     stuck = _hook(tmp_path, "stuck", f"""
         import subprocess
         open({str(pidfile)!r}, 'w').write(str(os.getpid()))
-        code = "import sys, time; time.sleep(3); open(sys.argv[1], 'w').write('x')"
-        subprocess.Popen([sys.executable, '-c', code, {str(alive)!r}],
+        code = "import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(60)"
+        subprocess.Popen([sys.executable, '-c', code, {str(helperpid)!r}],
                          start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while True:
             try:
@@ -635,22 +701,24 @@ def test_a_stuck_fork_is_ended_alone_and_a_helper_in_its_own_session_lives_on(tm
                 pass
         """)
     say = _hook(tmp_path, "say", "time.sleep(0.2)\n" + _ctx("still answered"))
-    slow = _hook(tmp_path, "slow", "time.sleep(30)\n")
+    # `slow` leaves a mark when the overrun signal ends it (its `finally` runs); a SIGKILL would leave none
+    slow = _hook(tmp_path, "slow", f"try:\n    time.sleep(300)\nfinally:\n    open({str(graceful)!r}, 'w').write('x')\n")
     launcher = _launcher(tmp_path, "PreToolUse", [("stuck", stuck, None, 0.5), ("slow", slow, None, 0.5),
-                                                  ("say", say, None, 5)])
-    code, out, err, recs, took = _recorded(launcher, PRE)
+                                                  ("say", say, None, 60)])
+    code, out, err, recs, _ = _recorded(launcher, PRE)
     j = json.loads(out)
     assert code == 0 and j["hookSpecificOutput"]["additionalContext"] == "still answered"
     assert "pretool" not in j["systemMessage"] and j["systemMessage"].count("ran past its 0.5 s timeout") == 2
     assert [r["rc"] for r in recs] == ["timeout", "timeout", 0]
-    assert recs[1]["ms"] < 1500  # it stopped at its overrun signal
-    assert took < 4.5  # the stuck one ended after the grace
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(pidfile.read_text()), 0)
-    deadline = time.monotonic() + 10
-    while not alive.exists() and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert alive.exists(), "the helper the hook started in its own session was ended with it"
+    assert graceful.exists(), "`slow` was not ended by its overrun signal"
+    # the stuck one never ends by itself: the launcher answered, so it ended it (the 60 s guard of _recorded otherwise)
+    assert _running([int(pidfile.read_text())]) == []
+    # the helper in its own session names itself, then runs 60 s: it is read from the process table, not from a pause
+    deadline = time.monotonic() + 60  # a hang guard, not a time the launcher is held to
+    while not helperpid.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert helperpid.exists() and _running([int(helperpid.read_text() or 0)]), \
+        "the helper the hook started in its own session was ended with it"
 
 
 def test_the_records_are_in_rule_order_with_each_hooks_own_time(tmp_path):
@@ -665,7 +733,8 @@ def test_the_records_are_in_rule_order_with_each_hooks_own_time(tmp_path):
     code, out, err, recs, _ = _recorded(launcher, {}, env=dict(os.environ, **{hook_launch.MARK_ENV: str(marks)}))
     assert [r["hook"] for r in recs] == ["hooks/" + p for p in (slow, fast, show)]
     assert [r["stdout"] for r in recs] == ["slow\n", "fast\n", "absent absent\n"]
-    assert recs[0]["ms"] >= 550 and recs[1]["ms"] < 400 and {r["how"] for r in recs} == {"fork"}
+    # each hook's own time: `fast` ended while `slow` slept, so its time is below `slow`'s, not a running total
+    assert recs[0]["ms"] >= 550 and recs[1]["ms"] < recs[0]["ms"] and {r["how"] for r in recs} == {"fork"}
     names = sorted(f.name for f in marks.iterdir())
     assert names == sorted(["launch.-"] + ["launch.hooks%2F" + p.replace("/", "%2F") for p in (slow, fast, show)])
 
@@ -718,10 +787,10 @@ def test_nothing_a_forked_hook_changes_reaches_another(tmp_path):
 
 def test_a_fork_that_cannot_be_made_runs_that_hook_as_its_own_process(tmp_path):
     refuse = _hook(tmp_path, "refuse", "sys.stderr.write('refused anyway\\n'); sys.exit(2)\n")
-    say = _hook(tmp_path, "say", "time.sleep(0.5)\n" + _ctx("a"))
-    say2 = _hook(tmp_path, "say2", "time.sleep(0.5)\n" + _ctx("b"))
-    launcher = _launcher(tmp_path, "PreToolUse", [("say", say, None, 5), ("refuse", refuse, None, 5),
-                                                  ("say2", say2, None, 5)])
+    say = _hook(tmp_path, "say", _meet(tmp_path, "two", "a", 2, "a"))
+    say2 = _hook(tmp_path, "say2", _meet(tmp_path, "two", "b", 2, "b"))
+    launcher = _launcher(tmp_path, "PreToolUse", [("say", say, None, 60), ("refuse", refuse, None, 60),
+                                                  ("say2", say2, None, 60)])
     probe = """
         import os
         real, calls = os.fork, []
@@ -732,9 +801,9 @@ def test_a_fork_that_cannot_be_made_runs_that_hook_as_its_own_process(tmp_path):
             return real()
         os.fork = fork
         """
-    code, out, err, recs, took = _recorded(launcher, PRE, probe=probe)
-    assert (code, err) == (2, "refused anyway\n") and [r["how"] for r in recs] == ["fork", "process", "fork"]
-    assert took < 1.5  # the other two still ran at once
+    code, out, err, recs, _ = _recorded(launcher, PRE, probe=probe)
+    # `a` and `b` each said so only once both were there: the other two still ran at once
+    assert (code, err) == (2, "refused anyway\na\nb\n") and [r["how"] for r in recs] == ["fork", "process", "fork"]
 
 
 def test_a_process_a_forked_hook_forks_ends_at_its_own_exit(tmp_path):
@@ -763,15 +832,21 @@ def test_a_process_a_forked_hook_forks_ends_at_its_own_exit(tmp_path):
 def test_an_answer_handed_back_while_the_launcher_was_busy_still_answers(tmp_path):
     """A fork that answered within its budget, and ended, while the launcher ran another hook as
     its own process past that budget: its answer stands (read from its pipe), never an error."""
-    refuse = _hook(tmp_path, "refuse", "time.sleep(0.4); sys.stderr.write('no: refused\\n'); sys.exit(2)\n")
-    slow = _hook(tmp_path, "slow", "time.sleep(1.5)\n" + _ctx("slow"))
-    launcher = _launcher(tmp_path, "PreToolUse", [("refuse", refuse, None, 1), ("slow", slow, None, 5)])
+    # `refuse` has a 4 s budget and leaves a file as it answers; `slow` starts running only when that file is
+    # there and then runs past the budget (4.5 s from the file), so the launcher reads the answer late whatever
+    # the machine's speed. Only a refuse that needed more than its whole budget to start would fail it.
+    done = str(tmp_path / "refused")
+    refuse = _hook(tmp_path, "refuse", f"open({done!r}, 'w').close(); sys.stderr.write('no: refused\\n'); sys.exit(2)\n")
+    slow = _hook(tmp_path, "slow", f"end = time.monotonic() + 60\n"
+                 f"while not os.path.exists({done!r}) and time.monotonic() < end:\n    time.sleep(0.02)\n"
+                 "time.sleep(4.5)\n" + _ctx("slow"))
+    launcher = _launcher(tmp_path, "PreToolUse", [("refuse", refuse, None, 4), ("slow", slow, None, 70)])
     probe = """
         import os
         real, calls = os.fork, []
         def fork():
             calls.append(1)
-            if len(calls) == 2:  # `slow` runs as its own process, in the launcher, for 1.5 s
+            if len(calls) == 2:  # `slow` runs as its own process, in the launcher, past refuse's budget
                 raise OSError(11, "Resource temporarily unavailable")
             return real()
         os.fork = fork
@@ -779,7 +854,7 @@ def test_an_answer_handed_back_while_the_launcher_was_busy_still_answers(tmp_pat
     code, out, err, recs, _ = _recorded(launcher, PRE, probe=probe)
     assert [r["how"] for r in recs] == ["fork", "process"]
     assert (recs[0]["rc"], recs[0]["stderr"]) == (2, "no: refused\n"), recs[0]
-    assert (code, out, err) == (2, "", "no: refused\n")
+    assert (code, out, err) == (2, "", "no: refused\nslow\n")
 
 
 def _gate(tmp_path, name, job_body, budget=20.0) -> str:
@@ -797,31 +872,36 @@ def _gate(tmp_path, name, job_body, budget=20.0) -> str:
 def test_a_gates_forks_end_with_the_gate_when_its_launcher_ends_it(tmp_path):
     """The launcher's overrun signal ends a gate that forks its own rules: the gate's forks end with
     it, so none runs past the call or holds the launcher's stdout open."""
-    late = tmp_path / "late"
-    gate = _gate(tmp_path, "gate", f"time.sleep(4)\nopen({str(late)!r}, 'w').write('ran past the call')\n")
+    # Each fork names itself and runs 120 s. Its stdout closing when the gate ended, not when the forks do, is the
+    # 60 s guard of _recorded (a fork holding it would hold it for 120 s); that none ran on past the call is read
+    # from the process table, not from a write after a pause.
+    started = tmp_path / "started"
+    gate = _gate(tmp_path, "gate", f"open({str(started)!r}, 'a').write('%d\\n' % os.getpid())\ntime.sleep(120)\n")
     other = _hook(tmp_path, "other", _ctx("other"))
-    launcher = _launcher(tmp_path, "PreToolUse", [("gate", gate, None, 1), ("other", other, None, 5)])
-    code, out, err, recs, took = _recorded(launcher, PRE)
-    assert took < 3, took  # its stdout closed when it ended, not when the gate's forks did
+    launcher = _launcher(tmp_path, "PreToolUse", [("gate", gate, None, 3), ("other", other, None, 60)])
+    code, out, err, recs, _ = _recorded(launcher, PRE)
     assert code == 0 and [r["rc"] for r in recs] == ["timeout", 0]
-    time.sleep(4.5)
-    assert not late.exists(), "a gate's fork ran on past the call"
+    forks = [int(pid) for pid in started.read_text().split()] if started.exists() else []
+    assert len(forks) == 2, "the gate's forks did not start before its timeout"
+    deadline = time.monotonic() + 30  # a killed process leaves the table a moment after the kill
+    while _running(forks) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _running(forks), "a gate's fork ran on past the call"
 
 
 def test_a_fork_a_forked_gate_makes_does_not_hold_the_launchers_pipe(tmp_path):
     """A gate that dies (here its own fork ends it, as a kill from outside would) is answered for at
     once: its forks do not hold the pipe it hands back on to the launcher."""
-    gate = _gate(tmp_path, "gate", "import signal\nos.kill(os.getppid(), signal.SIGKILL)\ntime.sleep(4)\n")
+    gate = _gate(tmp_path, "gate", "import signal\nos.kill(os.getppid(), signal.SIGKILL)\ntime.sleep(40)\n")
     other = _hook(tmp_path, "other", _ctx("other"))
-    launcher = _launcher(tmp_path, "PreToolUse", [("gate", gate, None, 30), ("other", other, None, 5)])
+    launcher = _launcher(tmp_path, "PreToolUse", [("gate", gate, None, 120), ("other", other, None, 60)])
     out = tmp_path / "out"
     with open(out, "wb") as fh:  # a file, not a pipe: the gate's orphaned forks still hold it a while
         p = subprocess.Popen([sys.executable, launcher], stdin=subprocess.PIPE, stdout=fh, stderr=fh)
         p.stdin.write(json.dumps(PRE).encode())
         p.stdin.close()
-        start = time.monotonic()
+        # the launcher answers when the gate has died, not when the gate's forks end (40 s), nor at its deadline (120 s)
         assert p.wait(timeout=30) == 0
-    assert time.monotonic() - start < 3  # not when the gate's forks ended (4 s), nor at its deadline
     assert "gate.py: ended without an answer (signal 9)" in json.loads(out.read_text())["systemMessage"]
 
 
@@ -829,22 +909,28 @@ def test_a_launcher_ended_by_sigterm_ends_its_forks_first(tmp_path):
     """The CLI ends a hook with SIGTERM: the launcher's forks end with it (no hook runs on after the
     launcher, with no one keeping its deadline), and the launcher ends by that signal, as before."""
     import signal
-    late = tmp_path / "late"
-    slow = _hook(tmp_path, "slow", f"time.sleep(3)\nopen({str(late)!r}, 'w').write('after the launcher')\n")
-    other = _hook(tmp_path, "other", "time.sleep(3)\n")
+    # Each hook names itself, then runs until it is killed (60 s at most): the signal goes once both run (not after
+    # a pause that stands for it), and whether one ran on is read from the process table, not from a pause.
+    started = tmp_path / "started"
+    body = f"open({str(started)!r}, 'a').write('%d\\n' % os.getpid())\ntime.sleep(60)\n"
+    slow, other = _hook(tmp_path, "slow", body), _hook(tmp_path, "other", body)
     launcher = _launcher(tmp_path, "PreToolUse", [("slow", slow, None, 30), ("other", other, None, 30)])
     payload = tmp_path / "payload.json"
     payload.write_text(json.dumps(PRE))
     with open(payload, "rb") as fh:
         p = subprocess.Popen([sys.executable, launcher], stdin=fh, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    time.sleep(0.8)
+    deadline = time.monotonic() + 60  # a hang guard, not a time the launcher is held to
+    while (not started.exists() or len(started.read_text().split()) < 2) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    forks = [int(pid) for pid in started.read_text().split()] if started.exists() else []
+    assert len(forks) == 2, "the launcher's forks did not start"
     p.send_signal(signal.SIGTERM)
-    start = time.monotonic()
-    out, err = p.communicate(timeout=10)
+    out, err = p.communicate(timeout=50)  # its stdout closed: a fork holding it would hold it for 60 s
     assert p.returncode == -signal.SIGTERM, (p.returncode, err)
-    assert time.monotonic() - start < 2  # its stdout closed: no fork holds it
-    time.sleep(3)
-    assert not late.exists(), "a fork ran on after its launcher was ended"
+    deadline = time.monotonic() + 30  # a killed process leaves the table a moment after the kill
+    while _running(forks) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _running(forks), "a fork ran on after its launcher was ended"
 
 
 AT_ONCE_FAULTS = {
@@ -885,7 +971,7 @@ def test_a_fault_in_the_at_once_run_answers_as_the_one_after_another_run(tmp_pat
                                                   ("refuse", refuse, None, 5, {"after": ("count",)}),
                                                   ("say", say, None, 5)])
     want = _recorded(launcher, PRE, probe=SEQUENTIAL)
-    assert want[:3] == (2, "", "no: refused\n") and ran.read_text() == "x"
+    assert want[:3] == (2, "", "no: refused\nsaid\n") and ran.read_text() == "x"
     ran.unlink()
     code, out, err, recs, _ = _recorded(launcher, PRE, probe=AT_ONCE_FAULTS[where])
     assert (code, out, err) == want[:3], (where, code, out, err)
@@ -899,31 +985,48 @@ def test_a_launcher_ended_by_sigterm_ends_a_gates_forks_that_ignore_sigterm(tmp_
     ends the launcher with SIGTERM, a gate's fork that ignores SIGTERM is ended too: the gate ends
     its forks before the launcher ends the gate, so none outlives the run as an orphan."""
     import signal
+    # Each fork names itself and runs until it is killed (60 s at most): whether one outlived the launcher is read
+    # from the process table once the launcher has ended, not from a write the fork makes after a pause, so a slow
+    # or busy runner neither stretches the forks past a fixed pause (a false orphan) nor hides a real one.
     for attempt in range(3):  # the orphan of the old timing was a race: look at it more than once
-        late = tmp_path / f"late{attempt}"
         started = tmp_path / f"started{attempt}"
         gate = _gate(tmp_path, f"gate{attempt}", f"""
             import signal
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
-            open({str(started)!r}, 'a').write('x')
-            end = time.monotonic() + 2.5
+            open({str(started)!r}, 'a').write('%d\\n' % os.getpid())
+            end = time.monotonic() + 60
             while time.monotonic() < end:
                 time.sleep(0.05)
-            open({str(late)!r}, 'w').write('outlived the run')
             """)
         other = _hook(tmp_path, f"other{attempt}", "time.sleep(3)\n")
         launcher = _launcher(tmp_path, "PreToolUse", [("gate", gate, None, 30), ("other", other, None, 30)])
         payload = tmp_path / "payload.json"
         payload.write_text(json.dumps(PRE))
-        with open(payload, "rb") as fh:
-            p = subprocess.Popen([sys.executable, launcher], stdin=fh, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE)
-        deadline = time.monotonic() + 10
-        while (not started.exists() or len(started.read_text()) < 2) and time.monotonic() < deadline:
+        err_file = tmp_path / f"err{attempt}"
+        with open(payload, "rb") as fh, open(err_file, "wb") as err_fh:  # files: an orphan holding them hangs nothing
+            p = subprocess.Popen([sys.executable, launcher], stdin=fh, stdout=err_fh, stderr=err_fh)
+        deadline = time.monotonic() + 60  # a hang guard, not a time the launcher is held to
+        while (not started.exists() or len(started.read_text().split()) < 2) and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert started.exists() and len(started.read_text()) == 2, "the gate's forks did not start"
+        forks = [int(pid) for pid in started.read_text().split()] if started.exists() else []
+        assert len(forks) == 2, "the gate's forks did not start"
         p.send_signal(signal.SIGTERM)
-        out, err = p.communicate(timeout=10)
-        assert p.returncode == -signal.SIGTERM, (p.returncode, err)
-        time.sleep(3)
-        assert not late.exists(), f"attempt {attempt}: a gate's fork that ignores SIGTERM outlived the run"
+        p.wait(timeout=60)
+        assert p.returncode == -signal.SIGTERM, (p.returncode, err_file.read_text())
+        deadline = time.monotonic() + 30  # a SIGKILLed process leaves the table a moment after the kill
+        while _running(forks) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _running(forks), f"attempt {attempt}: a gate's fork that ignores SIGTERM outlived the run"
+
+
+def _running(pids):
+    """The pids of pids that still run (a zombie, or a pid no longer there, does not)."""
+    alive = []
+    for pid in pids:
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except (OSError, IndexError):
+            continue
+        if state not in ("Z", "X"):
+            alive.append(pid)
+    return alive

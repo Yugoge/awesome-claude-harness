@@ -28,6 +28,7 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+import locations  # noqa: E402  (the filesystem root is no project)
 
 try:
     import fcntl
@@ -264,6 +265,8 @@ def record_yield(
 ) -> None:
     """Append one JSONL record to the yield log."""
     path = _log_path()
+    if locations.refuses_root(path, _project_dir(), "specialist-yield"):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     record = _build_record(
         report_artifact_path, specialist_type, session_id, cycle_id, classification, action

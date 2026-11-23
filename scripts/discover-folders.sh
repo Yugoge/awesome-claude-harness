@@ -7,13 +7,11 @@ set -euo pipefail
 
 PROJECT_ROOT="${1:?Missing project root path}"
 
-# Validate project root exists
 if [[ ! -d "$PROJECT_ROOT" ]]; then
   echo "Error: Project root not found: $PROJECT_ROOT" >&2
   exit 1
 fi
 
-# Change to project root
 cd "$PROJECT_ROOT"
 
 # Excluded directories (system, build, cache, venv)
@@ -55,7 +53,6 @@ EXCLUDE_PATHS=(
   "./docs/clean"
 )
 
-# Build find exclude arguments
 EXCLUDE_ARGS=()
 for exclude in "${EXCLUDES[@]}"; do
   EXCLUDE_ARGS+=(-name "$exclude" -prune -o)
@@ -64,7 +61,6 @@ for exclude in "${EXCLUDE_PATHS[@]}"; do
   EXCLUDE_ARGS+=(-path "$exclude" -prune -o)
 done
 
-# Find all directories (excluding system dirs)
 find . \
   "${EXCLUDE_ARGS[@]}" \
   -type d -print | \

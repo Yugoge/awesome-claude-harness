@@ -37,6 +37,9 @@ import tempfile
 import time
 from pathlib import Path, PurePosixPath
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
+
 DOC_SUFFIXES = (".md", ".rst", ".txt")
 TRAILER_RE = re.compile(r"^[ \t]*Red-test:[ \t]*(.+?)[ \t]*$", re.MULTILINE | re.IGNORECASE)
 NONE_RE = re.compile(r"^none\s*:\s*(.*)$", re.IGNORECASE)
@@ -161,7 +164,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="seconds after which, once some id is red then green, the rest is left unrun (default: none)")
     args = ap.parse_args(argv)
 
-    repo = Path(git(Path(args.repo), "rev-parse", "--show-toplevel").strip())
+    top = locations.repo_top(args.repo)  # never the filesystem root
+    if top is None:
+        raise SystemExit(f"red-green: {args.repo} is not inside a git work tree whose top is below the filesystem root")
+    repo = Path(top)
     base = git(repo, "rev-parse", "--verify", f"{args.base}^{{commit}}").strip()
     head = git(repo, "rev-parse", "--verify", f"{args.head}^{{commit}}").strip()
     mb = git(repo, "merge-base", base, head).strip()

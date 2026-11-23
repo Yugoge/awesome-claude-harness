@@ -14,9 +14,10 @@ tree's text spells each one, read at run time:
   `OPERATION_STALLED:` line ends the turn.
 * Step 5: the plan call (scripts/steps/commit-plan.py) once: its JSON object read as data (the late-repair
   state, the repository plan, the attribution slice, the manifest inputs); the late-repair state `invalid` or an
-  empty plan is routed on the path the text names and the call run again. Then the dispatch-snapshot manifest
-  (a Write of the fields the text lists, from the call's own values); one grant per plan entry with the writer
-  block of the step.
+  empty plan is routed on the path the text names and the call run again. The plan call writes the
+  dispatch-snapshot manifest (no agent call); `manifest=hand` plays a session in flight on the text before
+  2026-11-22, which Writes it by hand from the call's own values. One grant per plan entry with the writer
+  block of the step. `nothing_to_commit` lands a task only where the call printed its record.
 * Step 6: the planning dispatch (changelog-analyst with Step 7's prompt, DRYRUN=true), the
   pre-commit QA dispatch from the step's prompt block, the decision read of the commit-qa-report's
   last line; on `COMMIT: APPROVE`, QA_APPROVED_FILES as the step records it (PLAN_FILES, plus this
@@ -112,6 +113,7 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver commit`):
                           read from QA's prompt by drivers/_codex.py)
   cycle_variant=V         the /dev variant (drivers/dev.py; fanout runs the fan-out cycle)
   session=same|later      /close and /commit typed in the cycle's session or a later one
+  manifest=hand           Step 5's manifest written by hand, as the text before 2026-11-22 asks
                           (default same for plain, later for every other variant)
 
 Respellings: RESPELLINGS below (base-text paths, row 7). Deviations: DEVIATIONS below.
@@ -129,6 +131,34 @@ from ..pipeline import Deviations, Respelling, Orchestrator, utc_now
 from ..replay import Deviation
 from . import _codex
 from . import close as closedrv
+from .dev import Steps
+
+
+def command_steps(command: str) -> list:
+    """The step list of a command that has no todo script (scripts/todo/<command>.py), read from its own text of the
+    tree under test as the Stop gate reads it (hooks/stop-command-gate.py `_step_heading`: a `### Step N: <title>`
+    heading, its section up to the next heading): one `Step N: <title>` entry per heading, and the roles its
+    section dispatches (`subagent_type: <role>`) as its subagent_call, which `Steps` holds the step to."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    # in a sandbox the drivers lie in <sb>/replay/drivers and the harness under test in <sb>/home/.claude
+    path = next(p for p in (os.path.join(here, "..", "..", "home", ".claude", "commands", f"{command}.md"),
+                            os.path.join(here, "..", "..", "..", "commands", f"{command}.md")) if os.path.isfile(p))
+    text = open(path).read()
+    out = []
+    for m in re.finditer(r"^#+[ \t]+(Step[ \t]+(\d+): .*)$", text, re.M):
+        body = cmdtext.section(text, f"Step {m.group(2)}")
+        out.append({"content": m.group(1).strip(),
+                    "subagent_call": [{"subagent_type": r} for r in re.findall(r"subagent_type: ([\w-]+)", body)]})
+    return out
+
+
+# /commit's steps by what each is, from its own text (a step gone, or the pre-commit review no longer dispatching qa,
+# or the landing step no longer dispatching changelog-analyst, raises: the replay fails)
+CM = Steps(command_steps("commit"), "commit",
+           {"parse": ("Parse arguments", None), "resolve": ("Resolve task-id", None),
+            "disposition": ("Resolve the disposition", None), "force_audit": ("Deprecated --force usage audit", None),
+            "grant": ("Write commit grant", None), "qa": ("Pre-commit QA review gate", "qa"),
+            "analyst": ("Dispatch changelog-analyst", "changelog-analyst"), "spec_update": ("Spec-update dispatch", None)})
 
 PIPELINE = "commit"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -144,12 +174,12 @@ CODEX_VARIANTS = tuple(CODEX_SCRIPTS)
 
 RESPELLINGS = [
     Respelling("M1 controller", r"source venv/bin/activate && python3 scripts/late-repair-controller\.py",
-               "python3 ~/.claude/scripts/late-repair-controller.py", "commands/commit.md Step 5 (:313, :320 at 2acc29b)"),
+               "python3 ~/.claude/scripts/late-repair-controller.py", f"commands/commit.md Step {CM.grant} (:313, :320 at 2acc29b)"),
     Respelling("M2 resolver", r"(?<![\w/~.-])python3 scripts/resolve-dev-artifact-chain\.py",
-               "python3 ~/.claude/scripts/resolve-dev-artifact-chain.py", "commands/commit.md Step 5 (:334 at 2acc29b)"),
+               "python3 ~/.claude/scripts/resolve-dev-artifact-chain.py", f"commands/commit.md Step {CM.grant} (:334 at 2acc29b)"),
     Respelling("M3 grant writer", r"source venv/bin/activate && python3 ~/\.claude/scripts/write-commit-grant\.py",
                "python3 ~/.claude/scripts/write-commit-grant.py",
-               "commands/commit.md Steps 5-7 (:459, :486, :570, :821 at 2acc29b)"),
+               f"commands/commit.md Steps {CM.grant}-{CM.analyst} (:459, :486, :570, :821 at 2acc29b)"),
     Respelling("M4 discovery", r"(?<![\w/~.-])python3 scripts/dev-lifecycle\.py",
                "python3 ~/.claude/scripts/dev-lifecycle.py", "commands/commit.md --auto (:965 at 2acc29b)"),
     # agents/changelog-analyst.md:399 at 2acc29b: the dev-report resolution by a .claude/scripts path a
@@ -274,16 +304,16 @@ class CommitRun:
     # ------------------------------------------------------------ Step 3
     def disposition(self, label: str) -> tuple:
         o = self.o
-        block = o.block("Step 3", anchor="--disposition")
-        c = self.run_text(block, self.label(f"{label} Bash disposition"), "Step 3: the task's disposition")
+        block = o.block(f"Step {CM.disposition}", anchor="--disposition")
+        c = self.run_text(block, self.label(f"{label} Bash disposition"), f"Step {CM.disposition}: the task's disposition")
         out = (c.response.get("stdout") or "") if c.ok else (c.error or "")
         return c, parse_disposition(out)
 
     def step3(self, rounds: int = 4) -> bool:
         for k in range(rounds + 1):
-            c, d = self.disposition(f"Step 3 round {k}")
+            c, d = self.disposition(f"Step {CM.disposition} round {k}")
             if d["disposition"] is None:  # an instrument failure: run once more, then the stalled line
-                c, d = self.disposition(f"Step 3 round {k} again")
+                c, d = self.disposition(f"Step {CM.disposition} round {k} again")
                 if d["disposition"] is None:
                     err = ((c.response.get("stderr") or "") if c.ok else (c.error or "")).strip().split("\n")[-1]
                     self.stalled = f"OPERATION_STALLED: {err}"
@@ -291,7 +321,7 @@ class CommitRun:
                     return False
             if d["chain"] is not None:
                 self.chain = d["chain"]
-            closedrv.fact(self.rp, "commit Step 3", {"round": k, "disposition": d["disposition"],
+            closedrv.fact(self.rp, f"commit Step {CM.disposition}", {"round": k, "disposition": d["disposition"],
                                                      "gaps": [(g["artifact"], g["problem"]) for g in d["gaps"]],
                                                      "chain_line": d["chain"] is not None})
             if d["disposition"] == "chain_pass":
@@ -302,9 +332,9 @@ class CommitRun:
             dev_gaps = [g for g in d["gaps"] if g["artifact"] != close_rel]
             if dev_gaps:
                 for n, g in enumerate(dev_gaps, 1):
-                    self.route(g["artifact"], f"{g['problem']}: {g['message']}", f"Step 3 round {k + 1} gap {n}")
+                    self.route(g["artifact"], f"{g['problem']}: {g['message']}", f"Step {CM.disposition} round {k + 1} gap {n}")
             else:
-                self.close_steps(f"Step 3 round {k + 1}")
+                self.close_steps(f"Step {CM.disposition} round {k + 1}")
         return False
 
     def close_steps(self, label: str) -> str:
@@ -321,7 +351,7 @@ class CommitRun:
             cr.step1()
             last = cr.step2()
         self.rp.deviation_at = self.devs.at
-        closedrv.fact(self.rp, "commit close.md Steps 1-2", {"label": label, "verdict": last})
+        closedrv.fact(self.rp, f"commit close.md Steps {closedrv.CL.inspectors}-{closedrv.CL.debate}", {"label": label, "verdict": last})
         return last
 
     # ------------------------------------------------------------ Routes
@@ -373,10 +403,10 @@ class CommitRun:
         """The plan call; its JSON is what the main agent reads: the late-repair state and the plan (routed
         when `invalid` or empty, the call run again), then the values Steps 5-7 take from it."""
         o = self.o
-        block = o.block("Step 5", anchor="steps/commit-plan.py")
+        block = o.block(f"Step {CM.grant}", anchor="steps/commit-plan.py")
         for k in range(rounds + 1):
-            c = self.run_text(block, self.label(f"Step 5 Bash plan {k}"),
-                              "Step 5: late-repair state, repository plan, attribution slice and manifest inputs")
+            c = self.run_text(block, self.label(f"Step {CM.grant} Bash plan {k}"),
+                              f"Step {CM.grant}: late-repair state, repository plan, attribution slice and manifest inputs")
             self.facts = _json_object((c.response.get("stdout") or "") if c.ok else "")
             late = self.facts.get("late_repair") or {}
             self.plan = self.facts.get("repository_plan") or {}
@@ -384,49 +414,59 @@ class CommitRun:
                             NESTED_REPO=self.facts.get("nested_repo") or "",
                             TASK_REPORT=self.facts.get("task_report") or "",
                             ATTRIBUTION_LOG=json.dumps(self.facts.get("attribution_log") or {}))
-            closedrv.fact(self.rp, "commit Step 5", {
-                "label": f"Step 5 Bash plan {k}", "ok": c.ok,
+            closedrv.fact(self.rp, f"commit Step {CM.grant}", {
+                "label": f"Step {CM.grant} Bash plan {k}", "ok": c.ok,
                 "late_repair_state": late.get("state") if c.ok else None,
                 "late_repair_json": json.dumps(late, sort_keys=True) if late else None,
                 "task_report": os.path.basename(o.values.get("TASK_REPORT") or "").replace(self.tid, "<task>")})
             if late.get("state") == "invalid" and k < rounds:
-                self.route(late.get("path") or "", "late-repair state invalid (State C)", f"Step 5 round {k + 1}")
+                self.route(late.get("path") or "", "late-repair state invalid (State C)", f"Step {CM.grant} round {k + 1}")
                 continue
             if not self.plan.get("repositories") and k < rounds:
                 self.route(o.values.get("TASK_REPORT") or "", "the repository plan could not be built",
-                           f"Step 5 round {k + 1}")
+                           f"Step {CM.grant} round {k + 1}")
                 continue
             break
         return bool(self.plan.get("repositories"))
 
     def manifest(self) -> None:
-        """The dispatch-snapshot manifest: a Write, at the path and with the values the plan call printed."""
+        """The dispatch-snapshot manifest. The plan call writes it (commit-plan.py, the text's "write nothing for
+        it"): no call. A session in flight holding the text before 2026-11-22 (its Step 5 "Write the
+        dispatch-snapshot manifest"; arg manifest=hand plays one on this tree) writes it by hand: a Write, at the path
+        and with the values the plan call printed, which the minter still accepts."""
         o, f = self.o, self.facts
+        # OLDER_TEXT: "Write the dispatch-snapshot manifest"
+        hand = self.rp.args.get("manifest") == "hand" or \
+            "Write the dispatch-snapshot manifest" in o.section(f"Step {CM.grant}")
+        closedrv.fact(self.rp, f"commit Step {CM.grant} manifest", {"by": "hand" if hand else "plan call",
+                                                         "nothing_to_commit": bool(f.get("nothing_to_commit"))})
+        if not hand:
+            return
         sid = f.get("session_id") or o.s.sid
         doc = {"session_id": sid, "task_id": self.tid, "dispatched_at": utc_now(), "repository_plan": self.plan,
                "artifact_chain": self.chain or None, "files_at_dispatch": f.get("files_at_dispatch") or {}}
         path = f.get("manifest_path") or os.path.join(self.rp.layout.state, f"claude-commit-manifest-{sid}.json")
         # A later round of the same session finds its own manifest: Read, then edit in place (the write guard).
-        agents.put(o.s.main, path, json.dumps(doc, indent=2) + "\n", self.label("Step 5 Write manifest"))
+        agents.put(o.s.main, path, json.dumps(doc, indent=2) + "\n", self.label(f"Step {CM.grant} Write manifest"))
 
     def mint(self) -> None:
         o = self.o
-        writer = next(b.text for b in cmdtext.blocks(o.section("Step 5"), None, "bash")
+        writer = next(b.text for b in cmdtext.blocks(o.section(f"Step {CM.grant}"), None, "bash")
                       if "write-commit-grant.py" in b.text and "PLANNED_REPO_ROOT" in b.text)
         for k, e in enumerate(self.plan.get("repositories") or []):
             o.values["PLANNED_REPO_ROOT"] = e["repo_root"]
-            self.run_text(writer, self.label(f"Step 5 Bash mint {k}"), "Mint the repository's commit grant")
+            self.run_text(writer, self.label(f"Step {CM.grant} Bash mint {k}"), "Mint the repository's commit grant")
 
     def revoke(self, label: str) -> None:
         """Grant hygiene: the text's revoke call."""
         o = self.o
-        cmd = next(b.text for b in cmdtext.blocks(o.section("Step 6"), None, "bash") if "--revoke-only" in b.text)
-        self.run_text(cmd, self.label(f"{label} Bash revoke grant"), "Revoke the Step 5 commit grant")
+        cmd = next(b.text for b in cmdtext.blocks(o.section(f"Step {CM.qa}"), None, "bash") if "--revoke-only" in b.text)
+        self.run_text(cmd, self.label(f"{label} Bash revoke grant"), f"Revoke the Step {CM.grant} commit grant")
 
     # ------------------------------------------------------------ the analyst's prompt
     def analyst_prompt(self, dryrun: bool, approved: dict) -> str:
         o = self.o
-        tpl = next(b.text for b in cmdtext.blocks(o.section("Step 7")) if "CONTROL_ROOT=<" in b.text)
+        tpl = next(b.text for b in cmdtext.blocks(o.section(f"Step {CM.analyst}")) if "CONTROL_ROOT=<" in b.text)
         tpl = re.sub(r'<"([^"]*)" when BULK=false, else [^>]*>', lambda m: json.dumps(m.group(1).replace("$TASK_ID", self.tid)), tpl)
         # The obligation's plan roots, where the text declares them: the plan's repo_root values in order.
         roots = [e["repo_root"] for e in self.plan.get("repositories") or []]
@@ -756,7 +796,7 @@ class CommitRun:
     # ------------------------------------------------------------ Step 6
     def qa_prompt(self, groups: list) -> str:
         o = self.o
-        tpl = next(b.text for b in cmdtext.blocks(o.section("Step 6")) if "<obligation" in b.text)
+        tpl = next(b.text for b in cmdtext.blocks(o.section(f"Step {CM.qa}")) if "<obligation" in b.text)
         tpl = re.sub(r'<"([^"]*)" when BULK=false, else [^>]*>', lambda m: json.dumps(m.group(1).replace("$TASK_ID", self.tid)), tpl)
         prompt = o.instantiate(tpl, self.tid)
         rules = [(r"^PLAN_GROUPS$", json.dumps(groups)), (r"^QA_CODEX$", self.qa_codex), (r"^true\|false$", self.qa_codex),
@@ -809,21 +849,21 @@ class CommitRun:
         """Planning dispatch, then commit QA rounds until one approves (a REJECT is routed, Step 5 rebuilt)."""
         o = self.o
         for k in range(4):
-            self.dispatch_analyst(True, {}, self.label(f"Step 6 Agent(changelog-analyst) planning {k}"))
+            self.dispatch_analyst(True, {}, self.label(f"Step {CM.qa} Agent(changelog-analyst) planning {k}"))
             groups = [{"repo": r, "commit_message": self.subject(), "files": f} for r, f in self.plan_files.items()]
             if not any(g["files"] for g in groups):
                 o.s.say("Nothing to commit (plan computed OK; dry-run found no pending change) — QA gate skipped.")
                 return False
             self.rounds += 1
             if self.reject_first and self.rounds == 1:
-                self.commit_qa(groups, f"Step 6 Agent(qa) pre-commit review {k}",
+                self.commit_qa(groups, f"Step {CM.qa} Agent(qa) pre-commit review {k}",
                                "COMMIT: REJECT - the change is not ready to land", "- the change is not ready to land")
             else:
-                self.commit_qa(groups, f"Step 6 Agent(qa) pre-commit review {k}")
+                self.commit_qa(groups, f"Step {CM.qa} Agent(qa) pre-commit review {k}")
             rel = f"docs/dev/commit-qa-report-{self.tid}.md"
             path = os.path.join(o.project, rel)
-            c = o.s.read(path, label=self.label(f"Step 6 Read commit-qa-report {k}"),
-                         deviation=self.devs.at(self.label(f"Step 6 Read commit-qa-report {k}")))
+            c = o.s.read(path, label=self.label(f"Step {CM.qa} Read commit-qa-report {k}"),
+                         deviation=self.devs.at(self.label(f"Step {CM.qa} Read commit-qa-report {k}")))
             lines = [l for l in (agents.peek(self.rp, "main", path).split("\n") if c.ok else []) if l.strip()]
             last = lines[-1] if lines else ""
             closedrv.fact(self.rp, "commit QA round", {"round": self.rounds, "verdict": last})
@@ -832,15 +872,15 @@ class CommitRun:
             if k == 3:
                 return False
             o.s.say(last)
-            self.revoke(f"Step 6 round {k}")
+            self.revoke(f"Step {CM.qa} round {k}")
             # The finding names no file: its own report, whose QA runs again and names the path; then that path.
             self.qa_finding = None
-            self.route(rel, last, f"Step 6 round {k + 1}")
+            self.route(rel, last, f"Step {CM.qa} round {k + 1}")
             if self.qa_finding:
                 path_, why = self.qa_finding
                 cur = agents.peek(self.rp, "main", os.path.join(o.project, path_))
                 fixed = cur.replace("def add(a, b):\n", "def add(a, b):\n" + closedrv.TOY_DOC, 1)
-                self.route(path_, why, f"Step 6 round {k + 1} file", edits=[(path_, cur, fixed)])
+                self.route(path_, why, f"Step {CM.qa} round {k + 1} file", edits=[(path_, cur, fixed)])
             self.reject_first = False
             if not self.step5_plan():
                 return False
@@ -857,12 +897,12 @@ class CommitRun:
         outcome the text prints. A spec that stage 1 or 2 names is recorded as a fact: the toy cycle links none,
         and no spec-update agent is played."""
         o, tid = self.o, self.tid
-        sec = re.sub(r"\s+", " ", o.section("Step 8"))
+        sec = re.sub(r"\s+", " ", o.section(f"Step {CM.spec_update}"))
 
         def text(pattern: str, what: str) -> str:
             m = re.search(pattern, sec)
             if m is None:
-                raise cmdtext.TextNotFound(f"Step 8: no {what}")
+                raise cmdtext.TextNotFound(f"Step {CM.spec_update}: no {what}")
             return m.group(1).replace("<TASK_ID>", tid)
 
         docs = os.path.join(o.values.get("CONTROL_ROOT") or o.project, "docs/dev")
@@ -878,7 +918,7 @@ class CommitRun:
         project = os.path.dirname(os.path.dirname(docs))     # a relative spec path is the project root's
 
         def read(path: str, what: str) -> str:
-            lab = self.label(f"Step 8 Read {what}")
+            lab = self.label(f"Step {CM.spec_update} Read {what}")
             c = o.s.read(path, label=lab, deviation=self.devs.at(lab))
             return ((c.response.get("file") or {}).get("content") or "") if c.ok else ""
 
@@ -905,22 +945,22 @@ class CommitRun:
             if len(hits) == 1 and is_file(hits[0]):
                 stage, found = 2, hits
         if not stage:
-            lab = self.label("Step 8 Glob specs")
+            lab = self.label(f"Step {CM.spec_update} Glob specs")
             g = o.s.tool("Glob", {"pattern": "spec-*.md", "path": sdir}, label=lab, deviation=self.devs.at(lab))
             named = [f for f in (g.response.get("filenames") or [] if g.ok else [])
                      if re.fullmatch(r"spec-\d{8}-\d{6}\.md", os.path.basename(f))]
             if named:
-                lab = self.label("Step 8 Grep spec marker")
+                lab = self.label(f"Step {CM.spec_update} Grep spec marker")
                 m = o.s.tool("Grep", {"pattern": re.escape(marker), "path": sdir, "output_mode": "files_with_matches"},
                              label=lab, deviation=self.devs.at(lab))
                 held = {os.path.join(sdir, f) for f in (m.response.get("filenames") or [])} if m.ok else set()
                 found = [f for f in named if f in held]
         if stage:
-            outcome = warning if stage == 2 else f"Step 8: updating the spec {found[0]}"
+            outcome = warning if stage == 2 else f"Step {CM.spec_update}: updating the spec {found[0]}"
         else:
             outcome = (none_ if not found else one.replace("<path>", found[0]) if len(found) == 1
                        else several.replace("<paths>", ", ".join(found)))
-        closedrv.fact(self.rp, "commit Step 8", {"stage": stage or 4,
+        closedrv.fact(self.rp, f"commit Step {CM.spec_update}", {"stage": stage or 4,
                                                  "outcome": outcome.replace(project + os.sep, "").replace(tid, "<task>")})
         o.s.say(outcome)
 
@@ -929,11 +969,11 @@ class CommitRun:
         """Step 7's hook rejection, as the text spells it: one REFUSED: line (the hook, the operation and the exact
         command it refused), the hook's output verbatim and the remedy it names; nobody is asked and the commit is
         not run again."""
-        para = re.sub(r"\s+", " ", next(p for p in re.split(r"\n\s*\n", self.o.section("Step 7"))
+        para = re.sub(r"\s+", " ", next(p for p in re.split(r"\n\s*\n", self.o.section(f"Step {CM.analyst}"))
                                          if "**A hook rejection**" in p))
         template = re.search(r"line `(REFUSED: [^`]+)`", para)
         if not template:
-            raise cmdtext.TextNotFound("Step 7: no REFUSED: line for a hook rejection")
+            raise cmdtext.TextNotFound(f"Step {CM.analyst}: no REFUSED: line for a hook rejection")
         hb = self.hook_block
         op = f"`git commit` in {hb['repo']} (`{hb['command']}`)"
         line = template.group(1).replace("<hook>", hb["hook"]).replace("<the operation>", op).replace(
@@ -949,10 +989,10 @@ class CommitRun:
         plus, when the text adds it (BULK=false), this round's docs/dev/commit-qa-report-<TASK_ID>.md in the
         control root's repository: the report the approving read just read."""
         approved = {r: list(f) for r, f in self.plan_files.items()}
-        sec = re.sub(r"\s+", " ", self.o.section("Step 6"))
+        sec = re.sub(r"\s+", " ", self.o.section(f"Step {CM.qa}"))
         rec = re.search(r"Record `QA_APPROVED_FILES` = `PLAN_FILES`(.*?)TOCTOU guard", sec)
         if rec is None:
-            raise cmdtext.TextNotFound("Step 6: no QA_APPROVED_FILES record")
+            raise cmdtext.TextNotFound(f"Step {CM.qa}: no QA_APPROVED_FILES record")
         if "when `BULK=false`, this round's `docs/dev/commit-qa-report-<TASK_ID>.md`" in rec.group(1):
             rel = f"docs/dev/commit-qa-report-{self.tid}.md"
             root = next((r for r in approved if os.path.realpath(r) == os.path.realpath(self.o.project)),
@@ -973,7 +1013,7 @@ class CommitRun:
                 return "nothing to commit"
             approved = self.qa_approved()
             self.hook_block = None
-            self.dispatch_analyst(False, approved, self.label(f"Step 7 Agent(changelog-analyst) {k}"))
+            self.dispatch_analyst(False, approved, self.label(f"Step {CM.analyst} Agent(changelog-analyst) {k}"))
             cs = self.status.get("commit_status", "unknown")
             o.s.say(f"changelog-analyst: commit_status={cs}")
             if cs == "failed" and self.status.get("failure_code") == "hook_blocked" and self.hook_block:
@@ -1011,6 +1051,11 @@ class CommitRun:
         self.outcome = cs
         return cs
 
+    def landed_as(self, out: str) -> bool:
+        """Whether Step 7's outcome lands the task: a success outcome, and `nothing_to_commit` only where Step 5's
+        plan call wrote its record (commit.md --auto item 3: the one such state the Stop gate accepts)."""
+        return out in COMMITTED and (out != "nothing_to_commit" or bool((self.facts or {}).get("nothing_to_commit")))
+
     def git_log(self) -> str:
         import subprocess
         with self.rp.acting("driver"):
@@ -1031,7 +1076,7 @@ class CommitRun:
         out = self.walk()
         text = self.stalled or f"/commit {self.tid}: {out}"
         ev = self.o.s.stop(text, label="/commit Stop", deviation=self.devs.at("/commit Stop"))
-        self.rp.terminal("commit", out in COMMITTED and self.clean(), ev, task=self.tid, outcome=out)
+        self.rp.terminal("commit", self.landed_as(out) and self.clean(), ev, task=self.tid, outcome=out)
         if self.codex:
             self.codex.finish()
         return out
@@ -1081,36 +1126,38 @@ class CommitRun:
         c = self.run_text(self.list_call("commit"), "/commit --auto Bash discovery",
                           "Discover the commit_pending parents")
         parents = [l for l in ((c.response.get("stdout") or "") if c.ok else "").split("\n") if l.strip()]
-        results = []
+        closedrv.auto_targets(self.rp, o.s.sid, "commit", [l.split()[0] for l in parents])
+        results, ok = [], []
         for line in parents:
             self.tid = line.split()[0]
             self.rp.task(self.tid)
             out = self.walk()
             results.append((self.tid, out))
+            ok.append(self.landed_as(out))
         if not parents:
             self.lifecycle_row()
         o.s.say("\n".join(f"{t}: {r}" for t, r in results) or "no commit_pending parent")
         self.outcome = "; ".join(f"{t}: {r}" for t, r in results)
         ev = o.s.stop(f"/commit --auto: {self.outcome}", label="/commit Stop", deviation=self.devs.at("/commit Stop"))
-        self.rp.terminal("commit", bool(results) and all(r in COMMITTED for _, r in results) and self.clean(), ev,
+        self.rp.terminal("commit", bool(results) and all(ok) and self.clean(), ev,
                          outcome=self.outcome)
         return results
 
     # ------------------------------------------------------------ the waits
     def flags_refused(self, typed: str) -> str:
         """Step 1's --auto flag combination: the NO_TARGET: line the text spells; nothing runs, nobody is asked."""
-        para = re.sub(r"\s+", " ", self.o.section("Step 1"))
+        para = re.sub(r"\s+", " ", self.o.section(f"Step {CM.parse}"))
         para = para[para.index("**`--auto` flag combination**"):]
         line = re.search(r"line `(NO_TARGET: [^`]+)`", para)
         if not line:
-            raise cmdtext.TextNotFound("Step 1: no NO_TARGET: line for a refused flag combination")
+            raise cmdtext.TextNotFound(f"Step {CM.parse}: no NO_TARGET: line for a refused flag combination")
         self.o.s.say(line.group(1))
         closedrv.fact(self.rp, "commit no target", {"typed": typed, "line": line.group(1)})
         return line.group(1)
 
     def list_call(self, action: str) -> str:
         """Step 2's discovery call (the `--auto` section runs it too), for `--next-action <action>`."""
-        sec = re.sub(r"\s+", " ", self.o.section("Step 2"))
+        sec = re.sub(r"\s+", " ", self.o.section(f"Step {CM.resolve}"))
         call = re.search(r"`(python3 \"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/dev-lifecycle\.py\" list-actionable "
                          r"--next-action commit --project-dir \"<PROJECT_ROOT>\")`", sec).group(1)
         return call.replace("--next-action commit", f"--next-action {action}")
@@ -1119,13 +1166,13 @@ class CommitRun:
         """Step 2's no-unambiguous-candidate end: the text's discovery calls, then one NO_TARGET: line naming
         each candidate as `/commit <task-id>`; nobody is asked. Returns the candidates."""
         o = self.o
-        sec = re.sub(r"\s+", " ", o.section("Step 2"))
+        sec = re.sub(r"\s+", " ", o.section(f"Step {CM.resolve}"))
         if "Print one line `NO_TARGET: `" not in sec:
-            raise cmdtext.TextNotFound("Step 2: no NO_TARGET: line for an ambiguous task")
+            raise cmdtext.TextNotFound(f"Step {CM.resolve}: no NO_TARGET: line for an ambiguous task")
         cands = []
         for action in ("commit", "close"):
             c = self.run_text(self.list_call(action),
-                              self.label(f"Step 2 Bash list-actionable {action}"), f"The {action}_pending parents")
+                              self.label(f"Step {CM.resolve} Bash list-actionable {action}"), f"The {action}_pending parents")
             cands += [l.split()[0] for l in (c.response.get("stdout") or "").split("\n") if l.strip()] if c.ok else []
         line = ("NO_TARGET: " + ", ".join(f"/commit {t}" for t in cands) + ", /commit --auto") if cands else \
             re.search(r"the line is `(NO_TARGET: [^`]*)`", sec).group(1)

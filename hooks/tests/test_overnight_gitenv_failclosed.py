@@ -238,6 +238,8 @@ def test_launch_does_not_publish_when_in_place_helper_missing(lab):
     scripts = build_scripts_dir(lab, {})
     shutil.copy2(LAUNCHER, scripts / LAUNCHER.name)
     (scripts / LAUNCHER.name).chmod(0o755)
+    # The launcher sources hooks/lib/claude_home.sh from beside its scripts folder, as in every real install.
+    shutil.copytree(SCRIPTS.parent / "hooks" / "lib", lab / "hooks" / "lib", ignore=shutil.ignore_patterns("__pycache__"))
     sid = "labsession-" + uuid.uuid4().hex[:8]
     # An in-place launch needs bubblewrap (P2 R13): a stand-in that runs the command it is
     # given lets the launch reach the provisioning region this test is about.
@@ -266,6 +268,31 @@ def test_launch_does_not_publish_when_in_place_helper_missing(lab):
         f"(dev-registry/{sid} was created); the guard failed open"
     )
     assert "helper" in r.stderr.lower() and "refus" in r.stderr.lower(), r.stderr
+
+
+def test_launcher_asks_git_for_the_main_root_without_the_actor_marker(lab):
+    """M3-ORDERING: the launcher's query of the repository top runs unmarked, though CLAUDE_OVERNIGHT_ACTOR is
+    exported around it (an actor-marked git is refused for repository-identity reads)."""
+    main_root = lab / "main"
+    make_repo(main_root)
+    scripts = build_scripts_dir(lab, {})
+    shutil.copy2(LAUNCHER, scripts / LAUNCHER.name)
+    (scripts / LAUNCHER.name).chmod(0o755)
+    shutil.copytree(SCRIPTS.parent / "hooks" / "lib", lab / "hooks" / "lib", ignore=shutil.ignore_patterns("__pycache__"))
+    real_git = shutil.which("git")
+    seen = lab / "toplevel-calls.txt"
+    stub = lab / "bin" / "git"
+    stub.parent.mkdir()
+    stub.write_text('#!/bin/sh\ncase " $* " in *" --show-toplevel "*) echo "marker=${CLAUDE_OVERNIGHT_ACTOR:-unset}" >> "' + str(seen)
+                    + '";; esac\nexec "' + str(real_git) + '" "$@"\n')
+    stub.chmod(0o755)
+    env = dict(os.environ, CLAUDE_OVERNIGHT_ACTOR="1", GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null",
+               PATH=f"{stub.parent}:{os.environ.get('PATH', '/usr/bin:/bin')}")
+    subprocess.run([str(scripts / LAUNCHER.name), "--project-dir", str(main_root), "--session-id", "labsession-" + uuid.uuid4().hex[:8],
+                    "--end-time", "8h", "--no-worktree"], capture_output=True, text=True, timeout=300, env=env)
+    calls = seen.read_text().split() if seen.exists() else []
+    assert calls, "the launcher never asked git for the repository top"
+    assert set(calls) == {"marker=unset"}, calls
 
 
 # --------------------------------------------------------------------------- #

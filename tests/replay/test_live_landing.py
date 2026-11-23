@@ -10,8 +10,11 @@ CLI keeps the hook commands it loaded; each event runs whatever file is on disk 
 Three transitions (the base tree each time from this checkout's history; CI fetches it whole):
   master  origin/master before P1b merges (2acc29b, P8's merge);
   p1b     P1b's head (3f0b7a2), which P1c builds on;
-  p12     master's P12 merge (3a968cf), the oldest hook list a session that can still exist may hold.
-KEPT_LISTS names the transitions whose list a session keeps across the landing (p12); master's and
+  p12l7   master's P12-L7 train (8b27512, #46), the first master list after P12 that names no hook file
+          this tree lacks: the oldest hook list a session that can still exist may hold. (P12's merge,
+          3a968cf, and the lists after it up to 036d1ed register the lane-completeness watch by its own
+          path, a file this tree has deleted.)
+KEPT_LISTS names the transitions whose list a session keeps across the landing (p12l7); master's and
 p1b's lists name hook files this tree has retired and no session holding them can still exist, so
 they run only reloaded at the landing (again with your settings.json, below; policies/replay-hook-lists.v1.json).
 
@@ -76,10 +79,10 @@ from tests.replay import hookrun, landing, launchdiff, sites, suite
 
 TRANSITIONS = {"master": "2acc29b0c8149c32d8e424e58c6af55d073eac20",
                "p1b": "3f0b7a23ee9145c573678775dc67b0a230c228f4",
-               "p12": "3a968cf823c517bcbff835a11ecdfe3c3d68c5e6"}
+               "p12l7": "8b2751247345169c6615aa9631d93373ba2080ef"}
 # The transitions a session keeps the base's list across the landing for (D15), and those it reloads
 # this tree's at the landing (hooklist=landed); policies/replay-hook-lists.v1.json registers both.
-KEPT_LISTS = ("p12",)
+KEPT_LISTS = ("p12l7",)
 RELOADED_LISTS = ("master", "p1b")
 ENV = {"CLAUDE_OBLIGATION_STOPGATE": "block"}
 # P2 arms G1 and G3 beside P1b's STOPGATE, and the overnight guard's matcher gains AskUserQuestion (its
@@ -319,7 +322,8 @@ def _base_settings(name: str) -> dict:
 @pytest.mark.parametrize("name", sorted(KEPT_LISTS))
 def test_every_hook_a_base_session_registered_is_on_disk(name):
     """D15: a session running across the landing runs every hook command its base settings.json
-    registered, at its path; each file such a command names is in this tree (stubbed, never deleted)."""
+    registered, at its path; each file such a command names is in this tree (a file is deleted only once no
+    list a session that can still exist may hold names it: the kept base moves on)."""
     named, missing = 0, []
     for event, groups in (_base_settings(name).get("hooks") or {}).items():
         for group in groups:
@@ -397,8 +401,8 @@ FAILED_LAUNCH = ("PostToolUseFailure", None)
 # 2026-11-21: the deny list that was the CLI's own (pretool-deny-list.py), one more launcher rule every Bash
 # and Write call meets.
 DENY = "Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit|Skill"
-# 2026-11-21: the lane-completeness watch's registration removed (its file an exit-0 stub, for a list that kept
-# it): every Write after the landing runs this tree's list without it.
+# 2026-11-21: the lane-completeness watch's registration removed (since 2026-11-22 its file deleted too): every
+# Write after the landing runs this tree's list without it.
 WATCH_GONE = ("PostToolUse", "Write|Edit|NotebookEdit|MultiEdit")
 BASH = _pre(None, "*", "Bash", "Edit|Write|MultiEdit|Bash", P2_MATCHER[0], "Write|Edit|MultiEdit|NotebookEdit|Bash",
             DENY) | {("PostToolUse", "Bash"), POST_LAUNCH}
@@ -438,38 +442,26 @@ PROMPT = ("UserPromptSubmit", None)
 # prompt. The scenarios that land at 'start' (PRE, HOME) reach it with their first prompt (REACHED); A and
 # B land after their last typed prompt.
 # (P12-L7 runs the event's Python hooks in its launcher, bulk-commit-capability fourth, as it was registered.)
-_PROMPT_HOOKS = ["hooks/prompt-workflow.py", "hooks/userprompt-doc-sync-check.py",
-                 "hooks/userprompt-restart-authorize.py", "hooks/userprompt-consent-allowlist.sh",
-                 "hooks/userprompt-tmpfs-pressure.sh", "hooks/userprompt-bulk-commit-capability.py"]
-# 2026-11-21: the launcher's dispatch temp pointer (a dispatch whose end was never seen closes) and hold of
-# background returns, and the returns' deadline hook registered beside it: PRE and HOME reach them with every
-# prompt after their landing (REACHED), where test_again_with_your_settings runs them (hooklist) and holds
-# them to no hook error (a11); no replay checks what they do.
-_PROMPT_HOOKS_NOW = ["hooks/prompt-workflow.py", "hooks/userprompt-doc-sync-check.py",
-                     "hooks/userprompt-restart-authorize.py", "hooks/userprompt-bulk-commit-capability.py",
-                     "hooks/lib/dispatch_temp.py", "hooks/lib/returns_hold.py",
-                     "hooks/userprompt-returns-deadline.sh",
-                     "hooks/userprompt-consent-allowlist.sh", "hooks/userprompt-tmpfs-pressure.sh",
-                     "hooks/userprompt-harness-switch.sh"]
+# Since 2026-11-21 the launcher's dispatch temp pointer, hold of background returns and the returns' deadline
+# hook, since 2026-11-22 the --auto task-list rule (userprompt-auto-targets.py): PRE and HOME reach them with
+# every prompt after their landing (REACHED), where test_again_with_your_settings runs them (hooklist) and holds
+# them to no hook error (a11); no replay checks what they do (no landing scenario types an --auto command).
 # P13-3's score injector and P2-3's roots, registered on every agent start; since 2026-11-21 the agent's own
 # scratch directory (subagentstart-scratch.py), which PRE, A and B reach with each dispatch (REACHED) as above
 START = ("SubagentStart", None)
 FAILED_SKILL = ("PostToolUseFailure", "Skill")  # P13-3's codex ledger on a failed Skill call; no landing scenario calls codex
-ELSEWHERE = {RATING: ([], ["hooks/posttool-close-rating.py"]),
-             PROMPT: (_PROMPT_HOOKS, _PROMPT_HOOKS_NOW),
-             START: ([], ["hooks/subagentstart-record.py", "hooks/prompt-workflow.py", "hooks/subagentstart-scratch.py"]),
-             FAILED_SKILL: ([], ["hooks/posttool-codex-skill-ledger.py"]),
-             FAILED_LAUNCH: ([], ["hooks/posttool-orchestrator-ran.py"]),
-             # 2026-11-21: a failed dispatch's temp directory goes (lib/dispatch_temp.py); no landing replay has a
-             # dispatch fail, so none runs it
-             ("PostToolUseFailure", "Agent|Task"): ([], ["hooks/lib/dispatch_temp.py"]),
-             # design A's Monitor guard: a Monitor command meets every Bash hook; no landing scenario starts a monitor
-             ("PreToolUse", "Monitor"): ([], ["hooks/pretool-monitor-command.py"]),
-             ("PostToolUse", "Bash\\(git commit.*\\)"): (["hooks/posttool-git-warn.sh"], []),
-             ("Notification", "idle_prompt"): (["hooks/notification-idle-overnight.py"], []),
-             # 2026-11-19: every permission request is answered by rule (permissionrequest-launch.py runs it);
-             # no replay raises a PermissionRequest (a replayed call is decided by its hooks alone)
-             ("PermissionRequest", None): ([], ["hooks/permissionrequest-answer.py"])}
+# Which hooks each side registers there is read from the two settings.json files (_differing), not kept here:
+# what this states is that each of these registrations differs and that no scenario exercises it (EXERCISES).
+ELSEWHERE = frozenset({
+    RATING, PROMPT, START, FAILED_SKILL, FAILED_LAUNCH,
+    # a failed dispatch's temp directory goes (lib/dispatch_temp.py); no landing replay has a dispatch fail
+    ("PostToolUseFailure", "Agent|Task"),
+    # design A's Monitor guard: a Monitor command meets every Bash hook; no landing scenario starts a monitor
+    ("PreToolUse", "Monitor"),
+    ("PostToolUse", "Bash\\(git commit.*\\)"), ("Notification", "idle_prompt"),
+    # every permission request is answered by rule (permissionrequest-launch.py runs it); no replay raises a
+    # PermissionRequest (a replayed call is decided by its hooks alone)
+    ("PermissionRequest", None)})
 REACHED = {PRE.name: {RATING, PROMPT, START}, HOME.name: {PROMPT}, A.name: {RATING, START, FAILED_LAUNCH},
            B.name: {RATING, START, FAILED_LAUNCH}}  # P13-3: a dispatch starts an agent
 
@@ -564,9 +556,11 @@ def _hooklist(name: str, r: suite.Result) -> tuple[list, set, int]:
         # a launcher's own entry stands for the hooks listed after it (replay.py _inv_hooks)
         ran = [h["command"] for h in inv["hooks"] if launchdiff.launcher_rules(suite.REPO, h["hook"]) is None]
         want = [h["command"] for h in hookrun.select(head, inv["event"], inv["payload"])]
-        if ran != want:
+        if ran != want:  # with the whole commands that differ: two lists of the same names differ in their text
             bad.append({"step": inv["label"], "event": inv["event"], "ran": [hookrun.hook_name(c) for c in ran],
-                        "this tree's": [hookrun.hook_name(c) for c in want]})
+                        "this tree's": [hookrun.hook_name(c) for c in want],
+                        "commands that differ (ran, this tree's)": [
+                            (a, b) for a, b in zip(ran + [None] * len(want), want + [None] * len(ran)) if a != b]})
         if [h["command"] for h in hookrun.select(base, inv["event"], inv["payload"])] != want:
             n += 1
             mv = hookrun.match_value(inv["event"], inv["payload"])
@@ -660,7 +654,7 @@ def test_your_settings_differs_only_where_a_replay_runs_it(name):
     subagent cache lifetime (CACHE_ENV) alone."""
     differing = _differing(name)
     assert differing, "this tree registers as the base does: the replays with your settings.json are the replays"
-    assert {k: differing.get(k) for k in ELSEWHERE} == ELSEWHERE, differing
+    assert ELSEWHERE <= set(differing), (sorted(map(str, ELSEWHERE - set(differing))), differing)
     assert set(differing) - set(ELSEWHERE) == set().union(*EXERCISES.values()), differing
     head = _head_settings()
     assert hookrun.settings_env(_base_settings(name)) | ENV | P2_ENV | P10_ENV | P9_ENV | CACHE_ENV == \
@@ -704,7 +698,7 @@ def test_again_with_your_settings(live, case, part):
                 bad = _stops_not_0(r.hook_events())
                 assert not bad, f"{scn.name}: a Stop hook not exiting 0: {bad}"
             elif scn is A:  # every stop of the /redev cycle
-                if live.name == "master":
+                if live.name == "master":  # the old state a reloaded session resumes on: master's G2's stores
                     assert land.get("no_progress_stores"), land
                 assert _stops(r, _after(r), ("Stop", "SubagentStop")), r.explain()
                 bad = _stops_not_0(_after(r), ("Stop", "SubagentStop"))

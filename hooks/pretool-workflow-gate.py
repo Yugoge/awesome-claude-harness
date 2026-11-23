@@ -824,6 +824,9 @@ def native_subagent_evidence_for_transition(
         if old.get('status') != 'in_progress' or new.get('status') != 'completed':
             continue
         required_call = new.get('subagent_call')
+        if isinstance(required_call, list):  # a step stating every call (scripts/todo/dev.py ROUND_CALLS): its required one
+            required = [e for e in required_call if isinstance(e, dict) and not e.get('optional')]
+            required_call = required[0] if len(required) == 1 else None
         if not isinstance(required_call, dict):
             continue
         expected_role = required_call.get('subagent_type') or required_call.get('agent')

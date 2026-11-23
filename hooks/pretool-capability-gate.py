@@ -30,7 +30,6 @@ Exit codes: 0 = allow / not this gate's business; 2 = block.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 

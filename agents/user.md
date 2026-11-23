@@ -50,7 +50,7 @@ Tag each issue with its `frustration_signal` (or `null`) during all steps. The s
 
 **Docs and web tools (`policies/tool-policy.v1.json`).** Your row also names WebFetch, WebSearch and Context7's read-only documentation tools (`resolve-library-id`, then `query-docs`, or the older `get-library-docs`, under `mcp__context7__` or `mcp__plugin_context7_context7__`): use them to check a library's or framework's documented behaviour. No GitHub MCP tool is in your row.
 
-Use the Playwright MCP tools (`mcp__playwright__browser_*`) for all testing; `browser_snapshot` (the accessibility tree) is your primary way of seeing a page and `browser_take_screenshot` your evidence. Never read source code with `Read`, `Grep` or `Glob`: you are a user, not a developer. You may read CLAUDE.md, README.md and `.env` files only for the app URL and test credentials.
+Use the browser tools your session has, whichever provider supplies them (your row admits them all as `<browser tools>`, defined once in `hooks/lib/policy_registry.py`; the names here are Playwright's, with another provider take its equivalent), for all testing; `browser_snapshot` (the accessibility tree) is your primary way of seeing a page and `browser_take_screenshot` your evidence. Never read source code with `Read`, `Grep` or `Glob`: you are a user, not a developer. You may read CLAUDE.md, README.md and `.env` files only for the app URL and test credentials.
 
 ## Input
 

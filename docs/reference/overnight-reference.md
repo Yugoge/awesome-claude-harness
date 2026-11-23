@@ -12,7 +12,11 @@ inline form, except three lines newly authored here to describe the new in-place
 
 ## State file schema
 
-**Schema**:
+**Schema** (the fields the commands read; the writer, `scripts/create-overnight-state.sh`, writes
+`schema_version` 9 and also `protected_branch`, the `isolation_*`, `main_*`, `dev_registry_*` and
+`git_*` fields, `worktree_head_at_start`, `isolation_kind`, `guarantee_level`,
+`structural_claim_allowed`, `reference_transaction_selftest_result`, `actor_git_env`, `view_paths`
+and `codex_required`; `current_phase` starts at `exploring`; no writer sets a `cycle_count`):
 ```json
 {
   "session_id": "string (from $CLAUDE_SESSION_ID or UUID)",
@@ -21,7 +25,6 @@ inline form, except three lines newly authored here to describe the new in-place
   "focus": "string (discovery hint from user, or empty)",
   "spec_mode": "autonomous|user-provided",
   "user_spec_path": "string (path to user-provided spec, or null)",
-  "cycle_count": 0,
   "issues_found": 0,
   "issues_fixed": 0,
   "issues_skipped": 0,

@@ -6,10 +6,13 @@ recognised the old `~/.claude/scripts/spec-check.py` spelling.
 The line is agents/spec.md's `checkpoints` call, read from the file. A checkpoint
 action that names a view behind an arrow (`-> docs/dev/specs/<id>/views/...`) is
 what the guard's redirect patterns see; the spec-check whitelist is what lets it
-pass. Both spellings get the same decision; a writer outside the channel, an
-unquoted channel and a plain redirect into a view stay blocked."""
+pass. Both spellings get the same decision; a writer outside the channel and a plain
+redirect into a view stay blocked. The checker is recognised by its real place (round G, lane
+viewsguard), so an unquoted channel, which the shell expands to the same file, passes as the quoted
+one does; every run gets a throwaway HOME whose `.claude` is this tree."""
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -21,10 +24,19 @@ CHANNEL = '"${CLAUDE_HOME:-$HOME/.claude}/'
 ACTION = '"Write the dev role view -> docs/dev/specs/spec-1/views/dev.md"'
 
 
-def _decide(command: str) -> subprocess.CompletedProcess:
+def _decide(command: str, home: Path) -> subprocess.CompletedProcess:
     payload = {"tool_name": "Bash", "session_id": "views-guard-test", "tool_input": {"command": command}}
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_HOME"}
+    env["HOME"] = str(home)
     return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), text=True,
-                          capture_output=True, cwd=str(ROOT), check=False)
+                          capture_output=True, cwd=str(ROOT), env=env, check=False)
+
+
+def _home(tmp_path: Path) -> Path:
+    """A throwaway HOME whose `.claude` is this tree."""
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / ".claude").symlink_to(ROOT)
+    return tmp_path / "home"
 
 
 def _checkpoints_line() -> str:
@@ -43,20 +55,23 @@ def _checkpoints_line() -> str:
     return command
 
 
-def test_spec_check_channel_and_old_spelling_get_the_same_decision():
+def test_spec_check_channel_and_old_spelling_get_the_same_decision(tmp_path):
+    home = _home(tmp_path)
     new = _checkpoints_line()
     old = re.sub(r'"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/([^"]*)"', r"~/.claude/\1", new)
     assert old.startswith("source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/spec-check.py checkpoints")
-    new_rc, old_rc = _decide(new), _decide(old)
-    assert (new_rc.returncode, old_rc.returncode) == (0, 0), (new_rc.stderr, old_rc.stderr)
+    unquoted = new.replace(CHANNEL + "scripts/spec-check.py\"", "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py")
+    rcs = [_decide(c, home) for c in (new, old, unquoted)]
+    assert [r.returncode for r in rcs] == [0, 0, 0], [r.stderr for r in rcs]
 
 
-def test_writers_outside_the_quoted_channel_stay_blocked():
+def test_writers_outside_the_quoted_channel_stay_blocked(tmp_path):
+    home = _home(tmp_path)
     new = _checkpoints_line()
     for blocked in (
         new.replace(CHANNEL + "scripts/spec-check.py\"", '"/tmp/elsewhere/scripts/spec-check.py"'),
-        new.replace(CHANNEL + "scripts/spec-check.py\"", "${CLAUDE_HOME:-$HOME/.claude}/scripts/spec-check.py"),
+        new.replace(CHANNEL + "scripts/spec-check.py\"", '"/tmp/elsewhere/.claude/scripts/spec-check.py"'),
         "echo note > docs/dev/specs/spec-1/views/dev.md",
     ):
-        result = _decide(blocked)
+        result = _decide(blocked, home)
         assert result.returncode == 2 and "BLOCKED" in result.stderr, blocked

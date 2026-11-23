@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import agent_cycle
+from lib import agent_cycle, locations
 from lib.agent_resolver import resolve_agent_type
 
 
@@ -88,6 +88,8 @@ def main() -> None:
     status = _determine_status(data)
 
     ledger_dir = registry / "codex-ledger"
+    if locations.refuses_root(ledger_dir, project_dir, "codex-skill-ledger"):
+        sys.exit(0)
     try:
         ledger_dir.mkdir(parents=True, exist_ok=True)
     except OSError:

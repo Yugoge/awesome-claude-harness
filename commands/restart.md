@@ -55,9 +55,11 @@ so the steps below are the rule.
    says so on stderr. The grant is no permission: each send of step 3 is a dispatch to an own
    subagent, judged by the dispatch gate (CLAUDE.md lesson 16). Its output is the candidate set of THIS parent session's own transcript (after
    `claude --resume` it carries the interrupted history forward); other sessions and accounts are
-   not scanned by default, and children that finished (a terminal `end_turn` report) are already
-   excluded, so do not re-judge the list. It lists every own subagent (the CLI's result or its
-   `agent-<id>.meta.json` names the dispatch that started it) that did not finish, whatever cut it:
+   not scanned by default, and children whose latest run finished (a terminal `end_turn` report in
+   the run that the latest dispatch or delivered message to them started) are already excluded, so
+   do not re-judge the list. It lists every own subagent (the CLI's result or its
+   `agent-<id>.meta.json` names the dispatch that started it) whose latest run did not finish,
+   whatever cut it (a child that finished and was then cut in the run a message started is listed):
    a usage or session limit, the end of the CLI process, the owner's interrupt of a foreground
    dispatch (a result that names no child), a TaskStop; never one whose task a later dispatch of
    this session carried again (the same prompt, or the same `<obligation>` lane). The account-rotation case (another account's
@@ -87,9 +89,11 @@ so the steps below are the rule.
    `agent_id` as `to` and the exact `resume_message` step 2's set holds as `message`.
    Do not edit, summarize, prefix, suffix, translate, or otherwise rewrite that message. Where a
    dispatch of the candidate's role at this point must carry an `<obligation>` block (its lane's
-   span requires one), append the lane's original block after the message: the send is that
-   dispatch, the dispatch gate refuses it without the block, and the resumed run's stop is judged
-   by the block the send carries.
+   span requires one), append the lane's original block after the message, an exact copy. The
+   message, with that block or without it, is the recovery's resume (`subagent_restart.is_resume_message`):
+   it adds no work, so the send passes on the candidate's original dispatch and the resumed run's
+   stop is judged by that dispatch's declaration. Any other text makes the send a new dispatch,
+   judged by the dispatch gate and, at its stop, by the declaration it carries.
 4. **Read the outcome; run nothing.** The hooks wait and finalize: `hooks/subagentstop-restart-track.py`
    records each response and, when the last one is in, finalizes the recovery (the capability is
    consumed); at the parent's next prompt (a resumed child's notification included)
@@ -151,8 +155,9 @@ count with `candidates: []` is a complete, valid result, never an error to retry
 
 - **DO NOT self-invoke.** The command is human-only in both forms, the zero-candidate continuation
   included (frontmatter `disable-model-invocation: true` and the `Skill(restart)` entry of
-  the deny list, `policies/cli-deny.v1.json`; CLAUDE.md lesson 15). An agent that wants continuation asks the operator; it
-  never issues the directive to itself.
+  the deny list, `policies/cli-deny.v1.json`; CLAUDE.md lesson 15). It never issues the directive to itself, and nobody asks the owner for it
+  or whether to go on (CLAUDE.md Hook Discipline #1): an agent with work left goes on with that
+  work by the rules of its command.
 - **DO NOT call `Agent` or `Task`** to replace an interrupted subagent or to stand in for the main
   agent in step 8, and do not copy a transcript into a fresh prompt and call that a restart.
 - **DO NOT omit any candidate** of `candidates`, even if its last transcript entry looks nearly

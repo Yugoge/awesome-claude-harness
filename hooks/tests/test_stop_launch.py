@@ -94,11 +94,142 @@ def test_a10_a_coordinator_that_cannot_decide_blocks_a_gated_span_naming_stop(tm
     hooks = _scratch(tmp_path, source, timeout=1 if case == "timeout" else None)
     done = _stop(tmp_path, hooks, "dev")
     assert done.returncode == 2, done.stderr
+    assert "Traceback" not in done.stderr and done.stdout == ""
+    if case == "timeout":  # no verdict, as the coordinator says of its gate out of time
+        assert done.stderr == "".join(_coordinator().no_verdict_text("stop-workflow-coordinator.py", 1))
+        return
     assert done.stderr.startswith("COMMAND_GATE instrument failure: stop-workflow-coordinator.py ")
     assert done.stderr.endswith(". The gate is broken; the human can type /stop\n")
-    assert {"syntax error": "exited 1 (SyntaxError", "missing": "is missing",
-            "timeout": "ran past 1 s"}[case] in done.stderr
-    assert "Traceback" not in done.stderr and done.stdout == ""
+    assert {"syntax error": "exited 1 (SyntaxError", "missing": "is missing"}[case] in done.stderr
+
+
+def test_a10_a_session_record_that_cannot_be_read_in_time_blocks_as_no_verdict(tmp_path):
+    """A coordinator out of time and a transcript whose reading never returns (a FIFO no one writes: open
+    blocks, whatever the machine's speed): the fallback's reading is bounded by READ_LIMIT (1 s here), and the
+    stop is decided as a coordinator with no verdict: exit 2 and the same text, nothing verified."""
+    hooks = _scratch(tmp_path, SLOW, timeout=1)
+    launcher = hooks / LAUNCHER.name
+    launcher.write_text(launcher.read_text(encoding="utf-8").replace("READ_LIMIT = 5", "READ_LIMIT = 1"))
+    project = tmp_path / "project"
+    project.mkdir()
+    fifo = tmp_path / "transcript.jsonl"
+    os.mkfifo(fifo)
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_COMMAND_GATE"}
+    env.update({"CLAUDE_PROJECT_DIR": str(project), "HOME": str(tmp_path / "home"), "CLAUDE_COMMAND_GATE": "block"})
+    payload = {"session_id": SID, "transcript_path": str(fifo), "cwd": str(project), "hook_event_name": "Stop",
+               "stop_hook_active": False}
+    done = subprocess.run([sys.executable, str(launcher)], input=json.dumps(payload), capture_output=True,
+                          text=True, cwd=str(project), env=env, timeout=30)  # the old launcher never returns
+    assert (done.returncode, done.stdout) == (2, ""), done.stderr
+    assert done.stderr == "".join(_coordinator().no_verdict_text("stop-workflow-coordinator.py", 1))
+
+
+def test_a10_the_launchers_worst_case_fits_its_registration():
+    """The coordinator's limit, then the fallback's bounded reading and the refusal record's process: their sum
+    stays under the Stop registration's timeout."""
+    launcher = _launcher_module()
+    settings = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))
+    registered = settings["hooks"]["Stop"][0]["hooks"][0]["timeout"]
+    assert launcher.COORDINATOR_TIMEOUT + launcher.READ_LIMIT + launcher.RECORD_LIMIT < registered
+
+
+def _launch_with_overnight(tmp_path, overnight_source, *commands):
+    """A scratch launcher whose coordinator cannot decide and whose overnight.py is ``overnight_source``."""
+    hooks = _scratch(tmp_path, BROKEN)
+    (hooks / "lib" / "overnight.py").write_text(overnight_source, encoding="utf-8")
+    return _stop(tmp_path, hooks, *commands)
+
+
+@pytest.mark.parametrize("commands", [("dev",), ("help",)])
+def test_a10_a_launcher_that_cannot_load_overnight_py_blocks_and_names_it(tmp_path, commands):
+    """No window can be read: no verdict, as for a record not read in time (exit 2, the existing text), for a gated
+    span and for a session with no gated command alike, and the text names the module and why it failed."""
+    done = _launch_with_overnight(tmp_path, "def broken(:\n", *commands)
+    assert done.returncode == 2, done.stderr
+    assert done.stderr.startswith("COMMAND_GATE instrument failure: stop-workflow-coordinator.py exited 1")
+    assert "; overnight.py could not be loaded (SyntaxError" in done.stderr
+    assert done.stderr.endswith(". The gate is broken; the human can type /stop\n") and done.stdout == ""
+
+
+def test_a10_the_failed_load_is_in_the_refusal_record_text(monkeypatch):
+    launcher = _launcher_module()
+    recorded = []
+    monkeypatch.setattr(launcher, "record", lambda raw, hook, text: recorded.append(text))
+    monkeypatch.setattr(launcher, "_load", lambda name, path=None: launcher.FAILED.update({name: "OSError: x"}))
+    monkeypatch.delenv("CLAUDE_COMMAND_GATE", raising=False)
+    assert launcher.fallback(b"{}", "stop-workflow-coordinator.py", 280) == 2
+    assert len(recorded) == 1 and "overnight.py could not be loaded (OSError: x)" in recorded[0]
+
+
+def test_a10_an_unloadable_library_file_leaves_the_fallback_able_to_read_the_window(tmp_path):
+    """locations.py unloadable beside overnight.py: the module still loads (the standard library alone), the window
+    is read, and a session with no gated command and no open window is let stop, with nothing said of a failed load."""
+    hooks = _scratch(tmp_path, BROKEN)
+    (hooks / "lib" / "locations.py").write_text(BROKEN, encoding="utf-8")
+    done = _stop(tmp_path, hooks, "help")
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", ""), done.stderr
+
+
+def _bare_overnight(tmp_path):
+    """overnight.py alone in a directory: loaded with the standard library, nothing of the harness beside it."""
+    import importlib.util
+    only = tmp_path / "bare"
+    only.mkdir()
+    shutil.copy(HOOKS / "lib" / "overnight.py", only / "overnight.py")
+    spec = importlib.util.spec_from_file_location("overnight_bare", only / "overnight.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a10_overnight_py_with_no_library_beside_it_still_finds_its_roots_and_the_root_is_no_top(tmp_path, monkeypatch):
+    bare = _bare_overnight(tmp_path)
+    monkeypatch.delitem(sys.modules, "locations", raising=False)
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    assert bare._locations() is None
+    assert bare._top(repo) == str(repo.resolve()) and bare._common_dir(repo) == str(repo.resolve() / ".git")
+    assert str(repo.resolve()) in bare.candidate_project_dirs(str(repo))
+    monkeypatch.setattr(bare, "_git", lambda where, *args: "/" if args[-1] == "--show-toplevel" else "/.git")
+    assert bare._top("/anywhere") is None and bare._common_dir("/anywhere") is None  # a top at the root: none
+    monkeypatch.undo()
+    shared = bare._locations() or _shared_locations()
+    assert (shared.repo_top(repo), shared.repo_common_dir(repo)) == (bare._top(repo), bare._common_dir(repo))
+
+
+def _shared_locations():
+    """locations.py as the fallback's comparison is held to it: the same answers on a repository."""
+    sys.path.insert(0, str(HOOKS / "lib"))
+    try:
+        import locations
+        return locations
+    finally:
+        sys.path.pop(0)
+
+
+def _coordinator():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("stop_launch_test_coordinator", HOOKS / "stop-workflow-coordinator.py")
+    module = sys.modules[spec.name] = importlib.util.module_from_spec(spec)  # its dataclass reads its module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a10_the_launchers_no_verdict_text_says_what_the_coordinators_says():
+    """The launcher states its coordinator out of time with the coordinator's own text for its gate out of
+    time: no verdict, not let through, the next stop continues the gate's work, /stop; never "broken"."""
+    launcher = _launcher_module()
+    for subject, limit in (("stop-workflow-coordinator.py", 280), ("the gate", 60)):
+        assert launcher._texts(subject, limit) == _coordinator().no_verdict_text(subject, limit)
+    assert "broken" not in "".join(launcher._texts("stop-workflow-coordinator.py", 280))
+
+
+def _launcher_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("stop_launch_under_test", LAUNCHER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.mark.parametrize("case", ["syntax error", "timeout"])
@@ -270,7 +401,34 @@ def test_a10_the_launcher_loads_only_stdlib_and_the_two_modules_and_copies_no_ru
     assert top <= set(sys.stdlib_module_names) | {"__future__"}, top
 
 
-# ---------------------------------------------------------------- A22: the Stop registration, the stubs
+def test_a10_the_span_reader_without_the_index_module_reads_the_conversation_whole(tmp_path, monkeypatch):
+    """The fallback loads command_span.py by path with no library beside it, as the overnight reader is loaded; where a scan that
+    keeps readings is open and the index module cannot be loaded, the reading is the whole read, with the same answer."""
+    import importlib.util
+    import types
+    lib = tmp_path / "hooks" / "lib"
+    lib.mkdir(parents=True)
+    for name in ("command_span.py", "stop-commands.json"):
+        shutil.copy(HOOKS / "lib" / name, lib / name)
+    (tmp_path / "commands").mkdir()
+    (tmp_path / "commands" / "dev.md").write_text("x", encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("span_alone", lib / "command_span.py")
+    span = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(span)
+    transcript = _transcript(tmp_path / "t.jsonl", "dev")
+    whole = span.active_span(str(transcript), frozenset({"dev"}))
+    assert whole is not None and whole.command == "dev"
+    scan = types.SimpleNamespace(keep=tmp_path / "keep", memo={})
+    fake = types.ModuleType("fake_obligation")
+    fake.transcript_scan, fake._SCAN = object(), scan
+    monkeypatch.setitem(sys.modules, "fake_obligation", fake)
+    monkeypatch.setitem(sys.modules, "transcript_index", None)  # the module is not there to load
+    kept = span.active_span(str(transcript), frozenset({"dev"}))
+    assert kept is not None and (kept.command, kept.args, kept.start_line) == (whole.command, whole.args, whole.start_line)
+    assert span.active_command(str(transcript), keep=tmp_path / "keep2") == span.active_command(str(transcript)) == "dev"
+
+
+# ---------------------------------------------------------------- A22: the Stop registration
 def test_a22_the_stop_group_is_one_entry_the_launcher_with_timeout_300():
     settings = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))
     hooks = [h for group in settings["hooks"]["Stop"] for h in group["hooks"]]
@@ -281,14 +439,6 @@ def test_a22_the_stop_group_is_one_entry_the_launcher_with_timeout_300():
     for retired in ("stop-completion-gate", "stop-obligation-gate", "stop-do-report-gate", "stop-workflow-coordinator",
                     "stop-overnight-timelock", "CLAUDE_COMMAND_GATE"):  # the todo hooks: lane E's R19
         assert retired not in text, retired
-
-
-@pytest.mark.parametrize("stub", ["stop-obligation-gate.py", "stop-do-report-gate.py"])
-def test_a22_each_retired_stop_hook_is_a_one_line_stub_exiting_0(stub):
-    text = (HOOKS / stub).read_text(encoding="utf-8")
-    assert sum(line.startswith("# STUB:") for line in text.splitlines()) == 1
-    done = subprocess.run([sys.executable, str(HOOKS / stub)], input="", capture_output=True, text=True)
-    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
 
 
 def test_a22_no_awaiting_input_or_g4_decider_remains():

@@ -95,6 +95,7 @@ from pathlib import Path
 # front matter), read whenever asked: no list of role names lives here.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
 from roster import roles as _roster_roles  # noqa: E402
+import locations  # noqa: E402  (the filesystem root is no project)
 
 
 def _allowed_agents():
@@ -243,7 +244,7 @@ def _project_dir():
         return Path(os.environ["CLAUDE_PROJECT_DIR"])
     cwd = Path.cwd()
     for d in (cwd, *cwd.parents):
-        if (d / ".claude").is_dir():
+        if (d / ".claude").is_dir() and not locations.is_fs_root(d):
             return d
         if (d / ".git").exists():
             break
@@ -345,6 +346,8 @@ def _read_payload(spec_id, agent, instance_id=None):
 
 def _write_payload(spec_id, agent, payload, instance_id=None):
     path = _cp_file(spec_id, agent, instance_id)
+    if locations.refuses_root(path, _project_dir(), "spec-check"):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with _slot_lock(path):
         _atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False))
@@ -386,6 +389,8 @@ def _check_in_rmw(args, instance_id):
     --bump-generation invocations cannot tear (AC10d). Writes through
     _atomic_write_text directly: _write_payload would take the slot lock a second time."""
     path = _cp_file(args.spec_id, args.agent, instance_id)
+    if locations.refuses_root(path, _project_dir(), "spec-check"):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with _slot_lock(path):
         payload = _read_payload(args.spec_id, args.agent, instance_id)

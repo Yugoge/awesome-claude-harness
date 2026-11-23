@@ -65,7 +65,9 @@ plan that admits this exact repo at its live branch/HEAD, whose cited cycle
 report matches its recorded sha256, plus a close-report for the task. A
 grant is no longer mintable from a sentinel alone.
 
-That evidence is orchestrator-authored and so forgeable in principle -- /commit
+That evidence (written by /commit Step 5's plan call, scripts/steps/commit-plan.py,
+or by hand by a session holding the older Step 5 text) lies in the agent-writable
+state root and so is forgeable in principle -- /commit
 Step 5 mints BEFORE it dispatches, so at mint time there is nothing
 hook-witnessed to require. It raises the cost; the structural barrier is on
 the CONSUME side, where the privilege guard demands a hook-written
@@ -104,6 +106,7 @@ from pathlib import Path
 # import shape as scripts/break-overnight-lock.py).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
 from harness_state_dir import harness_state_dir  # noqa: E402
+import locations  # noqa: E402  (the filesystem root is no repository top)
 import commit_pipeline  # noqa: E402
 
 # Grant validity window. The privilege guard expires the grant at
@@ -449,7 +452,9 @@ def main(argv: list[str] | None = None) -> int:
     # Resolved before the pipeline-evidence check below because that check
     # binds the repository plan to this exact repo at its live branch/HEAD.
     try:
-        repo_root = _git_capture(["rev-parse", "--show-toplevel"], cwd=args.repo_root)
+        repo_root = locations.repo_top(args.repo_root or os.getcwd())  # never the filesystem root
+        if not repo_root:
+            raise RuntimeError("not inside a git work tree whose top is not the filesystem root")
         branch = _git_capture(["branch", "--show-current"], cwd=repo_root)
         expected_head = _git_capture(["rev-parse", "HEAD"], cwd=repo_root)
     except RuntimeError as exc:

@@ -25,6 +25,10 @@ import sys
 import pytest
 
 from tests.replay import suite
+from tests.replay.drivers.close import CL
+from tests.replay.drivers.push import PushSteps
+
+PUSH_STEPS = PushSteps(open(os.path.join(suite.REPO, "commands", "push.md"), encoding="utf-8").read())
 
 CLOSE = suite.Scenario("/close mistyped", "do", (("then", "close"), ("mistype", "1")), ("do", "close"), 110)
 PUSH = suite.Scenario("/push mistyped", "push", (("after", "none"), ("token", "owner2"), ("remote", "upstrem")),
@@ -38,7 +42,9 @@ WAITS = {"P3": (lambda: "\ndef disposition(" in _text("scripts/resolve-dev-artif
          "P4": (lambda: os.path.isfile(os.path.join(suite.REPO, "hooks", "lib", "close_rating.py")),
                 re.compile(r"gate instrument failure: ModuleNotFoundError: No module named 'lib\.close_rating'"))}
 # The gate on one transcript, P3's disposition and P4's close rating replaced by stand-ins of their
-# signatures: the disposition's lines name the task it is asked about (argv[4]: "gap") or none ("pass").
+# signatures: the disposition's lines name the task it is asked about, or none, by what the file
+# stand-in-disposition in the project says ("gap" or "pass"). It reads that file as the real disposition reads its
+# facts, so the gate's kept result notices a changed fact (a rewritten file), not a swapped function.
 STAND_INS = r"""
 import importlib.util, json, sys, types
 spec = importlib.util.spec_from_file_location("gate_on_the_replay", sys.argv[1])
@@ -48,7 +54,9 @@ rating = types.ModuleType("lib.close_rating")
 rating.rating_required = lambda span, task_id: False
 rating.rating_asked = lambda transcript_path, task_id: True
 sys.modules["lib.close_rating"] = rating
-lines = lambda root, task, stage: [f"{stage} {task}: the stand-in disposition"] if sys.argv[4] == "gap" else []
+def lines(root, task, stage):
+    with open(sys.argv[5] + "/stand-in-disposition") as fh:
+        return [f"{stage} {task}: the stand-in disposition"] if fh.read() == "gap" else []
 gate._SCRIPTS["scripts/resolve-dev-artifact-chain.py"] = types.SimpleNamespace(disposition_lines=lines)
 payload = {"session_id": sys.argv[2], "transcript_path": sys.argv[3], "cwd": sys.argv[5], "hook_event_name": "Stop"}
 span = gate.command_span.active_span(sys.argv[3])
@@ -79,6 +87,8 @@ def _on_the_transcript(r, root: str, disposition: str) -> dict:
            "CLAUDE_CODE_ENABLE_TASKS": "false",
            "PYTHONDONTWRITEBYTECODE": "1"}
     env.pop("CLAUDE_COMPAT_RUNTIME", None)
+    with open(os.path.join(root, "stand-in-disposition"), "w") as fh:
+        fh.write(disposition)
     done = subprocess.run([sys.executable, "-c", STAND_INS, GATE, sid, paths[0], disposition, root], cwd=root,
                           capture_output=True, text=True, env=env, timeout=120)
     assert done.returncode == 0, done.stderr
@@ -97,7 +107,7 @@ def test_a_mistyped_argument_corrected_in_the_turn_is_checked_on_the_corrected_v
     if scn is PUSH:
         assert typed == ["/push typed"] and asked == [], (typed, asked)
         assert [f["value"] for f in r.facts if f.get("key") == "push refusal"] == [
-            {"step": "Step 5", "action": "push to origin", "answer": None}], r.explain()
+            {"step": PUSH_STEPS.push, "action": "push to origin", "answer": None}], r.explain()
         pushes = [f["value"] for f in r.facts if f.get("key") == "push"]
         assert [p["rc"] for p in pushes] == [1] and "remote 'upstrem' not found" in pushes[0]["output"], pushes
         assert not pushes[-1]["pushed"], pushes[-1]
@@ -109,7 +119,7 @@ def test_a_mistyped_argument_corrected_in_the_turn_is_checked_on_the_corrected_v
     assert made["line"].startswith("NO_TARGET: ") and made["still_blocked"] is False, made
     typo = re.search(r"ticket-(.+)\.md$", made["typed"]).group(1)
     # with P4's close rating in the tree, close.md's Step 4 asks the rating; nothing else is asked
-    rating = ["/close Step 4 AskUserQuestion"] if WAITS["P4"][0]() else []
+    rating = [f"/close Step {CL.rating} AskUserQuestion"] if WAITS["P4"][0]() else []
     assert typo != tid and asked == rating, (typo, asked)
     assert [t for t in typed if t.startswith("/close ")] == ["/close typed", "/close typed again"], typed
     assert set(stops) == {"/do Stop", "/close Stop (no task)", "/close Stop"} and not _blocked(stops["/do Stop"]), \

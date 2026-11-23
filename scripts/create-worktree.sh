@@ -14,6 +14,7 @@
 #   * Emit WORKTREE_PATH/WORKTREE_BRANCH ONLY after full validation; fail closed.
 
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib" && pwd)/claude_home.sh"
 
 PROJECT_DIR=""
 NAME=""
@@ -29,6 +30,10 @@ if [[ -n "$PROJECT_DIR" ]]; then
     GIT_ROOT="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel)"
 else
     GIT_ROOT="$(git rev-parse --show-toplevel)"
+fi
+if claude_is_fs_root "$GIT_ROOT"; then  # the filesystem root is no repository top: no worktree is made below it
+    echo "Error: the filesystem root is no repository top: $GIT_ROOT" >&2
+    exit 1
 fi
 GITC=(git -C "$GIT_ROOT")
 

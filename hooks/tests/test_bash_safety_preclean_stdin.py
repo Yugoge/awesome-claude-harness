@@ -126,6 +126,43 @@ def test_guard_that_cannot_run_gives_deployment_error(sandbox, rc):
     assert "no protective pre-clean WIP snapshot is possible" not in proc.stderr
 
 
+# ── The refusal texts: no retry is invited; the owner's typed /allow is what releases one ──
+
+NO_RETRY = "This refusal is not retried; the owner's typed /allow releases the next refused call."
+
+
+def _redirected(sandbox):
+    return run(sandbox, "git -C /x clean -fd")
+
+
+def _snapshot_fails(sandbox):
+    return run(sandbox, "git clean -fd", cwd=sandbox["plain"])
+
+
+def _guard_cannot_run(sandbox):
+    shim = sandbox["tmp"] / "python-shim"
+    shim.write_text('#!/bin/bash\ncase "$1" in *git_clean_guard.py) exit 126 ;; esac\nexec %s "$@"\n'
+                    % sys.executable)
+    shim.chmod(0o755)
+    return run(sandbox, "echo harmless", env={**sandbox["env"], "CLAUDE_PYTHON_BIN": str(shim)})
+
+
+@pytest.mark.parametrize("refusal", [_redirected, _snapshot_fails, _guard_cannot_run])
+def test_each_preclean_refusal_names_the_owners_allow_and_no_retry(sandbox, refusal):
+    _consent(sandbox)
+    proc = refusal(sandbox)
+    assert proc.returncode == 2
+    said = " ".join(proc.stderr.split())
+    assert NO_RETRY in said
+    assert "re-issue" not in said
+
+
+def test_snapshot_rc2_names_both_causes(sandbox):
+    """write_checkpoint rc 2 is a directory that is not a repository or not the top of one."""
+    _consent(sandbox)
+    proc = _snapshot_fails(sandbox)
+    assert "write_checkpoint rc=2" in proc.stderr
+    assert "not a git repository, or not the top of its repository" in proc.stderr
 
 
 # ── MB-1a / MB-1b pins: the in-process rules see a large payload whole, with no /do ──

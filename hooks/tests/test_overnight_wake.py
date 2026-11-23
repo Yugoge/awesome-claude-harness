@@ -265,6 +265,9 @@ def test_the_owners_stop_leaves_the_owners_own_restart_grant(night, monkeypatch)
 def test_prompt_workflow_hands_over_restart_md_for_the_wake_in_its_span(night):
     p = night.hook("prompt-workflow.py", "UserPromptSubmit", prompt=WAKE)
     assert p.returncode == 0 and "OVERNIGHT WAKE" in p.stdout and "restart.md now and run its Mandatory procedure" in p.stdout
+    # restart.md steps 4 and 6: the hooks finalize the recovery; the agent runs no status or finalize
+    assert "the harness finalizes the recovery itself" in p.stdout and "finalize)" not in p.stdout, p.stdout
+    assert "nothing was cut: finalize" not in p.stdout, p.stdout
     night.typed("/stop")
     p = night.hook("prompt-workflow.py", "UserPromptSubmit", prompt=WAKE)
     assert "OVERNIGHT WAKE" not in p.stdout and "Mandatory procedure" not in p.stdout

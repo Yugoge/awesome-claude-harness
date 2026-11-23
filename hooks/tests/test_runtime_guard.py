@@ -4494,5 +4494,30 @@ class TestShellPayloadIsReadLikeAnyCommand:
             assert ev(cmd, datafile, fixture_repo) == "ALLOW", cmd
 
 
+class TestConfigSelfProtectionByWhatItIs:
+    """STEP0 protects the data file and its directories for what they are: with
+    `~/.config` a link, its real directory and the real file get the verdict the
+    linked spelling gets (location-rules U37)."""
+
+    def test_real_and_linked_spellings_get_one_verdict(self, tmp_path):
+        home = tmp_path / "home"
+        real = tmp_path / "realcfg"
+        (real / "claude").mkdir(parents=True)
+        (real / "claude" / "protected-runtime.json").write_text("{}")
+        home.mkdir()
+        (home / ".config").symlink_to(real)
+        os.environ["HOME"] = str(home)
+        cfg = str(home / ".config" / "claude" / "protected-runtime.json")
+        other = tmp_path / "other"
+        other.mkdir()
+        for linked, actual in ((home / ".config", real), (home / ".config" / "claude", real / "claude"),
+                               (cfg, real / "claude" / "protected-runtime.json")):
+            for verb in ("mv", "rm -rf"):
+                tail = f" {tmp_path}/away" if verb == "mv" else ""
+                assert _ev_cfg(f"{verb} {linked}{tail}", cfg) == "BLOCK", (verb, linked)
+                assert _ev_cfg(f"{verb} {actual}{tail}", cfg) == "BLOCK", (verb, actual)
+        assert _ev_cfg(f"mv {other} {tmp_path}/away", cfg) == "ALLOW"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

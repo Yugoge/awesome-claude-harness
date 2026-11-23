@@ -33,7 +33,7 @@ from lib import locations, scratch_owner  # noqa: E402
 from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 
 POINTER = ".dispatch-tmp"
-PREFIX = "dispatch-"
+PREFIX = locations.DISPATCH_PREFIX
 
 
 def _owned(root, sid):
@@ -201,12 +201,8 @@ def judge(paths):
 
 
 def _owner_record(path):
-    try:
-        with open(path, encoding="utf-8") as handle:
-            owner = json.load(handle)
-    except (OSError, ValueError):
-        return None
-    return owner if isinstance(owner, dict) else None
+    """The record of an .owner file at ``path`` (scratch_owner.owner_record, the one reader), else None."""
+    return scratch_owner.owner_record(os.path.dirname(path))
 
 
 def _close(root, held_too):

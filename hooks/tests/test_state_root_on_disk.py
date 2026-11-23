@@ -16,7 +16,8 @@ orchestrator gate counted from zero, /do ran with no consent and /allow issued n
   * with /tmp full, every decision of the hooks that read or write control state is the one with /tmp free.
 
 A full or replaced /tmp exists only inside a private mount namespace this test's own process starts
-(``unshare -m``); where none can be made, those cases are skipped. Nothing is written outside tmp_path.
+(as root, else a user namespace, else passwordless sudo, as on CI: hooks/tests/_private_ns.py); where none
+can be made, those cases are skipped, and fail so on GitHub Actions. Nothing is written outside tmp_path.
 """
 from __future__ import annotations
 
@@ -38,6 +39,8 @@ LIB = HOOKS / "lib"
 sys.path.insert(0, str(LIB))
 import harness_state_dir as hsd  # noqa: E402
 import harness_temp_state as hts  # noqa: E402
+sys.path.insert(0, str(HOOKS / "tests"))
+import _private_ns  # noqa: E402
 
 SID = "sid-state-root"
 SH_LIB = LIB / "harness_state_dir.sh"
@@ -80,8 +83,21 @@ def test_the_default_state_dir_is_on_disk_under_the_install_root(home):
     assert sh("harness_state_root; harness_state_dir", env_for(home)).splitlines() == [str(want.parent), str(want)]
     import refusal_record
     assert Path(refusal_record.directory()).parent == want.parent  # one root, beside the refusal record
+
+
+def test_the_root_follows_the_home_and_not_a_temp_or_runtime_dir(monkeypatch):
+    # The fixture's home lies in pytest's temp, which may itself be on /tmp (as on CI), so the volume check is made
+    # on a made-up home on disk; only resolved here, nothing is made. Temp and runtime variables point at the
+    # memory-backed volumes to show that neither twin consults them.
+    disk_home = "/var/lib/state-root-probe-home"
+    lure = {"TMPDIR": "/tmp/lure", "TMP": "/dev/shm/lure", "TEMP": "/dev/shm/lure", "XDG_RUNTIME_DIR": "/run/user/1",
+            "XDG_STATE_HOME": "/dev/shm/lure-state"}
+    for k, v in {"HOME": disk_home, **lure}.items():
+        monkeypatch.setenv(k, v)
+    want = str(expected_root(Path(disk_home)))
+    assert hsd.state_root() == want == sh("harness_state_root", env_for(Path(disk_home), **lure))
     for volume in ("/tmp", "/dev/shm", "/run"):
-        assert not str(want).startswith(volume + "/")
+        assert not want.startswith(volume + "/")
 
 
 @pytest.mark.parametrize("value", ["", "relative/state"])
@@ -295,36 +311,22 @@ def test_the_refusal_record_directory_is_refused_to_every_agent(home, agent):
 
 
 # ------------------------------------------------------------------------------- a full system temp
-_NS = None
-
-
-def _namespace_ok() -> bool:
-    global _NS
-    if _NS is None:
-        probe = subprocess.run(["unshare", "-m", "--propagation", "private", "sh", "-c",
-                                "mount -t tmpfs -o size=64k none /tmp && touch /tmp/x"], capture_output=True)
-        _NS = probe.returncode == 0
-    return _NS
-
-
-def in_private_tmp(script: str, env: dict, full: bool, extra_mount: str = "") -> subprocess.CompletedProcess:
+def in_private_tmp(script: str, env: dict, full: bool, keep: Path) -> subprocess.CompletedProcess:
     """Run bash `script` in a private mount namespace whose /tmp is a fresh 64 KiB tmpfs, filled to its last
-    block when `full`; `extra_mount` names one more directory to replace (and fill) the same way."""
-    fill = 'head -c 1048576 /dev/zero > "$1/.fill" 2>/dev/null; while : > "$1/.f$RANDOM" 2>/dev/null; do :; done'
-    pre = ""
-    for mnt in ("/tmp", extra_mount):
-        if mnt:
-            pre += f'mount -t tmpfs -o size=64k,nr_inodes=64 none "{mnt}" || exit 97; '
-            pre += f'set -- "{mnt}"; {fill if full else ":"}; '
-    return subprocess.run(["unshare", "-m", "--propagation", "private", "bash", "-c", pre + script], env=env,
+    block when `full`. The test's own directory `keep` stays what it was wherever pytest's temp lies: when it
+    lies under /tmp (CI's runner), it is bound back at its own path before the fill, from a descriptor
+    opened before the mount, so the scenario's home, work and temp dirs are never on the replaced volume."""
+    fill = 'head -c 1048576 /dev/zero > /tmp/.fill 2>/dev/null; while : > "/tmp/.f$RANDOM" 2>/dev/null; do :; done'
+    pre = ('exec 3<"$1"; mount -t tmpfs -o size=64k,nr_inodes=64 none /tmp || exit 97; '
+           'case "$1/" in /tmp/*) { mkdir -p "$1" && mount -c --bind /proc/self/fd/3 "$1"; } || exit 97;; esac; '
+           f'exec 3<&-; {fill if full else ":"}; set --; ')
+    way = _private_ns.require("the full-system-temp case")  # root, else a user namespace, else sudo (CI)
+    return subprocess.run(_private_ns.unshare_argv(way, env, ["bash", "-c", pre + script, "_", os.path.realpath(keep)]),
                           text=True, capture_output=True, timeout=600)
 
 
-needs_ns = pytest.mark.skipif("not _namespace_ok()", reason="no private mount namespace can be made here")
-
-
 SCENARIO = r'''
-cd "$WORK"
+cd "$WORK" || exit 97  # the scenario's own dirs are what it judges in: never run elsewhere
 gate() {  # one main-agent Bash call through the orchestrator gate, then its PostToolUse record
   local id="toolu_$1" p
   p="{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"touch f$1\"},\"session_id\":\"$SID\",\"tool_use_id\":\"$id\",\"hook_event_name\":\"PreToolUse\",\"cwd\":\"$WORK\"}"
@@ -349,12 +351,11 @@ def run_scenario(harness: Path, work: Path, full: bool) -> list:
     env = env_for(home, WORK=str(work / "wd"), HOOKS=str(harness / "hooks"), PY=sys.executable, SID="sid-full-1",
                   SID2="sid-full-2", SID3="sid-full-3", TMPDIR=str(work / "t"))
     (work / "t").mkdir()
-    proc = in_private_tmp(SCENARIO, env, full)
+    proc = in_private_tmp(SCENARIO, env, full, keep=work)
     assert proc.returncode != 97, proc.stderr
     return [ln for ln in proc.stdout.splitlines() if "=" in ln]
 
 
-@needs_ns
 def test_every_decision_is_the_same_with_the_system_temp_full(tmp_path):
     free = run_scenario(ROOT, tmp_path / "free", full=False)
     full = run_scenario(ROOT, tmp_path / "full", full=True)

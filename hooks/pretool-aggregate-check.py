@@ -125,10 +125,11 @@ def _scan_dev_dir(dev_dir):
     """Return ({task_id: {label: path}}, {task_id: path}): the lane-shaped
     reports of each task family in docs/dev, and each family's canonical.
 
-    A report's task is _task_of's; a family's canonical is never another's lane report.
+    A report's task is _task_of's, or _task_by_name's when it names no lane; a family's canonical is never another's
+    lane report.
     """
     lane_reports = defaultdict(dict)
-    canonicals = {}
+    canonicals, undeclared = {}, []
     if not dev_dir.exists() or not dev_dir.is_dir():
         return lane_reports, canonicals
     try:
@@ -143,9 +144,14 @@ def _scan_dev_dir(dev_dir):
             continue
         if result[0] == "canonical":
             canonicals[result[1]] = child
+        elif (named := _task_of(child)) is not None:
+            lane_reports[named[0]][named[1]] = child
         else:
-            task_id, lane = _task_of(child, result[1], result[2])
-            lane_reports[task_id][lane] = child
+            undeclared.append((child, result[1], result[2]))
+    known = set(lane_reports) | set(canonicals)
+    for child, stamp, label in undeclared:
+        task_id, lane = _task_by_name(child.name, label, known) or (stamp, label)
+        lane_reports[task_id][lane] = child
     for task_id in list(lane_reports):  # a pipeline's canonical, dev-report-<stamp>-0.json, is no lane of <stamp>
         for reports in lane_reports.values():
             for lane, path in list(reports.items()):
@@ -159,9 +165,9 @@ def _aggregator():
     return aggregate_rebuild.aggregator()
 
 
-def _task_of(path, stamp, label):
+def _task_of(path):
     """(task, lane) of a lane-shaped report: the task scripts/aggregate-dev-report.py's task_of_lane_report gives
-    for the lane the report names (its lane, else one of its lane_set); else its name's stamp and label."""
+    for the lane the report names (its lane, else one of its lane_set); None when it names no lane so accepted."""
     report = _read_json(path)
     report = report if isinstance(report, dict) else {}
     lane_set = report.get("lane_set")
@@ -169,7 +175,17 @@ def _task_of(path, stamp, label):
         task_id = isinstance(lane, str) and _aggregator().task_of_lane_report(path.name, lane)
         if task_id:
             return task_id, lane
-    return stamp, label
+    return None
+
+
+def _task_by_name(name, label, known):
+    """(task, lane) of a report naming no lane, by the same definition: of the readings task_of_lane_report accepts
+    for its name (the lane any dash-tail of its label), a task already known here first (a bare stamp's fan-out keeps
+    its dashed lanes), then the longest, not the stamp all pipelines share; None when it accepts none (role-first)."""
+    parts = label.split("-")
+    readings = [(task_id, lane) for lane in ("-".join(parts[i:]) for i in range(len(parts)))
+                if (task_id := _aggregator().task_of_lane_report(name, lane))]
+    return max(readings, key=lambda r: (r[0] in known, len(r[0])), default=None)
 
 
 def _read_json(path):
@@ -289,7 +305,7 @@ def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None, stal
             continue
         if not canonical.is_file():
             refused = aggregator_refusal(dev_dir, task_id)
-            named = [lane for lane in sorted(declared) if own_refusal(refused, lane)]
+            named = [lane for lane in sorted(declared) if own_refusal(refused, lane, task_id)]
             violations.append((
                 "canonical_missing", canonical,
                 f"the canonical aggregate of lanes {', '.join(sorted(declared))} is missing"
@@ -302,13 +318,16 @@ def _find_violations(lane_reports, canonicals, dev_dir, scope_task_id=None, stal
         if scope_task_id is None:
             continue
         if task_id in (stale or {}):  # nothing in it is judged
+            why = (f"the aggregator ran on them and refused them (its reasons: scripts/aggregate-dev-report.py "
+                   f"--task-id {task_id} --dry-run)" if _aggregator().rebuild_ended(task_id, stale[task_id])
+                   else "its rebuild did not finish")
             violations.append(("stale_canonical", canonical, "older than lane report(s) " + ", ".join(
-                os.path.basename(p) for p in stale[task_id]) + "; its rebuild did not finish", None, via))
+                os.path.basename(p) for p in stale[task_id]) + f"; {why}", None, via))
             continue
         aggregate = _read_json(canonical)
         workers = aggregate.get("parallel_workers") if isinstance(aggregate, dict) else None
         workers = workers if isinstance(workers, list) else []
-        unnamed = [lane for lane in sorted(declared) if lane not in workers]
+        unnamed = [lane for lane, label in zip(sorted(declared), _labels(task_id, sorted(declared))) if label not in workers]
         if unnamed:
             violations.append((
                 "canonical_stale", canonical,
@@ -334,8 +353,19 @@ def _cross(reason):  # a report compared with the first one: no lane's own fault
     return " != first shard " in reason or reason.endswith("snapshot mismatch")
 
 
-def own_refusal(reasons, label):  # the reasons about lane `label`'s report by itself
+def own_refusal(reasons, label, task_id=None):
+    """The reasons about lane `label`'s report by itself; with task_id, under the label the aggregator names that
+    lane of task_id by (its lane_label: 1-l2 for lane l2 of a pipeline <stamp>-1)."""
+    label = _aggregator().lane_label(task_id, label) if task_id is not None else label
     return [r for r in reasons if r.startswith((f"shard '{label}':", f"'{label}':")) and not _cross(r)]
+
+
+def _labels(task_id, lanes):
+    """The lanes as parallel_workers names them: the aggregator's label (1-l2 for lane l2 of a pipeline's
+    <stamp>-1), by its own definition; a list that is not one of strings is returned as it is."""
+    if not isinstance(lanes, list) or not all(isinstance(x, str) for x in lanes):
+        return lanes
+    return [_aggregator().lane_label(task_id, lane) or lane for lane in lanes]
 
 
 def _roster(value):
@@ -372,8 +402,8 @@ def _canonical_findings(lane_reports, canonicals, dev_dir, scope_task_id, lane_s
                 f"its task_id {identity[0]!r} and request_id {identity[1]!r} are not its task's {task_id!r}", via,
             ))
         workers = aggregate.get("parallel_workers")
-        for source, lanes in (("the lanes its lane reports record", sorted(declared)),
-                              ("the dispatch obligation's lane_set", lane_set)):
+        for source, lanes in (("the lanes its lane reports record", _labels(task_id, sorted(declared))),
+                              ("the dispatch obligation's lane_set", _labels(task_id, lane_set))):
             if _roster(lanes) is not None and _roster(workers) != _roster(lanes):
                 findings.append((
                     "canonical_roster_mismatch", canonical,

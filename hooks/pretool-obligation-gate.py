@@ -152,6 +152,33 @@ def _declared(obligation) -> dict:
             if isinstance(a, dict) and isinstance(a.get("path"), str)}
 
 
+_FORBID_RE = re.compile(r"^\W*(?:do not|don't|never|must not)\b", re.IGNORECASE)
+_READ_RE = re.compile(r"^\W*(?:read|open|view|consult|look at|load|rely on|use)\b", re.IGNORECASE)
+_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s")
+
+
+def _without_forbidden_reads(prompt: str) -> str:
+    """The prompt less the lines that only forbid reading something: a line that begins with
+    do not / never and then a read verb, and a list item that begins with a read verb under a
+    heading line that begins with do not / never (a "DO NOT:" list). A path such a line names
+    is no input of this dispatch (panels dispatched side by side each forbid reading the
+    others' reports). A line that forbids another act (modify, delete) keeps its paths."""
+    kept, listed = [], False
+    for line in prompt.split("\n"):
+        if _FORBID_RE.match(line):
+            tail = _FORBID_RE.sub("", line, count=1)
+            listed = line.rstrip().endswith(":")
+            if _READ_RE.match(tail):
+                continue
+        elif listed and _ITEM_RE.match(line):
+            if _READ_RE.match(_ITEM_RE.sub("", line, count=1)):
+                continue
+        else:
+            listed = False
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset) -> list:
     """R17, read from the active span's dispatch order (the CLI's record of
     each Agent call and how its agent's end came back, never a file's mtime
@@ -163,7 +190,8 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
     out): it declares nothing and is no verdict. An errored dispatch has not returned,
     unless its agent's own transcript records its stop; a background, resumed
     or cut dispatch returned when its agent's end came back
-    (lib/agent_returns.py, the one reading of it)."""
+    (lib/agent_returns.py, the one reading of it). A path the prompt names only to forbid
+    reading it (_without_forbidden_reads) is no input of this dispatch."""
     span = command_span.active_span(data["transcript_path"]) if data.get("transcript_path") else None
     if span is None:
         return []
@@ -181,7 +209,8 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
         if isinstance(parsed, ParsedObligation):
             earlier.append((call, parsed.obligation.get("role"), _declared(parsed.obligation)))
     own = _declared(obligation)
-    upstream = {path: entry for entry in earlier for path in entry[2] if path not in own and path in prompt}
+    wanted = _without_forbidden_reads(prompt)
+    upstream = {path: entry for entry in earlier for path in entry[2] if path not in own and path in wanted}
     findings, seen = [], set()
     for path, (call, role, paths) in upstream.items():
         if call.id in seen:

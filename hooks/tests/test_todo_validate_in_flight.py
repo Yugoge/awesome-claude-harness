@@ -118,7 +118,7 @@ class _Session:
         return pre
 
     def agent(self, subagent_type, returned=True):
-        tid = self.use("Agent", {"subagent_type": subagent_type, "prompt": "x", "description": "x"})
+        tid = self.use("Agent", {"subagent_type": subagent_type, "prompt": "Mode: analysis", "description": "x"})
         if returned:
             self.result(tid)
 
@@ -128,7 +128,7 @@ class _Session:
         assert self.todo(_at(self.steps, 0)).returncode == 0
         for n in range(upto):
             if n in calls:
-                self.agent(self.steps[n]["subagent_call"]["subagent_type"])
+                self.agent(_required_role(self.steps[n]))
             pre = self.todo(_done(self.steps, n))
             assert pre.returncode == 0, pre.stderr
 
@@ -245,7 +245,7 @@ def test_a_list_written_with_steps_4a_to_4c_validates_and_completes(s, monkeypat
     s.result(s.use("TodoWrite", {"todos": _at(s.steps, 0)}))  # admitted when it was the canonical list
     for n, step in enumerate(s.steps):
         if step.get("subagent_call"):
-            s.agent(step["subagent_call"]["subagent_type"])
+            s.agent(_required_role(step))
         pre = s.todo(_done(s.steps, n))
         assert pre.returncode == 0, (step["content"], pre.stderr)
     monkeypatch.setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
@@ -279,7 +279,7 @@ def test_an_overnight_list_written_with_step_11g_validates_and_completes(s, monk
     s.result(s.use("CronCreate", {"cron": "*/7 * * * *", "prompt": WAKE_PROMPT, "recurring": True}))
     for n, step in enumerate(s.steps):
         if step.get("subagent_call"):
-            s.agent(step["subagent_call"]["subagent_type"])
+            s.agent(_required_role(step))
         pre = s.todo(_done(s.steps, n))
         assert pre.returncode == 0, (step["content"], pre.stderr)
     monkeypatch.setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
@@ -289,3 +289,11 @@ def test_an_overnight_list_written_with_step_11g_validates_and_completes(s, monk
         "stop_gate_lettered_11g", HOOKS / "stop-command-gate.py"))
     spec.loader.exec_module(gate)
     assert gate.todo_gaps(importlib.import_module("lib.command_span").active_span(str(s.path))) == []
+
+
+def _required_role(step):
+    """The subagent type of the call a canonical step requires (a list states every call of the step, the
+    requirement round's included: scripts/todo/dev.py ROUND_CALLS; its optional entries are not required)."""
+    call = step.get("subagent_call")
+    return next((c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+                 if isinstance(c, dict) and not c.get("optional")), None)

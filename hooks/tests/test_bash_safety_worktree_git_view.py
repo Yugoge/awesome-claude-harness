@@ -263,21 +263,31 @@ def test_a_running_git_working_tree_change_is_refused(sandbox, command, marker):
 
 # The quote-neutralised pass scans git global options only from a `git` that starts a word, never again from a `git`
 # inside an option run it already walked: a long run of option words holding `git` (-Pgit, a=bgit) costs linear time.
-@pytest.mark.parametrize("command", ["git" + " -Pgit" * 10000 + " !", "git" + " -c a=bgit" * 5000])
-def test_quote_neutralised_option_scan_is_linear(command):
-    from lib.bash_safety_rules import _worktree_raw_fallback
-    start = time.process_time()  # CPU time: a busy runner slows the wall clock, not the work
-    _worktree_raw_fallback(command, globals_=True)
-    assert time.process_time() - start < 1.0
+# Twice the run must cost well under four times as much, the two compared with each other in CPU seconds (as below).
+@pytest.mark.parametrize("option,count,tail", [(" -Pgit", 10000, " !"), (" -c a=bgit", 5000, "")],
+                         ids=["Pgit-x10000", "c-abgit-x5000"])
+def test_quote_neutralised_option_scan_is_linear(option, count, tail):
+    _, large = _option_scan_cpu("git" + option * count + tail)
+    _, small = _option_scan_cpu("git" + option * (count // 2) + tail)
+    assert large < 3 * small, (small, large)
 
 
 def test_shell_payload_with_long_option_run_is_fast(sandbox):
-    command = "fish -c 'git" + " -Pgit" * 3000 + "'"
-    start = child_cpu()
-    r = run(sandbox, command)
-    elapsed = child_cpu() - start
-    assert r.returncode in (0, 2), r.stderr
-    assert elapsed < 2.0, elapsed
+    """Through the real hook: above the hook's fixed cost (a one-option payload), 6000 options cost well under
+    sixteen times what 1500 do (linear: four times; a scan that walks the run again from every option: sixteen).
+    Measured runs compared with each other, in child CPU seconds: no fixed bound holds on every runner."""
+    def cost(count):
+        best = None
+        for _ in range(2):  # the least of two runs
+            start = child_cpu()
+            r = run(sandbox, "fish -c 'git" + " -Pgit" * count + "'")
+            took = child_cpu() - start
+            assert r.returncode in (0, 2), r.stderr
+            best = took if best is None else min(best, took)
+        return best
+
+    fixed, quarter, full = cost(1), cost(1500), cost(6000)
+    assert full - fixed < 8 * max(quarter - fixed, 0.01), (fixed, quarter, full)
 
 
 # The option run between git and the subcommand has no length cap: a stash behind any number of global options in a
@@ -313,16 +323,31 @@ def test_long_global_option_run_before_a_safe_or_no_subcommand_passes(sandbox, c
     assert r.returncode == 0, r.stderr[-300:]
 
 
-@pytest.mark.parametrize("command,hit", [("git" + " -C git" * 10000, None),
-                                         ("fish -c 'git" + " -C git" * 10000 + "'", None),
-                                         ("git" + " -P" * 20000 + " stash", "bare"),
-                                         ("fish -c 'git" + " -P" * 20000 + " stash'", "bare")],
-                         ids=["C-git-x10000", "fish-C-git-x10000", "P-x20000-stash", "fish-P-x20000-stash"])
-def test_uncapped_option_scan_is_linear(command, hit):
+def _option_scan_cpu(command):
+    """(result, CPU seconds) of one quote-neutralised scan of command, the least CPU of two runs."""
     from lib.bash_safety_rules import _worktree_raw_fallback
-    start = time.monotonic()
-    got = _worktree_raw_fallback(command.replace("'", " "), globals_=True)
-    assert time.monotonic() - start < 1.0
+    best, spent = None, 0.0
+    for _ in range(9):  # the least of up to nine runs (a few ms each when linear), until one CPU second is spent
+        start = time.process_time()
+        got = _worktree_raw_fallback(command.replace("'", " "), globals_=True)
+        took = time.process_time() - start
+        best, spent = (took if best is None else min(best, took)), spent + took
+        if spent > 1.0:
+            break
+    return got, best
+
+
+# Twice the options must cost well under four times as much (a scan that walks the run again from every option grows
+# with its square). The two runs are compared with each other, in CPU seconds: no fixed bound holds on every runner.
+@pytest.mark.parametrize("head,option,count,tail,hit", [("git", " -C git", 10000, "", None),
+                                                        ("fish -c 'git", " -C git", 10000, "'", None),
+                                                        ("git", " -P", 20000, " stash", "bare"),
+                                                        ("fish -c 'git", " -P", 20000, " stash'", "bare")],
+                         ids=["C-git-x10000", "fish-C-git-x10000", "P-x20000-stash", "fish-P-x20000-stash"])
+def test_uncapped_option_scan_is_linear(head, option, count, tail, hit):
+    got, large = _option_scan_cpu(head + option * count + tail)
+    _, small = _option_scan_cpu(head + option * (count // 2) + tail)
+    assert large < 3 * small, (small, large)
     assert [k for k, v in got.items() if v] == ([hit] if hit else [])
 
 

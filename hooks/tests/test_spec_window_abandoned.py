@@ -34,6 +34,11 @@ BACKGROUND = HOOKS / "pretool-block-background-tasks.py"
 LAUNCH = HOOKS / "pretool-launch.py"
 
 
+def _spec_steps():
+    """The number of steps of /spec's canonical list, as scripts/todo/spec.py prints it."""
+    return len(todo_canonical.run_todo_script("spec"))
+
+
 class _Transcript:
     """A main-session transcript in the CLI's record shapes."""
 
@@ -200,7 +205,7 @@ def test_abandoned_spec_mid_requirement_round(tmp_path, env):
 def test_opening_turn_still_refuses_a_foreground_dispatch(tmp_path, env):
     payload = _payload(_opening_turn(tmp_path), FOREGROUND)
     code, err = _run(SPEC_FG, payload, env)
-    assert code == 2 and "SPEC INTERVIEW IN PROGRESS" in err and "(0/7 steps complete)" in err
+    assert code == 2 and "SPEC INTERVIEW IN PROGRESS" in err and f"(0/{_spec_steps()} steps complete)" in err
     code, err = _run(LAUNCH, payload, env)
     assert code == 2 and "SPEC INTERVIEW IN PROGRESS" in err
 
@@ -216,7 +221,7 @@ def test_step4_loop_after_a_follow_up_prompt_stays_live(tmp_path, env):
     """A later prompt continues the interview once its opening turn reached Step 4."""
     transcript = _loop(tmp_path)
     code, err = _run(SPEC_FG, _payload(transcript, FOREGROUND), env)
-    assert code == 2 and "(3/7 steps complete)" in err
+    assert code == 2 and f"(3/{_spec_steps()} steps complete)" in err
     assert _run(LAUNCH, _payload(transcript, FOREGROUND), env)[0] == 2
     assert _run(BACKGROUND, _payload(transcript, BACKGROUND_EXPLORE), env)[0] == 0
     assert _run(BACKGROUND, _payload(transcript, BACKGROUND_GENERAL), env)[0] == 0

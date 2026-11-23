@@ -38,7 +38,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -118,6 +118,19 @@ def _tell(text: str) -> None:
     print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': text}}))
 
 
+def _created_at(state: dict, cycle_id: int) -> str:
+    """Now (UTC, to the second), and always later than the previous cycle's contract: its created_at is the
+    cycle's pipeline stamp (scripts/build-pipelines-from-triage.py `-`), so two cycles never share one."""
+    fmt, now = '%Y-%m-%dT%H:%M:%SZ', datetime.now(timezone.utc).replace(microsecond=0)
+    try:
+        prev = json.loads(contract_runtime.contract_path(state, cycle_id - 1).read_text(encoding='utf-8'))
+        prev_at = datetime.strptime(prev['created_at'], fmt).replace(tzinfo=timezone.utc)
+        now = max(now, prev_at + timedelta(seconds=1))
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass  # cycle 1, or no readable earlier contract: nothing to be later than
+    return now.strftime(fmt)
+
+
 def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
     """Render the cycle contract when PM TRIAGE returns; otherwise do nothing."""
     state = contract_runtime.session_record(session_id, stdin_data)
@@ -144,7 +157,7 @@ def _write_cycle_contract(stdin_data: dict, session_id: str) -> None:
         'schema_version': 1,
         'session_id': session_id,
         'cycle_id': cycle_id,
-        'created_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'created_at': _created_at(state, cycle_id),
         'required_calls': calls,
     }
     try:

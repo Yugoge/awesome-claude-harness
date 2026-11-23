@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -388,9 +389,17 @@ def test_a_fifo_at_a_pointer_name_does_not_stall_the_reader(world):
     state = os.environ["CLAUDE_STATE_DIR"]
     fifo = CJ.pointer_path("tu-fifo")
     os.mkfifo(fifo)
-    started = time.monotonic()
-    parsed, ident = CJ.read_untrusted_json_ident(fifo)
-    assert parsed is None and ident is not None and time.monotonic() - started < 2
+    box = []
+    reader = threading.Thread(target=lambda: box.append(CJ.read_untrusted_json_ident(fifo)), daemon=True)
+    reader.start()
+    reader.join(60)  # generous outer limit: a reader that opens the fifo blocking never returns by itself
+    stuck = reader.is_alive()
+    if stuck:  # release the blocked open, so the test ends and nothing stays behind
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join(10)
+    assert not stuck, "the reader stalled on a fifo"
+    parsed, ident = box[0]
+    assert parsed is None and ident is not None
     assert CJ.unlink_verified(fifo, ident)
     assert os.listdir(state) == []
 

@@ -82,6 +82,14 @@ class _Abandoned(BaseException):
     """Ends a cut subagent no recovery resumed (its thread unwinds)."""
 
 
+def _required_roles(todo: dict) -> set:
+    """The roles of the calls a checklist item requires: its one call, or the required entries of the round
+    step's list of calls (scripts/todo/dev.py ROUND_CALLS; the optional ones never complete it)."""
+    call = todo.get("subagent_call") or {}
+    return {c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+            if isinstance(c, dict) and not c.get("optional")}
+
+
 def api_error(text: str) -> dict:
     return {"type": "assistant", "isApiErrorMessage": True, "error": "rate_limit", "apiErrorStatus": 429,
             "message": {"role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence",
@@ -392,7 +400,7 @@ def facts(r) -> dict:
             finalize = e["seq"]
         elif p.get("tool_name") == "TodoWrite" and step_done is None and not any(
                 h["verdict"] == "block" for h in e["hooks"]) and any(
-                t.get("status") == "completed" and (t.get("subagent_call") or {}).get("subagent_type") == role
+                t.get("status") == "completed" and role in _required_roles(t)
                 for t in ti.get("todos") or []):
             step_done = e["seq"]
     out["step_done_after"] = bool(finalize and step_done and step_done > finalize)

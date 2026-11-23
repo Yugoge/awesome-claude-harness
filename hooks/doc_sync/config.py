@@ -62,13 +62,13 @@ def counting_untracked():
 
 def work_tree_root(dir_path: Path) -> Path | None:
     """The resolved top level of the git work tree holding dir_path, or None outside one."""
-    try:
-        proc = subprocess.run(['git', '-C', str(dir_path), 'rev-parse', '--show-toplevel'],
-                              capture_output=True, text=True, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    top = proc.stdout.strip()
-    if proc.returncode != 0 or not top:
+    import sys
+    hooks = str(Path(__file__).resolve().parents[1])
+    if hooks not in sys.path:
+        sys.path.insert(0, hooks)
+    from lib import locations  # the filesystem root is no work tree: no file is generated there
+    top = locations.repo_top(dir_path)
+    if not top:
         return None
     try:
         return Path(top).resolve()

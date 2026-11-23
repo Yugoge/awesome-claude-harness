@@ -17,7 +17,9 @@ exemptions, its failure direction; hooks/lib/gate_runner.py):
 4. subagentstop-cp-enforce.py: the agent leaves no pending checkpoint in its own
    cp-state slot;
 5. subagentstop-restart-track.py, an observer: the response evidence /restart reads,
-   recorded whatever the rules above decided.
+   recorded whatever the rules above decided;
+6. lib/lane_ledger.py end, a witness: on the stop that stands, the lane's record (which
+   G2 read for the report's entries at dispatch start) is removed.
 
 Every refusal is returned to this producer at its own stop; the reasons of all
 refusing rules are reported together, once, with exit 2, so one round repairs them.
@@ -57,6 +59,7 @@ RULES = [
     Rule("cp-pending", str(HOOKS / "subagentstop-cp-enforce.py"), REFUSE),
     Rule("restart-track", str(HOOKS / "subagentstop-restart-track.py"), OBSERVE),
     # a background dispatch's end: what its return runs, on the stop the rules above let stand
+    Rule("lane-ledger-end", kind=WITNESS, call="lib.lane_ledger:end"),  # the record lives until its dispatch ends
     Rule("dispatch-end", str(HOOKS / "posttool-dispatch-record.py"), WITNESS),
 ]
 

@@ -67,6 +67,9 @@ def test_a_refused_commit_names_commit_and_allow_git_commit(run_guard):
     assert proc.returncode == 2, proc.stderr
     assert "BLOCKED: agent git commit" in proc.stderr
     assert "a human types /commit (or /allow git commit for one call)" in proc.stderr
+    # lib/hook_launch.release_refused: the owner's /allow releases it for a subagent too; the agent does not retry
+    assert "Main agent may bypass" not in proc.stderr, proc.stderr
+    assert "main agent or subagent" in proc.stderr and "not retried" in proc.stderr, proc.stderr
     for old in OLD_COMMIT_ADVICE:
         assert old not in proc.stderr, (old, proc.stderr)
 
@@ -84,3 +87,29 @@ def test_the_module_docstring_does_not_send_the_owner_to_his_shell():
     text = GUARD.read_text()
     for old in OLD_COMMIT_ADVICE:
         assert old not in text, old
+
+
+def test_a_refused_merge_names_the_owners_allow_and_no_retry(run_guard):
+    """lib/hook_launch.release_refused releases any refused call, a subagent's too: the text says so."""
+    proc = run_guard("git merge feature")
+    assert proc.returncode == 2, proc.stderr
+    assert "BLOCKED: agent git merge" in proc.stderr
+    assert "Main agent may bypass" not in proc.stderr, proc.stderr
+    assert "main agent or subagent" in proc.stderr and "not retried" in proc.stderr, proc.stderr
+
+
+def test_the_fault_refusal_says_the_owners_allow_releases_it(tmp_path, monkeypatch, capsys):
+    """A guard that cannot judge a git command refuses it; /do does not lift that, the owner's /allow does."""
+    import importlib.util
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAUDE_STATE_DIR", str(tmp_path))
+    spec = importlib.util.spec_from_file_location("privilege_guard_under_test", GUARD)
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "git status"}})
+    monkeypatch.setattr(guard, "_read_stdin", lambda: payload)
+    assert guard._internal_error_exit(ValueError("sandbox fault")) == 2
+    err = capsys.readouterr().err
+    assert "no /allow grant or /do consent lifts this" not in err, err
+    assert "/do consent does not lift it; the owner's typed /allow releases it" in err, err
+    assert "not retried" in err, err

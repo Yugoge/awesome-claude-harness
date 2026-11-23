@@ -927,18 +927,18 @@ def validate_artifact_for_obligation(path, schema_id: str) -> dict:
     reason}`` shape as :func:`validate_report_artifact`.
     """
     p = Path(path)
-    if not p.exists():
+    read = overnight.read_declared_json(p)
+    if read.status == 'absent':
         return _gate_result(
             'fail', schema_id, [f'expected artifact missing: {p}'],
             'obligation-named artifact absent (missing is blocking under obligation authority)',
         )
-    try:
-        record = json.loads(p.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError) as exc:
+    if read.status != 'ok':
         return _gate_result(
-            'fail', schema_id, [f'unparseable JSON: {exc}'],
+            'fail', schema_id, [f'unparseable JSON: {read.error}'],
             'obligation-named artifact is not valid JSON',
         )
+    record = read.value
     result = validate(_normalize_version_for_obligation(record, schema_id), schema_id)
     skip_reason = _skip_reason_if_unvalidatable(result)
     if skip_reason is not None:

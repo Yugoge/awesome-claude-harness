@@ -8,7 +8,6 @@ set -euo pipefail
 
 PROJECT_ROOT="${1:?Missing PROJECT_ROOT parameter}"
 
-# Validate project root exists
 if [[ ! -d "$PROJECT_ROOT" ]]; then
   echo "{\"error\": \"Project root not found: $PROJECT_ROOT\"}" >&2
   exit 1
@@ -26,13 +25,11 @@ elif [[ -f "go.mod" ]]; then
   PROJECT_TYPE="Go"
 fi
 
-# Count files
 TOTAL_FILES=$(find . -type f ! -path "./.git/*" 2>/dev/null | wc -l)
 DOC_FILES=$(find . -name "*.md" -type f ! -path "./.git/*" 2>/dev/null | wc -l)
 SCRIPT_FILES=$(find . -name "*.sh" -type f ! -path "./.git/*" 2>/dev/null | wc -l)
 TEST_FILES=$(find . \( -name "test*.py" -o -name "*_test.py" \) -type f 2>/dev/null | wc -l)
 
-# Output JSON
 jq -n \
   --arg project_type "$PROJECT_TYPE" \
   --argjson total "$TOTAL_FILES" \

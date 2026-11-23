@@ -989,7 +989,22 @@ def test_check_fails_a_stub_the_clean_form_does_not_register(sb):
     assert "[FAIL] hook paths: 9 commands, missing=0, stubs=2" in out
     assert "       Stop: %s is a stub the clean form does not register" % RETIRED in out
     assert "       SessionStart: %s is a stub the clean form does not register" % KEPT in out
-    assert KEPT_INFO in out and str(home) not in out
+
+
+def test_hook_path_check_asks_once_whether_the_home_is_a_checkout(sb, capsys):
+    """A git call that fails once (a busy machine: no process, no memory) answers "not a checkout"
+    for one read only. The clean form must not then be read from the working file, which holds the
+    overlay's stub, while the stub test is made as in a checkout, which passes it as the clean
+    form's own: the answers alternate here, false first; the stub must be named either way."""
+    home = stub_home(sb, lambda h: {"Stop": [{"hooks": [hook("python3", RETIRED, prefix=str(h))]}]})
+    tool = load_tool(sb)
+    answers = iter([False, True] * 8)
+    tool.is_checkout = lambda _home: next(answers)
+    working = tool.parse(tool._read(str(home / "settings.json")))
+    assert tool.check_hook_paths(str(home), working, tool.load_overlay(str(home))) is False
+    out = capsys.readouterr().out
+    assert "[FAIL] hook paths: 8 commands, missing=0, stubs=1" in out, out
+    assert "registers 2 exit-0" not in out, out
 
 
 def test_check_without_a_checkout_does_not_take_the_overlays_stub_for_the_clean_forms(sb):

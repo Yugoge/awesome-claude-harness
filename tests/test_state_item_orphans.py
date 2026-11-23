@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 SWEEP = (REPO / "scripts" / "install" / "tmp-cleanup-install.sh").read_text()
 
 
@@ -49,7 +50,7 @@ def test_s23_the_watchdog_pid_file_is_the_payload_sessions(tmp_path):
                "PYTHONDONTWRITEBYTECODE": "1"}
         payload = {"session_id": "sess-a", "tool_name": "mcp__playwright__browser_run_code", "tool_input": {}}
         subprocess.run([sys.executable, str(REPO / "hooks" / "posttool-runcode-watchdog.py")], input=json.dumps(payload),
-                       env=env, capture_output=True, text=True, timeout=60)
+                       env=env, capture_output=True, text=True, timeout=HANG_GUARD)
         assert not pid_file.exists()
     finally:
         sleeper.kill()
@@ -60,7 +61,7 @@ def test_c01_the_promote_hook_uses_the_cli_folder_name():
     text = (REPO / "hooks" / "session-promote-hook.sh").read_text()
     line = re.search(r"^PROJECT_NAME=.*$", text, re.M).group(0)
     got = subprocess.run(["bash", "-c", 'CWD=/srv/a.b_c; ' + line + '; printf %s "$PROJECT_NAME"'],
-                         capture_output=True, text=True, timeout=30).stdout
+                         capture_output=True, text=True, timeout=HANG_GUARD).stdout
     assert got == re.sub(r"[^A-Za-z0-9]", "-", "/srv/a.b_c")
 
 

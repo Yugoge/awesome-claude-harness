@@ -16,9 +16,15 @@ to a real semantic commit. The checkpoint ref stays local unless
 `GIT_AUTO_PUSH` is exactly `1` (the shipped `settings.json` sets `0`).
 A snapshot is of a project at the top of its own repository's working tree: a
 project in a folder below a larger repository, or in no repository, gets none
-(the ref and its recovery are the whole repository's). Each tree scan of a
-snapshot ends after `CHECKPOINT_SCAN_TIMEOUT` seconds (45), with every process
-it started.
+(the ref and its recovery are the whole repository's). A repository whose top is the filesystem
+root counts as none, below it or at it: nothing is written and the log says so once. Each tree scan of a
+snapshot ends after `CHECKPOINT_SCAN_TIMEOUT` seconds (45; the pre-command
+snapshot's, 3 s under its own `CLAUDE_HOOK_SNAPSHOT_TIMEOUT`), with every process
+it started. A snapshot ended so, or ended by that caller, is logged in
+`checkpoint.log` with its duration and cause, and the session's line says so.
+Each snapshot starts from the last one's index (`.git/checkpoint-stat-index`,
+its stat data only; its entries are put back to HEAD's), so `git add -A` hashes
+only the files changed since, not every tracked and untracked file again.
 
 ---
 

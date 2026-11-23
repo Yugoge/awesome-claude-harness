@@ -51,7 +51,9 @@ CRITERIA_PATH = (Path(__file__).resolve().parents[2] / "docs" / "dev"
 # was repaired for in this same cycle.
 #
 # Absent and broken are therefore treated as DIFFERENT conditions:
-#   absent  -> every test here is skipped with a visible reason (below)
+#   absent  -> the tests that read it (AC11, AC20, AC21, marked `needs_criteria`)
+#              are skipped with a visible reason (below); every other test
+#              holds its forms literally and runs, on a fresh clone and on CI
 #   present -> read it and fail CLOSED on anything wrong with it
 # Only the first is relaxed. A present-but-unreadable, malformed, or
 # AC-missing file still raises, because that is the copy-drift defect this
@@ -68,12 +70,12 @@ CRITERIA_PATH = (Path(__file__).resolve().parents[2] / "docs" / "dev"
 CRITERIA_ABSENT = not CRITERIA_PATH.exists() and not CRITERIA_PATH.is_symlink()
 CRITERIA_AVAILABLE = not CRITERIA_ABSENT
 
-if not CRITERIA_AVAILABLE:
-    pytestmark = pytest.mark.skip(
-        reason=("live acceptance-criteria file absent (%s); these tests assert "
-                "against the source-of-truth criteria and are not portable to a "
-                "tree without it" % CRITERIA_PATH)
-    )
+needs_criteria = pytest.mark.skipif(
+    CRITERIA_ABSENT,
+    reason=("live acceptance-criteria file absent (%s); this test asserts "
+            "against the source-of-truth criteria and is not portable to a "
+            "tree without it" % CRITERIA_PATH.name)
+)
 
 
 class _AbsentCriteria(dict):
@@ -81,8 +83,8 @@ class _AbsentCriteria(dict):
 
     Subscripting yields itself and iteration yields nothing, so the import-time
     parametrize builders produce empty matrices instead of raising. Every test
-    is already skipped by the module-level mark above, so this never silently
-    weakens an assertion — it only keeps collection alive.
+    that reads the criteria carries `needs_criteria` and is skipped, so this
+    never silently weakens an assertion — it only keeps collection alive.
     """
 
     def __getitem__(self, key):
@@ -320,9 +322,43 @@ def test_AC6_provable_dry_run_and_config_read_allowed(form):
 GRANTED_FORM = "git clean -fd"
 
 
-def test_AC7a_matching_do_consent_flag_allows(granted_sid):
-    """A matching main-agent /do flag short-circuits before the deny rule."""
-    assert run_hook(GRANTED_FORM, session_id=granted_sid) == ALLOW
+HOOKS_DIR = os.path.join(os.path.dirname(__file__), "..")
+
+
+def typed(prompt_text, sid, cwd, agent_id=None):
+    """The owner types `prompt_text` (/do or /allow): the prompt hook the CLI runs records it."""
+    hook = "prompt-workflow.py" if prompt_text.startswith("/do") else "userprompt-consent-allowlist.sh"
+    payload = {"hook_event_name": "UserPromptSubmit", "session_id": sid, "prompt": prompt_text, "cwd": cwd}
+    if agent_id:
+        payload["agent_id"] = agent_id
+    argv = ["bash" if hook.endswith(".sh") else sys.executable, os.path.join(HOOKS_DIR, hook)]
+    env = {k: v for k, v in os.environ.items() if k not in _HERMETIC_UNSET}
+    proc = subprocess.run(argv, input=json.dumps(payload), text=True, capture_output=True, env=env, cwd=cwd,
+                          timeout=120)
+    assert proc.returncode == 0, proc.stderr
+
+
+def launched(command, sid, cwd, n, agent_id=None):
+    """One Bash call through hooks/pretool-launch.py, where the pre-tool verdicts meet and a grant is spent."""
+    payload = {"hook_event_name": "PreToolUse", "session_id": sid, "tool_name": "Bash",
+               "tool_input": {"command": command}, "tool_use_id": "toolu_gitclean_%d" % n, "cwd": cwd}
+    if agent_id:
+        payload.update(agent_id=agent_id, agent_type="dev")
+    env = {k: v for k, v in os.environ.items() if k not in _HERMETIC_UNSET}
+    return subprocess.run([sys.executable, os.path.join(HOOKS_DIR, "pretool-launch.py")], input=json.dumps(payload),
+                          text=True, capture_output=True, env=env, cwd=cwd, timeout=600)
+
+
+def test_AC7a_typed_do_releases_the_main_agents_clean(throwaway_repo):
+    """The owner's typed /do, recorded by its prompt hook, lets the main agent's clean through."""
+    sid = fresh_sid()
+    assert launched(GRANTED_FORM, sid, throwaway_repo, 1).returncode == BLOCK
+    typed("/do clean the build", sid, throwaway_repo)
+    try:
+        p = launched(GRANTED_FORM, sid, throwaway_repo, 2)
+        assert p.returncode == ALLOW, p.stderr
+    finally:
+        _do_flag_path(sid).unlink(missing_ok=True)
 
 
 def test_AC7b_mismatched_session_do_flag_still_blocks(granted_sid):
@@ -330,9 +366,13 @@ def test_AC7b_mismatched_session_do_flag_still_blocks(granted_sid):
     assert run_hook(GRANTED_FORM, session_id=fresh_sid()) == BLOCK
 
 
-def test_AC7c_matching_allow_sentinel_allows(sentinel_sid):
-    """A structured /allow sentinel matching op=git target=clean bypasses."""
-    assert run_hook(GRANTED_FORM, session_id=sentinel_sid) == ALLOW
+def test_AC7c_typed_allow_releases_one_clean_exactly_once(throwaway_repo):
+    """The owner's typed /allow releases the next refused clean and is spent: the one after is refused."""
+    sid = fresh_sid()
+    typed("/allow", sid, throwaway_repo)
+    first = launched(GRANTED_FORM, sid, throwaway_repo, 1)
+    assert first.returncode == ALLOW and "RELEASED" in first.stdout, first.stderr
+    assert launched(GRANTED_FORM, sid, throwaway_repo, 2).returncode == BLOCK
 
 
 # ── AC8: quoted TOKEN corruption — options as well as values (OBJ-E) ─────────
@@ -422,17 +462,30 @@ def test_AC9_config_read_is_not_a_clean_subcommand():
 
 # ── AC10: no regression on the sibling blocks ────────────────────────────────
 
-AC10_FORMS = ["rm foo", "git reset --hard HEAD~1"]
+AC10_FORMS = ["rm foo"]
+PRIVILEGE_GUARD = os.path.join(os.path.dirname(__file__), "..", "pretool-git-privilege-guard.py")
 
 
 @pytest.mark.parametrize("form", AC10_FORMS)
 def test_AC10_sibling_blocks_not_regressed(form):
-    """The rm-block and the ref-mutation block must still fire."""
+    """The rm-block must still fire."""
     assert run_hook(form) == BLOCK
+
+
+def test_AC10_hard_reset_is_refused_by_its_survivor(throwaway_repo):
+    """The hard reset left this hook in P14-5 (BS-40 merged into the git privilege guard's GP-04): that hook
+    refuses it, in a repository with a commit to reset to."""
+    payload = {"tool_name": "Bash", "tool_input": {"command": "git reset --hard HEAD~1"},
+               "session_id": fresh_sid(), "cwd": throwaway_repo, "hook_event_name": "PreToolUse"}
+    env = {k: v for k, v in os.environ.items() if k not in _HERMETIC_UNSET}
+    proc = subprocess.run([sys.executable, PRIVILEGE_GUARD], input=json.dumps(payload), text=True,
+                          capture_output=True, env=env, cwd=throwaway_repo, timeout=120)
+    assert proc.returncode == BLOCK and "git reset --hard" in proc.stderr, proc.stderr
 
 
 # ── AC11: this test file exists and covers AC1-AC10 and AC12-AC14 ────────────
 
+@needs_criteria
 def test_AC11_every_ac_has_an_executing_test():
     """Every AC the criteria file says this module covers must own a test.
 
@@ -585,9 +638,12 @@ def throwaway_repo(tmp_path):
     something to snapshot and the snapshot lands outside this repository."""
     subprocess.run(
         ["git", "init", "-q", "."], cwd=tmp_path, check=True, capture_output=True)
+    # The repository's own identity: the pre-clean snapshot is a commit, and a machine without a global
+    # identity (CI's runner) would fail it, which refuses the clean (fail-closed, as it should).
+    for key, value in (("user.email", "t@t"), ("user.name", "t")):
+        subprocess.run(["git", "config", key, value], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t",
-         "commit", "-q", "--allow-empty", "-m", "base"],
+        ["git", "commit", "-q", "--allow-empty", "-m", "base"],
         cwd=tmp_path, check=True, capture_output=True)
     (tmp_path / "untracked_wip.txt").write_text("wip")
     return str(tmp_path)
@@ -604,12 +660,15 @@ def test_AC16a_subagent_session_do_flag_releases_nothing(
                     cwd=throwaway_repo) == BLOCK
 
 
-def test_AC16b_subagent_allow_grant_reaches_the_snapshot_guard(
-        sentinel_sid, throwaway_repo):
-    """A granted destructive clean on the subagent side must proceed —
-    through the snapshot guard, not around this deny."""
-    assert run_hook("git clean -fd", session_id=sentinel_sid,
-                    agent_id="agent-under-test", cwd=throwaway_repo) == ALLOW
+def test_AC16b_subagent_allow_grant_reaches_the_snapshot_guard(throwaway_repo):
+    """The owner's typed /allow releases a subagent's destructive clean once, through the pre-clean snapshot
+    (the release notice says so), not around it; the next one is refused."""
+    sid = fresh_sid()
+    typed("/allow", sid, throwaway_repo)
+    first = launched("git clean -fd", sid, throwaway_repo, 1, agent_id="agent-under-test")
+    assert first.returncode == ALLOW and "RELEASED" in first.stdout, first.stderr
+    assert "snapshot" in first.stdout, first.stdout
+    assert launched("git clean -fd", sid, throwaway_repo, 2, agent_id="agent-under-test").returncode == BLOCK
 
 
 def test_AC16b2_subagent_grant_still_denies_an_unprotectable_clean(
@@ -1216,19 +1275,22 @@ def _mutant_hook(tmp_path, *replacements):
     """A copy of the live hook with one property surgically removed, so a
     criterion can be shown to DISCRIMINATE rather than merely to pass."""
     hooks = Path(HOOK).resolve().parent
-    src = (hooks / "lib" / "bash_safety_rules.py").read_text(encoding="utf-8")
-    for old, new in replacements:
+    srcs = {}
+    for repl in replacements:  # (old, new) mutates lib/bash_safety_rules.py; (file, old, new) another lib file
+        name, old, new = repl if len(repl) == 3 else ("bash_safety_rules.py",) + tuple(repl)
+        src = srcs.get(name) or (hooks / "lib" / name).read_text(encoding="utf-8")
         assert old in src, "mutation target vanished: %r" % old
-        src = src.replace(old, new)
+        srcs[name] = src.replace(old, new)
     d = tmp_path / "mutant"
     (d / "lib").mkdir(parents=True)
     for entry in os.listdir(hooks):
         if entry not in ("lib", "tests", "__pycache__"):
             (d / entry).symlink_to(hooks / entry)
     for entry in os.listdir(hooks / "lib"):
-        if entry not in ("bash_safety_rules.py", "__pycache__"):
+        if entry not in srcs and entry != "__pycache__":
             (d / "lib" / entry).symlink_to(hooks / "lib" / entry)
-    (d / "lib" / "bash_safety_rules.py").write_text(src, encoding="utf-8")
+    for name, src in srcs.items():
+        (d / "lib" / name).write_text(src, encoding="utf-8")
     return str(d / "pretool-bash-safety.sh")
 
 
@@ -1314,9 +1376,13 @@ def test_AC18z_corpus_discriminates_against_a_grammar_relapse(tmp_path):
     proving nothing — the same failure mode as the delete-a-line fail-closed
     probe in AC18y.
     """
+    # Since P14-5 the invocations come from lib/shell_parse.py, whose git_invocations spans a separate value;
+    # the relapse is removed there too, or the parser alone still refuses every probe.
     mut = _mutant_hook(tmp_path, (
         "-[Cc]\\s+{GC_PLAINTOK}|--({GC_VALOPT_NAMES})\\s+{GC_PLAINTOK}|-{GC_QVAL}|{GC_VALTOK}",
-        "-{GC_NOSEP}"))
+        "-{GC_NOSEP}"), (
+        "shell_parse.py", "        if v in GIT_GLOBAL_VALUE_OPTS:\n            val = args[k + 1]",
+        "        if False:\n            val = args[k + 1]"))
     escaped = [f for f in _AC17_MUTANT_PROBES if run_hook(f, hook=mut) != BLOCK]
     assert escaped, (
         "the corpus cannot detect a relapse of the round-3 grammar, so passing "
@@ -1330,7 +1396,7 @@ def test_AC17s_corpus_discriminates_against_exec_context_removal(tmp_path):
     mut = _mutant_hook(
         tmp_path,
         ('grep(GC_SHELL_RE + "|" + GC_EXECCTX_RE,', 'grep(GC_SHELL_RE,'),
-        (" or exec_ctx.search(command)", ""))
+        (" or exec_ctx.search(text)", ""))  # _clean_occurrences: quotes neutralised in an exec context
     probes = ["git rebase -x 'git clean -fd' HEAD~2",
               "git submodule foreach 'git clean -fd'",
               "git filter-branch --tree-filter 'git clean -fd' HEAD"]
@@ -1401,6 +1467,7 @@ def _ac20_control_forms():
     return sorted(set(forms))
 
 
+@needs_criteria
 def test_AC20_register_is_a_closed_enumeration_of_exactly_three():
     """A fourth entry, a missing field or an id outside {E1,E2,E3} FAILS:
     widening the accepted scope is a requirement-owner decision and must not be
@@ -1416,6 +1483,7 @@ def test_AC20_register_is_a_closed_enumeration_of_exactly_three():
         assert missing == [], "%s is missing %s" % (cls["id"], missing)
 
 
+@needs_criteria
 @pytest.mark.parametrize("form", _ac20_control_forms())
 def test_AC20_near_miss_controls_still_deny(form):
     """The property that stops an exclusion being an open escape hatch.
@@ -1427,6 +1495,7 @@ def test_AC20_near_miss_controls_still_deny(form):
     assert_clean_rule_denies(form)
 
 
+@needs_criteria
 @pytest.mark.parametrize("form", _ac("AC6")["check"]["forms"])
 def test_AC20_bound_was_not_purchased_by_over_blocking(form):
     """AC20(iii): the whole AC6 ALLOW set must still exit 0, so the bound is
@@ -1468,6 +1537,7 @@ def _ac21_mirror_pairs():
     return pairs
 
 
+@needs_criteria
 @pytest.mark.xfail(strict=True, reason=_AC21_XFAIL_REASON)
 @pytest.mark.parametrize("class_id,form", _ac21_probes())
 def test_AC21_excluded_class_residual_is_still_open(class_id, form):
@@ -1477,6 +1547,7 @@ def test_AC21_excluded_class_residual_is_still_open(class_id, form):
     assert_clean_rule_denies(form)
 
 
+@needs_criteria
 @pytest.mark.parametrize("class_id,kind,clean_form,mirror_form",
                          _ac21_mirror_pairs())
 def test_AC21_clean_rule_is_never_weaker_than_the_guard_it_mirrors(
@@ -1494,6 +1565,7 @@ def test_AC21_clean_rule_is_never_weaker_than_the_guard_it_mirrors(
         "guard it mirrors" % (class_id, mirror_form, clean_form))
 
 
+@needs_criteria
 @pytest.mark.parametrize("control", _ac21_check()["non_vacuity_controls"],
                          ids=lambda c: c["form"])
 def test_AC21_non_vacuity_controls_still_deny(control):

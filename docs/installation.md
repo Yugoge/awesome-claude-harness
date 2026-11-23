@@ -280,7 +280,7 @@ that session's transcript, or the transcript did not change in the window): a bu
 tool calls fire canaries too. The session's project is the working directory its transcript
 records (one that no longer exists leaves it unknown), else, unless doctor probes another
 session, `CLAUDE_PROJECT_DIR` or the nearest directory above doctor's own with
-`.claude/settings*.json` or a git toplevel, never your HOME or the harness home. When it cannot be
+`.claude/settings*.json` or a git toplevel, never your HOME, the harness home or `/` (a `CLAUDE_PROJECT_DIR` naming one of them is read as unset). When it cannot be
 known, an event with no receipt and no registration in the layers read is `FAIL` when those
 layers wire the canary for other events (a partial wiring doctor can see), and
 `NOT_PROVABLE_HERE`, naming what was read, when they wire it for none. Run without a session and without `--session-id`, each event's

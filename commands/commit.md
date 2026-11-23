@@ -178,7 +178,7 @@ with Bash: the hook is the sole minter. Go to Step 6: `--bulk` and `--force` are
 the QA gate. The privilege guard decides on the sentinel at each auto-bulk commit.
 
 **BULK=false.** One Bash call (a fresh shell: nothing carries over in variables) resolves the task's
-report and builds the repository plan, the attribution slice and the manifest inputs:
+report, builds the repository plan and the attribution slice, and writes the dispatch-snapshot manifest:
 
 ```bash
 python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/steps/commit-plan.py" --task-id "$TASK_ID"
@@ -198,13 +198,25 @@ It prints one JSON object whose keys the script's header defines. Steps 5-7 read
   fact-based staging source `agents/changelog-analyst.md` reads beside the dev-report's own ledger;
   `no_events[]` lists paths the journal does not cover, for which the analyst's backup investigation
   applies, never a block.
-- `control_root`, `nested_repo`, `close_report`, `session_id`, `manifest_path` and `files_at_dispatch`
-  feed Step 7's prompt and the manifest below.
+- `control_root`, `nested_repo` and `close_report` feed Step 7's prompt; `session_id` is read below.
 - `unclaimed` (only when the plan owns no path, a cycle that declares no file): `unclaimed.paths`
   are the control checkout's changes no open cycle claims; this `/commit` lands them, nobody is
   asked. Paths in `claimed_by_open_cycles` stay for their cycles, and paths in
   `claimed_by_open_commands` (edits the attribution journal credits to a command still open in
   another session, with or without a report) stay for those sessions. Its absence changes nothing.
+- `nothing_to_commit`: the code's decision that the task has nothing to commit, written to
+  `docs/dev/nothing-to-commit-<task-id>.json` with its reason (non-null only when the plan computed
+  OK and either every owned path is in its repository's HEAD as the work tree holds it or is
+  ignored by the repository, or the plan owns no path, `unclaimed.paths` is empty and /close's
+  no-files facts hold over every session of the project: the reports say the task finished
+  (status `completed`) and declare no file, and no span
+  of the task wrote a project file, `hooks/lib/close_exit.nothing_to_land`; `null` removes an
+  earlier record). It is the only
+  "nothing to commit" the Stop gate accepts in place of a `Task-id:` commit, and the gate verifies
+  it again at the stop, against HEAD and, for a plan that owns no path, against the session records
+  (`nothing_to_commit` in `scripts/resolve-dev-artifact-chain.py`, the one test both run). A pending
+  owned change, a span that wrote a project file, a missing artifact or a broken or missing record
+  keeps the task owed; no line an agent writes counts.
 
 Two outcomes are findings (Routes), each followed by this call run again: `late_repair.state`
 `invalid` (a finding on `late_repair.path`), and a `null` `repository_plan` (a malformed report,
@@ -212,11 +224,10 @@ an unattached branch, an absent HEAD, an unsupported owner, an identity mismatch
 `task_report`). It is never an empty plan or "nothing to commit"; no grant is issued and nothing is
 staged while it holds.
 
-**Write the dispatch-snapshot manifest before minting any grant.** Write `manifest_path` with the
-Write tool (no time field: the minter takes the manifest's time from the CLI's record of that
-Write): JSON holding `session_id`, `task_id`, the complete
-`repository_plan` (with its report digest), the exact `ARTIFACT_CHAIN` JSON (when non-empty) and
-`files_at_dispatch` (and `unclaimed` when present). With no session id (`session_id` empty) print `OPERATION_STALLED:
+**The dispatch-snapshot manifest is the plan call's.** With a session id it writes the manifest the
+minter reads (`session_id`, `task_id`, `repository_plan` with its report digest, `files_at_dispatch`,
+`unclaimed` when present; its time is the file's own); write nothing for it. With no session id
+(`session_id` empty) print `OPERATION_STALLED:
 write-commit-grant.py has no session id (CLAUDE_CODE_SESSION_ID and CLAUDE_SESSION_ID unset)`,
 record it as the session's next harness-repair item, and dispatch nothing. `write-commit-grant.py`
 refuses to mint without the manifest: a live `/commit` user-intent sentinel alone is not enough,
@@ -277,8 +288,10 @@ the Step 5 grant (its `DRYRUN` guard, `agents/changelog-analyst.md`). Capture fr
 - If the dry-run reports `nothing_to_commit` / an empty plan, compare it to the plan first. If the
   plan computed OK, its owned paths exist and they are not already landed, the disagreement
   between the owned-edit declaration and the live bytes is a finding on the dev report (Routes),
-  not a silent no-op; rerun the planning phase after the fix. Only when the plan computed OK and
-  the paths are already landed (or it lists no owned path and `unclaimed.paths` is empty), print `Nothing to commit (plan
+  not a silent no-op; rerun the planning phase after the fix. Only when Step 5's `nothing_to_commit`
+  is non-null (or the plan lists no owned path and `unclaimed.paths` is empty while
+  `nothing_to_commit` is null: the task's records do not show that it wrote nothing, and the Stop
+  gate keeps naming its missing `Task-id:` commit), print `Nothing to commit (plan
   computed OK; dry-run found no pending change) — QA gate skipped.` (never after a failed plan
   computation), revoke the Step 5 grant (Grant hygiene below), and go to Step 7, which also
   no-ops. Dispatch no QA on an empty plan.
@@ -675,7 +688,8 @@ time, through the same unmodified Step 3 to Step 8 an explicit `/commit <task-id
    landed. Bind `DRYRUN` and `QA_CODEX` as passed to the batch, and run Step 3 through Step 8 exactly
    as written; nothing in them is aware `--auto` drives them.
 3. **Each parent completes**: its walk ends only by landing (`commit_status` in `committed`,
-   `nothing_to_commit`, `push_gate_reconciled`, `nothing_to_commit_precommitted`), by a hook's
+   `push_gate_reconciled`, `nothing_to_commit_precommitted`, or `nothing_to_commit` where Step 5's
+   `nothing_to_commit` record is non-null, the one such state the Stop gate accepts), by a hook's
    refusal reported on its `REFUSED:` line, or, under `--dry-run`, the preview end. Gaps, a `COMMIT: REJECT` and changelog-analyst failures are routed
    inside the walk (Steps 3-7); a `partially_committed` parent continues its remaining repositories
    in order under fresh grants (Step 7). A hook rejection is reported for that parent as Step 7

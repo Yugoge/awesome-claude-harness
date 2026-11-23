@@ -43,12 +43,12 @@ import pytest
 
 from tests.test_bootstrap_init import Home
 from tests.test_git_auto_push_opt_in import (AUTO_PUSH_LIB, BRANCH, CHECKPOINT_CMD,
-                                             CHECKPOINT_LIB, CHECKPOINT_NOTE, NEGATIVE_SETTLE,
+                                             CHECKPOINT_LIB, CHECKPOINT_NOTE,
                                              POLL_INTERVAL, POSITIVE_TIMEOUT, POST_COMMIT_HOOK,
                                              PROJECT_NAME, SKIP_MARKER, Run, _combined_hook_body,
                                              _fswatch_functions, _fswatch_log_dir, _git, _install_post_commit,
                                              _new_repo, _origin_refs, _run,
-                                             _run_session_git_init, _scratch_env)
+                                             _run_session_git_init, _scratch_env, wait_until_quiet)
 from tests.test_landing import env  # noqa: F401  (the landing tests' scratch-home fixture)
 from tests.test_landing import REPO, assert_landed, git, land, landing_log, make_home
 
@@ -89,7 +89,7 @@ def _set_key(env: dict, repo: Path, value: Optional[str]) -> None:
 
 def _judge(run: Run, pushes: bool) -> None:
     """A push: the origin's ref reaches the expected commit within POSITIVE_TIMEOUT. No push:
-    the origin's refs are unchanged NEGATIVE_SETTLE seconds after the trigger."""
+    the origin's refs are unchanged once no process works in the repository or origin any more."""
     label = f"{run.path} {run.case}"
     if pushes:
         deadline = time.monotonic() + POSITIVE_TIMEOUT
@@ -103,9 +103,7 @@ def _judge(run: Run, pushes: bool) -> None:
             f"{label}: origin {run.expected_ref} is {got or 'absent'}, expected "
             f"{run.expected_sha}\n{run.output}")
         return
-    remaining = run.triggered_at + NEGATIVE_SETTLE - time.monotonic()
-    if remaining > 0:
-        time.sleep(remaining)
+    wait_until_quiet(run.repo, run.origin)
     after = _origin_refs(run.env, run.origin)
     assert after == run.origin_before, (
         f"{label}: origin changed\nbefore:\n{run.origin_before}\nafter:\n{after}\n{run.output}")
@@ -227,7 +225,7 @@ def test_fswatch_push_follows_the_repository_switch(tmp_path, switch):
     log_dir = _fswatch_log_dir(functions, env)
     proc = _run(["bash", "-c", script, "bash", functions, repo], env, check=False)
     run = Run("fswatch", switch.id, env, repo, origin, origin_before, f"refs/heads/{BRANCH}",
-              head, proc.returncode, proc.stdout + proc.stderr, time.monotonic() - NEGATIVE_SETTLE)
+              head, proc.returncode, proc.stdout + proc.stderr, time.monotonic())
     assert proc.returncode == 0, run.output
     _judge(run, switch.pushes)  # safe_push is synchronous: no settling wait is needed
     log = log_dir / f"git-fswatch-{repo.name}.log"  # the state root's logs/
@@ -388,14 +386,17 @@ def _commit_pushes_a_backup(env, repo, origin, pushes):
     git(e, repo, "commit", "-q", "-m", "plain commit under test")
     head = git(e, repo, "rev-parse", "HEAD").stdout.strip()
     ref = f"refs/backups/claude/master/{head[:12]}"
-    deadline = time.monotonic() + (POSITIVE_TIMEOUT if pushes else NEGATIVE_SETTLE)
-    while time.monotonic() < deadline:
+    if not pushes:
+        wait_until_quiet(repo, origin)
+    deadline = time.monotonic() + (POSITIVE_TIMEOUT if pushes else 0)
+    while True:
         got = git(env, origin.parent, "--git-dir", str(origin), "rev-parse", "--verify", "-q", ref,
                   check=False).stdout.strip()
         if got:
             return True
+        if time.monotonic() >= deadline:
+            return False
         time.sleep(POLL_INTERVAL)
-    return False
 
 
 @pytest.mark.parametrize("state", ("upgraded", "landed"))

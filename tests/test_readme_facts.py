@@ -891,9 +891,9 @@ def test_ci_enforces_faults_follow_the_assertions(tmp_path):
     edit(unreadable, rel, "    if fault == \"F3b\":", "    if fault in (\"F3b\", \"F9\"):")
     verdict = rf.ci_enforces(unreadable)["faults_returned_and_repaired"]
     assert verdict["holds"] is False and "cannot tell for which faults" in " ".join(verdict["missing"])
-    # a fault added to the table goes through the helper like the others
+    # a fault added to the table goes through the helper like the others (anchored in FAULTS: F9 is in BY_CODE)
     grown = _ci_repo(tmp_path / "grown")
-    edit(grown, rel, '    "F9": "bash@', '    "F10": "missing@x",\n    "F9": "bash@')
+    edit(grown, rel, '    "F3a": "harness@', '    "F10": "missing@x",\n    "F3a": "harness@')
     after = rf.ci_enforces(grown)["faults_returned_and_repaired"]
     assert after["holds"] and "F10" in after["ids"] and len(after["ids"]) == len(base["ids"]) + 1
     empty = _ci_repo(tmp_path / "empty")

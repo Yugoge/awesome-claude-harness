@@ -9,13 +9,11 @@ set -euo pipefail
 MODE="${1:?Missing mode (clean-inspect|clean-merge-reports|record-checkpoint|rule-inspect)}"
 CONTEXT_FILE="${2:?Missing context JSON file}"
 
-# Validate context file exists
 if [[ ! -f "$CONTEXT_FILE" ]]; then
   echo "Error: Context file not found: $CONTEXT_FILE" >&2
   exit 1
 fi
 
-# Validate JSON syntax
 if ! jq empty "$CONTEXT_FILE" 2>/dev/null; then
   echo "Error: Invalid JSON in context file: $CONTEXT_FILE" >&2
   exit 1
@@ -35,7 +33,6 @@ clean_inspect() {
   echo "=== Clean Inspection Orchestration ===" >&2
   echo "Context: $CONTEXT_FILE" >&2
 
-  # Extract project root
   PROJECT_ROOT=$(jq -r '.orchestrator.analysis.project_root // "."' "$CONTEXT_FILE")
   echo "Project: $PROJECT_ROOT" >&2
 
@@ -77,7 +74,6 @@ clean_inspect() {
     echo "✅ Rule initialization completed: $RULE_CONTEXT_FILE" >&2
   fi
 
-  # Validate required fields
   if ! jq -e '.orchestrator.requirement' "$CONTEXT_FILE" >/dev/null 2>&1; then
     echo "Error: Missing requirement in context" >&2
     exit 1
@@ -188,7 +184,6 @@ record_checkpoint() {
   echo "=== Record Checkpoint Orchestration ===" >&2
   echo "Context: $CONTEXT_FILE" >&2
 
-  # Get checkpoint commit hash (3rd argument)
   CHECKPOINT_COMMIT="${3:-}"
   if [[ -z "$CHECKPOINT_COMMIT" ]]; then
     echo "Error: Missing checkpoint commit hash" >&2
@@ -214,11 +209,9 @@ rule_inspect() {
   echo "=== Rule Inspection Orchestration ===" >&2
   echo "Context: $CONTEXT_FILE" >&2
 
-  # Extract project root
   PROJECT_ROOT=$(jq -r '.orchestrator.analysis.project_root // "."' "$CONTEXT_FILE")
   echo "Project: $PROJECT_ROOT" >&2
 
-  # Validate required fields
   if ! jq -e '.orchestrator.requirement' "$CONTEXT_FILE" >/dev/null 2>&1; then
     echo "Error: Missing requirement in context" >&2
     exit 1
@@ -247,7 +240,6 @@ rule_inspect() {
   return 0
 }
 
-# Main execution
 case "$MODE" in
   clean-inspect)
     clean_inspect

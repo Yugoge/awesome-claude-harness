@@ -119,18 +119,19 @@ def test_a_list_that_never_finishes_reading_is_refused_in_time(env, tmp_path):
                               f"deny_list.entries = lambda *a, **k: _e({str(fifo)!r}, settings=None)")
     other = tmp_path / "other_rule.py"
     other.write_text("import sys\nsys.exit(0)\n")
-    p, took = _launch(env, f"Rule('deny-list', {str(rule)!r}, ('Bash',), timeout={_rule_timeout()}), "
-                           f"Rule('other', {str(other)!r}, ('Bash',))")
+    p, _ = _launch(env, f"Rule('deny-list', {str(rule)!r}, ('Bash',), timeout={_rule_timeout()}), "
+                        f"Rule('other', {str(other)!r}, ('Bash',))")
     assert p.returncode == 2, (p.returncode, p.stderr)
     assert "ran out of time while reading the list" in p.stderr and "no verdict within" in p.stderr, p.stderr
-    assert took < _rule_timeout(), took
+    # the rule's own refusal came, not the launcher's stop of a rule at its timeout (exit 1, "ran past")
+    assert "ran past its" not in p.stderr, p.stderr
 
 
 def test_a_matcher_that_runs_past_the_deadline_is_refused(env, tmp_path):
     rule = _wrapper(tmp_path, "import time\ndeny_list.Policy.refusal = lambda self, payload: time.sleep(60)")
-    p, took = _launch(env, f"Rule('deny-list', {str(rule)!r}, ('Bash',), timeout={_rule_timeout()})")
+    p, _ = _launch(env, f"Rule('deny-list', {str(rule)!r}, ('Bash',), timeout={_rule_timeout()})")
     assert p.returncode == 2 and "ran out of time while matching this call" in p.stderr, (p.returncode, p.stderr)
-    assert took < _rule_timeout(), took
+    assert "ran past its" not in p.stderr, p.stderr
 
 
 @pytest.mark.parametrize("damage,word", [("directory", "IsADirectoryError"), ("truncated", "JSONDecodeError")])

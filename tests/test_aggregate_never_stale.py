@@ -78,6 +78,9 @@ def test_a_rebuild_cut_off_leaves_the_old_aggregate_stale(project):
 
 
 def test_the_gates_verdict_with_a_fresh_aggregate_is_unchanged(project, monkeypatch):
+    """The gate's disposition keeps its lines while every fact it read holds (lib/fact_cache): the stale case is
+    a lane report written after the first verdict, a fact the kept lines were computed from, not only a patch."""
+    monkeypatch.setenv("CLAUDE_STATE_DIR", str(project / "state"))
     gate = _load("hooks/stop-command-gate.py", "stop_gate_never_stale")
     chain = gate._script("scripts/resolve-dev-artifact-chain.py")
     monkeypatch.setattr(chain, "disposition_lines", lambda root, task, stage: [
@@ -85,6 +88,8 @@ def test_the_gates_verdict_with_a_fresh_aggregate_is_unchanged(project, monkeypa
         f"GAP artifact=docs/dev/dev-report-{task}-l1.json problem=unresolved_blockers: y lane=l1"])
     fresh = gate.disposition(project, TID, "dev")
     assert fresh == chain.disposition_lines(project, TID, "dev")
+    assert gate.disposition(project, TID, "dev") == fresh  # nothing changed: the kept lines
+    _later(project / "docs" / "dev" / f"dev-report-{TID}-l1.json")
     monkeypatch.setattr(gate._script("scripts/aggregate-dev-report.py"), "rebuild_if_stale",
                         lambda root, task: [f"/p/docs/dev/dev-report-{task}-l1.json"])
     stale = gate.disposition(project, TID, "dev")

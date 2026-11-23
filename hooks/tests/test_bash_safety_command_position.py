@@ -250,3 +250,19 @@ def test_round4_a_computed_kill_word_or_double_slash_dd_target_is_refused(sandbo
 def test_round4_the_probe_and_a_double_slash_stdout_still_pass(sandbox, command):
     r = run(sandbox, command)
     assert r.returncode == 0, (command, r.stderr)
+
+
+# location-rules U11: daemon.json is refused for what it is, however the command spells where the write lands.
+def test_daemon_json_one_verdict_at_every_spelling(sandbox):
+    link = Path(sandbox["repo"]).parent / "etc-docker-link"
+    if not link.is_symlink():
+        link.symlink_to("/etc/docker")
+    for command in ("tee /etc/docker/daemon.json < x", "cd /etc/docker && tee daemon.json < x",
+                    "tee /etc//docker/daemon.json < x", "tee /etc/docker/../docker/daemon.json < x",
+                    "cd /etc && echo '{}' > docker/daemon.json", f"tee {link}/daemon.json < x",
+                    "cp a /etc/docker/./daemon.json"):
+        r = run(sandbox, command)
+        assert r.returncode == 2 and DAEMON_JSON in r.stderr, (command, r.stderr)
+    for command in ("tee ./daemon.json < x", "cd /etc/docker && cat daemon.json", "echo x > daemon.json"):
+        r = run(sandbox, command)
+        assert r.returncode == 0, (command, r.stderr)

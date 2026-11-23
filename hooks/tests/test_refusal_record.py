@@ -269,9 +269,15 @@ def test_a_held_lock_is_waited_for_a_bounded_time_then_given_up(monkeypatch):
     monkeypatch.setattr(R, "LOCK_WAIT", 0.05)
     with open(day) as held:
         fcntl.flock(held, fcntl.LOCK_EX)
-        started = time.process_time()
+        real, tries = fcntl.flock, []
+        monkeypatch.setattr(R.fcntl, "flock", lambda *a: (tries.append(1), real(*a))[1])
+        started = time.monotonic()
         assert R.write(payload(call="toolu_02"), *REPORTS[0]) is False
-        assert time.process_time() - started < 1.0                          # CPU seconds: it sleeps, it does not spin
+        waited = time.monotonic() - started
+        # it sleeps 2 ms between tries, it does not spin: no more tries than the sleeps it had time for
+        # (a bound that holds at any machine speed, as a sleep never ends early)
+        assert 1 <= len(tries) <= waited / 0.002 + 2, (len(tries), waited)
+        monkeypatch.setattr(R.fcntl, "flock", real)
     assert R.write(payload(call="toolu_02"), *REPORTS[0]) is True
     assert len(lines()) == 2
 
@@ -290,7 +296,7 @@ def test_a_hook_reports_through_a_writer_process_of_its_own(monkeypatch):
     R.report(payload(call="toolu_03"), [("hooks/x.py", "no")], "hooks/x.py", "another kind")    # no such kind: no line
 
 
-def test_a_report_never_raises_and_starts_nothing_for_a_payload_without_an_event(monkeypatch):
+def test_a_report_never_raises_and_starts_nothing_for_a_payload_without_an_event(monkeypatch, tmp_path):
     def never(*_a, **_k):
         raise AssertionError("a writer process was started")
     monkeypatch.setattr(subprocess, "run", never)
@@ -303,11 +309,13 @@ def test_a_report_never_raises_and_starts_nothing_for_a_payload_without_an_event
     monkeypatch.setattr(R.sys, "executable", "/bin/false")                    # the writer fails
     assert R.report(payload(), [("hooks/x.py", "no")], "hooks/x.py") is None
     monkeypatch.setattr(R, "REPORT_WAIT", 0.2)
-    monkeypatch.setattr(R.sys, "executable", "/bin/sleep")                    # the writer hangs: sleep <path> ... fails at once,
-    monkeypatch.setattr(R.os.path, "abspath", lambda _p: "30")                # so it is told to sleep 30 s instead
-    started = time.monotonic()
+    ended = tmp_path / "writer-ended"                                         # the writer hangs: it writes this only after its sleep
+    hang = tmp_path / "hang.sh"
+    hang.write_text(f"sleep 120\n: > {ended}\n")
+    monkeypatch.setattr(R.sys, "executable", "/bin/sh")                       # sh <script> <kind> ...: the script is the one above
+    monkeypatch.setattr(R.os.path, "abspath", lambda _p: str(hang))
     assert R.report(payload(), [], "hooks/x.py") is None and R.report(payload(), [("1", "1")], "1", "1") is None
-    assert time.monotonic() - started < 20
+    assert not ended.exists()                                                 # no clock: both came back while the writer slept
     assert lines() == []
 
 

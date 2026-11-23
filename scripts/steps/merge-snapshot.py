@@ -32,6 +32,8 @@ import sys
 from pathlib import Path
 
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(HARNESS_ROOT / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
 MISSING = "MISSING"
 
 
@@ -58,8 +60,8 @@ def default_branch() -> str:
 
 
 def repo_root() -> str:
-    code, top = git("rev-parse", "--show-toplevel")
-    return os.path.realpath(top) if code == 0 and top else ""
+    top = locations.repo_top(os.getcwd())  # never the filesystem root
+    return os.path.realpath(top) if top else ""
 
 
 def snapshot(ref: str) -> None:

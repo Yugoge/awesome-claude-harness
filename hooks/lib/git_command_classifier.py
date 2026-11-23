@@ -53,6 +53,7 @@ CLI usage:
 """
 
 import collections
+import contextvars
 import functools
 import json
 import os
@@ -374,8 +375,9 @@ _INERT_TEXT_OWNERS = frozenset({'grep', 'rg'})
 # with a hidden component (`.git/`, `.bashrc`, `.claude/`, `.vscode/`,
 # `.config/`, and `..`, which leaves the tree), one with a `hooks` component
 # (`core.hooksPath`), one under `~user`, a device or /proc name, an absolute
-# one outside the project and the temp roots (lib/locations.data_parts: the
-# project wherever it is checked out; its managed scratch `.claude/scratch/`
+# one outside the project, the call's directory and the temp roots
+# (lib/locations.data_parts: the project wherever it is checked out; the
+# call's directory as the payload names it, _CALL_CWD; its managed scratch `.claude/scratch/`
 # counts from below that folder) with a `bin`, `sbin` or `etc` component, as
 # written or resolved, and one of these names (any case, files a tool runs by
 # name) is code. Names a tool runs that need no dot:
@@ -427,9 +429,13 @@ def _written_paths(cmds, k, end):
     return paths, unknown
 
 
+# The directory the classified command runs in, set by classify_git_command for one call.
+_CALL_CWD = contextvars.ContextVar("git_command_classifier_call_cwd", default=None)
+
+
 def _is_code_file(path):
     """True iff a here-document written to path may be run or read as code by a tool (see _CODE_FILES)."""
-    rel, dirs = locations.data_parts(path), _CODE_DIRS
+    rel, dirs = locations.data_parts(path, _CALL_CWD.get()), _CODE_DIRS
     if rel is None:
         full = os.path.expanduser(path); real = os.path.realpath(full)  # noqa: E702
         if not os.path.isabs(full) or any(locations.is_device(p) or locations.below(locations.absolute(p), locations.PROC_DIR)
@@ -1714,8 +1720,9 @@ def _interpreter_runs_runtime(spec, args):
 
 
 @functools.lru_cache(maxsize=32)
-def _shell_layers(command_text):
-    """(texts, unresolved) for command_text.
+def _shell_layers(command_text, call_cwd=None):
+    """(texts, unresolved) for command_text run in call_cwd (_CALL_CWD's value: part of the cache key
+    only, since the scan below asks _is_code_file, whose answer depends on it).
 
     texts: command_text, then the text of every shell `-c` string it runs, in
     order, resolved recursively up to _MAX_SHELL_DEPTH levels; a value the outer
@@ -1751,12 +1758,12 @@ def _shell_layers(command_text):
 
 def iter_shell_texts(command_text):
     """Yield command_text, then the text of every shell `-c` string it runs."""
-    return iter(_shell_layers(command_text)[0])
+    return iter(_shell_layers(command_text, _CALL_CWD.get())[0])
 
 
 def _residual_shapes(command_text):
     """Yield (kind, text) for command words that may be git but did not resolve, in every layer."""
-    texts, unresolved = _shell_layers(command_text)
+    texts, unresolved = _shell_layers(command_text, _CALL_CWD.get())
     for k, text in enumerate(texts):
         yield from _segment_residual_shapes(text, nested=k > 0)
     for text in unresolved:
@@ -1839,8 +1846,12 @@ def _bare_invocation(inv):
     return tuple(w for w in words if w)
 
 
-def classify_git_command(command_text):
+def classify_git_command(command_text, cwd=None):
     """Return (invocations, residuals): list(iter_git_invocations()), list(_residual_shapes()).
+
+    cwd is the directory the command runs in (the payload's): a file a here-document is written to
+    there is judged as the same file a relative spelling names (_is_code_file); without it, the
+    process's own directory.
 
     The fail-closed test for a caller:
 
@@ -1850,7 +1861,11 @@ def classify_git_command(command_text):
         if not invocations:
             return               # git-free
     """
-    return list(iter_git_invocations(command_text)), list(_residual_shapes(command_text))
+    token = _CALL_CWD.set(cwd)
+    try:
+        return list(iter_git_invocations(command_text)), list(_residual_shapes(command_text))
+    finally:
+        _CALL_CWD.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -1866,7 +1881,9 @@ def classify_git_command(command_text):
 #     read as `git <words>` (lexical: `perl -e 'print "git push"'` is a push). Python (-c, or a
 #     here-document or here-string on stdin) is code to the removal analyzer: what it starts counts.
 #   - a script file named by a literal path that exists and is readable at hook
-#     time, relative to cwd, under _HIDDEN_SCRIPT_MAX bytes and not binary:
+#     time, relative to the directory it runs in (cwd, the call's, moved by each cd
+#     CdScopes follows; after one it cannot, yielded with text None: unproven),
+#     under _HIDDEN_SCRIPT_MAX bytes and not binary:
 #     `bash|sh|dash|zsh|ksh FILE`, `source FILE`, `. FILE`, and a command word
 #     with a `/` (`./x.sh`) whose first line is not a python, pypy, perl, ruby
 #     or node shebang. Its text is shell text; the commands in it are scanned
@@ -1995,6 +2012,7 @@ def hidden_git_texts(command_text, cwd=None, trusted=(), _depth=0):
     script = shell_parse.parse(command_text)
     if script.error is not None:
         return
+    scopes = shell_parse.CdScopes(command_text).run(script)  # where each part runs, from cwd ('')
     for site in shell_parse.walk(script):
         resolved = shell_parse.resolve(site.cmd)
         name = resolved.name
@@ -2016,14 +2034,20 @@ def hidden_git_texts(command_text, cwd=None, trusted=(), _depth=0):
         if found is None:
             continue
         path, as_shell = found
-        text = _hidden_script_text(path, cwd, trusted)
-        if text is None:
-            continue
-        if as_shell is None and _HIDDEN_SHEBANG_CODE_RE.match(text.partition('\n')[0]):
-            continue  # an interpreter file: unseen, like `python3 x.py`
-        yield 'script %s' % path, text
-        for origin, inner in hidden_git_texts(text, cwd, trusted, _depth + 1):
-            yield 'script %s: %s' % (path, origin), inner
+        rooted = path.startswith(shell_parse.ROOTED)
+        for d in {''} if rooted else scopes.of(site.cmd.words[0] if site.cmd.words else None):
+            if d == '?':  # a relative script after a cd the scan cannot follow: unproven, never empty
+                yield 'script %s (in a directory the guard cannot tell)' % path, None
+                continue
+            here = os.path.join(cwd or os.getcwd(), os.path.expanduser(d))
+            text = _hidden_script_text(path, here, trusted)
+            if text is None:
+                continue
+            if as_shell is None and _HIDDEN_SHEBANG_CODE_RE.match(text.partition('\n')[0]):
+                continue  # an interpreter file: unseen, like `python3 x.py`
+            yield 'script %s' % path, text
+            for origin, inner in hidden_git_texts(text, here, trusted, _depth + 1):
+                yield 'script %s: %s' % (path, origin), inner
 
 
 if __name__ == '__main__':

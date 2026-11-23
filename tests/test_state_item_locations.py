@@ -27,13 +27,14 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches (see test_scratch_permissions)
 HOOKS, LIB, SCRIPTS = REPO / "hooks", REPO / "hooks" / "lib", REPO / "scripts"
 SID = "0e0e0e0e-1111-4222-8333-444455556666"
 SETTINGS_TMP = json.loads((REPO / "settings.json").read_text())["env"]["CLAUDE_CODE_TMPDIR"]
 
 
 def _run(argv, env, cwd=None):
-    proc = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, timeout=120)
+    proc = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, timeout=HANG_GUARD)
     if proc.returncode != 0:
         raise AssertionError(f"{argv[:3]} rc={proc.returncode}: {proc.stderr.strip()[-600:]}")
     return proc.stdout.strip()
@@ -226,7 +227,7 @@ def c06(w):
                     f'eval "$(grep -E "^LOG_FILE=" {HOOKS / "git-fswatch.sh"!s})"; printf %s "${{LOG_FILE%/*}}"',
                     {"PATH": os.environ["PATH"], "HOME": str(w.homes[s])})
         out = subprocess.run(["bash", str(HOOKS / "fswatch-manager.sh"), "logs", "/x"], env=w.session(s),
-                             capture_output=True, text=True, timeout=60).stdout
+                             capture_output=True, text=True, timeout=HANG_GUARD).stdout
         reader = re.search(r"No log file found: (\S+)/git-fswatch-", out).group(1)
         pairs.append((s, real(writer), real(reader)))
     return pairs
@@ -253,7 +254,7 @@ def c12(w):
     (cfg / "settings.json").symlink_to(REPO / "settings.json")
     out = subprocess.run([sys.executable, str(SCRIPTS / "harness-switch"), "status"],
                          env=w.session("a", CLAUDE_CONFIG_DIR=str(cfg)), capture_output=True, text=True,
-                         timeout=60).stdout
+                         timeout=HANG_GUARD).stdout
     line = next(l for l in out.splitlines() if l.startswith("Config dir:"))
     decided = str(REPO.resolve()) if "not this home" not in line else str(cfg)
     return [("CLI loads", os.path.dirname(os.path.realpath(cfg / "settings.json")), decided)]
@@ -296,11 +297,20 @@ def p02(w):
 
 
 def t02(w):
-    env = w.session("a", TMPDIR=None)
-    text = (HOOKS / "session-scratch-init.sh").read_text()
-    writer = sh(re.search(r"^ROOT=.*$", text, re.M).group(0) + '; printf %s "$ROOT"', env)
-    reader = py("from doc_sync import notice; print(notice._state_root())", env)
-    return [("TMPDIR absent", writer, reader)]
+    from tests.test_scratch_permissions import script_root  # the root the start hook really uses, from its run
+    (w.scratch / "outer").mkdir()
+    (w.scratch / "outer" / ".owner").write_text('{"sid": "outer"}')
+    (w.tmp / "link").symlink_to(w.scratch / "outer")
+    pairs = []
+    for label, tmpdir in (("TMPDIR absent", None), ("TMPDIR a session's dir, trailing slash", f"{w.scratch}/outer/"),
+                          ("TMPDIR a session's dir through a link", str(w.tmp / "link"))):
+        env = w.session("a", TMPDIR=tmpdir)
+        probe = w.tmp / f"t02-probe-{len(pairs)}"
+        probe.mkdir()
+        writer = script_root(HOOKS / "session-scratch-init.sh", env, probe)
+        reader = py("from doc_sync import notice; print(notice._state_root())", env)
+        pairs.append((label, writer, reader))
+    return pairs
 
 
 def s34(w):

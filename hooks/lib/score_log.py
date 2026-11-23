@@ -68,8 +68,9 @@ def read_lines(path: str) -> list[tuple[int, dict]]:
 
 def project_key(cwd) -> str:
     """First 12 hex of the sha256 of cwd's resolved git common directory, which linked working copies share (else cwd)."""
-    common = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--git-common-dir"], capture_output=True, text=True).stdout.strip()
-    return hashlib.sha256(os.path.realpath(os.path.join(cwd, common)).encode()).hexdigest()[:12]
+    locations = importlib.import_module(".locations" if __package__ else "locations", __package__ or None)
+    common = locations.repo_common_dir(cwd) or os.path.realpath(cwd)  # none at the filesystem root's repository
+    return hashlib.sha256(common.encode()).hexdigest()[:12]
 
 
 def points_for(event: str, role: str) -> int | None:

@@ -25,8 +25,10 @@ must push. The near misses are what tell an exact guard from a loose one (a
 non-empty, numeric, truthy-word or prefix test passes unset/"0"/"1" just as well).
 
 All cases are triggered once, up front, by one module fixture. A "1" case then
-polls its origin for up to POSITIVE_TIMEOUT seconds; any other case is only
-concluded NEGATIVE_SETTLE seconds after its own trigger. Every case is judged
+polls its origin for up to POSITIVE_TIMEOUT seconds; any other case is
+concluded once no process works in its repository or origin any more (a push
+still in flight shows as such a process: no pause stands for "it has surely
+finished"). Every case is judged
 against its own origin, while the waits of different cases overlap.
 
 Also pinned here: the shipped settings.json (its tracked clean form) sets
@@ -71,7 +73,7 @@ CASES = ("unset", "", "0", "true", "yes", " 1", "1 ", "01", "10", "1")
 _CASE_IDS = {"": "empty", " 1": "space-1", "1 ": "1-space"}
 BRANCH = "master"
 POSITIVE_TIMEOUT = 20.0
-NEGATIVE_SETTLE = 5.0
+QUIET_LIMIT = 120.0  # an outer limit, reached only by a process that never ends
 POLL_INTERVAL = 0.25
 
 # A clearly fake identity. It only ever lands in commit metadata, never in a
@@ -332,6 +334,53 @@ def runs(tmp_path_factory) -> dict:
     return triggered
 
 
+def _become_subreaper() -> None:
+    """Linux: a process whose parent has ended is handed to this process, not to init, whatever its working
+    directory, session or name. Set when this module is imported, before any trigger runs."""
+    try:
+        import ctypes
+        ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+    except (OSError, AttributeError):
+        pass
+
+
+_become_subreaper()
+
+
+def _still_running(roots) -> list:
+    """Live (not zombie) children of this process, and any other process working under ``roots``."""
+    me, found = os.getpid(), []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == me:
+            continue
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as handle:
+                state, ppid = handle.read().rsplit(b")", 1)[1].split()[:2]
+            if state == b"Z":
+                continue
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except (OSError, ValueError):
+            continue
+        if int(ppid) == me or any(cwd == r or cwd.startswith(r + os.sep) for r in roots):
+            found.append(pid)
+    return found
+
+
+def wait_until_quiet(*dirs) -> None:
+    """Return when no leftover of a trigger is running: a trigger has returned by then, and what it left behind (a
+    detached push) was handed to this process when its parent ended (_become_subreaper), wherever it works. A
+    process with its working directory under ``dirs`` also counts (where the hand-over is not available). Whatever
+    the machine's speed, a push still on its way is seen here."""
+    roots = [os.path.realpath(str(d)) for d in dirs]
+    end = time.monotonic() + QUIET_LIMIT
+    while True:
+        left = _still_running(roots)
+        if not left:
+            return
+        assert time.monotonic() < end, f"processes {left} still run after {QUIET_LIMIT:g} s (watching {roots})"
+        time.sleep(0.05)
+
+
 def _assert_push_follows_opt_in(run: Run) -> None:
     label = f"{run.path} with GIT_AUTO_PUSH {_case_id(run.case)}"
     if run.case == "1":
@@ -344,9 +393,7 @@ def _assert_push_follows_opt_in(run: Run) -> None:
             f"{label}: origin {run.expected_ref} is {got or 'absent'} after "
             f"{POSITIVE_TIMEOUT:.0f}s, expected {run.expected_sha}\n{run.output}")
         return
-    remaining = run.triggered_at + NEGATIVE_SETTLE - time.monotonic()
-    if remaining > 0:
-        time.sleep(remaining)
+    wait_until_quiet(run.repo, run.origin)
     after = _origin_refs(run.env, run.origin)
     assert after == run.origin_before, (
         f"{label}: origin changed without opt-in "
@@ -571,3 +618,15 @@ def test_session_git_init_ask_prints_the_command_it_would_run(tmp_path, create, 
     hint = [line.strip() for line in output.splitlines() if "Run manually:" in line]
     assert len(hint) == 1 and hint[0].endswith(expected), output
     assert ("/push" in output) == (case != "1"), output
+
+
+def test_a_detached_process_that_leaves_its_directory_is_still_waited_for(tmp_path):
+    """The wait does not rest on where a leftover process works: a detached one that changes its directory first
+    is waited for, and with none left it returns at once."""
+    marker = tmp_path / "done"
+    wait_until_quiet(tmp_path)
+    inner = f"cd /; sleep 2; echo end > '{marker}'"
+    subprocess.run(["bash", "-c", 'setsid nohup bash -c "$1" </dev/null >/dev/null 2>&1 &', "bash", inner],
+                   check=True)
+    wait_until_quiet(tmp_path)
+    assert marker.exists(), "the wait returned while a detached process that left its directory still ran"

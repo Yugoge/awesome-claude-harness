@@ -215,6 +215,7 @@ def env(tmp_path, monkeypatch):
     for name in ("disposition", "gap_line"):
         monkeypatch.setattr(resolver, name, getattr(fake, name), raising=False)
     monkeypatch.setitem(gate._SCRIPTS, "scripts/resolve-dev-artifact-chain.py", resolver)
+    monkeypatch.setattr(gate, "disposition", gate._disposition)  # the fake answers by test, no file says so
     monkeypatch.setattr(chain_obligation, "declaring_dispatch", lambda task, path, root, roots=None: None)
     ns = types.SimpleNamespace(project=project, state=state, fake=fake, tmp=tmp_path,
                                tx=TX(tmp_path / f"{SID}.jsonl"))
@@ -610,10 +611,15 @@ def test_a4_a_do_whose_minted_line_cli_2_1_322_records_as_hook_success_can_end(e
 
 def test_a4_the_gate_creates_and_deletes_no_file(env):
     do_span(env)
-    before = sorted(p for p in env.tmp.rglob("*"))
+
+    def files():  # the gate keeps one thing, the index of what it read of the conversation (lib/transcript_index,
+        # its one writer, an entry in the inventory of control state); that folder is no file of the gate's own
+        return sorted(p for p in env.tmp.rglob("*") if "transcript-index" not in p.parts)
+
+    before = files()
     for mode in ("block", "advisory"):
         run(env, mode)
-    assert sorted(p for p in env.tmp.rglob("*")) == before
+    assert files() == before
 
 
 # R8: the do branch's write-set helper and Span.write_set, on the real readers
@@ -686,7 +692,7 @@ def test_r8_every_do_span_of_the_task_counts(env):
 
 
 def test_r8_a_versioned_report_failing_its_schema_is_a_gap(env):
-    """The do-report gate's schema case (stop-do-report-gate.py, a stub after P5), now the do branch's."""
+    """The do-report gate's schema case (stop-do-report-gate.py, retired with its file), now the do branch's."""
     do_span(env)
     path = do_report(env)
     record = json.loads(path.read_text())
@@ -1585,7 +1591,7 @@ def test_a8_close_needs_the_rating_question_asked_where_required(env, monkeypatc
 @pytest.mark.parametrize("command", ["close", "commit"])
 def test_a8_auto_targets_come_from_the_lifecycle_function_never_a_tool_result(env, monkeypatch, command):
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
-    lifecycle = types.SimpleNamespace(calls=[])
+    lifecycle = types.SimpleNamespace(calls=[], read_frozen=lambda *_: None)  # no list fixed at the command
     lifecycle.auto_targets = lambda root, action, cutoff: lifecycle.calls.append((action, cutoff)) or [FAMILY]
     monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
     env.tx.command(command, "--auto")
@@ -1617,7 +1623,7 @@ def test_a_parent_a_hook_refused_and_reported_is_no_longer_owed(env, monkeypatch
     the refusal not reported, another failure code, a line naming another task; a later landing dispatch of the
     task whose block lands it replaces the refusal."""
     if auto:
-        lifecycle = types.SimpleNamespace(auto_targets=lambda root, action, cutoff: [FAMILY, OTHER])
+        lifecycle = types.SimpleNamespace(read_frozen=lambda *_: None, auto_targets=lambda root, action, cutoff: [FAMILY, OTHER])
         monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
     env.tx.command("commit", "--auto" if auto else FAMILY)
     task_file(env)
@@ -1666,8 +1672,12 @@ def at_step(env, label="Step 10"):
     return steps, k
 
 
+PLAIN = (" - refused by pretool-aggregate-check.py: a fan-out's aggregate report must be complete before its final "
+         "verification. Next: the agent re-dispatches the lane's dev, which rewrites the aggregate; this step stays open.")
+
+
 @pytest.mark.parametrize("case", ["released", "no-line", "line-names-another-step", "another-role", "ran-later",
-                                  "not-a-hook", "before-the-step", "said-since"])
+                                  "not-a-hook", "before-the-step", "said-since", "bare-line", "no-next"])
 def test_a_dev_step_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(env, case):
     """The live 2026-11-19 shape (session 9dddc7ae, /dev Step 10): every dev dispatch refused by a hook, no question
     allowed. The turn ends on a REFUSED: line naming the pending step, when the transcript records a hook's refusal of
@@ -1680,8 +1690,10 @@ def test_a_dev_step_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(e
         env.tx.dispatch(FAMILY, role="dev")
     if case != "no-line":
         label = "Step 11" if case == "line-names-another-step" else "Step 10"
-        env.tx.say(f"REFUSED: {label}: Delegate to dev subagent: the dev dispatch (Agent dev) was refused by "
-                   "pretool-launch.py:\nOBLIGATION GATE ORDER (pretool-obligation-gate, R17)")
+        # the bare form the owner was shown on 2026-11-22 (what was refused, by which rule, what next: none said) holds
+        tail = {"bare-line": "", "no-next": PLAIN.split(" Next:")[0]}.get(case, PLAIN)
+        env.tx.say(f"REFUSED: {label}: Delegate to dev subagent (Agent dev){tail}\n"
+                   "OBLIGATION GATE ORDER (pretool-obligation-gate, R17)")
     if case == "said-since":
         env.tx.say("Still working.")
     code, text = run(env)
@@ -1761,9 +1773,10 @@ def test_a_session_on_the_old_text_is_told_the_exit_line_and_can_end_on_it(env):
     refused_dispatch(env)
     env.tx.say("Every dev dispatch is refused.")
     code, text = run(env)
-    line = f"REFUSED: {steps[k]['content']}"
+    line = (f"REFUSED: {steps[k]['content']} - refused by <the hook>: <the rule it applies, in plain words>. "
+            "Next: <who must do what, and what then happens>")
     assert code == 2 and f'write the line "{line}", then the hook\'s own output; the step stays open' in text, text
-    env.tx.say(line + "\nOBLIGATION GATE ORDER (pretool-obligation-gate, R17)")
+    env.tx.say(f"REFUSED: {steps[k]['content']}{PLAIN}\nOBLIGATION GATE ORDER (pretool-obligation-gate, R17)")
     assert run(env) == (0, "")
     assert command_span.active_span(env.tx.path).last_todos()[k]["status"] == "in_progress"  # still open
 
@@ -1786,8 +1799,9 @@ def test_the_exit_line_the_block_prints_is_the_one_the_gate_accepts_for_every_st
     steps = [t["content"] for t in tc.run_todo_script(command, "fix the build") or ()]
     assert steps, command
     for content in steps:
-        found = gate.STEP_REFUSED_LINE.search(f"REFUSED: {content}")
+        found = gate.STEP_REFUSED_LINE.search(f"REFUSED: {content}{PLAIN}")
         assert found and found.group(1) == content.split(":", 1)[0], content
+        assert not gate.STEP_REFUSED_LINE.search(f"REFUSED: {content}"), content  # says no rule and no next step
 
 
 # ---------------------------------------------------------------- /close: the environment and --auto's refused parent
@@ -1878,7 +1892,7 @@ def test_close_auto_ends_when_each_parent_it_could_not_close_is_refused_and_name
     auto = case != "plain-close"
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
     monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py",
-                        types.SimpleNamespace(auto_targets=lambda root, action, cutoff: [FAMILY, OTHER]))
+                        types.SimpleNamespace(read_frozen=lambda *_: None, auto_targets=lambda root, action, cutoff: [FAMILY, OTHER]))
     task_file(env)
     env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
     args = "--auto" if auto else FAMILY
@@ -1920,8 +1934,9 @@ def test_a_plain_close_step_whose_own_dispatch_a_hook_refused_ends_on_its_refuse
     if case == "ran-later":
         env.tx.dispatch(FAMILY, role="qa", pipeline="close")
     code, text = run(env)
-    assert code == 2 and (f'"REFUSED: {steps[k]["content"]}"' in text) is (case == "released"), (case, text)
-    env.tx.say(f"REFUSED: {steps[k]['content']}: the close QA dispatch was refused\nOBLIGATION GATE ORDER")
+    assert code == 2 and (f'"REFUSED: {steps[k]["content"]} - refused by <the hook>' in text) is (
+        case == "released"), (case, text)
+    env.tx.say(f"REFUSED: {steps[k]['content']}{PLAIN}\nOBLIGATION GATE ORDER")
     assert (run(env) == (0, "")) is (case == "released"), case
     assert command_span.active_span(env.tx.path).last_todos()[k]["status"] == "in_progress"
 
@@ -2193,7 +2208,7 @@ def test_p5_4_a_typed_commit_task_naming_a_task_stays_the_target(env, args, held
 def test_p5_4_commit_modes_keep_their_verdicts_beside_a_mistyped_id(env, monkeypatch, mode):
     """--dry-run asks nothing of the chain; --auto takes dev-lifecycle's target function's parents,
     never a typed word; --bulk reads its status block: a mistyped id typed beside them changes none."""
-    lifecycle = types.SimpleNamespace(auto_targets=lambda root, action, cutoff: [FAMILY])
+    lifecycle = types.SimpleNamespace(read_frozen=lambda *_: None, auto_targets=lambda root, action, cutoff: [FAMILY])
     monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
     env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
     env.fake.answers[(TYPO, "commit")] = trailer_gap(TYPO)
@@ -3712,3 +3727,45 @@ def test_review_rejected_other_gaps_of_the_cycle_still_hold(env):
                                                  "expected 'yes'")]
     code, text = run(env)
     assert code == 2 and "review rejected this landing" in text and "INVALID_CLOSE_VERDICT" in text, text
+
+
+STALE_TID = "20260101-120000"
+
+
+def _stale_shard(lane: str, status: str = "completed") -> dict:
+    return {"task_id": f"{STALE_TID}-{lane}", "baseline_head_sha": "abc123def456", "baseline_dirty_snapshot": "",
+            "lane": lane, "lane_set": ["l1", "l2"],
+            "dev": {"status": status, "tasks_completed": [], "scripts_created": [], "permissions_to_add": [],
+                    "files_modified": [f"src/{lane}.py"], "files_created": [], "observed_preexisting": []},
+            "blocking_issues": [], "recommendations": []}
+
+
+@pytest.mark.parametrize("case", ["refused", "cut off"])
+def test_a_stale_canonical_says_whether_the_aggregator_refused_its_lanes_or_its_rebuild_did_not_finish(
+        tmp_path, monkeypatch, case):
+    """A canonical left older than a lane report: the gap says which of the two happened. The aggregator ran on
+    the lane reports to its end and refused them (a lane's dev.status not completed), or the rebuild was cut off
+    (rebuild_if_stale's own timeout); never "did not finish" for a refusal."""
+    import functools
+    dev = tmp_path / "docs" / "dev"
+    dev.mkdir(parents=True)
+    for lane in ("l1", "l2"):
+        (dev / f"dev-report-{STALE_TID}-{lane}.json").write_text(json.dumps(_stale_shard(lane)))
+    agg = gate._script("scripts/aggregate-dev-report.py")
+    assert agg.rebuild_if_stale(tmp_path, STALE_TID) == []  # the canonical, current
+    lane = dev / f"dev-report-{STALE_TID}-l1.json"
+    lane.write_text(json.dumps(_stale_shard("l1", "blocked" if case == "refused" else "completed")))
+    stamp = (dev / f"dev-report-{STALE_TID}.json").stat().st_mtime_ns + 10**9
+    os.utime(lane, ns=(stamp, stamp))
+    if case == "cut off":
+        monkeypatch.setattr(agg, "rebuild_if_stale", functools.partial(agg.rebuild_if_stale, timeout=0.001))
+    monkeypatch.setattr(gate._script("scripts/resolve-dev-artifact-chain.py"), "disposition_lines",
+                        lambda root, task, stage: [])
+    lines = gate._disposition(tmp_path, STALE_TID, "dev")
+    assert len(lines) == 1 and "problem=stale_canonical" in lines[0], lines
+    assert f"lane report(s) dev-report-{STALE_TID}-l1.json;" in lines[0]
+    if case == "refused":
+        assert "the aggregator ran on them and refused them" in lines[0] and "did not finish" not in lines[0]
+        assert f"aggregate-dev-report.py --task-id {STALE_TID} --dry-run" in lines[0]
+    else:
+        assert "its rebuild did not finish" in lines[0] and "refused" not in lines[0]

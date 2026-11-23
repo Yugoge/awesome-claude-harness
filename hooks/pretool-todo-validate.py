@@ -284,13 +284,36 @@ def _call_type(call):
     return str(call.input.get('subagent_type') or '').strip().lower()
 
 
+def _required_calls(step):
+    """The calls a canonical step requires: its subagent_call's entries but those marked optional (a list
+    states every call of a step, as /dev's requirement round does: scripts/todo/dev.py ROUND_CALLS)."""
+    call = step.get('subagent_call') if isinstance(step, dict) else None
+    return [e for e in (call if isinstance(call, list) else [call])
+            if isinstance(e, dict) and e.get('subagent_type') and not e.get('optional')]
+
+
+def _call_mode(call):
+    """The ``Mode: <word>`` line of a dispatch prompt, lower-cased ('' when it has none)."""
+    found = re.search(r'^\s*Mode:\s*(\S+)', str(call.input.get('prompt') or ''), re.M | re.I)
+    return found.group(1).lower() if found else ''
+
+
 def _dispatched(state, content, step, calls):
-    """Gate 4's fact: an ok Agent call of the step's subagent type, or one
-    /restart resumed (``calls``: _returned_calls of the session), came back
-    after the TodoWrite that set the step in_progress. Offsets of results
-    order them, as the record does."""
-    start, types = _started_at(state, content), _subagent_types(step)
-    return start is not None and any(at is not None and at > start and _call_type(c) in types for at, c in calls)
+    """Gate 4's fact: for each call the step requires, its own ok Agent call (or one /restart resumed:
+    ``calls``, _returned_calls of the session) of that subagent type, and of that prompt mode when the
+    entry names one, came back after the TodoWrite that set the step in_progress; no call counts for two
+    entries. Offsets of results order them, as the record does."""
+    start = _started_at(state, content)
+    if start is None:
+        return False
+    left = [c for at, c in calls if at is not None and at > start]
+    for entry in _required_calls(step):
+        kind, mode = str(entry['subagent_type']).strip().lower(), str(entry.get('prompt_mode') or '').lower()
+        match = next((c for c in left if _call_type(c) == kind and (not mode or _call_mode(c) == mode)), None)
+        if match is None:
+            return False
+        left.remove(match)
+    return True
 
 
 def _strip_frontmatter(text):
@@ -380,10 +403,10 @@ def _find_completing_subagent_step(state, last, new_todos, sid):
 
 
 def _format_subagent_names(subagent_call):
-    """Format subagent type names from subagent_call metadata."""
-    if isinstance(subagent_call, list):
-        return ', '.join(s.get('subagent_type', '?') for s in subagent_call)
-    return subagent_call.get('subagent_type', '?')
+    """Format the required calls' subagent types (with their prompt mode) from subagent_call metadata."""
+    entries = _required_calls({'subagent_call': subagent_call})
+    return ', '.join(e['subagent_type'] + (f' with "Mode: {e["prompt_mode"]}"' if e.get('prompt_mode') else '')
+                     for e in entries) or '?'
 
 
 def _unreturned(state, types):
@@ -403,7 +426,7 @@ def check_subagent_completion_guard(state, last, new_todos, cmd, sid):
     idx, step_todo, step, flight = _find_completing_subagent_step(state, last, new_todos, sid)
     if step is not None:
         agents = _format_subagent_names(step.get('subagent_call'))
-        cut = _unreturned(state, _subagent_types(step))
+        cut = _unreturned(state, {str(e['subagent_type']).strip().lower() for e in _required_calls(step)})
         why = (f'Its {agents} call has not come back ({"; ".join(cut)}). A subagent cut by an '
                'interrupted session or a usage limit is resumed and finalized by the owner\'s /restart '
                '(commands/restart.md), never replaced by a new call.\n\n' if cut else

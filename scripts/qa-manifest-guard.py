@@ -269,7 +269,6 @@ def _collect_one_file(collect_cmd_argv: List[str], path: str) -> Tuple[bool, str
 
 def _run_cycle_diff_mode(cycle_diff_files: str, collect_only_cmd: str) -> int:
     """Cycle-diff mode: count pytest-collectable files in the cycle diff."""
-    # Split paths; empty string -> empty list.
     paths = [p.strip() for p in cycle_diff_files.split(",") if p.strip()]
 
     # Tokenize and validate the collect-only command BEFORE any vacuous-acknowledged early

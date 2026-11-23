@@ -1206,3 +1206,33 @@ def test_zz_ordinary_benign_command_is_permitted(cmd, state_root):
     rc, err = run_hook(cmd, state_root)
     assert rc == ALLOW, f"benign command refused: {cmd}\nrc={rc}\n{err}"
     assert refusal_labels(err) == set()
+
+
+# location-rules U9, U10: a grant, attestation or user-intent file is refused for what it is, wherever the command's
+# spelling puts it: a `cd` into the state directory, a link to it, or $TMPDIR when the state directory lies below it.
+def _run_at(command, state, cwd, tmpdir):
+    env = {k: v for k, v in os.environ.items() if k not in ("TMPDIR", "TMP", "TEMP", "TEMPDIR", "CLAUDE_TMPDIR")}
+    env.update(CLAUDE_STATE_DIR=state, TMPDIR=tmpdir)
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd})
+    return subprocess.run(["bash", HOOK], input=payload, env=env, text=True, capture_output=True).returncode
+
+
+def test_namespace_write_one_verdict_at_every_spelling(tmp_path):
+    tmpdir = tmp_path / "t"
+    (tmpdir / "st").mkdir(parents=True)
+    state = harness_state_dir(str(tmpdir / "st"))
+    os.makedirs(state, exist_ok=True)
+    link = tmp_path / "sl"
+    link.symlink_to(state)
+    rel = os.path.relpath(state, tmpdir)
+    work = tmp_path / "w"
+    work.mkdir()
+    passed = [command for name in (GRANT_PREFIX + "x.json", ATTEST_PREFIX + "x.json", "claude-commit-userintent-x.flag")
+              for command in (f"touch {state}/{name}", f"cd {state} && touch {name}", f"touch {link}/{name}",
+                              f'touch "$TMPDIR/{rel}/{name}"',
+                              f"echo x > {state}/../{os.path.basename(state)}/{name}")
+              if _run_at(command, state, str(work), str(tmpdir)) != BLOCK]
+    assert passed == [], passed
+    for command in (f"touch {work}/{GRANT_PREFIX}x.json", f"cd {state} && cat {GRANT_PREFIX}x.json",
+                    f'touch "$TMPDIR/{GRANT_PREFIX}x.json"'):
+        assert _run_at(command, state, str(work), str(tmpdir)) == ALLOW, command

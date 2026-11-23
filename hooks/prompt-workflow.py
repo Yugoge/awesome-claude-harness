@@ -58,22 +58,20 @@ try:
     import claude_home  # noqa: E402
 except Exception:  # pragma: no cover - fail-soft if lib missing
     claude_home = None  # type: ignore[assignment]
+import locations  # noqa: E402 -- the one answer for "the filesystem root is no project"
 from harness_state_dir import harness_state_dir  # noqa: E402
 from allowlist import state_entry_failure, write_state_entry  # noqa: E402
 
 
 def _try_git_toplevel() -> Path | None:
-    """Tier 4: git rev-parse --show-toplevel; None on failure."""
-    try:
-        result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True, timeout=2, check=False,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return Path(result.stdout.strip())
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        pass
-    return None
+    """Tier 4: the repository top (locations.repo_top, never the filesystem root); None on failure."""
+    top = locations.repo_top(os.getcwd())
+    return Path(top) if top else None
+
+
+def _root_project(path: Path) -> bool:
+    """Whether a write to ``path`` is refused: the project is the filesystem root (locations.refuses_root)."""
+    return locations.refuses_root(path, PROJECT_DIR, 'prompt-workflow')
 
 
 def resolve_project_dir(stdin_payload: dict | None = None) -> Path:
@@ -156,6 +154,8 @@ def _fsync_directory(directory: Path) -> None:
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     """Publish complete bytes at ``path`` without exposing a partial file."""
+    if _root_project(path):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(
         f'.{path.name}.tmp-{os.getpid()}-{hashlib.sha256(payload).hexdigest()[:16]}'
@@ -185,6 +185,9 @@ def _atomic_write_json(path: Path, value: object) -> None:
 @contextlib.contextmanager
 def _exclusive_lock(path: Path):
     """Serialize one Claude session only; independent sessions remain parallel."""
+    if _root_project(path):
+        yield
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -536,9 +539,11 @@ def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', 
     cmd += ['--session-id', session_id]
     cmd += ['--project-dir', str(PROJECT_DIR)]
     try:
-        # M5/AC4: raise the timeout from 10s to >=60s — worktree creation +
-        # validation + launch self-test legitimately take longer than 10s.
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        # No limit of its own: worktree creation, validation and the launch self-test
+        # take 4-6 CPU s of git; the launcher's rule timeout (60 s, userprompt-launch.py)
+        # bounds the whole hook, and a second 60 s here ended later than it, so it only
+        # failed a slow direct run.
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(result.stderr, file=sys.stderr)
             return False
@@ -1169,9 +1174,10 @@ def wake_recovery(user_input: str) -> str:
     return '\n'.join([
         "OVERNIGHT WAKE: this /dev-overnight session's scheduled wake fired inside its span, and the",
         f'/restart capability is issued for it. Read {path} now and run its Mandatory procedure',
-        '(prepare; one SendMessage with its exact resume_message per pending candidate; status;',
-        'finalize). With 0 candidates nothing was cut: finalize. Then carry on with the /dev-overnight',
-        'checklist step in progress; never stop, ask or wait.',
+        '(prepare; one SendMessage with its exact resume_message per pending candidate; then read the',
+        'outcome line: the harness finalizes the recovery itself). With 0 candidates nothing was cut and',
+        'nothing is run. Then carry on with the /dev-overnight checklist step in progress; never stop,',
+        'ask or wait.',
     ])
 
 
@@ -1380,6 +1386,8 @@ def _reserve_dev_registry(cmd_name: str, project_dir: Path) -> tuple[str, Path]:
     prefix = 'dev-command' if cmd_name == 'dev-command' else 'dev'
     base = _dev_clock().replace(microsecond=0)
     parent = registry_dir_for(project_dir, f"{prefix}-{base.strftime('%Y%m%d-%H%M%S')}").parent
+    if _root_project(parent):
+        raise RuntimeError('the filesystem root is no project: no registry is reserved')
     parent.mkdir(parents=True, exist_ok=True)
     for offset in range(86400):
         task_id = f"{prefix}-{(base + timedelta(seconds=offset)).strftime('%Y%m%d-%H%M%S')}"
@@ -1398,6 +1406,8 @@ def _reserve_dev_registry(cmd_name: str, project_dir: Path) -> tuple[str, Path]:
 
 def _write_new_file(path: Path, payload: bytes) -> None:
     """Create an immutable task-scoped artifact; never replace prior bytes."""
+    if _root_project(path):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -1471,6 +1481,8 @@ def _write_enforce_flags(argv: list) -> int:
     registry_dir = registry_dir_named(project_dir, session_id)
     if registry_dir is None:
         return fail(f'no registry directory for --session-id {session_id}')
+    if locations.refuses_root(registry_dir, project_dir, 'prompt-workflow'):
+        return fail('the filesystem root is no project')
     try:
         registry_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1730,8 +1742,9 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
             return json.dumps(data, ensure_ascii=False, sort_keys=True)
 
         bookmark = workflow_bookmark_path(sid)
-        bookmark.parent.mkdir(parents=True, exist_ok=True)
-        write_bookmark(bookmark, _started, encoding='utf-8')
+        if not _root_project(bookmark):
+            bookmark.parent.mkdir(parents=True, exist_ok=True)
+            write_bookmark(bookmark, _started, encoding='utf-8')
 
         codex_active = '--codex' in user_input.split()
         output = ''.join([
@@ -1915,6 +1928,8 @@ def start_roots(data: dict) -> str:
 def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
     """Write the workflow bookmark file."""
     bm = workflow_bookmark_path(sid)
+    if _root_project(bm):
+        return
     try:
         from lib.todo_canonical import write_bookmark
         bm.parent.mkdir(parents=True, exist_ok=True)
@@ -2090,6 +2105,8 @@ def cli(argv: list) -> int:
         if registry_dir is None or registry_dir.is_symlink():
             print(f'arm-registry: refusing to write the registry {registry_dir or repr(args.name)}',
                   file=sys.stderr)
+            return 1
+        if locations.refuses_root(registry_dir, project_dir, 'prompt-workflow'):
             return 1
         registry_dir.mkdir(parents=True, exist_ok=True)
         # A relaunch in the same session arms the same registry again: the

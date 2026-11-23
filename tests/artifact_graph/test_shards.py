@@ -271,3 +271,25 @@ def test_a_loaded_job_is_rebased_onto_the_directory_it_is_read_from(tmp_path):
     j = RT.load_job(str(here), str(tmp_path / "merge" / "sb" / "do" / "shipped"))
     assert (j.out, j.log, j.run_dir) == (str(here), str(here / "replay.log"), str(here / "run1-traced"))
     assert j.rc == 0 and j.extra["e1_mode"] == "fallback"
+
+
+def test_a_differential_that_ended_before_writing_its_results_keeps_its_error_to_the_merge(tmp_path, monkeypatch):
+    """The differential's end without results (a hook cut by its time limit ends it) is an error of the job:
+    it survives save and load, and the check over the set reports it, so its shard ends 1 and the final job's
+    test that every driver replayed fails. Nothing measured is never a pass."""
+    from tests.replay import differential as D
+    msg = "the differential exited 1 before writing its results"
+    monkeypatch.setattr(D, "execute", lambda *a, **k: {"units": [], "error": msg})
+    tree = tiny_tree(tmp_path)
+    one = tmp_path / "one"
+    for d in ONLY:
+        for s in RT.SETTINGS:
+            write_run(one / "runs" / d / s, d, s, one / "sb" / d / s)
+    out = one / "runs" / ONLY[0] / RT.SETTINGS[0]
+    job = RT.load_job(str(out), str(one / "sb" / ONLY[0] / RT.SETTINGS[0]))
+    RT.differential(job, [], {}, 1)
+    assert job.error == msg
+    RT.save_job(job)
+    assert RT.load_job(str(out)).error == msg
+    res = C.run_check(str(tree), str(one), budget_s=100.0, replays=False, differential=False, only=ONLY, log=str)
+    assert msg in res["errors"]

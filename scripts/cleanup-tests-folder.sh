@@ -5,7 +5,6 @@
 
 set -euo pipefail
 
-# Parse parameters
 PROJECT_ROOT=""
 EDGE_CASE_ANALYSIS=""
 
@@ -27,7 +26,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Validate required parameters
 if [[ -z "$PROJECT_ROOT" ]]; then
   echo "Error: --project-root is required" >&2
   exit 1
@@ -48,7 +46,6 @@ if [[ ! -f "$EDGE_CASE_ANALYSIS" ]]; then
   exit 1
 fi
 
-# Check if tests/ folder exists
 TESTS_DIR="$PROJECT_ROOT/tests"
 if [[ ! -d "$TESTS_DIR" ]]; then
   echo "No tests/ folder found at $TESTS_DIR - nothing to clean" >&2
@@ -68,15 +65,12 @@ fi
 echo "Valid edge cases from git history:" >&2
 echo "$VALID_EDGE_CASES" >&2
 
-# Track cleanup statistics
 REMOVED_COUNT=0
 PRESERVED_COUNT=0
 
-# Check scripts/ folder
 if [[ -d "$TESTS_DIR/scripts" ]]; then
   echo "Scanning tests/scripts/ for validators..." >&2
 
-  # Find all validator scripts
   for validator in "$TESTS_DIR/scripts"/validate-*.py "$TESTS_DIR/scripts"/validate-*.sh; do
     if [[ ! -e "$validator" ]]; then
       continue
@@ -104,7 +98,6 @@ if [[ -d "$TESTS_DIR/scripts" ]]; then
   done
 fi
 
-# Check instructions/ folder
 if [[ -d "$TESTS_DIR/instructions" ]]; then
   echo "Scanning tests/instructions/ for validator instructions..." >&2
 
@@ -114,7 +107,6 @@ if [[ -d "$TESTS_DIR/instructions" ]]; then
       continue
     fi
 
-    # Skip guide files
     if [[ "$(basename "$instruction")" == *"guide.md" ]]; then
       continue
     fi

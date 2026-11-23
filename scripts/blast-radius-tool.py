@@ -26,7 +26,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable
 
 # ---------------------------------------------------------------------------
 # Scope filtering -- spec §5.3 mandates excluding venv/, worktrees/, .archive,
@@ -431,7 +430,6 @@ def main(argv: list[str]) -> int:
     root = Path(args.root).resolve()
     phase = "2-verification" if args.git_diff else "1-prediction"
 
-    # Collect target files
     if args.git_diff:
         target_files = git_diff_files(args.base)
     else:

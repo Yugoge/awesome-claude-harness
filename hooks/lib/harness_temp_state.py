@@ -129,6 +129,9 @@ LOCATIONS: Tuple[Location, ...] = (
     Location("report-provenance", CONTROL, (_p("report-provenance"),), tree=True, hooks_only=True),
     Location("lane-ledger", CONTROL, (_p("lane-ledger"),), tree=True, hooks_only=True),
     Location("returns-hold", CONTROL, (_p("returns-hold"),), tree=True, hooks_only=True),
+    Location("auto-targets", CONTROL, (_p("auto-targets"),), tree=True, hooks_only=True),
+    Location("stop-disposition", CONTROL, (_p("stop-disposition"),), tree=True, hooks_only=True),
+    Location("transcript-index", CONTROL, (_p("transcript-index"),), tree=True, hooks_only=True),
     Location("capability-state", CONTROL, (_p("claude-capability-*"),), tree=True,
              tree_vars=("CLAUDE_CAPABILITY_STATE_DIR",)),
     Location("git-blessed-grants", CONTROL, (_p("claude-git-blessed"),), tree=True,
@@ -136,7 +139,8 @@ LOCATIONS: Tuple[Location, ...] = (
     Location("daemon-restart-grant", CONTROL, (_p("claude-allow-daemon-restart-*.flag"),)),
     Location("scratch-owner", CONTROL,
              (_p("*", ".owner"), _p("*", ".owner.*.tmp"),
-              _p("claude-scratch", "*", ".owner"), _p("claude-scratch", "*", ".owner.*.tmp"))),
+              _p("claude-scratch", "*", ".owner"), _p("claude-scratch", "*", ".owner.*.tmp")),
+             hooks_only=True),  # hooks/session-scratch-init.sh alone writes it: it dates a session's start
     # The dispatch temp's state (hooks/lib/dispatch_temp.py POINTER and its write's temp file).
     Location("dispatch-temp-state", CONTROL,
              (_p("*", ".dispatch-tmp"), _p("*", ".dispatch-tmp.*"),

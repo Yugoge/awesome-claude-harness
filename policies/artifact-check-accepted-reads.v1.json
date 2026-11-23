@@ -1,6 +1,6 @@
 {
  "schema": "artifact-check-accepted-reads.v1",
- "about": "Positions at which the artifact check's rule (6) would report a deciding read of an artifact, accepted for the reason each entry states (tests/artifact_graph/register.py): an entry covers every 6-move and 6-recheck line on its artifact whose decisions were all taken at its event and tool, and several entries on one artifact cover together a line whose decisions were taken at their positions, one entry per position. Only rule (6) can be covered; an entry that covers no current violation fails the check (register-stale).",
+ "about": "Positions at which the artifact check's rule (6) would report a deciding read of an artifact, accepted for the reason each entry states (tests/artifact_graph/register.py): an entry covers every 6-move and 6-recheck line on its artifact whose decisions were all taken at its event and tool, and several entries on one artifact cover together a line whose decisions were taken at their positions, one entry per position. At an event whose call carries no tool (Stop, UserPromptSubmit) the tool is \"\", and only there. Only rule (6) can be covered; an entry that covers no current violation fails the check (register-stale).",
  "entries": [
   {
    "artifact": "<proj>/docs/dev/requirement-round-<ts>-r1.json",
@@ -13,6 +13,60 @@
    "event": "PreToolUse",
    "tool": "AskUserQuestion",
    "reason": "The owner's question rule (requirement_round.question_refusal, at the main agent's AskUserQuestion) compares the ask with round 1's BA panel file, which the round relays when no round file exists: the file is the reference the question is checked against, so that only its questions, verbatim, reach the owner. It is not the panel's artifact validated a second time."
+  },
+  {
+   "artifact": "<state>/agentic-commit/merge-analyst/<hex>/<sid>/<rand>.json",
+   "event": "PreToolUse",
+   "tool": "Bash",
+   "reason": "The merge-analyst's grant is checked on its producer's own Write (merge_grant.fault, from posttool-allowlist-consume.py) and read again at /merge Step 5's merge.sh call through the same library (merge_grant.approval: fault() again, then the verdict): the grant expires 60 s after it is written and binds both branch tips, which only the moment of the merge can show still hold, and merge.sh runs git merge in a process no hook sees. The producer-side read takes the grant's path from the Write's file_path, which the check cannot resolve, so the rule both share is not seen."
+  },
+  {
+   "artifact": "<state>/agentic-commit/merge-analyst/<hex>/<sid>/<rand>.json",
+   "event": "Stop",
+   "tool": "",
+   "reason": "/merge's completion read (stop-command-gate.py p_merge, through merge_grant.newest: _newest_path and load) takes the merge's source, its tip and the verdict from this session's newest grant to judge whether the merge the owner typed is done or stands refused; it does not run fault() again (the producer's Write did, and removed a faulty grant). The grant is the record of what was approved, and the main agent's stop is where /merge is judged complete."
+  },
+  {
+   "artifact": "<state>/transcript-index/<hex>.json",
+   "event": "SubagentStop",
+   "tool": "*",
+   "reason": "The record is a cache of what a saved conversation said, kept so that a later read takes only what was added (hooks/lib/transcript_index.py, the one writer and reader). It holds no verdict: it is valid only while the conversation file is its continuation, checked against the bytes (offset, head and tail digests), and anything else is a whole read of the conversation, so a reader that decides through it decides on the conversation's own content, as it would without the record. The producer-side hooks (G1, the producer's tool call) read the same conversation through the same module; this reader judges a subagent's own stop (its dispatch obligation, the codex and artifact-contract rules of the producer gate) from the conversation as it stands at that stop, which no earlier call can have seen."
+  },
+  {
+   "artifact": "<state>/transcript-index/<hex>.json",
+   "event": "UserPromptSubmit",
+   "tool": "",
+   "reason": "The record is a cache of what a saved conversation said, kept so that a later read takes only what was added (hooks/lib/transcript_index.py, the one writer and reader). It holds no verdict: it is valid only while the conversation file is its continuation, checked against the bytes (offset, head and tail digests), and anything else is a whole read of the conversation, so a reader that decides through it decides on the conversation's own content, as it would without the record. The producer-side hooks (G1, the producer's tool call) read the same conversation through the same module; this reader judges the owner's typed restart command against the conversation as it stands when the prompt arrives, which no earlier call can have seen."
+  },
+  {
+   "artifact": "<harness>/projects/<slug>/<sid>/subagents/agent-<agent>.meta.json",
+   "event": "PreToolUse",
+   "tool": "Edit",
+   "reason": "A subagent's own Edit is judged by who that subagent is and by the call that dispatched it, which only the CLI's record about it names (subagent_restart.read_meta, the one reader; obligation._read_meta_tool_use_id). pretool-tool-policy.py's _own_from_tail takes the record's toolUseId to find the dispatch whose declared paths cover the file the Edit writes (without it the Edit is held to every other dispatch's declarations), _clean_dispatch binds a /clean cleaner's edit to its approved dispatch, and pretool-claude-config-guard.py's _dev_command_product_file takes it to tell /dev-command's own dev from any other writer of a command file. The record is the child's, written when the CLI starts it after the parent's Agent call (G1) has passed, so G1's read of it (its own children, for SendMessage) cannot answer for this call: it is read again at the call it identifies."
+  },
+  {
+   "artifact": "<harness>/projects/<slug>/<sid>/subagents/agent-<agent>.meta.json",
+   "event": "PreToolUse",
+   "tool": "Write",
+   "reason": "A subagent's own Write is judged by who that subagent is and by the call that dispatched it, which only the CLI's record about it names (subagent_restart.read_meta, the one reader). pretool-tool-policy.py's _grant_producer takes the record's toolUseId to find the dispatch of the push-analyst and holds the Write of its grant to that dispatch (role of the grant's folder, command template binding the grant's repository, session and request id): without the read the grant path, a protected path, refuses the analyst's own Write of its grant, and with no record that names a dispatch it stays refused. The Write also goes through _own_from_tail, as an Edit does. The record is written when the CLI starts the child, after the parent's Agent call (G1) has passed, so G1's read of it cannot answer for this call."
+  },
+  {
+   "artifact": "<harness>/projects/<slug>/<sid>/subagents/agent-<agent>.meta.json",
+   "event": "SubagentStop",
+   "tool": "qa",
+   "reason": "A QA's stop is judged by its own dispatch obligation (the producer gate's rules run at every subagent's stop): resolve_own_obligation reads the record's toolUseId (subagent_restart.read_meta, the one reader) and cross-checks it against the parent's Agent call whose prompt must equal the child's first prompt (obligation._cross_check_against_parent); a record that is missing or names another call or prompt leaves the stop with no obligation (meta_not_found, meta_tool_use_mismatch, prompt_mismatch) and the gates report it rather than take it for a pass. The record does not exist when G1 runs at the parent's dispatch, so the stop reads it at its own moment."
+  },
+  {
+   "artifact": "<harness>/projects/<slug>/<sid>/subagents/agent-<agent>.meta.json",
+   "event": "SubagentStop",
+   "tool": "spec",
+   "reason": "A spec agent's stop is judged as a QA's is (the producer gate's rules run at every subagent's stop): resolve_own_obligation reads the record's toolUseId (subagent_restart.read_meta, the one reader) and cross-checks it against the parent's Agent call (obligation._cross_check_against_parent), and the split check for a spec dispatched from the /spec template (_template_declared, through dispatch_template.dispatch_of) takes the same record's toolUseId to find the command span that holds the dispatch. The record does not exist when G1 runs at the parent's dispatch, so the stop reads it at its own moment."
+  },
+  {
+   "artifact": "<proj>/docs/dev/overnight/<sid>/retro-report-cycle1.json",
+   "event": "Stop",
+   "tool": "",
+   "reason": "The main agent's Stop after end_time judges the session's closeout (overnight.closeout_gaps, through the one cycle_complete the cycle counter also asks): whether the session delivered a PM retrospective at all. The session's record holds no cycle count and the conversation carries no marker the gate reads for it, so the report on disk, as it stands when the session ends, is the only fact the closeout can learn it from; the producer-side checks (G1, G3, the PM's own stop) ran when each report was written and cannot see the session's end, or a report that is gone by then. It is not the report's content validated a second time: the gate asks only whether a retrospective is there."
   }
  ]
 }

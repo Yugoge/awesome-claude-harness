@@ -294,11 +294,17 @@ def _regex(pattern: str) -> re.Pattern:
     value, as `session_id="$1"` given dev-<ts>) and <rand> (a temp-name generator's random part,
     which the runtime half writes <rand> inside its prefix and suffix) any text within a segment;
     <ts> a minted id that ends in a timestamp (dev-<ts>: rule (1) replaces only the timestamp);
-    other tokens themselves."""
+    other tokens themselves. One exception: a <*> that is a file's whole name before its extension
+    (`<dir>/<*>.json`: code that reads every such file of its directory) also matches a whole <rand>
+    name there (`<dir>/<rand>.json`): a file named by a minted id, as an agent's Write names the
+    merge-analyst grant by its request id; `tmp<rand>.json` or `<rand>-x.json` still does not."""
     out = []
     for m in re.finditer(r"<([a-z*]+)>|[^<]+|<", pattern):
         if m.group(1) is None:
             out.append(re.escape(m.group(0)))
+        elif m.group(1) == "*" and pattern[:m.start()].endswith("/") \
+                and re.fullmatch(r"\.[^/<]+", pattern[m.end():]):
+            out.append(r"(?:<rand>|(?:(?!<rand>).)*?)")   # a whole name, as an id names the file
         elif m.group(1) == "*":
             out.append(r"(?:(?!<rand>).)*?")      # no code names a temp-name generator's part
         elif m.group(1) in ("task", "sid", "lane"):

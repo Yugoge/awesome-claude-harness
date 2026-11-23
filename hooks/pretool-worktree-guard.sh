@@ -43,7 +43,8 @@ if [ -f "$CACHE_FILE" ]; then
 fi
 
 # Find git root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/claude_home.sh" 2>/dev/null || exit 0
+GIT_ROOT=$(claude_repo_top .) || exit 0  # the filesystem root is no repository: as for no repository
 MAIN_BRANCH=""
 
 # Detect main branch name

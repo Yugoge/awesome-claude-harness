@@ -4,7 +4,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 123
+- **Total files**: 121
 - **Subdirectories**: 5
 - **Naming convention**: kebab
 
@@ -30,7 +30,6 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `posttool-failure-launch.py` - PostToolUseFailure: record consumed Bash grants and attempted Codex Skill calls.
 - `posttool-git-checkpoint.sh` - posttool-git-checkpoint.sh - PostToolUse checkpoint trigger
 - `posttool-git-warn.sh` - posttool-git-warn.sh - PostToolUse (Bash): after a git commit, tell the model which files it left untracked.
-- `posttool-lane-completeness-watch.py` - It ran scripts/aggregate-dev-report.py after each write of a lane report that declares a fan-out,
 - `posttool-launch.py` - Every Python hook registered on PostToolUse runs here, each as `python3 <file>` would have run it
 - `posttool-orchestrator-ran.py` - hooks/pretool-orchestrator-gate.py counts a main-agent call at PreToolUse, before the other hooks'
 - `posttool-overnight-file-check.py` - PostToolUse:Agent Hook — Contract-driven overnight file check (G3)
@@ -100,9 +99,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `sessionstart-launch.py` - Every Python hook registered on SessionStart runs here, each as `python3 <file>` would have run it
 - `stop-cleanup-allowlist.sh` - Stop Hook: reap every /allow grant the reader rejects at turn end.
 - `stop-command-gate.py` - The Stop coordinator's completion phase runs it with its mode
-- `stop-do-report-gate.py` - It held a /do session's Stop until the do-report the consent sidecar named had
 - `stop-launch.py` - stderr. When the coordinator cannot decide (another exit, a timeout, a launch error, a missing
-- `stop-obligation-gate.py` - It re-validated, at the orchestrating session's Stop, the json artifacts its
 - `stop-spec-coverage-enforce.py` - It ran spec-verify.py on the views of the spec the /spec session last wrote, at
 - `stop-workflow-coordinator.py` - LANE-B (20260808-035658) M4/M7, P5 R9: run by hooks/stop-launch.py (directly by a session that
 - `stop.sh` - stop.sh - wrapper for /stop slash command
@@ -118,6 +115,7 @@ Retired hooks stay here as exit-0 stubs (marked by a `# STUB:` line); the landin
 - `subagentstop-lane-blockers.py` - A non-empty `blocking_issues` in a dev report holds the whole command at the
 - `subagentstop-producer-gate.py` - The rules run in this order, each as its own hook would run alone (its switch, its
 - `subagentstop-restart-track.py` - SubagentStop: persist response evidence for a /restart-resumed agent.
+- `userprompt-auto-targets.py` - commands/commit.md and close.md say the --auto snapshot is frozen for the batch; this rule makes ...
 - `userprompt-bulk-commit-capability.py` - human prompt, NOT from an LLM-emitted Bash command
 - `userprompt-consent-allowlist.sh` - UserPromptSubmit Hook: the owner's /allow grant, and its end at the owner's next prompt.
 - `userprompt-doc-sync-check.py` - UserPromptSubmit Hook: Periodic file deletion detection for doc-sync

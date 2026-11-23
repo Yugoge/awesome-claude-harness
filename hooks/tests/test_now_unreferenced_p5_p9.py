@@ -30,7 +30,7 @@ def _codex_bookmark(project: Path, sid: str) -> Path:
         [sys.executable, str(HOOKS.parent / "scripts" / "todo" / "dev.py")],
         capture_output=True, text=True, check=True, timeout=60).stdout)
     ba = next(i for i, step in enumerate(canonical)
-              if (step.get("subagent_call") or {}).get("subagent_type") == "ba")
+              if _required_role(step) == "ba")
     todos = [{"content": step["content"], "activeForm": step.get("activeForm", ""),
               "status": "completed" if i < ba else "in_progress" if i == ba else "pending"}
              for i, step in enumerate(canonical)]
@@ -50,7 +50,7 @@ def test_agent_return_leaves_a_codex_plan_bookmark_unchanged(tmp_path):
                CLAUDE_STATE_DIR=str(tmp_path / "state"))
     payload = {"session_id": sid, "cwd": str(project), "hook_event_name": "PostToolUse",
                "tool_name": "Agent",
-               "tool_input": {"subagent_type": "ba", "prompt": "plan it", "description": "plan"},
+               "tool_input": {"subagent_type": "ba", "prompt": "Mode: analysis\nplan it", "description": "plan"},
                "tool_response": {"content": "done"}}
     done = subprocess.run([sys.executable, str(TRACK)], input=json.dumps(payload), env=env,
                           cwd=project, capture_output=True, text=True, timeout=60)
@@ -67,3 +67,11 @@ def test_the_names_p5_left_without_a_caller_are_gone():
     source = TRACK.read_text(encoding="utf-8")
     for name in ("_record_subagent_call_legacy", "last_todos", "subagent_calls", "write_bookmark"):
         assert name not in source, name
+
+
+def _required_role(step):
+    """The subagent type of the call a canonical step requires (a list states every call of the step, the
+    requirement round's included: scripts/todo/dev.py ROUND_CALLS; its optional entries are not required)."""
+    call = step.get("subagent_call")
+    return next((c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+                 if isinstance(c, dict) and not c.get("optional")), None)

@@ -1376,9 +1376,13 @@ def _locate_unique(haystack, needle):
     """Return the unique byte offset of needle in haystack, or None if absent
     or non-unique.
 
-    Propagates EmptyOwnedOldStringError for an empty needle: that is a malformed
-    ledger entry, not an absent-or-ambiguous match.
+    An empty needle in an empty haystack is at offset 0, the one offset there
+    is: a created file's entry (agents/dev.md: `old` "" over the snapshot "").
+    Elsewhere it propagates EmptyOwnedOldStringError for an empty needle: that
+    is a malformed ledger entry, not an absent-or-ambiguous match.
     """
+    if not needle and not haystack:
+        return 0
     n = _count_occurrences(haystack, needle)
     if n != 1:
         return None

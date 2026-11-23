@@ -122,7 +122,8 @@ def _internal_error_exit(exc, what='internal error'):
         '\nBLOCKED: git-privilege guard %s, not a policy refusal: %s: %s\n'
         % (what, type(exc).__name__, str(exc)[:300])
         + 'The guard could not judge this command, which may run git, so it refuses '
-        'it; no /allow grant or /do consent lifts this. Report it.\n')
+        'it; /do consent does not lift it; the owner\'s typed /allow releases it. It is not retried: '
+        'report it.\n')
     return 2
 
 
@@ -155,6 +156,7 @@ from lib.git_command_classifier import (  # noqa: E402
 # hooks/pretool-commit-dispatch-attest.py. See _grant_provenance_refusal.
 from lib import commit_pipeline  # noqa: E402
 from lib import shell_parse  # noqa: E402
+from lib import locations as _locations  # noqa: E402  (the filesystem root is no repository top)
 from lib import git_facts  # noqa: E402
 # The per-event pointer a spent grant hands to the PostToolUse finalizer, which
 # appends the commit-event journal entry from it.
@@ -388,10 +390,15 @@ def _commit_target_git_output(target_dir, *args):
     return _git_output(prefix + list(args))
 
 
+def _commit_target_top(target_dir):
+    """The top of the repository a commit lands in, never the filesystem root; '' outside one."""
+    return _locations.repo_top(target_dir or os.getcwd()) or ''
+
+
 def _validate_commit_grant_repo(grant, target_dir):
     """grant.repo_root must be the toplevel of the repository the commit lands in."""
     grant_repo = grant.get('repo_root') or ''
-    current_repo = _commit_target_git_output(target_dir, 'rev-parse', '--show-toplevel')
+    current_repo = _commit_target_top(target_dir)
     if not grant_repo or not current_repo or grant_repo != current_repo:
         _block(
             '\nBLOCKED: agent git commit - repository mismatch.\n'
@@ -449,7 +456,7 @@ def _grant_matches_commit_target(grant, command):
         return False
     for rec in records:
         target_dir = _commit_target_dir(rec)
-        if _commit_target_git_output(target_dir, 'rev-parse', '--show-toplevel') != grant_repo:
+        if _commit_target_top(target_dir) != grant_repo:
             return False
         if _commit_target_git_output(target_dir, 'branch', '--show-current') != grant_branch:
             return False
@@ -923,7 +930,8 @@ def _block_default_deny_commit(msg):
         'For closed dev tasks, use /commit <task-id>.\n'
         'For human-driven commits, a human types /commit (or '
         '/allow git commit for one call).\n'
-        'Main agent may bypass with /allow <pattern> before the git commit command.\n'
+        'The owner\'s typed /allow releases the next refused call (main agent or subagent); '
+        'this refusal is not retried.\n'
         'Landing is not the agent\'s: list what must be committed in the report; write no landing script.\n'
     )
 
@@ -1089,7 +1097,7 @@ def _own_scratch_commit(command, data):
             paths = [] if d == '?' else _git_output([
                 '-C', top, 'rev-parse', '--path-format=absolute', '--show-toplevel', '--absolute-git-dir',
                 '--git-common-dir', '--git-path', 'objects', '--git-path', 'index']).splitlines()
-            if len(paths) != 5 or not all(owns(os.path.realpath(p)) for p in [top] + paths):
+            if len(paths) != 5 or locations.is_fs_root(paths[0]) or not all(owns(os.path.realpath(p)) for p in [top] + paths):
                 return False, note
     return True, note
 
@@ -1153,10 +1161,8 @@ def _bulk_refusal(command, data, sentinel):
         return ('\nBLOCKED: an auto-bulk commit is made only by the changelog-analyst /commit --bulk '
                 'dispatches, not by this caller.\n')
     records = _commit_records(command)
-    target = _commit_target_git_output(_commit_target_dir(records[0]), 'rev-parse', '--show-toplevel') \
-        if records else ''
-    project = _git_output(['-C', os.environ.get('CLAUDE_PROJECT_DIR') or _hook_cwd(data),
-                           'rev-parse', '--show-toplevel'])
+    target = _commit_target_top(_commit_target_dir(records[0])) if records else ''
+    project = _locations.repo_top(os.environ.get('CLAUDE_PROJECT_DIR') or _hook_cwd(data)) or ''
     since = commit_pipeline._parse_iso(sentinel.get('created_at')) if isinstance(sentinel, dict) else None
     return _verdict_refusal([project, target], 'bulk', since and since.timestamp())
 
@@ -1238,7 +1244,8 @@ def _evaluate_merge(command, data):
         '\nBLOCKED: agent git merge - only /merge may merge, through its '
         'wrapper hooks/merge.sh.\n'
         'Command excerpt: %s\n' % command[:200]
-        + 'Main agent may bypass with /allow <pattern> before the git merge command.\n'
+        + 'The owner\'s typed /allow releases the next refused call (main agent or subagent); '
+        'this refusal is not retried.\n'
     )
 
 
@@ -1939,7 +1946,12 @@ def _hidden_git_refusal(text, invocations, do_consent):
 
 def _evaluate_hidden_git(command, data, do_consent):
     for origin, text in hidden_git_texts(command, _hook_cwd(data), _TRUSTED_SCRIPT_DIRS):
-        invocations = classify_git_command(text)[0]
+        if text is None:
+            _block('\nBLOCKED: agent script whose git the guard cannot read: %s.\n' % origin
+                   + 'Command excerpt: %s\n' % command[:200]
+                   + 'A `cd` the guard cannot follow comes before it, so which file runs is unknown. Name the '
+                   'script by its absolute path, or `cd` to a literal directory.\n')
+        invocations = classify_git_command(text, _hook_cwd(data))[0]
         if not invocations:
             continue
         what = _hidden_git_refusal(text, invocations, do_consent)
@@ -2010,7 +2022,7 @@ def _evaluate_command(command, data, do_consent=False):
     # can move the protected branch or the guard cannot tell the branch it lands
     # on (_moves_protected_branch); git commit, git push and a git command the
     # guard cannot classify are judged as without it.
-    invocations, residuals = classify_git_command(command)
+    invocations, residuals = classify_git_command(command, _hook_cwd(data))
     # A git-shaped command whose binary the classifier cannot resolve (`g\it push`,
     # `$GIT push`, `$(which git) push`), or a shell `-c` string it cannot read
     # (`bash -c "cd $d && git status"`), is refused before the invocation list and

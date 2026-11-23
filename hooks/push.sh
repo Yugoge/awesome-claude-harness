@@ -102,7 +102,7 @@ echo ""
 # and unlinks it. Missing sentinel ⇒ abort. Stale (mtime > 60s) ⇒ abort.
 # FAIL sentinel ⇒ abort. All three abort branches use `exit 1` BEFORE any
 # `git push` invocation downstream — see Step 9.
-_CHAIN_B_REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$_CLAUDE_HOME_FALLBACK")}').encode()).hexdigest()[:16])" 2>/dev/null)"
+_CHAIN_B_REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT:-$(claude_repo_top . || echo "$_CLAUDE_HOME_FALLBACK")}').encode()).hexdigest()[:16])" 2>/dev/null)"
 _CHAIN_B_BRANCH_RAW="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 _CHAIN_B_BRANCH="$(python3 -c "print('${_CHAIN_B_BRANCH_RAW}'.replace('/', '__'))")"
 _CHAIN_B_REQUEST_ID="${CLAUDE_PUSH_REQUEST_ID:-${CLAUDE_TASK_ID:-${CLAUDE_SESSION_ID:-default}}}"
@@ -201,7 +201,7 @@ esac
 trap 'rm -f "$_CHAIN_B_SENTINEL_PATH" 2>/dev/null' EXIT INT TERM
 
 # --- Push-gate: verify SOME valid commit token exists (any session, any HEAD ancestor) ---
-_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$_CLAUDE_HOME_FALLBACK")"
+_REPO_ROOT="$(claude_repo_top . || echo "$_CLAUDE_HOME_FALLBACK")"
 _REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT}').encode()).hexdigest()[:16])")"
 _BRANCH_RAW="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 _BRANCH="$(python3 -c "print('${_BRANCH_RAW}'.replace('/', '__'))")"

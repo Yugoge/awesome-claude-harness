@@ -171,7 +171,12 @@ def test_the_main_agents_own_scratch_is_its_session_scratch(tmp_path):
                               "locations; print(locations.session_scratch_dir('s'))", os.path.join(ROOT, "hooks")],
                              capture_output=True, text=True, env=env, timeout=60).stdout.strip()
         assert out == os.path.join(os.path.realpath(locations.SESSION_SCRATCH_ROOT), "s")
-        assert '"${TMPDIR:-' + locations.SESSION_SCRATCH_ROOT + '}"' in open(INIT, encoding="utf-8").read()
+        # The session start takes that root from the same definition (scratch_owner.py --root runs
+        # locations.session_scratch_root); it no longer spells the default itself.
+        root_out = subprocess.run([sys.executable, os.path.join(ROOT, "hooks", "lib", "scratch_owner.py"), "--root"],
+                                  capture_output=True, text=True, env=env, timeout=60).stdout.strip()
+        assert root_out == os.path.dirname(out)
+        assert "/lib/scratch_owner.py\" --root" in open(INIT, encoding="utf-8").read()
     finally:
         sys.path.remove(os.path.join(ROOT, "hooks"))
 
@@ -221,5 +226,57 @@ def test_a_subagents_command_that_sets_no_temp_directory_writes_its_temp_files_i
                          env={"PATH": os.environ["PATH"]}, cwd=str(project), timeout=60)
     assert out.returncode == 0, out.stderr
     made = out.stdout.strip()
-    assert made.startswith(str(root.resolve() / SID) + os.sep), made
-    assert not made.startswith(("/tmp/", str(project) + os.sep)), made
+    # Directly in the session's scratch directory: neither the system temp nor the project, wherever pytest's temp lies.
+    assert os.path.dirname(made) == str(root.resolve() / SID), made
+    assert not made.startswith(str(project.resolve()) + os.sep), made
+
+
+@pytest.mark.parametrize("where", ["outside", "session-scratch"])
+def test_a_project_checked_out_in_the_session_scratch_is_judged_as_the_project(tmp_path, where):
+    """g-loctriage U17: a dev's Write of a file of its own project gets the same verdict whether the project lies
+    outside every temp root or inside the session scratch; another actor's scratch there stays refused."""
+    project = PROJECTS[0] if where == "outside" else str(session_root(tmp_path) / SID / "p")
+    p = run(tmp_path, project, "Write", {"file_path": f"{project}/src/notes.txt", "content": "x"})
+    assert p.returncode == 0, p.stderr
+    if where == "session-scratch":
+        other = session_root(tmp_path) / SID / "qa" / "ffff0000ffff0000" / "n.txt"
+        p = run(tmp_path, project, "Write", {"file_path": str(other), "content": "x"})
+        assert p.returncode == 2 and "sibling scratch target denied" in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("place", ["pytest-temp", "shared-memory"])
+def test_another_sessions_scratch_is_refused_wherever_the_scratch_root_lies(tmp_path, place):
+    """g-locfind1 F1: a dev's Write into ANOTHER session's scratch directory (a directory holding .owner below the
+    scratch root) gets the same verdict whether the root lies in a system temp directory or elsewhere; its own
+    session's scratch stays writable."""
+    import shutil
+    import tempfile
+
+    if place == "shared-memory" and not os.path.isdir("/dev/shm"):
+        pytest.skip("no shared-memory directory")
+    base = tempfile.mkdtemp(dir="/dev/shm") if place == "shared-memory" else str(tmp_path)
+    try:
+        root = os.path.realpath(os.path.join(base, "scratch-root"))
+        for sid in ("0f0e0d0c-0b0a-4908-8706-050403020100", SID):
+            os.makedirs(os.path.join(root, sid))
+            with open(os.path.join(root, sid, ".owner"), "w", encoding="utf-8") as handle:
+                json.dump({"sid": sid}, handle)
+        env = dict(os.environ, TMPDIR=root)
+        home = tmp_path / "home"
+        env = {k: v for k, v in env.items() if not k.startswith("CLAUDE")}
+        env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), CLAUDE_PROJECT_DIR=PROJECTS[0],
+                   CLAUDE_STATE_DIR=str(tmp_path / "state"), PYTHONDONTWRITEBYTECODE="1")
+
+        def verdict(path):
+            payload = {"session_id": SID, "cwd": PROJECTS[0], "hook_event_name": "PreToolUse", "tool_name": "Write",
+                       "tool_input": {"file_path": path, "content": "x"}, "agent_id": "a1b2c3d4e5f60718",
+                       "agent_type": "dev", "subagent_type": "dev"}
+            return subprocess.run([sys.executable, HOOK], input=json.dumps(payload), capture_output=True, text=True,
+                                  cwd=str(tmp_path), env=env, timeout=60)
+
+        foreign = verdict(os.path.join(root, "0f0e0d0c-0b0a-4908-8706-050403020100", "notes.txt"))
+        assert foreign.returncode == 2, foreign.stderr
+        own = verdict(os.path.join(root, SID, "dev", "a1b2c3d4e5f60718", "notes.txt"))
+        assert own.returncode == 0, own.stderr
+    finally:
+        shutil.rmtree(base, ignore_errors=True) if place == "shared-memory" else None

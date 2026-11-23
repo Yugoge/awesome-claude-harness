@@ -78,7 +78,8 @@ def repo(tmp_path, env):
 def slow(repo, env):
     """A snapshot that runs past a 1 s limit, as one of a very large repository does: `git add -A` runs a clean
     filter that sleeps, so the time goes where it goes in a large tree, in the snapshot's staging."""
-    git(repo, "config", "filter.slow.clean", "sleep 20; cat", env=env)
+    ended = repo.parent / "filter-ended"          # written only when the filter's sleep is over: absent = it was cut off
+    git(repo, "config", "filter.slow.clean", f"sleep 300; : > '{ended}'; cat", env=env)
     (repo / ".gitattributes").write_text("*.txt filter=slow\n")
     return {**env, "CLAUDE_HOOK_SNAPSHOT_TIMEOUT": "1s"}
 
@@ -168,12 +169,12 @@ def test_a_failed_snapshot_lets_the_command_run_and_says_why(repo, env):
 
 def test_a_snapshot_past_its_time_limit_is_abandoned_and_the_command_runs(repo, env):
     index = (repo / ".git" / "index").read_bytes()
-    start = time.monotonic()
     result = decide(UNPROVEN, repo, slow(repo, env))
+    assert not (repo.parent / "filter-ended").exists(), result  # no clock: it was ended while the filter still slept
     assert result["verdict"] == "ALLOW", result
     assert result["calls"][0]["snapshot"] == {
-        "none": "the snapshot took longer than 1 s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
-    assert time.monotonic() - start < 60
+        "none": "the snapshot took longer than 1 s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT) and was ended; "
+                "logged in logs/checkpoint.log"}
     assert (repo / ".git" / "index").read_bytes() == index and checkpoint_refs(repo) == []
 
 
@@ -202,12 +203,11 @@ def test_after_a_snapshot_past_its_time_limit_the_repository_gets_none_for_a_per
     assert first["none"].startswith("the snapshot took longer than"), first
     marks = os.listdir(env["CLAUDE_STATE_DIR"])
     assert len(marks) == 1
-    start = time.monotonic()
     second = decide(UNPROVEN, repo, env)  # the ordinary limit would now let it finish: the pause decides
     assert second["verdict"] == "ALLOW" and checkpoint_refs(repo) == [], second
     assert second["calls"][0]["snapshot"]["none"].startswith(
         "the last snapshot of this repository ran past its time limit at "), second
-    assert time.monotonic() - start < 30
+    assert not (repo.parent / "filter-ended").exists()  # the filter never ran again: the pause decided
     # The same repository reached from a subdirectory and through a link shares the mark.
     (repo / "sub").mkdir()
     os.symlink(repo, os.path.join(os.path.dirname(repo), "link"))

@@ -128,9 +128,17 @@ def span_opener(record, commands: frozenset) -> tuple[str, str] | None:
     return None
 
 
-def active_command(transcript_path) -> str | None:
+def active_command(transcript_path, keep=None) -> str | None:
     """The latest human-typed harness command outside CONTROL_COMMANDS in the
-    whole transcript, or None (no such prompt, or the file is unreadable)."""
+    whole transcript, or None (no such prompt, or the file is unreadable). ``keep`` (a folder, the state
+    root's) keeps what was read (lib/transcript_index): a later call reads only the lines added since."""
+    if keep is not None:
+        try:
+            kept = _kept_span(transcript_path, None, keep)
+            if kept is not None:
+                return kept["openers"][-1][1] if kept["openers"] else None
+        except (TypeError, ValueError, KeyError, IndexError):
+            pass
     found = openers(transcript_path)
     return found[-1][1] if found else None
 
@@ -140,20 +148,25 @@ def openers(transcript_path, commands: frozenset | None = None) -> list[tuple[in
     CONTROL_COMMANDS in the whole transcript, in order; [] when it cannot be
     read. ``commands`` defaults to this harness's commands/*.md stems."""
     commands = harness_commands() if commands is None else commands
-    found = []
     try:
         with open(transcript_path, encoding="utf-8", errors="replace") as handle:
-            for number, line in enumerate(handle, 1):
-                if '"user"' not in line:
-                    continue
-                try:
-                    opener = span_opener(json.loads(line), commands)
-                except ValueError:
-                    continue
-                if opener:
-                    found.append((number, opener[0], opener[1]))
+            return openers_in(handle, 1, commands)
     except (OSError, TypeError, ValueError):
         return []
+
+
+def openers_in(lines, first: int, commands: frozenset) -> list[tuple[int, str, str]]:
+    """openers of ``lines`` (text lines), the first of them line ``first`` of its transcript."""
+    found = []
+    for number, line in enumerate(lines, first):
+        if '"user"' not in line:
+            continue
+        try:
+            opener = span_opener(json.loads(line), commands)
+        except ValueError:
+            continue
+        if opener:
+            found.append((number, opener[0], opener[1]))
     return found
 
 
@@ -398,6 +411,130 @@ def _first_use(lines: _Lines, needles, names, floor: int, ident: str):
     return None
 
 
+# The span's own conversation, read once and kept (lib/transcript_index, inside a scan that keeps readings: the
+# Stop gate's): a later stop folds in only the lines the conversation gained since. What the fold keeps is what
+# the whole-file readers below derive: the typed harness commands (active_span), the dispatch calls with their
+# results and each call's time, and the ids a hook refused in the record.
+_KEPT_VERSION = "span2"
+# What the kept reading carries of a result's toolUseResult: the fields the readers of a dispatch's or a message's
+# result ask (agent_returns, the Stop gate's wait for background agents).
+_USE_FIELDS = ("isAsync", "status", "agentId", "resumedAgentId")
+_KEPT_EXTRA_TOOLS = ("SendMessage",)
+_RESULT_ID = re.compile(rb'"tool_use_id"\s*:\s*"((?:[^"\\]|\\.)*)"')
+_HOOK_SOURCE = (b'"source":"hook"', b'"source": "hook"')
+
+
+def _span_fold(commands: frozenset):
+    """The step of the kept reading (transcript_index.extend): state {openers: [line, command, args],
+    calls: [id, name, input, line, result_line, ok, time], pending: {id token: call indexes}, refused: ids}
+    after ``data``, which holds whole lines (or an unfinished one), the first of them line ``first``."""
+    tools = tuple(_subagent().DISPATCH_TOOLS) + _KEPT_EXTRA_TOOLS
+    names = tuple(f'"{n}"'.encode() for n in tools)
+
+    def step(state: dict, data: bytes, first: int) -> dict:
+        openers, calls, uses = list(state["openers"]), list(state["calls"]), dict(state["uses"])
+        pending = {token: list(at) for token, at in state["pending"].items()}
+        refused = set(state["refused"])
+        for number, raw in enumerate(data.split(b"\n"), first):
+            if not raw:
+                continue
+            record = _UNREAD
+            if pending and b'"tool_result"' in raw:  # a result of a call still without one
+                wanted = {m.decode("utf-8", "replace") for m in _RESULT_ID.findall(raw)} & pending.keys()
+                if wanted:
+                    record = _decode(raw)
+                    came = {}
+                    for block in _blocks(record):
+                        token = json.dumps(block.get("tool_use_id"))[1:-1]
+                        if block.get("type") == "tool_result" and token in wanted:
+                            came[token] = not block.get("is_error")
+                    own = record.get("toolUseResult") if isinstance(record, dict) else None
+                    for token, ok in came.items():
+                        for at in pending.pop(token):
+                            calls[at] = calls[at][:4] + [number, ok, calls[at][6]]
+                            uses[calls[at][0]] = {k: own[k] for k in _USE_FIELDS if k in own} if isinstance(own, dict) else {}
+            if b'"user"' in raw and b'"tool_result"' not in raw and any(n in raw for n in _USER_RECORD):
+                record = _decode(raw) if record is _UNREAD else record
+                found = span_opener(record, commands) if record else None
+                if found:
+                    openers.append([number, found[0], found[1]])
+            if any(h in raw for h in _HOOK_SOURCE):
+                record = _decode(raw) if record is _UNREAD else record
+                refused.update(i for i in hook_refused(record) if isinstance(i, str) and i)
+            if any(n in raw for n in names):
+                record = _decode(raw) if record is _UNREAD else record
+                stamp = record.get("timestamp") if isinstance(record, dict) else None
+                for block in _blocks(record):
+                    if block.get("type") == "tool_use" and isinstance(block.get("input"), dict) \
+                            and block.get("name") in tools:
+                        ident = block.get("id") or ""
+                        if ident:
+                            pending.setdefault(json.dumps(ident)[1:-1], []).append(len(calls))
+                        calls.append([ident, block.get("name") or "", block["input"], number, 0, False,
+                                      stamp if isinstance(stamp, str) else None])
+        return {"openers": openers, "calls": calls, "pending": pending, "refused": sorted(refused), "uses": uses}
+    return step
+
+
+def _open_scan():
+    """(the obligation module, its open scan) that keeps readings, or (None, None): the scan is on the copy of
+    lib/obligation its opener loaded, which may be another copy than this module's own (the Stop gate opens it
+    on the one the chain script imports), so each loaded copy is asked."""
+    import sys
+    for name, module in list(sys.modules.items()):
+        if name.rsplit(".", 1)[-1] == "obligation" and getattr(module, "transcript_scan", None) is not None:
+            scan = getattr(module, "_SCAN", None)
+            if scan is not None and getattr(scan, "keep", None) is not None:
+                return module, scan
+    return None, None
+
+
+def _kept_span(transcript_path, commands: frozenset | None = None, keep=None) -> dict | None:
+    """The kept reading of the whole transcript (see above), or None to read it whole: no scan that keeps
+    readings is open, the bytes hold a carriage return, or the kept entry does not fit. OSError when the file
+    cannot be read."""
+    commands = harness_commands() if commands is None else commands
+    ob, scan = _open_scan()
+    if keep is None and scan is None or not transcript_path:
+        return None
+    import hashlib  # first use: loading this module (every hook's start) does not import it
+    digest = hashlib.sha256("\0".join(sorted(commands)).encode()).hexdigest()
+    salt = _KEPT_VERSION + digest
+
+    def compute():
+        try:  # the launcher's fallback loads this file alone by path: a missing index is a whole read, not a raise
+            try:
+                from . import transcript_index
+            except ImportError:
+                import transcript_index  # type: ignore[no-redef]
+        except ImportError:
+            return None
+        empty = lambda: {"openers": [], "calls": [], "pending": {}, "refused": [], "uses": {}}  # noqa: E731
+        try:
+            # one entry per set of commands (the time lock's reader asks for two): they do not replace each other
+            got = transcript_index.extend(keep if keep is not None else scan.keep, transcript_path, f"span-{digest[:12]}", salt,
+                                          empty, _span_fold(commands))
+        except OSError:
+            raise
+        except Exception:  # a kept entry that does not fit: the whole read decides
+            return None
+        if got is not None and scan is not None:
+            ob._counted(got[1])
+        return None if got is None else got[0]
+    if keep is not None and scan is None:  # a reader with no scan of its own: the folder it names keeps the reading
+        try:
+            return compute()
+        except OSError:
+            return None
+    key = ("span", str(transcript_path), salt)
+    if key not in scan.memo:
+        try:
+            scan.memo[key] = compute()
+        except OSError:
+            return None
+    return scan.memo[key]
+
+
 class Span:
     """The command that opened the span, its arguments and its opener's line.
     It keeps the bytes active_span read, so its calls come from that one read
@@ -410,16 +547,18 @@ class Span:
     a span costs what the span costs, not what the session costs. Its
     start_line then counts the lines before those bytes when first asked:
     only a reader that numbers lines pays for the lines before the span."""
-    __slots__ = ("command", "args", "_start_line", "transcript_path", "_data", "_floor", "_base", "_ahead")
+    __slots__ = ("command", "args", "_start_line", "transcript_path", "_data", "_floor", "_base", "_ahead", "_commands")
 
     def __init__(self, command: str, args: str, start_line: int | None, transcript_path: str = "",
-                 data: bytes | None = None, floor: int | None = None, base: int = 0, ahead=None):
+                 data: bytes | None = None, floor: int | None = None, base: int = 0, ahead=None,
+                 commands: frozenset | None = None):
         self.command, self.args, self._start_line = command, args, start_line
         self.transcript_path = transcript_path
         self._data = data  # None: read transcript_path when asked
         self._floor = floor  # offset of the line after start_line in data; None: found when asked
         self._base = base  # offset of data in the transcript
         self._ahead = ahead  # (open transcript, offset of the opener in data) while start_line is None
+        self._commands = commands  # set: a span found in the kept reading, whose bytes are read when first asked
 
     @property
     def start_line(self) -> int:
@@ -456,6 +595,8 @@ class Span:
 
     def _lines(self):
         """(_Lines over the span's bytes, offset of the line after the opener)."""
+        if self._data is None and self._commands is not None:  # a kept span: the file once, for every reader
+            self._data = _read(self.transcript_path)
         lines = _Lines(self._data if self._data is not None else _read(self.transcript_path))
         if self._data is not None and self._floor is not None:
             return lines, self._floor
@@ -468,6 +609,10 @@ class Span:
         at the first call it wants leaves the rest of a long span undecoded,
         and a reader from the end finds its lines from the end: the newest
         call of a long session costs no pass over the lines before it."""
+        kept = self._kept_iter(names, newest_first, before)
+        if kept is not None:  # inside a scan that keeps readings: the calls the conversation gained are all that was read
+            yield from kept
+            return
         try:
             lines, floor = self._lines()
         except (OSError, TypeError, ValueError):
@@ -484,6 +629,26 @@ class Span:
                 number -= lines.data.count(b"\n", begin, pos)
             pos = begin
             yield _call(lines, number, end, block)
+
+    def _kept_iter(self, names, newest_first: bool, before: str | None):
+        """iter_calls() of ``names`` (all among the tool names the kept reading carries) from the kept reading, as a
+        list; None to read the span's bytes."""
+        if not names or not set(names) <= set(_subagent().DISPATCH_TOOLS) | set(_KEPT_EXTRA_TOOLS):
+            return None
+        try:
+            state = _kept_span(self.transcript_path, self._commands)
+            if state is None:
+                return None
+            found = []
+            for ident, name, tool_input, line, result_line, ok, _stamp in state["calls"]:
+                if line <= self.start_line or name not in names:
+                    continue
+                if before and ident == before:
+                    break
+                found.append(Call(id=ident, name=name, input=tool_input, line=line, result_line=result_line, ok=ok))
+            return found[::-1] if newest_first else found
+        except (OSError, TypeError, ValueError, KeyError):
+            return None
 
     def uses(self, *names: str, newest_first: bool = False, before: str | None = None):
         """iter_calls() as Use records: the same calls in the same order, with
@@ -528,7 +693,16 @@ class Span:
     def last_text(self) -> str:
         """The text of the main session's last assistant record in the span that holds text ('' when none):
         what the Stop gate reads where the Stop payload carries no last_assistant_message."""
-        return (self.texts() or [""])[-1]
+        try:  # from the end: the newest text record is the first met, the records before it are not decoded
+            lines, floor = self._lines()
+        except (OSError, TypeError, ValueError):
+            return ""
+        for _begin, _end, raw in lines.having_back((b'"text"',), floor):
+            record = _decode(raw)
+            found = [b.get("text") for b in _blocks(record) if b.get("type") == "text" and isinstance(b.get("text"), str)]
+            if found and record.get("type") == "assistant":
+                return "\n".join(found)
+        return ""
 
     def result_text(self, ident: str) -> str:
         """The text of call ``ident``'s tool_result in the span ('' while none came back); an Agent
@@ -569,6 +743,20 @@ class Span:
         """The toolUseResult the CLI recorded beside call ``ident``'s tool_result in the span ({}
         while none came back or it holds no object): an Agent call's agentId and status
         ("async_launched" for a background launch), a SendMessage's resumedAgentId."""
+        try:  # a call the kept reading carries: its result's fields were kept with it
+            state = _kept_span(self.transcript_path, self._commands)
+            if state is not None:
+                memo = _open_scan()[1].memo
+                key = ("span-results", id(state), self.start_line)
+                if key not in memo:  # {id: its result's line} of the first call with the id after the opener
+                    memo[key] = {}
+                    for call_id, _n, _i, line, result_line, _ok, _s in state["calls"]:
+                        if line > self.start_line and call_id not in memo[key]:
+                            memo[key][call_id] = result_line
+                if ident in memo[key]:
+                    return dict(state["uses"].get(ident, {})) if memo[key][ident] else {}
+        except (OSError, TypeError, ValueError, KeyError):
+            pass
         try:
             lines, floor = self._lines()
         except (OSError, TypeError, ValueError):
@@ -606,22 +794,78 @@ class Span:
     def dispatch_calls(self, before: str | None = None):
         """The span's Agent/Task calls (iter_calls, ``before`` as there) but those a hook refused (refused_calls):
         a call that never ran is no dispatch. Every reader of dispatches reads them here."""
+        kept = self._kept_calls(before)
+        if kept is not None:  # inside a scan that keeps readings: only what the conversation gained is read
+            return (c for c in kept[0] if c.id not in kept[1])
         try:  # from the span's own bytes: the file is not read again for this
             refused = refused_calls(self.transcript_path, data=self._lines()[0].data)
         except (OSError, TypeError, ValueError):
             refused = frozenset()
         return (c for c in self.iter_calls(*_subagent().DISPATCH_TOOLS, before=before) if c.id not in refused)
 
+    def _kept_calls(self, before: str | None = None):
+        """(the span's dispatch calls as dispatch_calls() reads them before the refusals, the ids refused) from the
+        kept reading of the conversation, or None to read it whole. The calls are those after the opener's line."""
+        try:
+            state = _kept_span(self.transcript_path, self._commands)
+            if state is None:
+                return None
+            calls = []
+            dispatch = set(_subagent().DISPATCH_TOOLS)
+            for ident, name, tool_input, line, result_line, ok, _stamp in state["calls"]:
+                if line <= self.start_line or name not in dispatch:
+                    continue
+                if before and ident == before:
+                    break
+                calls.append(Call(id=ident, name=name, input=tool_input, line=line, result_line=result_line, ok=ok))
+            session = Path(str(self.transcript_path)).stem
+            return calls, frozenset(state["refused"]) | recorded_refusals(session)
+        except (OSError, TypeError, ValueError, KeyError):
+            return None
+
     def dispatches(self) -> list:
         """(call, obligation) of each dispatch_calls() call whose prompt parses to an obligation, in span order,
         however its call came back (agent_returns.Returns reads whether its agent stopped), at its record's time."""
         ob = _obligation()
-        parsed = ((c, ob.parse_obligation(c.input.get("prompt"))) for c in self.dispatch_calls())
-        return [(call, ob.dispatch_time(found.obligation, self.recorded_at(call.id)))
+        stamps = self._kept_stamps()
+        memo = None if stamps is None else _open_scan()[1].memo  # a call's prompt is parsed once for the scan
+
+        def parse(c):
+            key = ("span-parse", str(self.transcript_path), c.line, c.id)
+            if memo is None:
+                return ob.parse_obligation(c.input.get("prompt"))
+            if key not in memo:
+                memo[key] = ob.parse_obligation(c.input.get("prompt"))
+            return memo[key]
+        parsed = ((c, parse(c)) for c in self.dispatch_calls())
+        return [(call, ob.dispatch_time(found.obligation, self.recorded_at(call.id) if stamps is None
+                                        else stamps.get(call.id)))
                 for call, found in parsed if isinstance(found, ob.ParsedObligation)]
+
+    def _kept_stamps(self) -> dict | None:
+        """{id: the time recorded on the first dispatch call with that id after the opener} from the kept reading
+        (recorded_at's answer for a plain id; None for any other), or None to ask recorded_at."""
+        try:
+            state = _kept_span(self.transcript_path, self._commands)
+            if state is None:
+                return None
+            memo = _open_scan()[1].memo
+            key = ("span-stamps", id(state), self.start_line)
+            if key not in memo:
+                stamps: dict = {}
+                for ident, _name, _input, line, _result, _ok, stamp in state["calls"]:
+                    if line > self.start_line and ident not in stamps:
+                        stamps[ident] = stamp if _PLAIN_ID.match(ident) else None
+                memo[key] = stamps
+            return memo[key]
+        except (OSError, TypeError, ValueError, KeyError, AttributeError):
+            return None
 
     def recorded_at(self, ident: str) -> str | None:
         """The timestamp the CLI wrote on the record of tool use ``ident``, or None."""
+        stamps = self._kept_stamps()
+        if stamps is not None and ident in stamps:  # a dispatch call, in what the scan kept
+            return stamps[ident]
         try:
             lines, floor = self._lines()
             found = _first_use(lines, (b'"tool_use"',), (), floor, ident)
@@ -892,6 +1136,16 @@ def active_span(transcript_path: str | Path, commands: frozenset | None = None) 
     in one read of the whole file, as copying ever larger chunks together
     would cost more than reading the file once."""
     commands = harness_commands() if commands is None else commands
+    try:  # inside a scan that keeps readings: the last typed command is in what it kept
+        kept = _kept_span(transcript_path, commands)
+        if kept is not None:
+            if not kept["openers"]:
+                return None
+            line, command, args = kept["openers"][-1]
+            return Span(command=command, args=args, start_line=int(line), transcript_path=str(transcript_path),
+                        commands=commands)
+    except (TypeError, ValueError, KeyError, IndexError):  # an entry that does not fit: the whole read decides
+        pass
     try:
         handle = open(transcript_path, "rb")
         info = os.fstat(handle.fileno())
@@ -944,14 +1198,20 @@ def transcript_span(transcript_path) -> Span:
     return Span("", "", 0, str(transcript_path))
 
 
+def refusal_folder() -> str:
+    """The folder of lib/refusal_record.py's record (its directory())."""
+    import zlib
+    home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+    key = f"{home.rsplit(os.sep, 1)[-1].lstrip('.')}-{zlib.crc32(os.fsencode(home)):08x}"
+    return os.path.join(os.path.expanduser("~"), ".local/state/claude-harness", key, "refusals")
+
+
 def _refusal_record_files(now: float | None = None) -> list:
     """Every day file lib/refusal_record.py's record keeps (its directory(), its day_file() names; KEEP_DAYS of
     them), oldest first, with `now`'s (UTC) day there or not: a session's refusal is found whatever day it was
     written (the owner's ruling of 2026-11-20; the two newest days only was a window)."""
-    import time, zlib  # noqa: E401
-    home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-    key = f"{home.rsplit(os.sep, 1)[-1].lstrip('.')}-{zlib.crc32(os.fsencode(home)):08x}"
-    folder = os.path.join(os.path.expanduser("~"), ".local/state/claude-harness", key, "refusals")
+    import time
+    folder = refusal_folder()
     today = time.strftime("refusals-%Y-%m-%d.jsonl", time.gmtime(time.time() if now is None else now))
     try:
         names = {n for n in os.listdir(folder) if n.startswith("refusals-") and n.endswith(".jsonl")}

@@ -8,7 +8,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -144,12 +143,15 @@ def test_a_background_dispatch_gets_it_from_the_function_at_its_end_not_at_its_l
 def test_a_gate_past_the_bound_is_one_line_and_does_not_hold_the_return(env, tmp_path):
     module = _module()
     slow = tmp_path / "slow-gate.py"
+    ended = tmp_path / "gate-ended"
     slow.write_text("import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', 'import time; "
-                    "time.sleep(60)'])\ntime.sleep(60)\n")
+                    "time.sleep(120)'])\ntime.sleep(120)\n"
+                    f"open({str(ended)!r}, 'w').close()\n")
     module.GATE, module.BOUND = str(slow), 1.0
-    start = time.monotonic()
+    # No wall time is compared: the return must come while the gate is still asleep (no marker). A
+    # return that waits for the gate would take its whole 300 s.
     text = module.handback(_payload(env[0], "dev"))
-    assert time.monotonic() - start < 6
+    assert not ended.exists(), "the return waited for the gate to end"
     tail = text.splitlines()[-1]
     assert tail == "COMMAND_GATE open gaps not listed: the Stop gate took over 1 s; they are listed at the Stop."
 

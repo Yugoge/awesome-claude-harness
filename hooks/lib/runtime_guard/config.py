@@ -178,6 +178,7 @@ def _config_path_variants() -> set:
     tilde = _home_tilde_variant(p)
     if tilde:
         variants.add(tilde)
+    variants.add(os.path.realpath(p))  # the file itself, when a link on its path leads elsewhere
     return variants
 
 
@@ -197,12 +198,16 @@ def _config_ancestor_dirs() -> set:
     and `/root/.config` are protected while `/root` and `/` are not (a routine
     `mv /root /backup` must still ALLOW). Includes the `~/`-prefixed variant for a
     `/root/`-rooted path. Generic — no project identity (the path itself is the only
-    hardcoded constant, already generic)."""
+    hardcoded constant, already generic). A directory is protected for what it is, not
+    for how it is spelt: where a link on the path leads elsewhere (`~/.config` a link),
+    the directories the file and each written ancestor really lie in are protected too."""
     out = set()
     norm = os.path.normpath(DATA_FILE_PATH)
+    written = []
     d = os.path.dirname(norm)
     while d and not _locations().is_broad_root(d):
         out.add(d)
+        written.append(d)
         # Generic: add the ~/-prefixed variant for ANY ancestor
         # under the real user home, not only /root/.
         tilde = _home_tilde_variant(d + "/")
@@ -212,6 +217,14 @@ def _config_ancestor_dirs() -> set:
         if parent == d:
             break
         d = parent
+    for start in [os.path.dirname(os.path.realpath(norm))] + [os.path.realpath(w) for w in written]:
+        r = start
+        while r and not _locations().is_broad_root(r) and r not in out:
+            out.add(r)
+            parent = os.path.dirname(r)
+            if parent == r:
+                break
+            r = parent
     return out
 
 

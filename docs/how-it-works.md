@@ -245,19 +245,19 @@ Everything else (`agents/`, `commands/`, `skills/`, `schemas/`, `templates/`, `t
 
 #### Hook events
 
-Counted from the tracked clean `settings.json`, paseo module off (with it on, `UserPromptSubmit` has one more).
+Counted from the tracked clean `settings.json`, paseo module off (with it on, `UserPromptSubmit` has one more): each launcher read as the hooks it runs, as the README's facts count them (`scripts/readme_facts.py` `hook_registrations`, `hooks/lib/launch_settings.py`). SubagentStart has 3 more. The one SubagentStop entry, `hooks/subagentstop-producer-gate.py`, runs 10 rules of its own.
 
 | Event | Hook entries | Primary purpose |
 |---|---|---|
-| SessionStart | 8 | Session info banner, scratch-directory init, runtime-directory gitignore propagation, todo/command drift check, hook canary, tmpfs banner (plus opt-in git init and RAM-disk promotion) |
-| UserPromptSubmit | 6 | Command start (checklist injection, cycle ids, verbatim requirement to disk), `/allow` grant, `/restart` and `/commit --bulk` capability minting, doc-sync deletion check, tmpfs pressure warning |
-| PreToolUse | 35 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
+| SessionStart | 9 | Session info banner, scratch-directory init, runtime-directory gitignore propagation, todo/command drift check, hook canary, tmpfs banner (plus opt-in git init and RAM-disk promotion) |
+| UserPromptSubmit | 11 | Command start (checklist injection, cycle ids, verbatim requirement to disk), `/allow` grant, `/restart` and `/commit --bulk` capability minting, doc-sync deletion check, tmpfs pressure warning |
+| PreToolUse | 24 | The gate layer: orchestrator rate-limit, bash-safety, git kernel, tool-policy, branch/PR firewall |
 | PermissionRequest | 1 | Answers every permission request by rule (see "Permission prompts" below) |
-| PostToolUse | 17 | Doc-sync, commit-event finalization, checkpoint writes (an `/allow` grant is spent at PreToolUse, where it releases a refusal) |
-| PostToolUseFailure | 1 | The calls that ran, commit-event finalization, the Codex Skill ledger and a failed dispatch's temp directory on a failed tool result |
+| PostToolUse | 15 | Doc-sync, commit-event finalization, checkpoint writes (an `/allow` grant is spent at PreToolUse, where it releases a refusal) |
+| PostToolUseFailure | 4 | The calls that ran, commit-event finalization, the Codex Skill ledger and a failed dispatch's temp directory on a failed tool result |
 | Stop | 1 | One entry, `stop-launch.py`, which runs the workflow coordinator: its phases are the spec-coverage phase (an exit-0 stub: the split is decided at the spec subagent's own stop), the auto-commit checkpoint snapshot, the completion gate (overnight time-lock, `/do` report, the other gated commands) and allowlist cleanup |
 | SessionEnd | 1 | Scratch-directory sweep |
-| SubagentStop | 8 | cp-state enforcement, artifact contract, e2e and codex-ledger checks, `/restart` response evidence, minimum-diff, layer-match and guard-integrity warnings |
+| SubagentStop | 1 | cp-state enforcement, artifact contract, e2e and codex-ledger checks, `/restart` response evidence, minimum-diff, layer-match and guard-integrity warnings |
 
 Retired hooks stay in the tree as exit-0 stubs (marked by a `# STUB:` line), so a running session whose loaded hook list still names one gets exit 0, never a missing file. `render-settings check` (run by `scripts/doctor`) fails a hook command whose file is missing or is a stub the clean form does not register. The landing repairs an overlay that registers one: at the first Stop after HEAD moves, it drops from `settings.machine.json`, and from the working `settings.json`, each hook command whose script is a harness hook HEAD deleted or marks `# STUB:`, or that another registered command already runs, and `logs/landing.log` names the drops by event and count.
 

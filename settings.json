@@ -316,7 +316,7 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-launch.py\"",
-            "timeout": 265
+            "timeout": 385
           }
         ]
       },

@@ -56,7 +56,9 @@ from tests.replay.test_faults import CLAIMS, FAULTS as FAULT_SPECS
 
 DO_CASES = ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-sequence", "checklist-lock",
             "todo-first")
-PLAIN_CASES = ("bg-dispatch", "dispatch-writes", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
+# bg-dispatch is retired: an orchestrator's background dispatch is no longer refused (2026-11-22,
+# background-for-all.md), so that case reaches no gate.
+PLAIN_CASES = ("dispatch-writes", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
                "qa-provenance")
 CASES = {c: suite.Scenario(f"dead end: {c}", "_deadend", (("case", c),),
                            ("do",) if c in DO_CASES else ("plain",), 60) for c in DO_CASES + PLAIN_CASES}
@@ -75,7 +77,30 @@ FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
 MERGE = next(s for s in suite.COMPLIANT if s.name == "/merge")
 QA_EARLY = suite.Scenario("/dev QA before its dev returned", "dev", (("variant", "qa-early"),), ("dev",), DEV.cost)
 QA_WRITE = "agent:qa Write docs/dev/qa-report-*"
-QA_DISPATCH = "Step 13 Agent(qa)"
+
+
+def dev_step(role: str, after: int = 0) -> int:
+    """The number of /dev's first step after Step `after` whose subagent call is `role`, from the command's own
+    step list (scripts/todo/dev.py, the list the todo hook hands the orchestrator): the faults below name their
+    dispatch by it, so a renumbering of the steps needs no edit here."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_dev_todos", os.path.join(suite.REPO, "scripts", "todo", "dev.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    for t in mod.get_todos():
+        n = int(re.match(r"Step (\d+)\b", t["content"]).group(1))
+        call = t.get("subagent_call") or {}  # one call, or the list of a step with several (the requirement round)
+        # a call by what it is: its role, and of a list its required entries (ROUND_CALLS: panel QA's qa is optional)
+        if n > after and role in {c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+                                  if not c.get("optional")}:
+            return n
+    raise LookupError(f"/dev has no step after Step {after} whose subagent call is {role}")
+
+
+DEV_STEP = dev_step("dev")  # the dev dispatch
+QA_STEP = dev_step("qa", DEV_STEP)  # the QA dispatch after it (not the QA of BA's conclusions before it)
+QA_DISPATCH = f"Step {QA_STEP} Agent(qa)"
+LANE_QA = f"Step {QA_STEP} [[]l1] Agent(qa)"  # a fan-out's first lane
 SKIP = "qa.e2e_enforcement.status:skipped_without_justification"
 # fault -> (the pipeline's compliant scenario, settings, what the replay injects: tests/replay/faults.py)
 FAULTS = {
@@ -90,27 +115,35 @@ FAULTS = {
     "dev report lists an ignored file": (DEV, "armed", "invalid@agent:dev Write docs/dev/dev-report-*="
                                          'dev.files_created:["toy/__pycache__/__init__.cpython-312.pyc"]'),
     # The listing planted after the dev's stop passed: G3's gitignore rule (pretool-aggregate-check.py and
-    # pretool-gitignore-preflight.py) refuses Step 13's QA dispatch naming the report.
+    # pretool-gitignore-preflight.py) refuses the QA dispatch (QA_STEP) naming the report.
     "dev report lists an ignored file before QA": (DEV, "armed",
                                                    f"plant@{QA_DISPATCH}=docs/dev/dev-report-{{task}}.json:ignored"),
     "dev report spoiled before QA": (DEV, "armed", f"plant@{QA_DISPATCH}=docs/dev/dev-report-{{task}}.json:junk"),
     "canonical aggregate missing before QA": (FANOUT, "shipped",
-                                              "plant@Step 13 [[]l1] Agent(qa)=docs/dev/dev-report-{task}.json:absent"),
-    "canonical aggregate schema-invalid before QA": (FANOUT, "armed", "plant@Step 13 [[]l1] Agent(qa)="
+                                              f"plant@{LANE_QA}=docs/dev/dev-report-{{task}}.json:absent"),
+    "canonical aggregate schema-invalid before QA": (FANOUT, "armed", f"plant@{LANE_QA}="
                                                      "docs/dev/dev-report-{task}.json:schema-invalid"),
+    # A canonical newer than its lanes (no rebuild replaces it) naming another task: G3 R12(b)'s finding
+    # (pretool-aggregate-check.py _emit_canonical_findings); the lane dispatched again writes its report, whose stop
+    # rebuilds the canonical.
+    "canonical aggregate of another task before QA": (FANOUT, "armed", f"plant@{LANE_QA}="
+                                                      "docs/dev/dev-report-{task}.json:identity"),
     "qa dispatched before its dev returned": (QA_EARLY, "armed", ""),
     "merge grant invalid": (MERGE, "shipped", "invalid@agent:merge-analyst Write grant=nonce:0000"),
     # test_faults.py's F7 (shipped): a lane dispatched from the pre-P1 template, its report needs_review
-    "lane from the pre-P1 template": (FANOUT, "shipped", "pretemplate@Step 10 [[]l1] Agent(dev);"
+    "lane from the pre-P1 template": (FANOUT, "shipped", f"pretemplate@Step {DEV_STEP} [[]l1] Agent(dev);"
                                       "invalid@agent:dev Write docs/dev/dev-report-*-l1.json=dev.status:needs_review"),
-    # test_faults.py's F9 (shipped): the newest lane's report reaches disk by a shell redirection, so the
-    # canonical aggregate is missing at that lane's stop (G2's canonical wire, C5)
-    "last lane report written by a shell redirection": (FANOUT, "shipped",
-                                                        "bash@agent:dev Write docs/dev/dev-report-*-l2.json"),
-    # P6 A20 (test_faults.py's F10, F11, F3a, armed): G2's file lists and F3.a at the dev's own stop
+    # Retired, a gate no longer theirs to meet: test_faults.py's F9 (the newest lane's report written by a shell
+    # redirection) since the lane's own stop rebuilds the aggregate whatever wrote the report (aggregate-never-stale.md,
+    # the aggregate-rebuild rule of subagentstop-producer-gate.py); F11 (a report omitting a file its dev wrote) since
+    # the lane ledger completes the lists before G2 reads them (dev-bookkeeping-by-hook.md).
+    # P6 A20 (test_faults.py's F10, F3a, armed): G2's file lists and F3.a at the dev's own stop
     "dev report lists a file it did not write": (FANOUT, "armed", FAULT_SPECS["F10"]),
-    "dev report omits a file it wrote": (FANOUT, "armed", FAULT_SPECS["F11"]),
     "dev wrote a syntax-broken harness hook": (FANOUT, "armed", FAULT_SPECS["F3a"]),
+    # The dev's report lists an open blocking issue: its own stop is held once with the list
+    # (subagentstop-lane-blockers.py, blockers-at-lane-stop.md); its next round writes the report without it.
+    "dev report lists an open blocking issue": (DEV, "shipped", "invalid@agent:dev Write docs/dev/dev-report-*="
+                                                'blocking_issues:["the toy suite was not run"]'),
 }
 COMMIT = next(s for s in suite.COMPLIANT if s.name == "/commit")
 # fault -> (scenario, settings, spec) of a denial: test_faults.py's F12 and F12w, a grant claimed by the wrong role
@@ -153,11 +186,17 @@ class Catalog:
     def __init__(self, tree: str, work: str):
         self.e = sites.Enumerator(tree)
         self.sites, self.not_relayed = sites.relayed_sites(self.e, tree, work)
-        self.cls = {s.id: sites.classify(self.e, s) for s in self.sites}
-        self.by_id = {s.id: s for s in self.sites}
+        self.cls = {s.key: sites.classify(self.e, s) for s in self.sites}
+        self.by_key = {s.key: s for s in self.sites}
 
     def of(self, s) -> str:
-        return self.cls[s.id][0]
+        return self.cls[s.key][0]
+
+    @staticmethod
+    def name(s) -> str:
+        """A site as the tables print it: its key (sites.name_sites), which an edit that only moves lines
+        keeps, and where it is now."""
+        return f"{s.key} (at {s.id})"
 
     def table(self) -> str:
         per: dict = collections.defaultdict(collections.Counter)
@@ -221,7 +260,7 @@ def check_replay(r, catalog, compliant: bool) -> list[str]:
             bad.append(f"{where}: the block maps to no enumerated site (recall): {b['text'][:300]}")
             continue
         classes = {catalog.of(s) for s in b["sites"]}
-        ids = ", ".join(s.id for s in b["sites"])
+        ids = ", ".join(catalog.name(s) for s in b["sites"])
         if compliant and "D" in classes:
             bad.append(f"{where}: a compliant scenario reached the D site {ids}")
         if "-" in classes:
@@ -244,17 +283,17 @@ def test_every_blocking_site_is_enumerated_and_classified(catalog):
     print("\nH sites:")
     for s in catalog.sites:
         if catalog.of(s) == "H":
-            print(f"  {s.id} {s.func}: {catalog.cls[s.id][1]}")
+            print(f"  {catalog.name(s)}: {catalog.cls[s.key][1]}")
     print("\nsites that fit no class (dead ends no replay reaches; outside the D25 scenarios and faults):")
     for s in catalog.sites:
         if catalog.of(s) == "-":
-            print(f"  {s.id} {s.func} [{', '.join(sorted({r[0] for r in s.regs}))[:120]}]: {catalog.cls[s.id][1]}")
+            print(f"  {catalog.name(s)} [{', '.join(sorted({r[0] for r in s.regs}))[:120]}]: {catalog.cls[s.key][1]}")
     assert catalog.sites, "the enumerator found no blocking site"
     every = catalog.e.sites()
     missed = [x for hook in catalog.e.entries() for x in sites.unaccounted(catalog.e, hook, every)]
     assert not missed, "exit-2 calls in registered hooks that the enumeration does not account for:\n  " + \
         "\n  ".join(missed)
-    unreachable = [(s.id, catalog.cls[s.id][1]) for s in catalog.sites if catalog.of(s) == "U"]
+    unreachable = [(catalog.name(s), catalog.cls[s.key][1]) for s in catalog.sites if catalog.of(s) == "U"]
     assert not unreachable, "unreachable sites remain; delete each with its proof:\n" + \
         "\n".join(f"  {i}: {why}" for i, why in unreachable)
     assert any(catalog.of(s) == "H" for s in catalog.sites), "the time-lock's Stop blocks went unfound"
@@ -268,7 +307,7 @@ def test_gate_is_cleared_by_the_actors_next_action(replays, catalog, case):
     r = replays.get(case_key(case))
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     bl = blocks(r, catalog)
-    print(f"\n{case}: " + "; ".join(f"{b['ev']['label']!r} -> {', '.join(s.id + ' ' + catalog.of(s) for s in b['sites'])}"
+    print(f"\n{case}: " + "; ".join(f"{b['ev']['label']!r} -> {', '.join(catalog.name(s) + ' ' + catalog.of(s) for s in b['sites'])}"
                                     for b in bl))
     assert bl, f"{case} reached no gate:\n{r.explain()}"
     assert all(catalog.of(s) == "G" for b in bl for s in b["sites"]), \
@@ -303,7 +342,8 @@ def test_a_step_whose_own_call_a_hook_refused_ends_on_its_report(replays):
     r = replays.get(suite.replay_key(STEP_REFUSED, "shipped"))
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     rounds = {x["label"]: x for x in (r.terminal("do") or {}).get("rounds", [])}
-    assert rounds["/do Step 2 call refused by a hook"]["blocked"], rounds
+    from tests.replay.drivers.do import DO  # the step the driver refuses, by what it is (/do's Develop step)
+    assert rounds[f"/do Step {DO.develop} call refused by a hook"]["blocked"], rounds
     assert not rounds["/do Stop on the step's refusal"]["blocked"], rounds
     assert rounds["/do Stop with the step open"]["blocked"], rounds
     assert r.reached(), r.explain()
@@ -319,7 +359,7 @@ def test_fault_gate_is_cleared_by_its_producers_next_round(replays, catalog, fau
     r = replays.get(fault_key(fault))
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     bl = blocks(r, catalog)
-    print(f"\n{fault}: " + "; ".join(f"{b['ev']['label']!r} -> {', '.join(s.id + ' ' + catalog.of(s) for s in b['sites'])}"
+    print(f"\n{fault}: " + "; ".join(f"{b['ev']['label']!r} -> {', '.join(catalog.name(s) + ' ' + catalog.of(s) for s in b['sites'])}"
                                      for b in bl))
     assert bl, f"{fault}: the fault met no gate:\n{r.explain()}"
     assert all(catalog.of(s) == "G" for b in bl for s in b["sites"]), \
@@ -336,7 +376,7 @@ def test_fault_denial_is_named_and_its_actor_goes_on(replays, catalog, denial):
     r = replays.get(fault_key(denial))
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     bl, evs = blocks(r, catalog), events(r)
-    print(f"\n{denial}: " + "; ".join(f"{b['ev']['label']!r} -> {', '.join(s.id + ' ' + catalog.of(s) for s in b['sites'])}"
+    print(f"\n{denial}: " + "; ".join(f"{b['ev']['label']!r} -> {', '.join(catalog.name(s) + ' ' + catalog.of(s) for s in b['sites'])}"
                                       for b in bl))
     assert bl and all(b["sites"] for b in bl), f"{denial}: no block, or one mapping to no site:\n{r.explain()}"
     assert all(catalog.of(s) == "D" for b in bl for s in b["sites"]), f"{denial} met a block at a site other than D"
@@ -363,22 +403,22 @@ def test_every_gate_site_is_reached_and_cleared(replays, catalog):
         for b in blocks(r, catalog):
             for s in b["sites"]:
                 name = f"{r.scenario.name} ({r.settings}{', ' + _faults[0][1] if _faults else ''})"
-                (cleared_by if ok and cleared(evs, b["ev"]) else failed)[s.id].add(name)
+                (cleared_by if ok and cleared(evs, b["ev"]) else failed)[s.key].add(name)
                 if catalog.of(s) == "D" and key in denial_keys and not (ok and cleared(evs, b["ev"])):
-                    denied.append(f"{s.id} {s.func}: {name}")
+                    denied.append(f"{catalog.name(s)}: {name}")
     rows, unreached = [], []
     for s in catalog.sites:
         if catalog.of(s) != "G":
             continue
-        rows.append({"site": s.id, "function": s.func, "cleared by": "; ".join(sorted(cleared_by[s.id])) or "-",
-                     "reached, not cleared": "; ".join(sorted(failed[s.id])) or "-"})
-        if not cleared_by[s.id]:
-            unreached.append(f"{s.id} {s.func}: " + ("reached by " + "; ".join(sorted(failed[s.id])) +
-                                                     " but not cleared" if failed[s.id] else "no replay reaches it"))
+        rows.append({"site": s.key, "at": s.id, "cleared by": "; ".join(sorted(cleared_by[s.key])) or "-",
+                     "reached, not cleared": "; ".join(sorted(failed[s.key])) or "-"})
+        if not cleared_by[s.key]:
+            unreached.append(f"{catalog.name(s)}: " + ("reached by " + "; ".join(sorted(failed[s.key])) +
+                                                    " but not cleared" if failed[s.key] else "no replay reaches it"))
     print("\nG sites, the replays that reach them and clear them:\n" + suite.table(rows))
-    d_rows = [{"site": s.id, "function": s.func, "denied, the actor's next call allowed, in": "; ".join(
-        sorted(cleared_by[s.id])) or "-", "reached, not cleared": "; ".join(sorted(failed[s.id])) or "-"}
-        for s in catalog.sites if catalog.of(s) == "D" and (cleared_by[s.id] or failed[s.id])]
+    d_rows = [{"site": s.key, "at": s.id, "denied, the actor's next call allowed, in": "; ".join(
+        sorted(cleared_by[s.key])) or "-", "reached, not cleared": "; ".join(sorted(failed[s.key])) or "-"}
+        for s in catalog.sites if catalog.of(s) == "D" and (cleared_by[s.key] or failed[s.key])]
     print("\nD sites the session's replays reach (a fault's denial):\n" + suite.table(d_rows))
     assert not unreached, "G sites with no replay that reaches and clears them:\n  " + "\n  ".join(unreached)
     assert not denied, "D sites a denial fault reaches whose actor's next call is refused:\n  " + "\n  ".join(denied)

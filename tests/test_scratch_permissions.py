@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import posixpath
 import re
 import sys
@@ -53,6 +54,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 SETTINGS = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))
 EXAMPLE = json.loads((REPO / "settings.machine.example.json").read_text(encoding="utf-8"))
 
@@ -185,11 +187,50 @@ def decide(perms: dict, op: str, path: str, builtin: bool = False) -> str:
 
 
 # ------------------------------------------------------------------ the harness's own scratch names
-def test_session_root_is_the_pinned_tmpdir():
+def script_root(script: Path, env: dict, tmp: Path) -> str:
+    """The session scratch root `script` (a session start or end hook) really uses under `env`: the last value
+    its run assigns to ROOT, read from its own trace (bash -x on a descriptor of its own). Nothing is written
+    outside `tmp`: `mkdir` fails (a PATH shim), so a start stops before it creates anything, and an end finds
+    no directory of its made-up session to remove."""
+    import subprocess
+    shim, trace = tmp / "shim", tmp / "trace.txt"
+    shim.mkdir(exist_ok=True)
+    (shim / "mkdir").write_text("#!/bin/sh\nexit 1\n")
+    (shim / "mkdir").chmod(0o755)
+    env = {**env, "PATH": f"{shim}:/usr/bin:/bin", "HOME": str(tmp), "CLAUDE_PROJECT_DIR": str(tmp),
+           "CLAUDE_CODE_SESSION_ID": "probe-sid", "BASH_XTRACEFD": "9"}
+    subprocess.run(["bash", "-c", 'exec 9>"$1"; shift; exec bash -x "$@"', "_", str(trace), str(script)],
+                   input='{"session_id": "probe-sid"}', capture_output=True, text=True, env=env, cwd=tmp, timeout=HANG_GUARD)
+    roots = [ln.split("=", 1)[1].strip("'") for ln in trace.read_text().splitlines() if ln.lstrip("+ ").startswith("ROOT=")]
+    return roots[-1] if roots else ""
+
+
+def definition_root(env: dict) -> str:
+    import subprocess
+    return subprocess.run([sys.executable, "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import locations; "
+                           "print(locations.session_scratch_root())", str(REPO / "hooks" / "lib")],
+                          capture_output=True, text=True, env=env, timeout=HANG_GUARD).stdout.strip()
+
+
+@pytest.mark.parametrize("case", ["set", "absent", "trailing-slash", "link"])
+def test_session_root_is_the_pinned_tmpdir(tmp_path, case):
+    """The shipped TMPDIR is the session root, and the session start and end use the root of the one definition
+    (locations.session_scratch_root) with TMPDIR set, unset, and set to one session's directory spelled with a
+    trailing slash or through a link (where a root of the script's own, `${ROOT%/*}`, named another place)."""
     env = SHIPPED["env"]
     assert env["TMPDIR"] == env["CLAUDE_CODE_TMPDIR"] == SESSION_ROOT
+    root = tmp_path / "root"
+    (root / "outer").mkdir(parents=True)
+    (root / "outer" / ".owner").write_text('{"sid": "outer"}')
+    (tmp_path / "links").mkdir()
+    (tmp_path / "links" / "outer").symlink_to(root / "outer")
+    tmpdir = {"set": str(root), "absent": None, "trailing-slash": f"{root}/outer/",
+              "link": str(tmp_path / "links" / "outer")}[case]
+    run_env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", **({"TMPDIR": tmpdir} if tmpdir else {})}
+    want = definition_root(run_env)
+    assert want == (SESSION_ROOT if case == "absent" else os.path.realpath(root))
     for hook in ("session-scratch-init.sh", "sessionend-scratch-sweep.sh"):
-        assert 'ROOT="${TMPDIR:-/var/tmp/claude-scratch}"' in (REPO / "hooks" / hook).read_text()
+        assert script_root(REPO / "hooks" / hook, run_env, tmp_path) == want, hook
 
 
 def test_role_root_is_the_policy_role_scratch():

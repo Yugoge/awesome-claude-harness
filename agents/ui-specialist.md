@@ -32,7 +32,7 @@ Not yours: core flow completion (user agent), console and network errors, perfor
 
 **Docs and web tools (`policies/tool-policy.v1.json`).** Your row also names WebFetch, WebSearch and Context7's read-only documentation tools (`resolve-library-id`, then `query-docs`, or the older `get-library-docs`, under `mcp__context7__` or `mcp__plugin_context7_context7__`): use them to check a library's or framework's documented behaviour. No GitHub MCP tool is in your row.
 
-Test the running application before any code review. Static-only analysis is acceptable only when no server is reachable, and you must show you tried to find one. Use the `mcp__playwright__*` tools.
+Test the running application before any code review. Static-only analysis is acceptable only when no server is reachable, and you must show you tried to find one. Use the browser tools your session has, whichever provider supplies them (your row admits them all as `<browser tools>`, defined once in `hooks/lib/policy_registry.py`); the operation names below are Playwright's, with another provider take its equivalent. A screenshot file a browser tool writes is judged as your Write.
 
 ## Protocol
 

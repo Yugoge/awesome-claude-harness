@@ -14,6 +14,13 @@ measured at every position its decisions were taken; requiring one entry to equa
 several accepted positions uncoverable, though each position carries its own reason. A decision at a
 position no entry names still leaves the violation reported, and each entry is still stale on its own.
 
+A position at an event whose call carries no tool (TOOLLESS: Stop, UserPromptSubmit; their payload names no
+tool or agent type, so the check's position there is (event, "")) is named by that event and an empty tool,
+"tool": "". Why: a read at such an event could not be named at all while every entry needed a tool, so a
+read accepted for a stated reason there stayed reported. An empty tool at any other event is still refused
+(it would name no one tool's call), and so is a tool at a tool-less event (no call there has one). What is
+no longer checked: nothing at another event; at a tool-less event the entry names the event alone.
+
 The register cannot go stale silently: an entry that covers no current violation is a violation of its own
 (register-stale), as is an entry that does not parse or carries no reason (register-invalid). The check
 reports how many violations the register covers (counts()["register_covered"]), and lists them in the map.
@@ -25,7 +32,24 @@ import os
 
 PATH = os.path.join("policies", "artifact-check-accepted-reads.v1.json")
 COVERABLE = ("6-move", "6-recheck")
+TOOLLESS = ("Stop", "UserPromptSubmit")  # the events whose call carries no tool or agent type
 _KEYS = ("artifact", "event", "tool", "reason")
+
+
+def _problem(i: int, e) -> str | None:
+    """Why entry `i` is refused, or None."""
+    if not isinstance(e, dict) or set(e) != set(_KEYS):
+        return f"entry {i}: the keys are exactly {', '.join(_KEYS)}"
+    if not all(isinstance(e[k], str) for k in _KEYS):
+        return f"entry {i}: artifact, event, tool and reason are strings"
+    if not all(e[k].strip() for k in ("artifact", "event", "reason")):
+        return (f"entry {i}: artifact, event and reason are non-empty strings"
+                + (" (an empty reason is refused)" if not e["reason"].strip() else ""))
+    if e["event"] in TOOLLESS and e["tool"]:
+        return f"entry {i}: {e['event']} carries no tool: its tool is \"\""
+    if e["event"] not in TOOLLESS and not e["tool"].strip():
+        return f"entry {i}: the tool is a non-empty string at {e['event']} (only {', '.join(TOOLLESS)} carry none)"
+    return None
 
 
 def load(tree: str) -> tuple[list[dict], list[str]]:
@@ -43,11 +67,9 @@ def load(tree: str) -> tuple[list[dict], list[str]]:
         return [], [f"{PATH} holds no entries list"]
     good, problems = [], []
     for i, e in enumerate(entries):
-        if not isinstance(e, dict) or set(e) != set(_KEYS):
-            problems.append(f"entry {i}: the keys are exactly {', '.join(_KEYS)}")
-        elif not all(isinstance(e[k], str) and e[k].strip() for k in _KEYS):
-            problems.append(f"entry {i}: artifact, event, tool and reason are non-empty strings"
-                            + (" (an empty reason is refused)" if not str(e.get("reason") or "").strip() else ""))
+        why = _problem(i, e)
+        if why:
+            problems.append(why)
         else:
             good.append(dict(e, index=i))
     return good, problems
@@ -82,7 +104,7 @@ def apply(vs: list, entries: list[dict], problems: list[str], make) -> tuple[lis
             "reason": " | ".join(e["reason"] for e in es)}))
         used.update(e["index"] for e in es)
     left += [make("register-invalid", PATH, p) for p in problems]
-    left += [make("register-stale", PATH, f"entry {e['index']} ({e['artifact']} at {e['event']} {e['tool']}) "
+    left += [make("register-stale", PATH, f"entry {e['index']} ({e['artifact']} at {e['event']} {e['tool'] or '(no tool)'}) "
                   "covers no current violation: remove it")
              for e in entries if e["index"] not in used]
     return left, covered

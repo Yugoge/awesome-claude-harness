@@ -19,7 +19,7 @@
 #     - empty repo:                 ref created as a root commit (no parent)
 #
 # Algorithm (git plumbing only — no `git commit`):
-#   1. read-tree parent tree (or --empty for bootstrap)
+#   1. seed: the last snapshot's index (stat data) with HEAD's entry set, else read-tree HEAD (or --empty)
 #   2. git add -A into a TEMP index (GIT_INDEX_FILE); return 3 when the settings clean filter refuses;
 #      never the project's .claude/scratch; a nested repository with no commit is left out and named
 #   2b. hard-exclude known PII file classes from the temp index (independent of .gitignore)
@@ -87,10 +87,26 @@ CHECKPOINT_REMOTE_LOOKUP_TIMEOUT="${CHECKPOINT_REMOTE_LOOKUP_TIMEOUT:-10}"  # se
 # process git started (its process group), so no scan outlives its hook; two stay under the Stop phase's 120 s.
 CHECKPOINT_SCAN_TIMEOUT="${CHECKPOINT_SCAN_TIMEOUT:-45}"  # seconds
 checkpoint_scan() { if command -v timeout >/dev/null 2>&1; then timeout -k 5 "$CHECKPOINT_SCAN_TIMEOUT" git "$@"; else git "$@"; fi; }
+# checkpoint_overtime <seconds> <cause>: a snapshot past its time limit, ended with nothing written: its log line (duration,
+# cause) and the session's line (checkpoint_notice). Also run by a caller that had to end the snapshot itself.
+checkpoint_overtime() {
+    _checkpoint_log ERROR "snapshot ran past its time limit after ${1}s: ${2}; nothing written (ref=${ref:-?}, repo=${3:-$PWD})"
+    checkpoint_notice="Checkpoint snapshot ran past its time limit after ${1}s (${2}): nothing written, see logs/checkpoint.log"
+    checkpoint_late=1
+}
 # True when dir (default: here) is the top of its repository's working tree. A project below a larger repository is
 # not: the snapshot is the repository's (one ref per branch, restored at its top), so it would take the tree above.
+# The filesystem root is never a repository's top: a repository found there (once one lay there by accident) is no
+# project, so a session below it, or at it, writes nothing; the one log line below says so.
 checkpoint_project_top() {
-    local d t; d=$(cd "${1:-.}" 2>/dev/null && pwd -P) && t=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null) && [ "$t" = "$d" ]
+    local d t; checkpoint_root_refused=""
+    d=$(cd "${1:-.}" 2>/dev/null && pwd -P) && t=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null) || return 1
+    if claude_is_fs_root "$t"; then
+        checkpoint_root_refused=1
+        _checkpoint_log WARN "the filesystem root is the only repository above '${d}': no snapshot (trigger='${trigger:-?}')"
+        return 1
+    fi
+    [ "$t" = "$d" ]
 }
 
 # Known PII file classes hard-excluded from every checkpoint snapshot,
@@ -460,14 +476,15 @@ ${CLAUDE_CHECKPOINT_EXTRA_TRAILER}}"
 #   1  build/CAS failure after retries
 #   2  not a git repo
 #   3  refused at step 2 or 2c: nothing written; checkpoint_refused_by names the rule(s), no value
-# checkpoint_notice: the one line for the session when the snapshot was refused or left a file out
+# checkpoint_notice: the one line for the session when the snapshot was refused, ran past its time limit (then
+# checkpoint_late=1) or left a file out
 # (checkpoint_left_out names them, never a value); checkpoint_streak: the run it extends, if any.
 write_checkpoint() {
     local work_dir="${1:-}"
     local trigger="${2:-unknown}"
     local custom_message="${3:-}"
-    local count_file="" ref=""
-    checkpoint_notice="" checkpoint_streak="" checkpoint_left_out="" checkpoint_ref="" checkpoint_commit=""
+    local count_file="" ref="" t0=$SECONDS
+    checkpoint_notice="" checkpoint_streak="" checkpoint_left_out="" checkpoint_ref="" checkpoint_commit="" checkpoint_late=""
 
     # /harness off: no snapshot is written, by any writer (hooks/lib/harness_switch.sh)
     if . "${BASH_SOURCE[0]%/*}/harness_switch.sh" 2>/dev/null && harness_switch_off; then
@@ -476,7 +493,8 @@ write_checkpoint() {
 
     # rc=2 (not a repo, or not its top) is a no-op skip, NOT a checkpoint failure: the counter is left alone.
     if ! checkpoint_project_top "$work_dir"; then
-        _checkpoint_log WARN "not a git repo, or not the top of its repository (work_dir='${work_dir}', trigger='${trigger}')"
+        [ -n "$checkpoint_root_refused" ] \
+            || _checkpoint_log WARN "not a git repo, or not the top of its repository (work_dir='${work_dir}', trigger='${trigger}')"
         return 2
     fi
 
@@ -537,7 +555,20 @@ write_checkpoint() {
 
     rm -f "$TMP_INDEX"
     mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null  # the 2>> redirects below fail on a fresh home
-    if [ -n "$seed_parent_tree" ]; then
+    # The last snapshot's index (its stat data) seeds this one, so add -A hashes only files changed since, not every
+    # tracked and untracked file again; HEAD's entries it lacks come back and the ones it holds that HEAD lacks and that
+    # are ignored now, or in the scratch root, go: the same entries as a seed from HEAD's tree. Unusable: HEAD's tree.
+    local stat_cache="${abs_git_dir}/checkpoint-stat-index" fix="${TMP_INDEX}.fix"
+    if [ -n "$seed_parent_tree" ] && [ -s "$stat_cache" ] && cp -p "$stat_cache" "$TMP_INDEX" 2>/dev/null \
+        && { GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" diff-index -z --cached --name-only --no-renames --diff-filter=D HEAD
+             GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" diff-index -z --cached --name-only --no-renames --diff-filter=A HEAD \
+                 | "${git_cmd[@]}" check-ignore --no-index -z --stdin
+             GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" diff-index -z --cached --name-only --no-renames --diff-filter=A HEAD \
+                 -- ":(top,glob).claude/scratch/**"; } >"$fix" 2>>"$CHECKPOINT_LOG_FILE" \
+        && { ! [ -s "$fix" ] || GIT_LITERAL_PATHSPECS=1 GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" reset -q HEAD \
+             --pathspec-from-file="$fix" --pathspec-file-nul 2>>"$CHECKPOINT_LOG_FILE"; }; then
+        rm -f "$fix"
+    elif rm -f "$fix" "$TMP_INDEX" && [ -n "$seed_parent_tree" ]; then
         if ! GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" read-tree "$seed_parent_tree" 2>>"$CHECKPOINT_LOG_FILE"; then
             _checkpoint_log ERROR "read-tree failed (parent_tree=${seed_parent_tree}, ref=${ref})"
             rm -f "$TMP_INDEX"
@@ -579,8 +610,10 @@ write_checkpoint() {
             _checkpoint_refused
             return 3
         fi
-        _checkpoint_log ERROR "add -A failed (ref=${ref})"
         _checkpoint_record_failure
+        case "$rc" in 124|137) checkpoint_overtime "$((SECONDS - t0))" "git add -A was ended at its bound, \
+CHECKPOINT_SCAN_TIMEOUT=${CHECKPOINT_SCAN_TIMEOUT}s" "$top"; checkpoint_notice+="; ${checkpoint_streak}"; return 1 ;; esac
+        _checkpoint_log ERROR "add -A failed (ref=${ref})"
         return 1
     fi
 
@@ -590,33 +623,15 @@ write_checkpoint() {
     # days before its ignore rule existed). Path-component-exact, never substring: basename PREFIX
     # for the .claude.json family, exact interior directory segment for backups/sessions.
     # -------------------------------------------------------------------------
-    local pii_path pii_removed=0
-    while IFS= read -r pii_path; do
-        [ -z "$pii_path" ] && continue
-        if GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" update-index --force-remove -- "$pii_path" 2>>"$CHECKPOINT_LOG_FILE"; then
-            pii_removed=$((pii_removed + 1))
-        fi
-    done < <(GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" ls-files 2>/dev/null | while IFS= read -r p; do
-        base="${p##*/}"
-        is_pii=0
-        for prefix in $CHECKPOINT_PII_BASENAME_PREFIXES; do
-            case "$base" in
-                "$prefix"*) is_pii=1 ;;
-            esac
-        done
-        if [ "$is_pii" -eq 0 ]; then
-            dir="${p%/*}"
-            if [ "$dir" != "$p" ]; then
-                IFS='/' read -r -a segs <<< "$dir"
-                for seg in "${segs[@]}"; do
-                    for comp in $CHECKPOINT_PII_PATH_COMPONENTS; do
-                        [ "$seg" = "$comp" ] && is_pii=1
-                    done
-                done
-            fi
-        fi
-        [ "$is_pii" -eq 1 ] && printf '%s\n' "$p"
-    done)
+    # One pathspec per class (git matches them in one pass: a per-path shell loop cost seconds on a large index).
+    local pii_spec=() pii_list="${TMP_INDEX}.pii" pii_removed=0 p
+    for p in $CHECKPOINT_PII_BASENAME_PREFIXES; do pii_spec+=(":(top,glob)**/${p}*"); done
+    for p in $CHECKPOINT_PII_PATH_COMPONENTS; do pii_spec+=(":(top,glob)**/${p}/**"); done
+    : >"$pii_list"; [ "${#pii_spec[@]}" = 0 ] || GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" ls-files -z -- "${pii_spec[@]}" >"$pii_list" 2>/dev/null
+    pii_removed=$(tr -cd '\0' <"$pii_list" | wc -c | tr -d ' ')
+    [ "${pii_removed:-0}" -gt 0 ] && ! GIT_INDEX_FILE="$TMP_INDEX" "${git_cmd[@]}" update-index -z --force-remove --stdin \
+        <"$pii_list" 2>>"$CHECKPOINT_LOG_FILE" && pii_removed=0
+    rm -f "$pii_list"
     if [ "$pii_removed" -gt 0 ]; then
         _checkpoint_log WARN "hard-excluded ${pii_removed} known-PII-class path(s) from snapshot (ref=${ref})"
     fi
@@ -663,6 +678,9 @@ write_checkpoint() {
         _checkpoint_record_failure
         return 1
     fi
+    # The next snapshot's seed (above); cp -p keeps the index's time, against which git tells a racily changed file.
+    cp -p "$TMP_INDEX" "${TMP_INDEX}.stat" 2>/dev/null && mv -f "${TMP_INDEX}.stat" "$stat_cache" 2>/dev/null \
+        || rm -f "${TMP_INDEX}.stat"
 
     # -------------------------------------------------------------------------
     # PHASE 2: commit-tree + update-ref under flock: one writer per repo at a

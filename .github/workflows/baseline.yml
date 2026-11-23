@@ -95,6 +95,14 @@ jobs:
         # The gates below read this tracked file as-is; nothing is rendered here.
         run: python3 scripts/install/render-settings check --staged
 
+      - name: Install bubblewrap
+        # The unit tests of the /dev-overnight write boundary run a real bwrap and skip where none
+        # is installed (as in the jobs replay-suite and artifact-graph-shard).
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+
       - name: Install Python dependencies
         # Hash-verified install from the lockfile matching THIS matrix leg.
         # --require-hashes makes pip reject the whole install if any requirement,
@@ -158,6 +166,15 @@ jobs:
         # doc-sync region the writer refuses. Runs before the tests, on the clean checkout.
         run: python3 scripts/regen-folder-docs.py --check
 
+      - name: Definition register (tests.defs_registry --stale)
+        # One fact, one definition. The module exits 1 on an uncovered group or a file it cannot parse and 2 on an
+        # invalid register, but 0 with stale entries (register definitions the tree no longer has), which it only
+        # lists; the grep makes the summary line itself the verdict: 0 uncovered groups and 0 not found.
+        run: |
+          set -o pipefail
+          python3 -m tests.defs_registry --stale | tee "$RUNNER_TEMP/defs-register.out"
+          grep -Eq "^uncovered groups: 0 \(0 definitions\); definitions scanned: [0-9]+; register definitions not found: 0$" "$RUNNER_TEMP/defs-register.out"
+
       - name: Run tests
         # tests/test_artifact_graph.py replays every pipeline traced in a sandbox;
         # the artifact-graph jobs below run it: shards with strace and a mount
@@ -167,8 +184,9 @@ jobs:
         # artifact-graph-run-to-run its test_run_to_run.py).
         # In parallel (pytest-xdist): one worker per CPU, each test file whole on one worker
         # (--dist loadfile), so a file's module-level fixtures and ordering stay as they were.
+        # -rs: every skipped test's reason is printed, so a skip CI should not take is visible in the log.
         run: >-
-          python3 -m pytest hooks/tests tests -q -n auto --dist loadfile
+          python3 -m pytest hooks/tests tests -q -n auto --dist loadfile -rs
           --ignore=tests/generated --ignore=tests/test_artifact_graph.py
           --ignore=tests/artifact_graph/test_mutations.py --ignore=tests/replay
 

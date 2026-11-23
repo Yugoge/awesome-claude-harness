@@ -318,6 +318,7 @@ def _attribute_shards_by_identity(
     merged: list[tuple[str, str, str]] = []
     for label, path in shards:
         declared = _self_declared_lane(path, original_task_id)
+        declared = lane_label(original_task_id, declared) or declared if declared is not None else None
         if declared is not None and declared != label and declared in filename_labels:
             merged.append((path.name, label, declared))
             continue
@@ -1074,6 +1075,38 @@ def task_of_lane_report(filename: str, lane: str) -> str | None:
     return task_id if task_id and _is_worker_for_task(filename, _bare_task_id(task_id), task_id)[0] else None
 
 
+def lane_label(task_id: str, lane: str) -> str | None:
+    """The label this script's reasons name lane `lane` of task_id by ('1-l2' for lane l2 of <stamp>-1), by the same
+    definition; None when dev-report-<task_id>-<lane>.json is no lane report of task_id."""
+    name = f"dev-report-{task_id}-{lane}.json"
+    return _is_worker_for_task(name, _bare_task_id(task_id), task_id)[1] if task_of_lane_report(name, lane) else None
+
+
+def lane_of_label(task_id: str, label: str) -> str:
+    """The lane a label of this script's names (lane l2 for '1-l2' of <stamp>-1): lane_label's inverse; a label of a
+    task with no suffix is its lane."""
+    suffix = _task_suffix(task_id, _bare_task_id(task_id))
+    return label[len(suffix) + 1:] if suffix and label.startswith(suffix + "-") else label
+
+
+def _rebuild_record(task_id: str, stale: list[str]) -> Path:
+    return Path(stale[0]).parent / f".dev-report-{task_id}.rebuild"
+
+
+def _rebuild_state(stale: list[str]) -> str:
+    return json.dumps(sorted((os.path.basename(p), os.stat(p).st_mtime_ns, os.stat(p).st_size) for p in stale))
+
+
+def rebuild_ended(task_id: str, stale: list[str]) -> bool:
+    """Whether rebuild_if_stale's record holds the state of ``stale``: a run on these lane reports ended and left
+    the canonical stale. A cut-off run records nothing. The one reader of the record (the check before a QA
+    dispatch and the Stop gate ask it)."""
+    try:
+        return _rebuild_record(task_id, stale).read_text(encoding="utf-8") == _rebuild_state(stale)
+    except OSError:
+        return False
+
+
 def rebuild_if_stale(project_dir, task_id: str, timeout: float = REBUILD_TIMEOUT_S) -> list[str]:
     """Run this script for task_id when a lane report is newer than its canonical; the lane reports
     still newer afterwards. A refused, failed or cut-off run leaves the old canonical (writes are
@@ -1087,9 +1120,8 @@ def rebuild_if_stale(project_dir, task_id: str, timeout: float = REBUILD_TIMEOUT
     if not stale:
         return []
     import fcntl
-    dev_dir = Path(stale[0]).parent
-    state = json.dumps(sorted((os.path.basename(p), os.stat(p).st_mtime_ns, os.stat(p).st_size) for p in stale))
-    with open(dev_dir / f".dev-report-{task_id}.rebuild", "a+", encoding="utf-8") as record:
+    state = _rebuild_state(stale)
+    with open(_rebuild_record(task_id, stale), "a+", encoding="utf-8") as record:
         try:
             fcntl.flock(record, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -1578,7 +1610,7 @@ _STAGE_OWNED_HUNKS_CACHE: list = []  # [(replay_with_provenance, OwnedLandingRef
 # a one-time aggregation step, and neither run even found a match (see
 # _chain_bounded_orderings below for why: one declaring lane's ledger entry
 # had an empty `old` string, which stage-owned-hunks.py's replay primitive
-# refuses unconditionally, so every permutation containing it fails only
+# refuses in any non-empty buffer, so every permutation containing it fails only
 # after however much OTHER work that ordering did first). Raising this
 # constant alone is therefore not a safe fix at N=6; above this bound, the
 # search is handed to the chain-aware algorithm instead, which only widens

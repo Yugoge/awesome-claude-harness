@@ -202,3 +202,14 @@ def test_explicit_value_keeps_match_anywhere(env):
     """A set CLAUDE_HARD_BANNED_SCRIPTS keeps its match-anywhere meaning: the noexec reading is the default's."""
     r = hook(env, "bash -n scripts/demo-recovery.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery")
     assert r.returncode == 2 and "hard-banned script 'demo-recovery'" in r.stderr
+
+
+@pytest.mark.parametrize("program", ["/usr/bin/cat", "/usr//bin/cat", "/usr/bin/../bin/cat", "cat"])
+def test_a_read_is_a_read_however_the_program_directory_is_spelled(env, program):
+    """g-loctriage U39: the same program, named through another spelling of its directory, gets the same verdict;
+    running the script stays refused in every spelling."""
+    r = hook(env, f"{program} demo-recovery.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery")
+    assert r.returncode == 0 and "hard-banned script" not in r.stderr, r.stderr
+    shell = program.replace("cat", "bash")
+    r = hook(env, f"{shell} demo-recovery.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery")
+    assert r.returncode == 2 and "hard-banned script 'demo-recovery'" in r.stderr

@@ -21,6 +21,7 @@ import importlib
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -93,27 +94,26 @@ class ChainValidator:
 
     def read_json(self, path: Path, *, required: bool = True) -> dict[str, Any] | None:
         relative = _rel(path, self.root)
-        if not path.is_file():
+        read = _harness_lib("overnight").read_declared_json(path)
+        if not read.is_file:
             if required:
                 self.error("MISSING_ARTIFACT", relative, "required JSON artifact is absent")
             return None
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            self.error("UNREADABLE_ARTIFACT", relative, str(exc))
+        if read.status == "unreadable":
+            self.error("UNREADABLE_ARTIFACT", relative, str(read.error))
             return None
-        if not raw.strip():
+        if read.status == "empty":
             self.error("EMPTY_ARTIFACT", relative, "JSON artifact is empty")
             return None
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as exc:
+        if read.status == "malformed":
+            exc = read.error
             self.error(
                 "MALFORMED_JSON",
                 relative,
                 f"line {exc.lineno}, column {exc.colno}: {exc.msg}",
             )
             return None
+        value = read.value
         if not isinstance(value, dict):
             self.error("INVALID_JSON_TYPE", relative, "top-level value must be an object")
             return None
@@ -304,8 +304,18 @@ def _safe_task_id(task_id: str) -> bool:
     return bool(task_id not in (os.curdir, os.pardir) and TASK_ID_RE.fullmatch(task_id))
 
 
-def _lane_paths(dev_dir: Path, task_id: str, worker: str) -> dict[str, Path]:
-    lane_id = f"{task_id}-{worker}"
+def _lane_label(aggregate: ModuleType | None, task_id: str, lane: str) -> str:
+    """The label the canonical's parallel_workers names lane `lane` of task_id by (the aggregator's lane_label)."""
+    return (aggregate.lane_label(task_id, lane) if aggregate is not None else None) or lane
+
+
+def _label_lane(aggregate: ModuleType | None, task_id: str, label: str) -> str:
+    """The lane a parallel_workers label of task_id names (the aggregator's lane_of_label)."""
+    return aggregate.lane_of_label(task_id, label) if aggregate is not None else label
+
+
+def _lane_paths(dev_dir: Path, task_id: str, lane: str) -> dict[str, Path]:
+    lane_id = f"{task_id}-{lane}"
     return {
         "ticket": dev_dir / f"ticket-{lane_id}.md",
         "context": dev_dir / f"context-{lane_id}.json",
@@ -467,7 +477,7 @@ def _find_undeclared_lane_artifacts(
     applying it to a self-declared worker would let a lane exempt itself by
     naming its files after a revision label.
     """
-    declared = set(workers)
+    declared = {_label_lane(aggregate, validator.task_id, label) for label in workers}
     families = (
         ("ticket-", ".md"),
         ("context-", ".json"),
@@ -1104,6 +1114,7 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                 continue
             if scan_key_is_truncated:
                 label = _lane_shard_label(child.name, task_id, aggregate)
+                label = _lane_label(aggregate, task_id, label) if label is not None else None
                 is_worker = label is not None
             else:
                 is_worker, label = aggregate._is_worker_for_task(
@@ -1126,6 +1137,7 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
                 # dispatched -- the identity and lane-set checks then report it
                 # under their own codes.
                 declared_lane = _self_declared_worker(child, task_id)
+                declared_lane = _lane_label(aggregate, task_id, declared_lane) if declared_lane is not None else None
                 if declared_lane is not None and declared_lane in workers:
                     label = declared_lane
                 # One lane can own several shards once identity decides, so the
@@ -1167,8 +1179,8 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
         artifact_paths = [result["canonical_dev_report"], result["completion"]]
         result["report_paths"] = [result["canonical_dev_report"]]
         for worker in workers:
-            lane_id = f"{task_id}-{worker}"
-            paths = _lane_paths(dev_dir, task_id, worker)
+            lane_id = f"{task_id}-{_label_lane(aggregate, task_id, worker)}"
+            paths = _lane_paths(dev_dir, task_id, _label_lane(aggregate, task_id, worker))
             lane = {
                 "worker": worker,
                 "task_id": lane_id,
@@ -1222,13 +1234,14 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             )
         elif distinct:
             roster = distinct[0]
-            for lane_label in [name for name in roster if name not in scanned_labels]:
+            scanned_lanes_bare = [_label_lane(aggregate, task_id, label) for label in scanned_labels]
+            for lane_label in [name for name in roster if name not in scanned_lanes_bare]:
                 validator.error(
                     "LANE_SET_MISMATCH",
                     result["canonical_dev_report"],
                     f"roster lane {lane_label!r} of lane_set {roster!r} has no shard",
                 )
-            for lane_label in [name for name in scanned_labels if name not in roster]:
+            for lane_label in [name for name in scanned_lanes_bare if name not in roster]:
                 validator.error(
                     "LANE_SET_MISMATCH",
                     result["canonical_dev_report"],
@@ -1363,7 +1376,7 @@ def resolve_chain(project_root: Path | str, task_id: str) -> dict[str, Any]:
             validator.error(
                 "AMBIGUOUS_SINGULAR_CHAIN",
                 result["canonical_dev_report"],
-                f"singular canonical coexists with worker shards {[label for label, _ in scanned]!r}",
+                f"singular canonical coexists with worker shards {[_label_lane(aggregate, task_id, label) for label, _ in scanned]!r}",
             )
         if workers_declaration == "absent" and scanned:
             # Additive to AMBIGUOUS_SINGULAR_CHAIN above, which still fires
@@ -1551,10 +1564,89 @@ def _check_do_report(
         )
 
 
+NOTHING_TO_COMMIT = "nothing_to_commit"
+
+
+def nothing_to_commit_path(dev_dir: Path, task_id: str) -> Path:
+    """The commit plan's record that the task has nothing to commit: written by
+    scripts/steps/commit-plan.py (record_nothing_to_commit), read by _check_commits."""
+    return Path(dev_dir) / f"nothing-to-commit-{task_id}.json"
+
+
+def _read_json_file(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def nothing_to_commit(plan: dict, lifecycle: ModuleType, root: Path, task_id: str) -> str | None:
+    """Why the commit plan has nothing to commit, else None: every path the
+    plan owns, in every repository of the plan, is in that repository's HEAD
+    as the work tree holds it (no change, staged or not, against HEAD) or is
+    ignored by the repository. A path that is neither (absent from HEAD and
+    the work tree alike) keeps the commit owed. A plan that owns no path has
+    nothing to commit only on /close's no-files facts, read over every session
+    of the project (hooks/lib/close_exit.nothing_to_land): its reports declare
+    no file and its spans wrote no project file. The one test /commit
+    (commands/commit.md Step 5) and the Stop gate share."""
+    if not any(repo.get("owned_paths") for repo in plan.get("repositories") or []):
+        return ("the task owns no path, its reports declare no changed file and no span of it in the "
+                "project's session records wrote a project file"
+                if _harness_lib("close_exit").nothing_to_land(Path(root), task_id) else None)
+    in_head = ignored = 0
+    for repo in plan.get("repositories") or []:
+        paths = [p for p in repo.get("owned_paths") or [] if isinstance(p, str)]
+        if not paths:
+            continue
+        git = ["git", "-C", str(repo["repo_root"])]  # check-ignore reads plain paths, no pathspec magic
+        if lifecycle._porcelain_dirty(Path(repo["repo_root"]), paths):
+            return None
+        try:
+            tree = subprocess.run([*git, "--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", "HEAD", "--",
+                                   *paths], capture_output=True, text=True, timeout=10, check=True).stdout.split("\0")
+            rest = [p for p in paths if p not in tree]
+            probe = subprocess.run([*git, "check-ignore", "-z", "--stdin"], input="".join(p + "\0" for p in rest),
+                                   capture_output=True, text=True, timeout=10) if rest else None
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if probe is not None and (probe.returncode not in (0, 1) or set(rest) - set(probe.stdout.split("\0"))):
+            return None
+        in_head, ignored = in_head + len(paths) - len(rest), ignored + len(rest)
+    if not in_head + ignored:
+        return None
+    return (f"every path the task owns is in HEAD as the work tree holds it ({in_head}) "
+            f"or ignored by its repository ({ignored})")
+
+
+def record_nothing_to_commit(dev_dir: Path, task_id: str, plan: dict | None) -> dict | None:
+    """commit-plan.py's record for a plan with nothing to commit (nothing_to_commit's
+    reason, the plan's repositories and heads), written beside the task's reports;
+    any earlier record is removed when the plan has something to commit. The record
+    is no evidence by itself: _check_commits verifies it again against HEAD."""
+    path = nothing_to_commit_path(dev_dir, task_id)
+    reason = None
+    if plan is not None and Path(dev_dir).is_dir():
+        reason = nothing_to_commit(plan, _exec_script("dev-lifecycle.py", "_disposition_lifecycle"),
+                                   Path(dev_dir).parent.parent, task_id)
+    if reason is None:
+        path.unlink(missing_ok=True)
+        return None
+    record = {"task_id": task_id, "state": NOTHING_TO_COMMIT, "reason": reason,
+              "repositories": [{key: repo.get(key) for key in ("repo_root", "expected_head", "owned_paths")}
+                               for repo in plan.get("repositories") or []]}
+    partial = path.with_name(f".{path.name}.{os.getpid()}")
+    partial.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(partial, path)
+    return record
+
+
 def _check_commits(validator: ChainValidator, task_id: str, report: Path, lifecycle: ModuleType) -> None:
     """A ``Task-id`` line reachable from HEAD in every repository of the task's
     commit plan, the plan built as dev-lifecycle's commit_detection builds it;
-    its dirty-tree half is no part of the disposition."""
+    its dirty-tree half is no part of the disposition. Short of one, the task
+    has landed only on the commit plan's nothing_to_commit record, verified
+    again by nothing_to_commit at this moment; every other gap stays."""
     root = validator.root
     repos = lifecycle._load_commit_repos_module()
     try:
@@ -1569,14 +1661,19 @@ def _check_commits(validator: ChainValidator, task_id: str, report: Path, lifecy
         validator.error("REPO_PLAN_ERROR", _rel(report, root), str(exc))
         return
     trailer = f"Task-id: {task_id}"
-    for repo in plan["repositories"]:
-        repo_root = Path(repo["repo_root"])
-        if not lifecycle._head_reachable_trailer(repo_root, trailer):
-            validator.error(
-                "MISSING_TASK_TRAILER",
-                _rel(repo_root, root),
-                f"no commit reachable from HEAD carries the line {trailer!r}",
-            )
+    missing = [repo for repo in plan["repositories"]
+               if not lifecycle._head_reachable_trailer(Path(repo["repo_root"]), trailer)]
+    record = _read_json_file(nothing_to_commit_path(validator.dev_dir, task_id)) if missing else None
+    if (isinstance(record, dict) and record.get("task_id") == task_id and record.get("state") == NOTHING_TO_COMMIT
+            and (reason := nothing_to_commit(plan, lifecycle, root, task_id))):  # the record, verified again now
+        validator.landed = f"{NOTHING_TO_COMMIT}: {reason}"
+        return
+    for repo in missing:
+        validator.error(
+            "MISSING_TASK_TRAILER",
+            _rel(Path(repo["repo_root"]), root),
+            f"no commit reachable from HEAD carries the line {trailer!r}",
+        )
 
 
 def disposition(project_root: Path | str, task_id: str, stage: str) -> dict[str, Any]:
@@ -1644,6 +1741,8 @@ def disposition(project_root: Path | str, task_id: str, stage: str) -> dict[str,
         "task_id": task_id,
         "gaps": gaps,
         "chain": getattr(validator, "chain", None),
+        # the commit stage's verified nothing_to_commit reason, only when it applies
+        **({"landed": validator.landed} if getattr(validator, "landed", None) else {}),
     }
 
 
@@ -1673,6 +1772,8 @@ def _print_disposition(project_dir: str, task_id: str, stage: str | None) -> int
         )
         return INSTRUMENT_FAILURE_EXIT
     print(f"DISPOSITION={outcome['disposition']} STAGE={outcome['stage']} TASK={outcome['task_id']}")
+    if outcome.get("landed"):
+        print(f"LANDED={outcome['landed']}")
     for gap in outcome["gaps"]:
         print(gap_line(gap))
     if outcome.get("chain") is not None:

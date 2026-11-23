@@ -26,6 +26,8 @@ site. Consult, observe, witness and advise rules refuse nothing through the gate
 
 unaccounted() cross-checks the walk against a plain token scan of each registered hook's own file
 (and of each refusing rule file).
+A site is named by its key (name_sites: file, function, kind, longest message piece), not by its line, so
+the catalogue and the tables printed from it keep their names across an edit that only moves lines.
 Each Site keeps its file, line, function, the source of the conditions guarding it (enclosing tests,
 early returns), the string constants of its message (with those of a module-level name bound once to a
 string, or to a dict, tuple or list of strings, that the message reads: PyModule.named_text), and the
@@ -71,9 +73,11 @@ class Site:
     dynamic: bool = False  # the message interpolates a value (it can name the call it refuses)
     role: str = ""
     rules: list = field(default_factory=list)  # the gate rule files it is reached through (none: [])
+    key: str = ""        # the site's name across edits (Enumerator.sites, name_sites)
 
     @property
     def id(self) -> str:
+        """Where the site is now (file:line): it moves with every edit above it; `key` does not."""
         return f"{self.file}:{self.line}"
 
     def all_text(self) -> str:
@@ -160,7 +164,8 @@ def _flow_text(mod, func, call) -> list[str]:
             continue
         seen.add(name)
         for a in assigns:
-            if not any(isinstance(t, ast.Name) and t.id == name for t in getattr(a, "targets", None) or [a.target]):
+            if not any(isinstance(t, ast.Name) and t.id == name for t0 in getattr(a, "targets", None) or [a.target]
+                       for t in (t0.elts if isinstance(t0, ast.Tuple) else [t0])):  # `head, tail = _texts(...)` too
                 continue
             out += mod.text_of(a.value)
             for n in ast.walk(a.value):
@@ -527,6 +532,13 @@ class PyModule:
                 out = self.text_of(prev) + out
         for f in self._called_locals(stmts):
             out += self.text_of(f)
+        # A message a local name carries to the write (`found = reasons(data)` before the block, then
+        # `write("\n".join(found))`): the prose of the values it is assigned from, as a helper's are
+        # (_flow_text); a bare key it is read through (`data.get("session_id")`) names no message.
+        func = self.enclosing_func(st)
+        for n in (n for x in stmts for n in ast.walk(x)) if func is not None else ():
+            if isinstance(n, ast.Call):
+                out += [t for t in _flow_text(self, func, n) if t not in out and " " in t.strip()]
         return [s for s in out if len(s.strip()) >= 4]
 
     def _called_locals(self, stmts) -> list:
@@ -1418,7 +1430,21 @@ class Enumerator:
                     have.rules = sorted(set(have.rules) | set(s.rules))
                 else:
                     merged[s.id] = s
-        return sorted(merged.values(), key=lambda s: (s.file, s.line))
+        return name_sites(sorted(merged.values(), key=lambda s: (s.file, s.line)))
+
+
+def name_sites(found: list[Site]) -> list[Site]:
+    """Give each site its key: file, function, kind (and the helper a call site calls) and the longest piece
+    of its message, numbered #2, #3 ... in line order where those repeat. An edit that only moves lines, or
+    adds a site with a message of its own, names every other site as before; a new site is a new key."""
+    seen: dict[str, int] = {}
+    for s in found:
+        piece = max(fragments(s), key=lambda f: (len(f), f), default="")
+        base = f"{s.file} {s.func}() {s.kind}" + (f" -> {s.via}" if s.via else "") + \
+            (f" '{piece[:60]}'" if piece else "")
+        seen[base] = seen.get(base, 0) + 1
+        s.key = base + (f" #{seen[base]}" if seen[base] > 1 else "")
+    return found
 
 
 def sites(tree: str) -> list[Site]:

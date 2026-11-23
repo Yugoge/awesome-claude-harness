@@ -55,6 +55,7 @@ from pathlib import Path
 # Same cross-directory import shape as scripts/write-commit-grant.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
 from harness_state_dir import harness_state_dir  # noqa: E402
+import locations  # noqa: E402  (the filesystem root is no repository top)
 from allowlist import state_entry_failure, write_state_entry  # noqa: E402
 
 EXIT_RACE = 3
@@ -99,7 +100,7 @@ def main(argv=None) -> int:
                         help="print the token path and write nothing")
     args = parser.parse_args(argv)
 
-    repo_root = _git(args.repo_root, "rev-parse", "--show-toplevel")
+    repo_root = locations.repo_top(args.repo_root) or ""  # never the filesystem root
     if not repo_root or not args.branch.strip() or not args.commit.strip():
         print(f"push-gate token not written: {args.repo_root!r} is not a git "
               "repository, or --branch/--commit is empty", file=sys.stderr)

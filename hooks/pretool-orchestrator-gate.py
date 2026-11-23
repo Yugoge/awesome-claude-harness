@@ -399,8 +399,8 @@ def read_only_bash(data: dict) -> bool:
 # scratch directory passes uncounted, and the input key naming the file.
 SCRATCH_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
                        "NotebookEdit": "notebook_path"}
-# The harness session scratch root when TMPDIR is unset: hooks/session-scratch-init.sh's.
-from lib.locations import SESSION_SCRATCH_ROOT as HARNESS_SCRATCH_DEFAULT_ROOT  # noqa: E402
+# The harness session scratch root (an absolute TMPDIR, else hooks/session-scratch-init.sh's default).
+from lib.locations import session_scratch_root  # noqa: E402
 
 
 def _inside(path: str, root: str) -> bool:
@@ -421,7 +421,10 @@ def _scratch_overlaps_harness(scratch: str, data: dict) -> bool:
     dir, the git-blessed grant dir) must not overlap it either way. Flat roots
     (the harness reads named entries at their top: the state dir, CLAUDE_TMPDIR,
     the daemon-restart grant dir, doc-sync's state root) may hold it, as /tmp
-    holds the CLI's scratchpad, but must not be it or sit inside it."""
+    holds the CLI's scratchpad, but must not be it or sit inside it. A broad root (the
+    filesystem root, a system directory, the home: lib/locations.is_broad_root) as a tree
+    root holds every scratch, so for it only the other direction counts."""
+    from lib.locations import is_broad_root
     tree = [os.environ.get("CLAUDE_PROJECT_DIR"), data.get("cwd"), os.environ.get("CLAUDE_HOME"),
             os.environ.get("CLAUDE_CONFIG_DIR"), str(Path.home() / ".claude"),
             str(Path(__file__).resolve().parent.parent), os.environ.get("CLAUDE_GIT_BLESSED_GRANT_DIR")]
@@ -431,7 +434,7 @@ def _scratch_overlaps_harness(scratch: str, data: dict) -> bool:
     flat = [harness_state_dir(), os.environ.get("CLAUDE_TMPDIR"), os.environ.get("CLAUDE_DAEMON_RESTART_SENTINEL_DIR"),
             os.environ.get("CLAUDE_DOC_SYNC_STATE_ROOT")]
     for root in filter(None, map(_real_abs, tree)):
-        if _inside(root, scratch) or _inside(scratch, root):
+        if _inside(root, scratch) or (_inside(scratch, root) and not is_broad_root(root)):
             return True
     return any(_inside(root, scratch) for root in filter(None, map(_real_abs, flat)))
 
@@ -447,9 +450,7 @@ def _session_scratch_of(real: str, sid: str) -> str | None:
         <project>/<sid>/scratchpad.
     Each must exist as a real directory: no symlink from its root down."""
     candidates = []
-    root = os.environ.get("TMPDIR") or HARNESS_SCRATCH_DEFAULT_ROOT
-    if os.path.isabs(root):
-        candidates.append((os.path.join(os.path.realpath(root), sid), True))
+    candidates.append((os.path.join(session_scratch_root(), sid), True))  # the root as every other reader takes it
     root = os.environ.get("CLAUDE_CODE_TMPDIR") or os.environ.get("TMPDIR") or "/tmp"
     if os.path.isabs(root):
         base = os.path.join(os.path.realpath(root), f"claude-{os.getuid()}")

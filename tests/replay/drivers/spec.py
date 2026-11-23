@@ -46,12 +46,13 @@ The split QA reads the monolith and the views and runs check 3's verifier lines.
 
 Driver arguments (cli.py --arg K=V):
   variant=plain          the run above; split QA passes on round 1
-  variant=omission       the spec subagent omits qa's Role Mandate (R3.4: qa's candidate
-                         role lines conflict, Section 7 gives the duty to "QA (on fail) or
-                         PM-Retro"); it records the omission only where its text tells it to
-                         (the base's R3.4 record in views/mandate-omissions.json); a block at
-                         its stop it cannot clear without fabricating a mandate, so it stops
-                         again with the split as it stands
+  variant=omission       the spec subagent omits qa's Role Mandate (R3.4: the monolith has no
+                         `## Role: qa` heading and no consumers: annotation naming qa, so the
+                         text has it omit the section and fabricate nothing); the text has it
+                         record nothing, and `spec-verify.py --strict` accepts a view without
+                         a Role Mandate exactly then: the run meets no block (before P1b the
+                         text recorded the omission in views/mandate-omissions.json and the
+                         variant met a block at the spec subagent's stop)
   variant=bad-split      round 1 of the spec subagent dumps qa's content blocks into dev.md
                          too (the coverage-fallback ANTI-PATTERN), a split that only
                          `spec-verify.py --strict` rejects (pairwise overlap); a block at the
@@ -98,6 +99,21 @@ import shlex
 from .. import agents, cmdtext, hookrun
 from ..pipeline import DROP_NEXT, Deviations, Orchestrator, utc_now
 from . import _round
+from .dev import Steps
+
+# /spec's steps by what each IS, from the command's own canonical list (scripts/todo/spec.py, via drivers/dev.py
+# Steps: a step gone raises LookupError at import). The list names no subagent role: the roles the finalize step
+# calls (spec, qa) are checked where the driver takes their templates from the command's text.
+SP = Steps(command="spec", what={"parse": ("Parse arguments", None), "clarify": ("Clarify requirement", None),
+                                 "write": ("Write first spec", None), "accumulate": ("Accumulate requirements", None),
+                                 "conclusion": ("Detect natural conclusion", None), "finalize": ("Finalize spec", None),
+                                 "display": ("Display result", None)})
+for _step in SP._what:  # resolve every step now: a step gone fails the driver at load, naming it
+    getattr(SP, _step)
+# The spec AGENT's own phases (agents/spec.md, "### Step N" under its Phase 0/0.5/1/2) are a different list with a
+# different source: that file's headings. The driver finds each by its title alone ("Write manifest.json",
+# "Assemble and write view files", ...), never by a number (a number repeats across the phases, and is not the
+# command's step). The titles are the agent's text; a renamed one raises cmdtext.TextNotFound naming it.
 
 PIPELINE = "spec"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -282,7 +298,7 @@ class SpecText:
     def __init__(self, o: Orchestrator):
         self.o = o
         self.create_block = None
-        for b in cmdtext.blocks(o.text, "Step 3", "bash"):
+        for b in cmdtext.blocks(o.text, f"Step {SP.write}", "bash"):
             if _calls("spec-write.py", "create").search(b.text):
                 self.create_block = b.text
         self.writer = self.create_block is not None
@@ -293,7 +309,7 @@ class SpecText:
         first = self.create_block.split("\n")[0]
         m = re.match(r"^(.*?)spec-write\.py(\"?) create --spec (?:\"[^\"]*\"|\S+)\s*(<<'?(\w+)'?)\s*$", first)
         if not m:
-            raise cmdtext.TextNotFound("Step 3's writer block has no `spec-write.py create --spec ... <<'X'` line")
+            raise cmdtext.TextNotFound(f"Step {SP.write}'s writer block has no `spec-write.py create --spec ... <<'X'` line")
         return m.group(1), m.group(2), m.group(3), m.group(4)
 
     def call(self, inline: str, body: str) -> str:
@@ -340,22 +356,11 @@ class SpecAgent:
 
     def venv(self) -> str:
         """The venv activation as Step 5 spells it (the text has every Python stanza run in the venv)."""
-        sec = cmdtext.section(self.text, "Step 5: Write manifest.json")
+        sec = cmdtext.section(self.text, "Write manifest.json")
         m = re.search(r"`(source [^`]*/venv/bin/activate\"?)`", sec)
         if not m:
-            raise cmdtext.TextNotFound("agents/spec.md Step 5 spells no venv activation")
+            raise cmdtext.TextNotFound("agents/spec.md's Write manifest.json step spells no venv activation")
         return m.group(1)
-
-    def omission_reason(self) -> str | None:
-        """The closed-enum reason the text gives for an omission whose candidate blocks conflict,
-        where the text has the subagent record its omission at all."""
-        sec = cmdtext.section(self.text, "Step 3: Assemble and write view files")
-        if "mandate-omissions.json" not in sec or "Do not record the omission yourself" in sec:
-            return None
-        for code, desc in re.findall(r'^\s*-\s*`"([a-z_]+)"`\s*—\s*(.*)$', sec, re.M):
-            if "conflict" in desc:
-                return code
-        raise cmdtext.TextNotFound("agents/spec.md R3.4 lists no reason for conflicting candidate blocks")
 
     # ------------------------------------------------------------ Phase 1: content blocks and routing
     def content_blocks(self, mono: str) -> list:
@@ -464,7 +469,7 @@ class SpecAgent:
         return m.group(0) if m else None
 
     def header(self, agent: str, mono_rel: str, spec_id: str, extraction: bool = True) -> list:
-        tpl = cmdtext.blocks(self.text, "Step 3: Assemble and write view files")[0].text
+        tpl = cmdtext.blocks(self.text, "Assemble and write view files")[0].text
         out = []
         for l in tpl.rstrip("\n").split("\n"):
             if l.startswith("**Extraction**") and not extraction:
@@ -503,7 +508,7 @@ class SpecAgent:
                 out += b[1] + [""]
             out += ["---", ""]
         if generated:
-            sec = cmdtext.section(self.text, "Step 4: Create orchestrator view")
+            sec = cmdtext.section(self.text, "Create orchestrator view")
             table = [l for l in sec.split("\n") if l.startswith("|")]
             rows = []
             for l in table[2:]:  # the template's header and separator rows, then one row per agent
@@ -550,7 +555,7 @@ class SpecAgent:
         sub.read(mono_path, label="spec Read monolith")
         mono = _read(rp, mono_path)
         _sub_bash(sub, f"mkdir -p {shlex.quote(views_dir)}", "Create the views directory", label="spec Bash mkdir views")
-        excluded = [a for a in re.findall(r"`([a-z-]+)`", cmdtext.section(self.text, "Step 2: Decide which agents get views")
+        excluded = [a for a in re.findall(r"`([a-z-]+)`", cmdtext.section(self.text, "Decide which agents get views")
                                           .split("Priority order")[0]) if a not in self.selected]
         sub.s.say("Agent selection:\n  Included: dev (implements the check in toy/__init__.py), "
                   "qa (verifies the acceptance list)\n  Excluded: " + ", ".join(excluded)
@@ -560,11 +565,6 @@ class SpecAgent:
         sub.s.say(f"Meta-Rule discovery:\n  Recognized: {'[]' if not meta else 'see ## Meta-Rules'}\n"
                   f"  Advisory (MUST/SHOULD inline): {musts}\n  Un-parseable: []", sub.aid)
         self.write_views(sub, mono, dump=run.variant == "bad-split" and self.round == 1)
-        if self.omit and self.omission_reason():
-            # R3.4 as the base text says: append the omission record to views/mandate-omissions.json.
-            rec = {"omissions": [{"view": f"{self.omit}.md", "agent": self.omit, "reason": self.omission_reason()}]}
-            sub.write(f"{views_dir}/mandate-omissions.json", json.dumps(rec, indent=2) + "\n",
-                      label="spec Write mandate-omissions.json")
         self.manifest(sub, mono)
         self.self_check(sub, mono)
         self.coverage(sub)
@@ -657,7 +657,7 @@ class SpecAgent:
     def coverage(self, sub) -> None:
         """Step 7's coverage block, as the text spells it."""
         c = self.ctx
-        cmd = self.block("Step 7: Coverage verification", index=0)
+        cmd = self.block("Coverage verification", index=0)
         cmd = cmd.replace("<spec-id>", c["spec_id"])
         cmd = f"MONOLITH_PATH={shlex.quote(c['mono_path'])}\n" + cmd
         _sub_bash(sub, cmd, "Coverage verification", label="spec Bash coverage")
@@ -738,16 +738,12 @@ class SpecAgent:
                           "checkpoint_counts": {a: 2 for a in self.selected}},
                "codex_consult": {"invoked": False, "status": "not_requested", "feedback_summary": None,
                                  "feedback_incorporated": None}}
-        if self.omit:
-            out["phase1"]["mandate_omitted"] = {f"{self.omit}.md": "candidate role lines conflict (R3.4)"}
         return json.dumps(out, indent=2)
 
     def on_stop_block(self, sub, ev):
         """A block at the subagent's stop: the split goes back to it. A split it can fix (the bad
-        split's dumped blocks) is re-extracted as its text says and checked again; one it cannot fix
-        without fabricating (an omitted Role Mandate) is reported as it stands."""
+        split's dumped blocks) is re-extracted as its text says and checked again."""
         self.stop_round += 1
-        text = "\n".join(h.get("stderr", "") + h.get("stdout", "") for h in ev.blocks)
         mono = _read(self.rp, self.ctx["mono_path"])
         if self.run.variant == "bad-split" and self.stop_round == 1:
             sub.s.say("The split was returned: pairwise overlap above the threshold. Restarting Phase 1 "
@@ -757,10 +753,6 @@ class SpecAgent:
             _sub_bash(sub, self.block("Coverage fallback (deterministic, no LLM judgment)", anchor="--strict")
                      .replace("<spec-id>", self.ctx["spec_id"]).replace('"$MONOLITH_PATH"', shlex.quote(self.ctx["mono_path"])),
                      "Strict verification", label="spec Bash strict verify")
-            return self.final()
-        if self.stop_round == 1:
-            sub.s.say("The split was returned:\n" + text[-1500:] + "\nNothing in it can change without "
-                      "fabricating content the monolith does not hold (R3.4 / verbatim-only rule).", sub.aid)
             return self.final()
         return None
 
@@ -838,17 +830,17 @@ class SpecRun:
         o.slash(self.requirement)
         o.todo_start()
         # Step 1: no --codex token; non-empty requirement -> Step 3. Step 2: not triggered.
-        self.to(3)
+        self.to(SP.write)
         self.step3()
         # A text that asks the round (an earlier one does not): as its own Step 3a before the integer step numbers,
         # as Step 3's sub-heading "The requirement round" since.
-        lettered = bool(re.search(r"^#+\s+Step 3a\b", o.text, re.M))
-        self.round_heading = "Step 3a" if lettered else "The requirement round"
+        lettered = bool(re.search(rf"^#+\s+Step {SP.write}a\b", o.text, re.M))
+        self.round_heading = f"Step {SP.write}a" if lettered else "The requirement round"
         if lettered or re.search(r"^#+\s+The requirement round\b", o.text, re.M):
             if lettered:
-                self.to("3a")
+                self.to(f"{SP.write}a")
             self.step3a()
-        o.advance()  # Step 3 (or 3a) done, Step 4 in progress
+        self.to(SP.accumulate)  # the steps before it complete on the way
         if self.variant == "text-question":  # R7: a turn ending with a question in text is a Stop gap (A8)
             ev = self.s.stop("Spec written. Shall I add more requirements?", label="Stop with a question in text")
             text = "\n".join(hookrun.refusal(b) for b in ev.blocks)
@@ -867,26 +859,26 @@ class SpecRun:
             self.angle = angle
             act = agents.Act(notes=_round.panel_notes(angle), status="ready", summary=f"panel {angle}",
                              terminal={"docs/dev/ba-panel-*": f"BA PANEL {angle}: DONE"})
-            o.dispatch(o.template(self.round_heading, index=0), act, f"Step 3a Agent(ba) panel {angle}", sid,
+            o.dispatch(o.template(self.round_heading, index=0), act, f"Step {SP.write}a Agent(ba) panel {angle}", sid,
                        subagent_type="ba")
         self.angle = None
         doc = _round.with_paths(_round.round1(sid, panel=_round.panel()), sid)
         o.dispatch(o.template(self.round_heading, index=1), agents.Act(content={"requirement-round.v1": doc}, summary="panel QA"),
-                   "Step 3a Agent(qa) panel QA", sid, subagent_type="qa")
+                   f"Step {SP.write}a Agent(qa) panel QA", sid, subagent_type="qa")
         rel = f"docs/dev/ba-panel-{sid}-r1.json"
         if self.variant == "round":  # Finalize before round 1 is asked is refused (A6)
-            d = o.dispatch(o_template(o, "Step 6", 0), agents.Act(summary="early finalize"),
-                           "Step 6 Agent(spec) before round 1 is asked", sid, subagent_type="spec")
+            d = o.dispatch(o_template(o, f"Step {SP.finalize}", 0), agents.Act(summary="early finalize"),
+                           f"Step {SP.finalize} Agent(spec) before round 1 is asked", sid, subagent_type="spec")
             text = "\n".join(hookrun.refusal(b) for b in (d.pre.blocks if d.pre else []))
             if not d.blocked or "ASK_FIRST" not in text:
                 raise AssertionError(f"Finalize before round 1 was asked was not refused: {text[:300]}")
             _round.fact(self.rp, "refused: Finalize before round 1 is asked", {"text": text.splitlines()[:2]})
-        call, _tin = _round.ask(o, rel, f"requirement-round:{sid}:r1", "Step 3a AskUserQuestion r1")
+        call, _tin = _round.ask(o, rel, f"requirement-round:{sid}:r1", f"Step {SP.write}a AskUserQuestion r1")
         ans = f"docs/dev/requirement-answers-{sid}-r1.json"
         if not os.path.isfile(os.path.join(self.project, ans)):
             raise AssertionError("/spec's round 1 was asked and the hook wrote no answer file")
         block = next(b.text for b in cmdtext.blocks(o.text, self.round_heading) if "--answers" in b.text)
-        o.run_text(block, "Step 3a Bash spec-write append --answers", "Copy the owner's answers into Section 5",
+        o.run_text(block, f"Step {SP.write}a Bash spec-write append --answers", "Copy the owner's answers into Section 5",
                    extra_rules=[(r"^n$", "1")])
         raw = agents.peek(self.rp, "main", os.path.join(self.project, ans)).rstrip("\n")
         if raw not in self.spec_text():
@@ -895,21 +887,21 @@ class SpecRun:
 
     def step3(self) -> None:
         o, s, rp = self.o, self.s, self.rp
-        sec = o.section("Step 3")
+        sec = o.section(f"Step {SP.write}")
         tpl_rel = re.search(r"Read the template at `([^`]+)`", sec).group(1)
         tpl = tpl_rel.replace("<HARNESS_ROOT>", rp.layout.harness, 1).replace("~", rp.layout.home, 1)
-        s.read(tpl, label="Step 3 Read template", deviation=o.devs.at("Step 3 Read template"))
+        s.read(tpl, label=f"Step {SP.write} Read template", deviation=o.devs.at(f"Step {SP.write} Read template"))
         text = _read(rp, tpl)
         self.ts = utc_now().replace("-", "").replace(":", "").replace("T", "-").rstrip("Z")
         rp.task(self.ts)
-        path_line = next(b.text for b in cmdtext.blocks(o.text, "Step 3") if "docs/dev/specs/spec-" in b.text).strip()
+        path_line = next(b.text for b in cmdtext.blocks(o.text, f"Step {SP.write}") if "docs/dev/specs/spec-" in b.text).strip()
         self.path = o.bind(_tree_claude_home(rp).known_text(path_line, project=self.project) or path_line)
         # Step 3 item 3: the placeholders it names, Section 5 the requirement verbatim.
         pop = sec[sec.index("Populate the template"):sec.index("Write the spec")]
         for ph in re.findall(r"`(<[^`>]+>)`\s*→", pop):
             val = {"<issue_description>": SUMMARY, "<ISO-8601>": utc_now()}.get(ph)
             if val is None:
-                raise cmdtext.TextNotFound(f"Step 3 item 3 names {ph}, which the driver cannot fill")
+                raise cmdtext.TextNotFound(f"Step {SP.write} item 3 names {ph}, which the driver cannot fill")
             text = text.replace(ph, val)
         if "Section 5 → user's requirement verbatim" in pop:
             text = appended(text, "5", self.requirement, replace_placeholder=True)
@@ -918,7 +910,7 @@ class SpecRun:
             # the text's nested `<the path of sub-step 2, <YYYYMMDD-HHMMSS> as written>`: the path of sub-step 2
             # (its stamp bound by the driver: a typed name, which the writer writes as given)
             block = re.sub(r"<the path of sub-step 2,[^<>]*<[^<>]+>[^<>]*>", lambda m: self.path, self.st.create_block)
-            call = o.run_text(block, "Step 3 Bash spec-write create", "Write the first spec",
+            call = o.run_text(block, f"Step {SP.write} Bash spec-write create", "Write the first spec",
                               extra_rules=[(r"^the populated template$", text)])
             # the writer prints the path it wrote (its own UTC time in a name the text leaves stamped): spec_path
             m = re.search(r"^spec-write: create (\S+)$", (getattr(call, "response", None) or {}).get("stdout", ""), re.M)
@@ -927,8 +919,8 @@ class SpecRun:
         else:
             if "Create `docs/dev/specs/` if it does not exist" in sec:
                 o.run(f"mkdir -p {shlex.quote(os.path.dirname(self.path))}", "Create docs/dev/specs/",
-                      "Step 3 Bash mkdir specs")
-            s.write(self.path, text, label="Step 3 Write spec", deviation=o.devs.at("Step 3 Write spec"))
+                      f"Step {SP.write} Bash mkdir specs")
+            s.write(self.path, text, label=f"Step {SP.write} Write spec", deviation=o.devs.at(f"Step {SP.write} Write spec"))
         # The early capture: the first turn carries no design or evidence (sub-step 1 no-op).
         self.explore()
         s.say(f"Spec written: {self.path}. Add more requirements whenever you are ready.")
@@ -936,7 +928,7 @@ class SpecRun:
     def explore(self) -> None:
         """Step 3 item 5: the background Explore dispatch, from the text's own Agent(...) block."""
         o = self.o
-        blk = next(b.text for b in cmdtext.blocks(o.text, "Step 3") if "subagent_type=" in b.text)
+        blk = next(b.text for b in cmdtext.blocks(o.text, f"Step {SP.write}") if "subagent_type=" in b.text)
         fields = dict(re.findall(r'(\w+)="((?:[^"\\]|\\.)*)"', blk))
         flags = {k: v == "true" for k, v in re.findall(r"(\w+)=(true|false)\b", blk)}
         prompt = o.bind(fields["prompt"])
@@ -949,7 +941,7 @@ class SpecRun:
                      label="Explore Grep add")
             sub.read(f"{project}/toy/util.py", label="Explore Read toy/util.py")
 
-        label = "Step 3 Agent(Explore) background"
+        label = f"Step {SP.write} Agent(Explore) background"
         self.s.dispatch(fields["subagent_type"], prompt, description=fields.get("description", ""), body=body,
                         result=self.findings, label=label, deviation=o.devs.at(label),
                         extra_input={"run_in_background": flags.get("run_in_background", False)})
@@ -962,7 +954,7 @@ class SpecRun:
             f"completed</summary>\n<result>{self.findings}</result>\n</task-notification>")}})
         # "Exploration findings arrive -> integrate into Section 1 (Before) silently."
         self.write_append("1", self.findings, "Turn 2 Section 1 findings",
-                          ("Step 4", "Exploration findings arrive"), replace_placeholder=True)
+                          (f"Step {SP.accumulate}", "Exploration findings arrive"), replace_placeholder=True)
         self.end_turn("Folded the exploration findings into Section 1.", "Stop turn 2")
 
     # ------------------------------------------------------------ turn 3: another requirement
@@ -971,11 +963,11 @@ class SpecRun:
         self.turn += 1
         self.s.prompt(FOLLOW_UP, label="prompt follow-up requirement", deviation=o.devs.at("prompt follow-up requirement"))
         # Capture precondition: nothing to capture. Branch: another requirement -> ### 5.N.
-        tpl = next(b.text for b in cmdtext.blocks(o.section("Step 4"), None) if "### 5.N" in b.text)
+        tpl = next(b.text for b in cmdtext.blocks(o.section(f"Step {SP.accumulate}"), None) if "### 5.N" in b.text)
         n = 2 + len(re.findall(r"^### 5\.\d+", self.spec_text(), re.M))
         block = o.bind(tpl.replace("### 5.N:", f"### 5.{n}:"),
                        [(r"^brief title extracted", FOLLOW_UP_TITLE), (r"^verbatim requirement text$", FOLLOW_UP)])
-        self.write_append("5", block, "Turn 3 Section 5 append", ("Step 4", "Another requirement"))
+        self.write_append("5", block, "Turn 3 Section 5 append", (f"Step {SP.accumulate}", "Another requirement"))
         self.end_turn(f"Added it to the spec as 5.{n}.", "Stop turn 3")
 
     # ------------------------------------------------------------ turn 4: design only
@@ -1007,11 +999,11 @@ class SpecRun:
         o, s = self.o, self.s
         self.turn += 1
         s.prompt(CLOSING, label="prompt conclusion", deviation=o.devs.at("prompt conclusion"))
-        self.to(6)
+        self.to(SP.finalize)
         self.finalize()
-        o.advance()  # Step 6 done, Step 7 in progress
+        self.to(SP.display)
         self.step7()
-        o.advance()  # Step 7 done
+        o.advance()  # the display step, the last one, done
         ev = s.stop(self.display, label="Stop", deviation=o.devs.at("Stop"))
         spec = os.path.join(self.project, self.path) if not os.path.isabs(self.path) else self.path
         self.rp.terminal("spec", os.path.isfile(spec) and getattr(self, "split_verdict", "") == "pass", ev,
@@ -1021,15 +1013,15 @@ class SpecRun:
         o, s = self.o, self.s
         o.values.update(spec_path=self.path, CLAUDE_PROJECT_DIR=self.project)
         # 1. The pre-split call: the Section 9 reference guard, the id, the line count.
-        call = o.run_text(o.block("Step 6", anchor="spec-finalize.py\" prepare", lang="bash"),
-                          "Step 6 Bash spec-finalize prepare", "Pre-split checks: Section 9 guard and line count")
+        call = o.run_text(o.block(f"Step {SP.finalize}", anchor="spec-finalize.py\" prepare", lang="bash"),
+                          f"Step {SP.finalize} Bash spec-finalize prepare", "Pre-split checks: Section 9 guard and line count")
         facts = _facts(call)
         if facts.get("status") != "ok" or not facts.get("monolith_lines") or not facts.get("spec_id"):
             raise cmdtext.TextNotFound(f"the pre-split call did not pass: {facts}")
         o.values["monolith_lines"] = facts["monolith_lines"]
         self.spec_id = facts["spec_id"]
         # 2-3. The spec subagent and the split QA loop.
-        self.dispatch_spec(0, "Step 6 Agent(spec)")
+        self.dispatch_spec(0, f"Step {SP.finalize} Agent(spec)")
         verdict = self.split_qa()
         while verdict == "fail" and self.qa_round < 3:
             s.say(f"Split-QA round {self.qa_round}/3: QA found {len(self.issues)} issue(s). "
@@ -1038,18 +1030,18 @@ class SpecRun:
             for issue in self.issues:
                 named = re.search(r"\(([^)]+)\)", issue["issue"])
                 self.agent.extra.setdefault(issue["view"], []).append(named.group(1))
-            self.dispatch_spec(1, f"Step 6 Agent(spec) re-split round {self.qa_round}")
+            self.dispatch_spec(1, f"Step {SP.finalize} Agent(spec) re-split round {self.qa_round}")
             verdict = self.split_qa()
         self.split_verdict = verdict
         # 4. The completion call, after the split QA's last verdict: the marker and the advisory lint.
-        call = o.run_text(o.block("Step 6", anchor="spec-finalize.py\" complete", lang="bash"),
-                          "Step 6 Bash spec-finalize complete", "Mark the split complete")
+        call = o.run_text(o.block(f"Step {SP.finalize}", anchor="spec-finalize.py\" complete", lang="bash"),
+                          f"Step {SP.finalize} Bash spec-finalize complete", "Mark the split complete")
         facts = _facts(call)
         if not facts.get("marker") or not facts.get("lint"):
             raise cmdtext.TextNotFound(f"the completion call did not mark the split: {facts}")
 
     def spec_template(self, index: int) -> dict:
-        return o_template(self.o, "Step 6", index)
+        return o_template(self.o, f"Step {SP.finalize}", index)
 
     def dispatch_spec(self, resplit: int, label: str):
         """The spec subagent's dispatch from the text's template; a re-split (`resplit` 1) is the same dispatch
@@ -1057,8 +1049,8 @@ class SpecRun:
         o = self.o
         fields = dict(self.spec_template(0))
         if resplit:
-            added = o.block("Step 6", anchor="qa_feedback_from_previous_round")
-            desc = re.search(r'description "(Spec agent re-split[^"]*)"', o.section("Step 6")).group(1)
+            added = o.block(f"Step {SP.finalize}", anchor="qa_feedback_from_previous_round")
+            desc = re.search(r'description "(Spec agent re-split[^"]*)"', o.section(f"Step {SP.finalize}")).group(1)
             fields["description"] = desc
             fields["prompt"] = fields["prompt"].replace("</obligation>", "</obligation>\n\n" + added.rstrip("\n"), 1)
         prompt = o.render(fields, self.spec_id)
@@ -1073,7 +1065,7 @@ class SpecRun:
     def split_qa(self) -> str:
         o = self.o
         self.qa_round += 1
-        fields = o_template(o, "Step 6", 1)
+        fields = o_template(o, f"Step {SP.finalize}", 1)
         prompt = o.render(fields, self.spec_id)
         # The owner's "no phases" ruling: the QA the replay dispatches must be told to fail a split that phases or
         # defers a requested outcome (a criterion naming each of them and keeping parallel lanes). The replayed QA
@@ -1112,7 +1104,7 @@ class SpecRun:
                                  "each view holds what its agent needs"})
         if "SPLIT QA: pass" in prompt:  # the reply's last line the dispatch's obligation declares (response_line)
             result += f"\n\nSPLIT QA: {'fail' if fail else 'pass'}"
-        label = f"Step 6 Agent(qa) split QA round {self.qa_round}"
+        label = f"Step {SP.finalize} Agent(qa) split QA round {self.qa_round}"
         self.s.dispatch(fields.get("subagent_type") or "qa", prompt, description=o.bind(fields.get("description", "")),
                         body=body, result=result, label=label, deviation=o.devs.at(label))
         return "fail" if fail else "pass"
@@ -1122,7 +1114,7 @@ class SpecRun:
         o, s, rp = self.o, self.s, self.rp
         su = Orchestrator(rp, "spec-update", session=s, deviations=o.devs)
         mk = su.inline("Temp-note mode", "mktemp", startswith="mktemp")
-        c = o.run(mk, "Create the temp update note", "Step 7 Bash mktemp update note")
+        c = o.run(mk, "Create the temp update note", f"Step {SP.display} Bash mktemp update note")
         note_path = c.response.get("stdout", "").strip() if c.ok else ""
         # `mktemp -d`: the note is the new file the text names in that directory, written with no Read first.
         in_dir = "-d" in mk.split()
@@ -1130,7 +1122,7 @@ class SpecRun:
             name = next(code for code in cmdtext.inline_codes(su.text, "Temp-note mode", "mktemp")
                         if re.fullmatch(r"[\w.-]+\.md", code))
             note_path = os.path.join(note_path, name)
-        disp = o.bind(cmdtext.blocks(o.section("Step 7"), None)[0].text,
+        disp = o.bind(cmdtext.blocks(o.section(f"Step {SP.display}"), None)[0].text,
                       [(r"^absolute path$", self.path), (r"^temp update path", note_path or "(none)")])
         disp = "\n".join(l for l in disp.split("\n")
                          if not (l.startswith("<If split-QA exhausted") or l.startswith("⚠ Split-QA")))
@@ -1141,14 +1133,14 @@ class SpecRun:
         if m:
             rp.rand(m.group(1))
         if not in_dir:  # a file mktemp created: Read before writing it, as the text says
-            s.read(note_path, label="Step 7 Read update note", deviation=o.devs.at("Step 7 Read update note"))
+            s.read(note_path, label=f"Step {SP.display} Read update note", deviation=o.devs.at(f"Step {SP.display} Read update note"))
         note = su.block("Temp-note mode", anchor="# Update")
         note = su.bind(note, [(r"^short focus$", "implement the spec with /dev"), (r"^ISO-8601$", utc_now()),
                               (r'id or "unknown"', self.spec_id), (r"^spec\|dev\|close", "spec"),
                               (r"exact next command", "/dev (in this session) or /dev --spec " + self.path),
                               (r"^path or URL$", self.path),
                               (r".", f"see {self.path} and docs/dev/specs/{self.spec_id}/views/")])
-        s.write(note_path, note, label="Step 7 Write update note", deviation=o.devs.at("Step 7 Write update note"))
+        s.write(note_path, note, label=f"Step {SP.display} Write update note", deviation=o.devs.at(f"Step {SP.display} Write update note"))
 
     # ------------------------------------------------------------ the whole /spec
     def run(self) -> "SpecRun":

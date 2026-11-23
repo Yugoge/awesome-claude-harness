@@ -1597,7 +1597,9 @@ def _linked_worktree_git_paths(worktree_path: str) -> list[str]:
     packed-refs that bypasses git's ref transaction is refused before the boundary
     (`_raw_git_metadata_write_into_main`)."""
     gd = _git_query(['rev-parse', '--path-format=absolute', '--git-dir'], worktree_path)
-    gcd = _git_query(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktree_path)
+    gcd = locations.repo_common_dir(worktree_path)  # none for a repository at the filesystem root
+    if not gcd:
+        return []
     paths: list[str] = []
     for p in (gd, gcd):
         if p and os.path.exists(p):
@@ -1622,7 +1624,7 @@ def _shared_common_dir_ro_rebinds(worktree_path: str) -> list[str]:
     this way; the per-worktree gitdir is untouched. `git rev-parse --git-common-dir`
     resolves the shared common-dir from a LINKED worktree (whose `.git` is a FILE
     pointing at `<common>/worktrees/<name>`) — never the per-worktree gitdir."""
-    gcd = _git_query(['rev-parse', '--path-format=absolute', '--git-common-dir'], worktree_path)
+    gcd = locations.repo_common_dir(worktree_path)
     if not gcd or not os.path.isdir(gcd):
         return []
     common_real = os.path.realpath(gcd)
@@ -1754,8 +1756,8 @@ def _checkout_git_dirs(path: str) -> list[str]:
     probe = path
     while not os.path.isdir(probe):
         probe = os.path.dirname(probe)
-    return _git_query(['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'],
-                      probe).splitlines()
+    dirs = _git_query(['rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'], probe).splitlines()
+    return [] if dirs and locations.is_fs_root(os.path.dirname(dirs[-1])) else dirs
 
 
 class _GitConfigPaths:

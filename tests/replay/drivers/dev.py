@@ -138,6 +138,104 @@ from ..replay import Deviation
 from . import _round
 
 PIPELINE = "dev"
+
+
+class Steps:
+    """/dev's step numbers by what each step IS, read from the command's own canonical step list
+    (scripts/todo/dev.py `get_todos()`, the list the todo hook hands the orchestrator): a step is found by its
+    heading, and a step that calls a subagent must still call that role. A renumbering needs no edit here; a step
+    that is gone, or whose role changed, raises LookupError, so the replay fails."""
+
+    WHAT = {"parse": ("Parse development requirement", None), "graphify_pre": ("Graphify pre-BA", None),
+            "specialists": ("Consult specialists", None), "round": (("Requirement round", "Delegate to BA subagent"), "ba"),
+            "clarify": ("BA clarification loop", None), "validate_ba": ("Validate BA output", None),
+            "qa_ba": ("QA validates BA conclusions", "qa"), "ba_qa_loop": ("BA-QA iteration loop", None),
+            "graphify": ("Graphify enrichment", "graphify"), "dev": ("Delegate to dev subagent", "dev"),
+            "aggregate": ("Write canonical aggregate", None), "validate_dev": ("Validate dev implementation", None),
+            "qa": ("Delegate to QA subagent", "qa"), "qa_results": ("Process QA results", None),
+            "settings": ("Update settings.json permissions", None), "iterate": ("Iteration loop", None),
+            "report": ("Generate completion report", None)}
+
+    def __init__(self, todos=None, command: str = "dev", what: dict | None = None, live: bool = False):
+        """`live`: the list is read from the harness home of the moment each time a step is asked for (re-read when
+        its file changed), not once when the module loads: a replay that plays an older harness for part of the
+        session (the home lands between two events) takes each step from the version it is playing then."""
+        self._command, self._what, self._live, self._seen = command, self.WHAT if what is None else what, live, None
+        self._fixed = None if (todos is None and live) else todos if todos is not None else self._load()
+
+    def _load(self):
+        import importlib.util
+        import sys
+        # in a sandbox the drivers lie in <sb>/replay/drivers and the harness under test in <sb>/home/.claude;
+        # in the tree they lie in tests/replay/drivers
+        here, command = os.path.dirname(os.path.abspath(__file__)), self._command
+        path = next(p for p in (os.path.join(here, "..", "..", "home", ".claude", "scripts", "todo", f"{command}.py"),
+                                os.path.join(here, "..", "..", "..", "scripts", "todo", f"{command}.py"))
+                    if os.path.isfile(p))
+        st = os.stat(path)
+        key = (os.path.realpath(path), st.st_mtime_ns, st.st_size, st.st_ino)
+        if self._seen and self._seen[0] == key:
+            return self._seen[1]
+        spec = importlib.util.spec_from_file_location(f"_{command}_todos".replace("-", "_"), path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, os.path.dirname(path))  # a todo script may import another (dev-command: dev's round)
+        try:
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.remove(os.path.dirname(path))
+        self._seen = (key, mod.get_todos())
+        return self._seen[1]
+
+    @property
+    def _todos(self):
+        return self._fixed if self._fixed is not None else self._load()
+
+    def get(self, name: str, default=None):
+        """The step's number in the list being played, `default` when that version has no such step."""
+        try:
+            return getattr(self, name)
+        except LookupError:
+            return default
+
+    def has(self, name: str) -> bool:
+        """Whether the list being played holds this step (a version without it does not play it)."""
+        try:
+            getattr(self, name)
+        except LookupError:
+            return False
+        return True
+
+    def __getattr__(self, name: str) -> int:
+        if name.startswith("_") or name not in self._what:
+            raise AttributeError(name)
+        heading, role = self._what[name]
+        for t in self._todos:
+            m = re.match(r"Step (\d+): (.*)", t["content"])
+            if m and m.group(2).startswith(heading):
+                call = t.get("subagent_call") or {}
+                roles_ = {c.get("subagent_type") for c in (call if isinstance(call, list) else [call])} - {None}
+                if role is not None and role not in roles_:
+                    raise LookupError(f"/{self._command}'s step {m.group(1)} ({heading}) no longer calls {role}: {sorted(roles_)}")
+                return int(m.group(1))
+        raise LookupError(f"/{self._command} has no step {heading!r} in its canonical step list")
+
+
+def text_todos(command: str) -> list:
+    """The step list of a command that has no todo script (merge, push, commit): its own `### Step N: title`
+    headings in commands/<command>.md, the text the Stop gate's predicate cites, in the shape of a todo list; a
+    step whose text says "Dispatch the `<role>` subagent" calls that role. Found where `Steps` finds a script."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = next(p for p in (os.path.join(here, "..", "..", "home", ".claude", "commands", f"{command}.md"),
+                            os.path.join(here, "..", "..", "..", "commands", f"{command}.md")) if os.path.isfile(p))
+    text = open(path, encoding="utf-8").read()
+    out = []
+    for m in re.finditer(r"^### (Step \d+: [^\n]*)\n(.*?)(?=^#{1,3} |\Z)", text, re.M | re.S):
+        role = re.search(r"Dispatch the `([\w-]+)` subagent", m.group(2))
+        out.append({"content": m.group(1), "subagent_call": {"subagent_type": role.group(1)} if role else None})
+    return out
+
+
+S = Steps()
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 COST = {"plain": 301, "qa-fail": 366, "question": 300, "ba-qa-fail": 322, "fanout": 430, "fanout-qa-fail": 508,
@@ -149,11 +247,11 @@ REQUIREMENT = ("add input validation to toy.add: raise TypeError naming the offe
 PROJECT_ROOT_PREFIX = 'CLAUDE_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" '
 RESPELLINGS = [
     Respelling("R1 resolver", r"(?<![\w/~.-])python3 scripts/resolve-dev-artifact-chain\.py",
-               "python3 ~/.claude/scripts/resolve-dev-artifact-chain.py", "commands/dev.md Step 17"),
+               "python3 ~/.claude/scripts/resolve-dev-artifact-chain.py", f"commands/dev.md Step {S.report}"),
     Respelling("R2 qa_mode flip", r"(?<!\" )(?<![\w=])bash ~/\.claude/scripts/write-qa-mode\.sh",
                PROJECT_ROOT_PREFIX + "bash ~/.claude/scripts/write-qa-mode.sh", "commands/dev.md Steps 7, 13"),
     Respelling("R3 aggregator", r"source venv/bin/activate && python3 scripts/aggregate-dev-report\.py",
-               PROJECT_ROOT_PREFIX + "python3 ~/.claude/scripts/aggregate-dev-report.py", "commands/dev.md Step 11"),
+               PROJECT_ROOT_PREFIX + "python3 ~/.claude/scripts/aggregate-dev-report.py", f"commands/dev.md Step {S.aggregate}"),
     Respelling("R4 QA guard", r"(?<![\w/~.-])python3 scripts/qa-manifest-guard\.py",
                "python3 ~/.claude/scripts/qa-manifest-guard.py", "agents/qa.md Phase 5"),
 ]
@@ -409,8 +507,8 @@ class DevCycle:
         lettered = bool(re.search(r"^#+\s+Step 4c\b", self.o.text, re.M))
         folded = bool(re.search(r"^#+\s+BA Analysis\b", self.o.text, re.M))
         self.has_round = lettered or folded
-        self.ba_heading = "Step 4c" if lettered else "BA Analysis" if folded else "Step 4"
-        self.ba_label = "Step 4c" if lettered else "Step 4"
+        self.ba_heading = "Step 4c" if lettered else "BA Analysis" if folded else f"Step {S.round}"
+        self.ba_label = "Step 4c" if lettered else f"Step {S.round}"
         self.panel_heading = "Step 4a" if lettered else "Panel QA Writes Round 1"
         self.round_step = {s: s if lettered else 4 for s in ("4a", "4b", "4c")}  # the checklist item of each part
 
@@ -420,7 +518,7 @@ class DevCycle:
             (r"^DEV_SESSION_ID$", lambda m: self.reg),
             (r"^(?:timestamp|task_id|task-id|TASK_ID)$", lambda m: self.tid),
             (r"^(?:YYYYMMDD-HHMMSS|same timestamp)$", lambda m: self.digits),
-            (r"^(?:requirement from Step 1|original requirement|requirement)$", lambda m: self.sc.requirement),
+            (rf"^(?:requirement from Step {S.parse}|original requirement|requirement)$", lambda m: self.sc.requirement),
             (r"^spec_path or null$", "null"),
             (r"^view_paths\.\w+ or null", "null"),
             (r"any file paths mentioned by user", lambda m: self.sc.rel),
@@ -472,10 +570,17 @@ class DevCycle:
         while not self.o.at_step(n):
             self.o.advance()
 
-    def step_role(self, step: int):
-        """The subagent_type the canonical checklist's item for Step <step> names (its subagent_call)."""
+    def step_role(self, step: int, mode: str = "analysis"):
+        """The subagent_type the canonical checklist's item for Step <step> names (its subagent_call); of a step with
+        several calls (the requirement round, scripts/todo/dev.py ROUND_CALLS), the one whose prompt carries
+        `Mode: <mode>` (the BA analysis by default; LookupError when the list states none)."""
         todo = next(t for t in self.o.todos if re.match(rf"Step {step}\b", t["content"]))
-        return (todo.get("subagent_call") or {}).get("subagent_type")
+        call = todo.get("subagent_call") or {}
+        if isinstance(call, list):
+            call = next((c for c in call if c.get("prompt_mode") == mode), None)
+            if call is None:
+                raise LookupError(f"/dev's Step {step} states no call with Mode: {mode}: {todo.get('subagent_call')}")
+        return call.get("subagent_type")
 
     def templates(self, step: int) -> list[dict]:
         """Every dispatch template of Step <step>, in order."""
@@ -523,7 +628,7 @@ class DevCycle:
         o.slash(typed_args or self.sc.requirement)
         # "Read `DEV_SESSION_ID` [and `TASK_ID`] from the hook output above (line[s] `...: …`)":
         # the names and the hook lines the item quotes, in the same order.
-        codes = cmdtext.inline_codes(o.text, "Step 1", "from the hook output")
+        codes = cmdtext.inline_codes(o.text, f"Step {S.parse}", "from the hook output")
         names = [c for c in codes if re.fullmatch(r"[A-Z_]+", c)]
         lines = [c for c in codes if c.rstrip().endswith(("…", "...")) and ":" in c]
         got = {n: o.hook_line(l) for n, l in zip(names, lines)}
@@ -539,13 +644,13 @@ class DevCycle:
 
     def step1(self) -> None:
         o = self.o
-        line = re.search(r"`(Spec: <[^`]*>)`", o.section("Step 1"))
+        line = re.search(r"`(Spec: <[^`]*>)`", o.section(f"Step {S.parse}"))
         if line:  # the text has the hook decide the spec and print it as `Spec: <path>` / `Spec: none`
             v = o.hook_line(line.group(1))
             o.values["spec_path"] = "" if v == "none" else v
         # Every Bash block of Step 1 except the fallback the text keeps for a missing hook output.
         fallback = re.compile(r"(?i)\*\*fallback\*\*|hook output is absent|not in your context")
-        calls = o.run_step_blocks(1, skip=lambda name, b, para: bool(fallback.search(para)),
+        calls = o.run_step_blocks(S.parse, skip=lambda name, b, para: bool(fallback.search(para)),
                                   capture=("spec_path", "SPEC_ID", "CP_STATE_DIR"))
         self.spec_id = o.values.get("SPEC_ID", "")
         if not self.spec_id and o.values.get("spec_path"):  # "Its stdout JSON carries artifact_id (SPEC_ID below)"
@@ -561,20 +666,20 @@ class DevCycle:
             o.s.say("auto-detect skipped: newest spec predates this session")
 
     def step2(self) -> None:
-        self.o.run_step_blocks(2)
+        self.o.run_step_blocks(S.graphify_pre)
 
     def step3(self) -> None:
         o = self.o
         o.s.say("ui-specialist: SKIP — a library function, no UI\narchitect: SKIP — one function in one module\n"
                 "product-owner: SKIP — the request states the behaviour\nuser: SKIP — no end-to-end flow involved")
-        c = o.s.bash("git log --oneline -n 5", "Recent commits touching the area", label="Step 3 Bash recent commits",
-                     deviation=o.devs.at("Step 3 Bash recent commits"))
+        c = o.s.bash("git log --oneline -n 5", "Recent commits touching the area", label=f"Step {S.specialists} Bash recent commits",
+                     deviation=o.devs.at(f"Step {S.specialists} Bash recent commits"))
         self.commits = [l for l in c.response.get("stdout", "").split("\n") if l.strip()] if c.ok else []
         sec = o.section("Four Contracts Awareness")
         item = next(l for l in sec.split("\n") if "Existing BA specs" in l)
         pattern = re.findall(r"`([^`]+)`", re.sub(r"\(legacy:[^)]*\)", "", item))[0]
-        o.s.tool("Glob", {"pattern": pattern, "path": o.project}, label="Step 3 Glob prior tickets",
-                 deviation=o.devs.at("Step 3 Glob prior tickets"))
+        o.s.tool("Glob", {"pattern": pattern, "path": o.project}, label=f"Step {S.specialists} Glob prior tickets",
+                 deviation=o.devs.at(f"Step {S.specialists} Glob prior tickets"))
 
     def dispatch_ba(self, heading: str, label: str, question: bool = False, addressed=None, instead=None,
                     need: str | None = None, on_stop_block=None):
@@ -592,7 +697,7 @@ class DevCycle:
         # The answers BA's prompt carries. Since #27 Step 5's `Previous answers:` is the producer answer file the
         # hook wrote, or `none` for a question left unanswered: such a question's default is no answer BA is
         # given; BA records it as its text says (agents.Player._unanswered), not here.
-        by_file = bool(self.answers) and "Previous answers: <the producer answer file" in self.o.section("Step 5")
+        by_file = bool(self.answers) and "Previous answers: <the producer answer file" in self.o.section(f"Step {S.clarify}")
         given = [a for a in self.answers if not (by_file and "assumption" in a)]
         if given:
             content["context.v1"]["clarification_answers"] = given
@@ -610,13 +715,13 @@ class DevCycle:
         return self._dispatch(o.template(heading), act, label, subagent_type=self.ba_type, on_stop_block=on_stop_block)
 
     def question_schema(self) -> str:
-        m = re.search(r"\(schema ([\w.-]+\.v\d+)", self.o.section("Step 5"))
+        m = re.search(r"\(schema ([\w.-]+\.v\d+)", self.o.section(f"Step {S.clarify}"))
         if not m:
-            raise cmdtext.TextNotFound("Step 5 names no question schema")
+            raise cmdtext.TextNotFound(f"Step {S.clarify} names no question schema")
         return m.group(1)
 
     def step4_pre(self) -> None:
-        self.ba_type = self.step_role(4)
+        self.ba_type = self.step_role(S.round)
         self.cycle = self.tid  # the round runs once for the cycle, under its task id
 
     def refused(self, d, needle: str, what: str) -> None:
@@ -658,7 +763,7 @@ class DevCycle:
         if self.spec_id:
             act = agents.Act(content={"requirement-round.v1": _round.round1(tid, self.spec_id)}, status="ready",
                              summary="the spec's open points")
-            self._dispatch(o.template("Step 4", anchor="Mode: intake"), act, "Step 4 Agent(ba) intake",
+            self._dispatch(o.template(f"Step {S.round}", anchor="Mode: intake"), act, f"Step {S.round} Agent(ba) intake",
                            subagent_type=self.ba_type)
             rel = f"docs/dev/requirement-round-{tid}-r1.json"
             asked = {q["question"] for q in self.load(rel)["questions"]} if self.variant == "spec-round" else set()
@@ -672,7 +777,7 @@ class DevCycle:
                 act = agents.Act(notes=_round.panel_notes(angle, cause), status="ready",
                                  terminal={"docs/dev/ba-panel-*": f"BA PANEL {angle}: DONE"},
                                  summary=f"panel {angle}: root cause and solutions")
-                self._dispatch(o.template("Step 4", anchor="Mode: panel"), act, f"Step 4 Agent(ba) panel {angle}",
+                self._dispatch(o.template(f"Step {S.round}", anchor="Mode: panel"), act, f"Step {S.round} Agent(ba) panel {angle}",
                                subagent_type=self.ba_type)
             self.angle = None
             self.to(self.round_step["4a"])
@@ -767,7 +872,7 @@ class DevCycle:
 
     def producer_source(self) -> str:
         """The source Step 5 gives a relayed producer question, bound to the task."""
-        m = re.search(r"`metadata\.source` is `([^`]+)`", self.o.section("Step 5"))
+        m = re.search(r"`metadata\.source` is `([^`]+)`", self.o.section(f"Step {S.clarify}"))
         return self.o.bind(m.group(1)) if m else ""
 
     def relay(self, label: str) -> None:
@@ -790,42 +895,42 @@ class DevCycle:
             return
         if self.variant == "devquestion":  # A5: two producer questions in a row, each asked before the next dispatch
             for k, need in ((1, "a second decision only the owner can make"), (2, None)):
-                self.refused(self.dispatch_ba("Step 5", f"Step 5 Agent(ba) before question {k} is asked"),
+                self.refused(self.dispatch_ba(f"Step {S.clarify}", f"Step {S.clarify} Agent(ba) before question {k} is asked"),
                              "ASK_FIRST", f"BA re-dispatched before producer question {k} is asked")
-                self.relay(f"Step 5 AskUserQuestion question {k}")
-                d = self.dispatch_ba("Step 5", f"Step 5 Agent(ba) after question {k}", question=need is not None,
+                self.relay(f"Step {S.clarify} AskUserQuestion question {k}")
+                d = self.dispatch_ba(f"Step {S.clarify}", f"Step {S.clarify} Agent(ba) after question {k}", question=need is not None,
                                      need=need)
                 self.ba_question = d.player.question_written
             answers = sorted(os.listdir(os.path.join(self.o.project, "docs", "dev")))
             if len([a for a in answers if a.startswith(f"producer-answer-{self.tid}-ba-")]) != 2:
                 raise AssertionError(f"two producer questions gave {answers}")
             return
-        self.relay("Step 5 AskUserQuestion")
-        d = self.dispatch_ba("Step 5", self.L("Step 5 Agent(ba) clarification round 1"))
+        self.relay(f"Step {S.clarify} AskUserQuestion")
+        d = self.dispatch_ba(f"Step {S.clarify}", self.L(f"Step {S.clarify} Agent(ba) clarification round 1"))
         self.ba_question = d.player.question_written
 
-    def step6(self, label: str = "Step 6") -> None:
+    def step6(self, label: str = f"Step {S.validate_ba}") -> None:
         o = self.o
-        self.ba_outputs = self.text_paths(6, "Read BA output files")
+        self.ba_outputs = self.text_paths(S.validate_ba, "Read BA output files")
         for rel in self.ba_outputs:
             self.read(rel, f"{label} Read {rel}")
-        o.run_step_blocks(6, label=label)
+        o.run_step_blocks(S.validate_ba, label=label)
 
     @property
     def context_rel(self) -> str:
         """BA's context JSON: the JSON file among the BA outputs Step 6 names."""
         return next(p for p in self.ba_outputs if p.endswith(".json"))
 
-    def step7(self, label: str = "Step 7", verdict: str = "pass", summary: str = "") -> dict:
+    def step7(self, label: str = f"Step {S.qa_ba}", verdict: str = "pass", summary: str = "") -> dict:
         o = self.o
-        o.run_step_blocks(7, label=label)
+        o.run_step_blocks(S.qa_ba, label=label)
         content = {}
         if verdict == "fail":
             content = {"*": {"objections": [self.sc.objection], "summary": "BA's root cause lacks evidence"}}
         elif summary:
             content = {"*": {"summary": summary}}
         act = agents.Act(verdict=verdict, content=content, summary="BA analysis checked")
-        d = self._dispatch(o.template("Step 7"), act, f"{label} Agent(qa) ba_validation")
+        d = self._dispatch(o.template(f"Step {S.qa_ba}"), act, f"{label} Agent(qa) ba_validation")
         rel = next(a["path"] for a in d.player.b.obligation["artifacts"] if a.get("kind") == "json")
         self.read(rel, f"{label} Read {rel}")
         return self.load(rel)
@@ -849,38 +954,38 @@ class DevCycle:
         o = self.o
         o.s.say(f"BA-QA iteration 1: QA found {len(self.objections)} objections in BA analysis. "
                 "Re-invoking BA to address objections.")
-        d = self.dispatch_ba("Step 8", self.L("Step 8 Agent(ba) BA-QA iteration 1"), addressed=self.objections)
+        d = self.dispatch_ba(f"Step {S.ba_qa_loop}", self.L(f"Step {S.ba_qa_loop} Agent(ba) BA-QA iteration 1"), addressed=self.objections)
         # D25 (1): the BA keeps its acceptance criteria unchanged, as a compliant re-dispatch may, and stops
         # unblocked; raising fails the artifact check's armed replay of this variant (CI), not only its table.
         if d.stop is not None and d.stop.still_blocked:
             raise agents.PlayError(f"{d.label}: the compliant re-dispatched BA was blocked at its stop")
-        self.step6(self.L("Step 8 (Step 6 again)"))
-        report = self.step7(self.L("Step 8 (Step 7 again)"), "pass")
+        self.step6(self.L(f"Step {S.ba_qa_loop} (Step {S.validate_ba} again)"))
+        report = self.step7(self.L(f"Step {S.ba_qa_loop} (Step {S.qa_ba} again)"), "pass")
         assert report.get("verdict") == "pass", report
 
     def step9_check(self) -> bool:
         """Whether graphify is dispatched: always, unless the text checks a sentinel the registry lacks."""
         o = self.o
-        check = re.search(r"check whether the sentinel file exists at `([^`]+)`", o.section("Step 9"))
+        check = re.search(r"check whether the sentinel file exists at `([^`]+)`", o.section(f"Step {S.graphify}"))
         if not check:
             return True
         path = re.sub(r"\$\{?CLAUDE_PROJECT_DIR\}?", o.project, check.group(1)).replace("$DEV_SESSION_ID", self.reg)
         g = o.s.tool("Glob", {"pattern": os.path.basename(path), "path": os.path.dirname(path)},
-                     label="Step 9 Glob graphify sentinel", deviation=o.devs.at("Step 9 Glob graphify sentinel"))
+                     label=f"Step {S.graphify} Glob graphify sentinel", deviation=o.devs.at(f"Step {S.graphify} Glob graphify sentinel"))
         return bool(g.ok and g.response.get("filenames"))
 
     def step9_lane(self, dispatch: bool) -> None:
         o = self.o
         if dispatch:
-            self._dispatch(o.template("Step 9"), agents.Act(), self.L("Step 9 Agent(graphify)"))
+            self._dispatch(o.template(f"Step {S.graphify}"), agents.Act(), self.L(f"Step {S.graphify} Agent(graphify)"))
             # The record the text says to take graphify's status from, and the line it adds to the
             # dev and QA prompts when that status is ok or degraded.
-            sec = o.section("Step 9")
+            sec = o.section(f"Step {S.graphify}")
             status = None
             for code in re.findall(r"`(\.claude/dev-registry/<DEV_SESSION_ID>/graphify/[\w.-]+\.json)`", sec):
                 path = os.path.join(o.project, o.bind(code))
                 if os.path.isfile(path):
-                    o.s.read(path, label=self.L(f"Step 9 Read {os.path.basename(path)}"))
+                    o.s.read(path, label=self.L(f"Step {S.graphify} Read {os.path.basename(path)}"))
                     status = json.loads(agents.peek(self.rp, "main", path)).get("status")
                     break
             o.s.say(f"graphify_status={status}")
@@ -902,19 +1007,19 @@ class DevCycle:
         self.tw_expected = (not skip) and (ctx.get("complexity_tier") in ("STANDARD", "COMPLEX")
                                           or ctx.get("risk_level") == "high")
         if self.tw_expected:  # the Step 10 template other than the dev dispatch's: the test-writer pre-dispatch
-            fields = next(t for t in self.templates(10)
-                          if self.o.template_role(t, self.tid) != self.step_role(10))
-            self._dispatch(fields, agents.Act(work=roles.test_writer()), self.L("Step 10 Agent(test-writer)"))
-            for rel in self.text_paths(10, "After the test-writer subagent completes, verify on disk"):
-                self.read(rel, self.L(f"Step 10 Read {rel}"))
+            fields = next(t for t in self.templates(S.dev)
+                          if self.o.template_role(t, self.tid) != self.step_role(S.dev))
+            self._dispatch(fields, agents.Act(work=roles.test_writer()), self.L(f"Step {S.dev} Agent(test-writer)"))
+            for rel in self.text_paths(S.dev, "After the test-writer subagent completes, verify on disk"):
+                self.read(rel, self.L(f"Step {S.dev} Read {rel}"))
 
     def step10_pre(self) -> None:
         """Step 10's pre-dispatch baseline capture."""
-        self.o.run_step_blocks(10, capture=("baseline_head_sha", "baseline_dirty_snapshot"))
+        self.o.run_step_blocks(S.dev, capture=("baseline_head_sha", "baseline_dirty_snapshot"))
 
     def step10_dev(self) -> None:
         sc = self.sc
-        d = self.dispatch_dev(self.L("Step 10 Agent(dev)"),
+        d = self.dispatch_dev(self.L(f"Step {S.dev} Agent(dev)"),
                               sc.partial if self.variant in ("qa-fail", "fanout-qa-fail") and self.fails_first()
                               else sc.final, sc.old, early_qa=self.variant == "qa-early",
                               question=DEV_QUESTION if self.variant == "dev-question" else None)
@@ -932,8 +1037,8 @@ class DevCycle:
     def dispatch_dev(self, label: str, new_code: str, old_code: str, context_rel: str | None = None,
                      add_lines=(), early_qa: bool = False, question: dict | None = None):
         o, sc = self.o, self.sc
-        tpl = next(t for t in self.templates(10)
-                   if self.o.template_role(t, self.tid) == self.step_role(10))
+        tpl = next(t for t in self.templates(S.dev)
+                   if self.o.template_role(t, self.tid) == self.step_role(S.dev))
         fields = with_lines(tpl, list(add_lines) + self.graph_lines, context_rel)
         baseline = {"baseline_head_sha": o.values.get("baseline_head_sha", ""),
                     "baseline_dirty_snapshot": o.values.get("baseline_dirty_snapshot", "")}
@@ -941,8 +1046,8 @@ class DevCycle:
                          else None, tools=[FORMATTER] if self.variant == "formatter" else None)
         if early_qa:  # variant=qa-early: Step 13's QA is sent while this dev still runs (G1's order, R17)
             def work(sub, brief, player, _work=work):
-                d = self._dispatch(with_lines(self.o.template("Step 13"), self.graph_lines),
-                                   agents.Act(verdict="pass", summary="QA pass"), self.L("Step 13 (early) Agent(qa)"))
+                d = self._dispatch(with_lines(self.o.template(f"Step {S.qa}"), self.graph_lines),
+                                   agents.Act(verdict="pass", summary="QA pass"), self.L(f"Step {S.qa} (early) Agent(qa)"))
                 if not d.blocked:
                     raise AssertionError("a QA dispatched before its dev returned was not refused")
                 return _work(sub, brief, player)
@@ -950,15 +1055,15 @@ class DevCycle:
         if question:  # the decision blocks the work: the dev edits nothing and writes its question instead
             act = agents.Act(question=dict(question, schema=self.question_schema()),
                              summary="an owner decision blocks the change")
-        return self._dispatch(fields, act, label, subagent_type=self.step_role(10))
+        return self._dispatch(fields, act, label, subagent_type=self.step_role(S.dev))
 
-    def relay_dev_question(self, label: str = "Step 12") -> None:
+    def relay_dev_question(self, label: str = f"Step {S.validate_dev}") -> None:
         """Step 12's "If dev wrote its question artifact": relay it as in Step 5 (ONE AskUserQuestion) and
         re-dispatch dev fresh with the answer (Step 10's template, a fresh dispatched_at), each round until
         the dev writes its report."""
         import hashlib
         sc, o = self.sc, self.o
-        sec = o.section("Step 12")
+        sec = o.section(f"Step {S.validate_dev}")
         # Since #27 the text names the relay's metadata.source and the hook's answer file, and the
         # re-dispatch's `Previous answers:` is that file (or none); before, the answers as JSON.
         m = re.search(r"`metadata\.source` `([^`]+)`", sec)
@@ -979,16 +1084,16 @@ class DevCycle:
                                   add_lines=add)
             self.dev_question = d.player.question_written
 
-    def step12(self, label: str = "Step 12") -> None:
+    def step12(self, label: str = f"Step {S.validate_dev}") -> None:
         self.relay_dev_question(label)
-        for rel in self.text_paths(12, "Read dev implementation report"):
+        for rel in self.text_paths(S.validate_dev, "Read dev implementation report"):
             self.read(rel, f"{label} Read {rel}")
 
-    def step13_blocks(self, label: str = "Step 13") -> None:
+    def step13_blocks(self, label: str = f"Step {S.qa}") -> None:
         self.qa_round += 1
-        self.o.run_step_blocks(13, label=label)
+        self.o.run_step_blocks(S.qa, label=label)
 
-    def step13_dispatch(self, label: str = "Step 13", verdict: str = "pass") -> None:
+    def step13_dispatch(self, label: str = f"Step {S.qa}", verdict: str = "pass") -> None:
         o, sc = self.o, self.sc
         extra = {}
         if verdict == "fail":
@@ -1001,23 +1106,23 @@ class DevCycle:
         # qa.md Phase 6: the blast-radius tool's Phase 2 run, as the agent text spells it (not respelled, row 7).
         act = agents.Act(verdict=verdict, work=work, summary=f"QA {verdict}", respell=o.respell,
                          text_calls=[("Phase 6: Blast-Radius Phase 2 Verification", {})])
-        self._dispatch(with_lines(o.template("Step 13"), self.graph_lines), act, f"{label} Agent(qa)")
+        self._dispatch(with_lines(o.template(f"Step {S.qa}"), self.graph_lines), act, f"{label} Agent(qa)")
 
-    def step13(self, label: str = "Step 13", verdict: str = "pass") -> None:
+    def step13(self, label: str = f"Step {S.qa}", verdict: str = "pass") -> None:
         self.step13_blocks(label)
         self.step13_dispatch(label, verdict)
 
-    def step14(self, label: str = "Step 14") -> str:
-        rel = self.qa_report_rel = self.text_paths(14, "Read QA report")[0]
+    def step14(self, label: str = f"Step {S.qa_results}") -> str:
+        rel = self.qa_report_rel = self.text_paths(S.qa_results, "Read QA report")[0]
         self.read(rel, f"{label} Read {rel}")
         return (self.load(rel).get("qa") or {}).get("status")
 
-    def step15(self, label: str = "Step 15") -> None:
+    def step15(self, label: str = f"Step {S.settings}") -> None:
         o = self.o
         perms = ((self.load(self.qa_report_rel).get("qa") or {}).get("permissions_verification")
                  or {}).get("validated_permissions") or []
         # The text's per-permission jq edit (an example entry) runs once per validated permission: none here.
-        o.run_step_blocks(15, skip=lambda name, b, para: "permissions.allow +=" in b.text and not perms,
+        o.run_step_blocks(S.settings, skip=lambda name, b, para: "permissions.allow +=" in b.text and not perms,
                           label=label)
 
     def step16(self) -> None:
@@ -1025,27 +1130,27 @@ class DevCycle:
         self.iteration += 1
         o.values["N"] = str(self.iteration)
         rules = [(r"^N$", str(self.iteration))]
-        o.run_step_blocks(16, extra_rules=rules, label=self.L("Step 16"))
+        o.run_step_blocks(S.iterate, extra_rules=rules, label=self.L(f"Step {S.iterate}"))
         # "Return to Step 10 with new context JSON": the context file a Step 16 block writes, if any.
         ctx_tpl = re.search(r"Context file:\s*(\S+)", next(
-            t["prompt"] for t in self.templates(10) if "Context file:" in t["prompt"])).group(1)
+            t["prompt"] for t in self.templates(S.dev) if "Context file:" in t["prompt"])).group(1)
         ctx_rx = re.escape(ctx_tpl.split("<", 1)[0]) + r"\S*\.json"
         new_ctx = None
-        for _name, b, _para in o.step_blocks("Step 16"):
+        for _name, b, _para in o.step_blocks(f"Step {S.iterate}"):
             for t in re.findall(r">\s*(" + ctx_rx + ")", o.bind(b.text, rules)):
                 new_ctx = t
         # Lines the text adds to Step 10's template for the re-dispatch ("adding the line `X: path`").
-        add = [o.bind(c) for c in re.findall(r"`([A-Z][\w ]* file:\s*[^`\s]+)`", o.section("Step 16"))]
-        self.dispatch_dev(self.L(f"Step 16 Agent(dev) iteration {self.iteration}"), sc.final, sc.partial,
+        add = [o.bind(c) for c in re.findall(r"`([A-Z][\w ]* file:\s*[^`\s]+)`", o.section(f"Step {S.iterate}"))]
+        self.dispatch_dev(self.L(f"Step {S.iterate} Agent(dev) iteration {self.iteration}"), sc.final, sc.partial,
                           new_ctx, add)
-        self.step12(self.L("Step 16 (Step 12 again)"))
-        self.step13(self.L("Step 16 (Step 13 again)"), "pass")
-        status = self.step14(self.L("Step 16 (Step 14 again)"))
+        self.step12(self.L(f"Step {S.iterate} (Step {S.validate_dev} again)"))
+        self.step13(self.L(f"Step {S.iterate} (Step {S.qa} again)"), "pass")
+        status = self.step14(self.L(f"Step {S.iterate} (Step {S.qa_results} again)"))
         assert status == "pass", status
-        if self.extra_round(14, "dev", "Step 16"):  # D32: both rounds run again after the lane's dev returned
-            self.step13(self.L("Step 16 (Step 13 again, the extra independent round)"), "pass")
-            assert self.step14(self.L("Step 16 (Step 14 again)")) == "pass"
-        self.step15(self.L("Step 15"))
+        if self.extra_round(S.qa_results, "dev", f"Step {S.iterate}"):  # D32: both rounds run again after the lane's dev returned
+            self.step13(self.L(f"Step {S.iterate} (Step {S.qa} again, the extra independent round)"), "pass")
+            assert self.step14(self.L(f"Step {S.iterate} (Step {S.qa_results} again)")) == "pass"
+        self.step15(self.L(f"Step {S.settings}"))
 
     def files_generated(self, lines: list) -> list:
         """Step 17's template lines, the "Files Generated" list as a single-lane cycle fills it."""
@@ -1061,21 +1166,21 @@ class DevCycle:
         round that the reader sends to this step, the main agent's own)."""
         o = self.o
         lab = (prefix + " ") if prefix else ""
-        tpl = o.block("Step 17", anchor="Development Completion Report")
+        tpl = o.block(f"Step {S.report}", anchor="Development Completion Report")
         report = o.bind("\n".join(self.files_generated(tpl.split("\n"))),
                         [(r"^ISO-8601$", utc_now()), (r"^N$", str(self.iterations()))])
-        rel = self.text_paths(17, "Save report to")[0]
-        o.s.write(os.path.join(o.project, rel), report, label=f"{lab}Step 17 Write completion report",
-                  deviation=o.devs.at(f"{lab}Step 17 Write completion report"))
+        rel = self.text_paths(S.report, "Save report to")[0]
+        o.s.write(os.path.join(o.project, rel), report, label=f"{lab}Step {S.report} Write completion report",
+                  deviation=o.devs.at(f"{lab}Step {S.report} Write completion report"))
         # The resolver postcondition: completion needs its exit 0 (a refused or failed call is not one).
-        calls = o.run_step_blocks(17, capture=("ARTIFACT_CHAIN",), label=f"{lab}Step 17")
+        calls = o.run_step_blocks(S.report, capture=("ARTIFACT_CHAIN",), label=f"{lab}Step {S.report}")
         self.chain_ok = all(c.ok for c in calls)
-        if "/spec-update --temp" not in o.section("Step 17"):
+        if "/spec-update --temp" not in o.section(f"Step {S.report}"):
             return
         # Workflow update: all requested work is complete -> /spec-update --temp, as that command's text says.
         su = Orchestrator(self.rp, "spec-update", session=o.s, deviations=o.devs)
         mk = su.inline("Temp-note mode", "mktemp", startswith="mktemp")
-        c = o.run(mk, "Create the temp update note", f"{lab}Step 17 Bash mktemp update note")
+        c = o.run(mk, "Create the temp update note", f"{lab}Step {S.report} Bash mktemp update note")
         path = c.response.get("stdout", "").strip() if c.ok else ""
         if path:
             m = re.search(r"update-([A-Za-z0-9]+)(?:\.md)?$", path)
@@ -1084,14 +1189,14 @@ class DevCycle:
             if " -d " in f" {mk} ":  # the text's private directory: the note is the new file update.md in it
                 path = os.path.join(path, "update.md")
             else:  # the earlier text: the empty file mktemp made, Read before it is written
-                o.s.read(path, label=f"{lab}Step 17 Read update note",
-                         deviation=o.devs.at(f"{lab}Step 17 Read update note"))
+                o.s.read(path, label=f"{lab}Step {S.report} Read update note",
+                         deviation=o.devs.at(f"{lab}Step {S.report} Read update note"))
             note = su.block("Temp-note mode", anchor="# Update")
             note = su.bind(note, [(r"^ISO-8601$", utc_now()), (r'id or "unknown"', self.tid),
                                   (r"^spec\|dev\|close", "dev"), (r"exact next command", f"/close {self.tid}"),
                                   (r".", "see the completion report")])
-            o.s.write(path, note, label=f"{lab}Step 17 Write update note",
-                      deviation=o.devs.at(f"{lab}Step 17 Write update note"))
+            o.s.write(path, note, label=f"{lab}Step {S.report} Write update note",
+                      deviation=o.devs.at(f"{lab}Step {S.report} Write update note"))
 
     def not_complete(self) -> str:
         """The Stop text when Step 17's resolver postcondition did not pass ("exit 2 or any other status
@@ -1108,8 +1213,8 @@ class DevCycle:
         if "owes one more independent final_verification QA dispatch" not in text:
             raise AssertionError(f"a cycle without the extra round met no gap: {text[:300]}")
         _round.fact(self.rp, "extra round skipped", {"blocked": True})
-        self.step13("Step 13 again, the extra independent round")
-        self.step14("Step 14 (again)")
+        self.step13(f"Step {S.qa} again, the extra independent round")
+        self.step14(f"Step {S.qa_results} (again)")
 
     def stop(self) -> None:
         o = self.o
@@ -1150,53 +1255,53 @@ class DevCycle:
         self.step1()
         if self.variant == "spec-round" and not self.spec_id:
             raise AssertionError("/dev --spec resolved no spec id")
-        self.to(2); self.step2()
-        self.to(3); self.step3()
-        self.to(4); self.step4()
+        self.to(S.graphify_pre); self.step2()
+        self.to(S.specialists); self.step3()
+        self.to(S.round); self.step4()
         if self.variant == "text-question":  # R7: a turn ending with a question in text is a Stop gap (A8)
             ev = o.s.stop("Round 1 is asked. Shall I go on with the analysis?", label="Stop with a question in text")
             text = "\n".join(hookrun.refusal(b) for b in ev.blocks)
             if "the turn ends with a question in text" not in text:
                 raise AssertionError(f"a question in text met no gap: {text[:300]}")
             _round.fact(self.rp, "text question", {"blocked": True})
-        self.to(5); self.step5()
-        self.to(6); self.step6()
-        self.to(7)
+        self.to(S.clarify); self.step5()
+        self.to(S.validate_ba); self.step6()
+        self.to(S.qa_ba)
         report = self.step7(verdict="fail" if self.variant == "ba-qa-fail" else "pass")
-        if report.get("verdict") == "pass" and self.extra_round(7, "ba", "Step 7"):  # D32: a low BA's analysis is judged twice
+        if report.get("verdict") == "pass" and self.extra_round(S.qa_ba, "ba", f"Step {S.qa_ba}"):  # D32: a low BA's analysis is judged twice
             # The independent round writes its own report. With the first round's bytes the player edits nothing, and
             # the stop gate's freshness rule (2 s slack) holds that stop whenever the two rounds are over 2 s apart.
-            self.step7("Step 7 (the extra independent round)",
+            self.step7(f"Step {S.qa_ba} (the extra independent round)",
                        summary="BA analysis checked again by an independent QA, with nothing of the first round")
-        self.to(8)
+        self.to(S.ba_qa_loop)
         if report.get("verdict") == "fail":
             self.objections = report.get("objections") or []
             self.step8()
-        self.to(9); self.step9()
-        self.to(10); self.step10()
-        self.to(11)
-        o.s.say("Step 11 waived: single-dev cycle (N == 1); the dev writes the canonical report itself.")
-        self.to(12); self.step12()
+        self.to(S.graphify); self.step9()
+        self.to(S.dev); self.step10()
+        self.to(S.aggregate)
+        o.s.say(f"Step {S.aggregate} waived: single-dev cycle (N == 1); the dev writes the canonical report itself.")
+        self.to(S.validate_dev); self.step12()
         if self.variant == "qa-never":
             # The turn is interrupted here (acceptance 7's second case): Step 13's QA is never dispatched and
             # no Stop event fires, as an interrupted turn runs no Stop hook.
             self.interrupted = True
             return
-        self.to(13); self.step13(verdict="fail" if self.variant == "qa-fail" else "pass")
-        self.to(14)
+        self.to(S.qa); self.step13(verdict="fail" if self.variant == "qa-fail" else "pass")
+        self.to(S.qa_results)
         status = self.step14()
         if status == "pass" and self.rp.args.get("extra") == "skip" and "dev" in self.low_roles():
             self.skipped_extra = True  # the cycle ends without the extra round: the Stop gate holds it (repair_extra)
-        elif status == "pass" and self.extra_round(14, "dev", "Step 14"):  # D32: a low dev's work is judged twice
-            self.step13("Step 14 (Step 13 again, the extra independent round)")
-            status = self.step14("Step 14 (again)")
-        self.to(15)
+        elif status == "pass" and self.extra_round(S.qa_results, "dev", f"Step {S.qa_results}"):  # D32: a low dev's work is judged twice
+            self.step13(f"Step {S.qa_results} (Step {S.qa} again, the extra independent round)")
+            status = self.step14(f"Step {S.qa_results} (again)")
+        self.to(S.settings)
         if status == "pass":
             self.step15()
-        self.to(16)
+        self.to(S.iterate)
         if status != "pass":
             self.step16()
-        self.to(17); self.step17()
+        self.to(S.report); self.step17()
         o.advance()
         if getattr(self, "skipped_extra", False):
             self.repair_extra()
@@ -1227,7 +1332,7 @@ class FanoutCycle(DevCycle):
         adapter = next((l for l in o.template(self.ba_heading)["prompt"].split("\n")
                         if "Lane-execution adapter is active" in l), None)
         if adapter is None:
-            raise cmdtext.TextNotFound("Step 4's template has no fan-out lane-execution adapter line")
+            raise cmdtext.TextNotFound(f"Step {S.round}'s template has no fan-out lane-execution adapter line")
         self.o.profile = re.search(r'profile="([^"]+)"', adapter).group(1)
         self.suffix = re.search(r'lane="<lane-suffix>"\s*\(e\.g\.\s*"([A-Za-z]+)\d+"\)', adapter).group(1)
         self.base_name = re.search(r'becomes\s+"<([A-Za-z_]+)>-<lane-suffix>"', adapter).group(1)
@@ -1334,13 +1439,13 @@ class FanoutCycle(DevCycle):
     def step11(self) -> None:
         """The canonical aggregate's producer as the tree's Step 11 names it."""
         o = self.o
-        calls = [c for c in re.findall(r"`([^`\n]+)`", o.section("Step 11"))
+        calls = [c for c in re.findall(r"`([^`\n]+)`", o.section(f"Step {S.aggregate}"))
                  if re.search(r"aggregate-dev-report\.py\s+--task-id", c)]
         if calls:  # the base text: the orchestrator runs the aggregator once every lane's dev has returned
-            o.run_text(calls[0], "Step 11 Bash aggregate-dev-report.py",
+            o.run_text(calls[0], f"Step {S.aggregate} Bash aggregate-dev-report.py",
                        "Write the canonical aggregate dev-report from the lane reports")
         else:
-            o.s.say("Step 11: every lane's dev has returned; the canonical aggregate's producer is the "
+            o.s.say(f"Step {S.aggregate}: every lane's dev has returned; the canonical aggregate's producer is the "
                     "lane-completeness hook, so the orchestrator runs no aggregator.")
 
     def files_generated(self, lines: list) -> list:
@@ -1378,46 +1483,46 @@ class FanoutCycle(DevCycle):
         self.start(self.typed_args)
         self.step1()
         self.decompose()
-        self.to(2); self.step2()
-        self.to(3); self.step3()
-        self.to(4); self.step4_pre()
+        self.to(S.graphify_pre); self.step2()
+        self.to(S.specialists); self.step3()
+        self.to(S.round); self.step4_pre()
         if self.has_round:
             self.step4_round()
             self.to(self.round_step["4c"])
         self.each(self.step4_lane)
-        self.to(5); self.each(self.step5)
-        self.to(6); self.each(lambda: self.step6(self.L("Step 6")))
-        self.to(7)
-        reports = self.each(lambda: self.step7(self.L("Step 7"), "pass"))
-        self.to(8)
+        self.to(S.clarify); self.each(self.step5)
+        self.to(S.validate_ba); self.each(lambda: self.step6(self.L(f"Step {S.validate_ba}")))
+        self.to(S.qa_ba)
+        reports = self.each(lambda: self.step7(self.L(f"Step {S.qa_ba}"), "pass"))
+        self.to(S.ba_qa_loop)
         failed = [l for l in self.lanes if reports[l.name].get("verdict") == "fail"]
         for lane in failed:  # retry only the affected lanes
             with self.on(lane):
                 self.objections = reports[lane.name].get("objections") or []
                 self.step8()
-        self.to(9)
+        self.to(S.graphify)
         dispatch = self.step9_check()
         self.each(lambda: self.step9_lane(dispatch))
-        self.to(10)
+        self.to(S.dev)
         self.each(self.step10_tw)
         self.step10_pre()
         self.each(self.step10_dev)
-        self.to(11); self.step11()
-        self.to(12); self.each(lambda: self.step12(self.L("Step 12")))
-        self.to(13)
+        self.to(S.aggregate); self.step11()
+        self.to(S.validate_dev); self.each(lambda: self.step12(self.L(f"Step {S.validate_dev}")))
+        self.to(S.qa)
         def qa():
-            self.step13_blocks(self.L("Step 13"))
-            self.step13_dispatch(self.L("Step 13"), "fail" if self.variant == "fanout-qa-fail" and self.fails_first()
+            self.step13_blocks(self.L(f"Step {S.qa}"))
+            self.step13_dispatch(self.L(f"Step {S.qa}"), "fail" if self.variant == "fanout-qa-fail" and self.fails_first()
                                  else "pass")
         self.each(qa)
-        self.to(14)
-        status = self.each(lambda: self.step14(self.L("Step 14")))
-        self.to(15)
-        with self.one_call(15, "Apply the validated permissions, every passing lane"):
-            self.each(lambda: self.step15(self.L("Step 15")), [l for l in self.lanes if status[l.name] == "pass"])
-        self.to(16)
+        self.to(S.qa_results)
+        status = self.each(lambda: self.step14(self.L(f"Step {S.qa_results}")))
+        self.to(S.settings)
+        with self.one_call(S.settings, "Apply the validated permissions, every passing lane"):
+            self.each(lambda: self.step15(self.L(f"Step {S.settings}")), [l for l in self.lanes if status[l.name] == "pass"])
+        self.to(S.iterate)
         self.each(self.step16, [l for l in self.lanes if status[l.name] != "pass"])  # the failed lanes only
-        self.to(17); self.step17()
+        self.to(S.report); self.step17()
         o.advance()
         self.stop()
 

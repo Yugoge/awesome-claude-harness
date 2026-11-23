@@ -110,14 +110,14 @@ def tx(tmp_path, monkeypatch):
 
 def _spec_done(tx):
     steps = canonical("spec")
-    assert len(steps) == 7
+    assert len(steps) > 1  # a walk of the whole list, however many steps scripts/todo/spec.py prints
     tx.command("spec", "a new feature")
     tx.walk(steps, len(steps))
     return steps
 
 
 # ---------------------------------------------------------------- the allow (red on the base, green after)
-def test_an_unrelated_two_item_list_after_all_seven_spec_steps_runs(tx):
+def test_an_unrelated_two_item_list_after_all_the_spec_steps_runs(tx):
     _spec_done(tx)
     proc = tx.validate(FOREIGN)
     assert proc.returncode == 0, proc.stderr

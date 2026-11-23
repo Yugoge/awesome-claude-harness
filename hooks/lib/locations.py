@@ -208,14 +208,23 @@ def temp_root_of(path, cwd: Optional[str] = None, roots: Optional[Tuple[str, ...
     return best
 
 
+DISPATCH_PREFIX = "dispatch-"  # the name hooks/lib/dispatch_temp.py gives a foreground dispatch's temp directory
+
+
 def session_scratch_root() -> str:
     """The root of the session scratch directories, an absolute $TMPDIR or SESSION_SCRATCH_ROOT
     (hooks/session-scratch-init.sh's ${TMPDIR:-/var/tmp/claude-scratch}), real. The variable is read
     here by name (_abs_var's test inline): the artifact check's static half follows an environment
-    read by a literal name, not one whose name is a parameter."""
+    read by a literal name, not one whose name is a parameter. A $TMPDIR that is itself one session's
+    directory (its .owner there: a process started from a session's shell inherits that export) names
+    its parent, the same root; so is the directory of an open foreground dispatch inside it
+    (<root>/<sid>/dispatch-*, hooks/lib/dispatch_temp.py)."""
     tmp = os.environ.get("TMPDIR") or ""
     root = (tmp if os.path.isabs(tmp) else None) or SESSION_SCRATCH_ROOT
-    return _real(root) or root
+    root = _real(root) or root
+    if os.path.basename(root).startswith(DISPATCH_PREFIX) and os.path.isfile(os.path.join(os.path.dirname(root), ".owner")):
+        root = os.path.dirname(root)
+    return os.path.dirname(root) if os.path.isfile(os.path.join(root, ".owner")) else root
 
 
 def cli_temp_root() -> str:
@@ -345,18 +354,19 @@ def spec_rest(path: str) -> Optional[str]:
 
 
 # -- where a written file is data, and what is too broad to guard --------------------------
-def data_parts(path: str) -> Optional[Tuple[str, ...]]:
+def data_parts(path: str, cwd: Optional[str] = None) -> Optional[Tuple[str, ...]]:
     """The components of ``path`` below the place a written file may land in as data: a relative
     path as written; an absolute one (`~` expanded) below the project, the directory the call runs
-    in (the same file a relative spelling names) or a temp root. Either way from below the managed
-    scratch when it lies there. None anywhere else."""
+    in (``cwd``, the payload's; the process's own when not given: the same file a relative spelling
+    names) or a temp root. Either way from below the managed scratch when it lies there. None
+    anywhere else."""
     path = os.path.expanduser(path)
     if path.startswith("~"):
         return None
     if os.path.isabs(path):
         if is_device(path) or below(os.path.normpath(path), PROC_DIR) is not None:
             return None  # a name the kernel keeps for a process (fd/N, self/fd/N), not where a file lies
-        for place in (str(project_root()), os.curdir) + tuple(sorted(temp_roots(), key=len, reverse=True)):
+        for place in (str(project_root()), cwd or os.curdir) + tuple(sorted(temp_roots(), key=len, reverse=True)):
             rel = inside(path, place)
             if rel is not None:
                 break
@@ -373,3 +383,62 @@ def is_broad_root(directory: str) -> bool:
     norm = os.path.normpath(directory)
     home = os.path.normpath(os.environ.get("HOME") or os.path.expanduser("~"))
     return norm in SYSTEM_ROOTS or below(home, norm) is not None
+
+
+# -- the filesystem root is no top ---------------------------------------------------------
+# The one definition of "the root is no top": no repository's and no project's top is the
+# filesystem root. A repository that lies there by accident is not a repository for any
+# directory below it, so a gate decides for such a directory as for one in no repository, and a
+# writer that would write below the root writes nothing.
+_ROOT_SAID: set = set()
+
+
+def is_fs_root(path) -> bool:
+    """Whether ``path``, resolved, is the filesystem root."""
+    real = _real(str(path)) if path else None
+    return real == os.path.abspath(os.sep)
+
+
+def repo_top(where) -> Optional[str]:
+    """The top of the git work tree holding ``where``; None outside one, and None when that top
+    is the filesystem root. Every reader of "which repository am I in" asks here."""
+    import subprocess
+    try:
+        done = subprocess.run(["git", "-C", str(where), "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    top = done.stdout.strip()
+    return top if done.returncode == 0 and top and not is_fs_root(top) else None
+
+
+def refuses_root(path, project, who: str) -> bool:
+    """Whether a write to ``path`` below ``project`` must not happen because ``project`` is the
+    filesystem root: it says so once per process and ``who`` on stderr. A writer returns on True."""
+    if not is_fs_root(project) or not is_inside(path, project):
+        return False
+    if any(is_inside(path, other) for other in (state_root(),) + config_homes() + temp_roots()):
+        return False  # the state root, a configuration home and a temp root are places of their own
+    if who not in _ROOT_SAID:
+        _ROOT_SAID.add(who)
+        import sys
+        sys.stderr.write(f"{who}: the filesystem root is no project: nothing is written below it\n")
+    return True
+
+
+def repo_common_dir(where, git_args=()) -> Optional[str]:
+    """The real path of the git common directory of the repository holding ``where`` (what linked
+    work trees share); None outside one, and None when that repository's top is the filesystem
+    root (the common directory is then a direct child of the root). ``git_args``: the caller's own
+    global git words (``--git-dir=...``, ``-C ...``) placed before ``-C where``; a ``where`` of None adds no ``-C``."""
+    import subprocess
+    try:
+        done = subprocess.run(["git", *git_args, *(() if where is None else ("-C", str(where))),
+                               "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                              capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    common = done.stdout.strip()
+    if done.returncode or not common or is_fs_root(os.path.dirname(common)):
+        return None
+    return _real(common)

@@ -209,7 +209,20 @@ def _extract_targets(tool_name: str, tool_input: dict) -> list:
     if tool_name == "Bash":
         command = tool_input.get("command") or ""
         return extract_bash_write_paths(command) if isinstance(command, str) else []
+    from lib import policy_registry
+
+    if policy_registry.is_browser_tool(tool_name):  # the files it writes, each judged as a Write (_check_targets)
+        return [None] + policy_registry.browser_files(tool_input)[0]
     return [None]
+
+
+def _browser_calls(tool_name: str, tool_input) -> list:
+    """A browser tool's call as the calls the role row judges: the tool, each file it writes as a Write
+    and each file it uploads to a page as a Read (policy_registry.browser_files)."""
+    from lib import policy_registry
+
+    written, uploaded = policy_registry.browser_files(tool_input)
+    return [(tool_name, None)] + [("Write", p) for p in written] + [("Read", p) for p in uploaded]
 
 
 def _project_root() -> "os.PathLike | str":
@@ -241,7 +254,8 @@ def _role_temp_exceptions(role: str, session_id=None) -> list:
             continue
         if "tmp" in entry.strip("*").split("/"):
             out.append(entry)
-        elif not locations.is_system_temp_root(state) and entry.startswith("*/"):
+        elif not locations.is_system_temp_root(state) and entry.startswith("*/") and \
+                policy_registry._machine_place(entry) is None:  # a device is no place in the state dir
             out.append(state + entry[1:] + ("" if entry.endswith("*") else "*"))
     return out
 
@@ -249,7 +263,7 @@ def _role_temp_exceptions(role: str, session_id=None) -> list:
 def _matches_role_exception(role: str, target: str, session_id=None) -> bool:
     from lib import policy_registry
 
-    return policy_registry.in_flight(role, target) or \
+    return policy_registry.in_flight(role, target, session_id) or \
         policy_registry._path_in_prefixes(target, _role_temp_exceptions(role, session_id))
 
 
@@ -278,7 +292,8 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
     That decision is taken structurally from the path shape
     <project>/.claude/scratch/<session>/<role>/<dispatch_id>/...,
     because actor-exactness must not silently degrade to "allow" -- a JSON
-    prefix admits a sibling's directory as readily as the owner's.
+    prefix admits a sibling's directory as readily as the owner's. A path of that shape that is
+    not the caller's is "sibling" in any other directory too (_foreign_scratch).
     """
     from pathlib import Path
 
@@ -286,18 +301,47 @@ def _scratch_status(role: str, target: str, data: dict) -> str:
     if own and locations.is_inside(target, own, str(_project_root())):
         return "owner"
     session = data.get("agent_id") and locations.session_scratch_dir(data.get("session_id"))
-    if session and locations.is_inside(target, session, str(_project_root())):
+    project = str(_project_root())
+    if session and locations.is_inside(target, session, project) and not (
+            locations.is_inside(project, session) and locations.is_inside(target, project, project)):
         return "sibling"  # another agent's, or the main agent's: wherever the session scratch root lies
+    # (a project checked out inside the session scratch is the project: its files are not a sibling's scratch)
     resolved = _resolved(target)
     scratch_root = Path(_project_root()).resolve(strict=False) / ".claude" / "scratch"
+    dispatch_id = data.get("agent_id")
     try:
         rel = resolved.relative_to(scratch_root).parts
     except ValueError:
-        return "system_temp" if locations.in_arbitrary_temp(str(resolved), str(_project_root())) else "outside"
-    dispatch_id = data.get("agent_id")
+        rel = _foreign_scratch(resolved)
+        if rel is not None and not (len(rel) >= 3 and rel[1] == role and dispatch_id and rel[2] == dispatch_id):
+            return "sibling"  # another actor's in any other project: the same shape, the same verdict
+        if locations.in_arbitrary_temp(str(resolved), str(_project_root())):
+            return "system_temp"
+        return "sibling" if _other_session_scratch(resolved, data) else "outside"
     if len(rel) >= 3 and rel[1] == role and dispatch_id and rel[2] == dispatch_id:
         return "owner"
     return "sibling"
+
+
+def _other_session_scratch(resolved, data: dict) -> bool:
+    """Whether a resolved path lies in another session's scratch directory: the first directory below the
+    session scratch root that holds a session's .owner record, not this session's. What it is decides, not
+    where the root lies (below a system temp directory the same path is refused as system temp)."""
+    from lib.scratch_owner import OWNER_FILE, is_safe_session_dir_name
+
+    rel = locations.inside(str(resolved), locations.session_scratch_root(), str(_project_root()))
+    own = data.get("session_id")
+    return bool(rel) and rel[0] != own and is_safe_session_dir_name(rel[0]) and \
+        os.path.isfile(os.path.join(locations.session_scratch_root(), rel[0], OWNER_FILE))
+
+
+def _foreign_scratch(resolved) -> "tuple | None":
+    """The components below the first <dir>/.claude/scratch/ of a resolved path outside the project, else None."""
+    if locations.is_inside(str(resolved), str(_project_root())):
+        return None
+    parts = resolved.parts
+    at = next((i for i in range(len(parts) - 1) if parts[i:i + 2] == locations.SCRATCH_PARTS), None)
+    return None if at is None else parts[at + 2:]
 
 
 def _check_scratch_actor_exactness(role: str, target, data: dict):
@@ -404,7 +448,9 @@ def _note_bash_write_target(data: dict, target) -> None:
 # loaded only for a write, its bytecode cached like every lib module: this
 # file, compiled on every tool call, keeps the rule and the transcript reader.
 def _write_targets(tool_name: str, targets: list) -> list:
-    if tool_name != "Bash" and tool_name not in WRITE_TOOLS:
+    from lib import policy_registry
+
+    if tool_name != "Bash" and tool_name not in WRITE_TOOLS and not policy_registry.is_browser_tool(tool_name):
         return []
     found = targets
     # An unexpanded word cannot name a declared path, and a device (a redirect's
@@ -1790,9 +1836,13 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
     (_check_clean_writes): its tool lists and the shared protected prefixes
     apply to it.
     """
-    check_tool = "Write" if tool_name == "Bash" else tool_name
+    from lib import policy_registry
+
+    browser = policy_registry.is_browser_tool(tool_name)
     restaged = _restaged_targets(tool_name, data.get("tool_input"))
-    for target in targets:
+    calls = _browser_calls(tool_name, data.get("tool_input")) if browser else \
+        [("Write" if tool_name == "Bash" else tool_name, t) for t in targets]
+    for check_tool, target in calls:
         if check_tool in WRITE_TOOLS and locations.is_sink(target):
             continue  # the null device, the caller's own streams, terminal or descriptor: no file is written
         carveouts = restaged is not None and target not in restaged
@@ -1812,6 +1862,12 @@ def _check_targets(role: str, tool_name: str, targets: list, data: dict, own: se
                 sys.stderr.write("tool-policy.v1 note: to wait for a condition, run the loop in a foreground Bash call "
                                  "(timeout up to 600000 ms): until <check>; do sleep 2; done; "
                                  "to wait for a command you started, run it with run_in_background: true.\n")
+            elif browser and check_tool == tool_name:  # name the roles whose rows admit it and what this one does
+                sys.stderr.write(f"tool-policy.v1 note: browser tools are open to the roles "
+                                 f"{','.join(policy_registry.browser_roles())} only, whose agent texts have them render "
+                                 f"or drive the running app; as {role}, name in your report the page, the action and "
+                                 "the viewports to render, for the QA's live check, and reach the running app "
+                                 "without rendering through a Bash call (curl).\n")
             _note_inflight_token_route(role, tool_name, target)
             sys.exit(2)
         if check_tool in WRITE_TOOLS:
@@ -2003,13 +2059,15 @@ def _check_protected(role, tool_name: str, tool_input: dict, targets: list, data
     if not found:
         return
     base = data.get("cwd") or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    roots = (claude_home.resolve(), os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
-                                                 "projects"), harness_state_dir())
+    roots = (claude_home.resolve(), None, harness_state_dir())
+    # The transcripts: projects/ of every directory this session's configuration is in, each spelling (U3).
+    configs = [os.path.join(h, "projects") for h in locations.config_homes()] or [os.path.expanduser("~/.claude/projects")]
     git_files = _home_git_files(roots[0])
     for target, removed in dict.fromkeys(found):  # a variable the hook's environment holds is the shell's
         word = os.path.expandvars(re.sub(r"\$\{(\w+):-([^}]*)\}", lambda m: os.environ.get(m[1]) or m[2], target))
         path = os.path.join(base, os.path.expanduser(word))
-        what = not any(c in word for c in "$`\x00") and _protected(path, removed, *roots, git_files)
+        what = not any(c in word for c in "$`\x00") and next(
+            (w for c in configs if (w := _protected(path, removed, roots[0], c, roots[2], git_files))), None)
         if what == _GRANT and not removed and data.get("agent_id") and _grant_producer(path, roots[2], data):
             continue  # the push-analyst's own Write of its grant (agents/push-analyst.md Phase 7)
         if what:

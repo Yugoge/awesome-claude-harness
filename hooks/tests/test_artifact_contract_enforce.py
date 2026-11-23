@@ -160,7 +160,9 @@ def _run_hook(
         capture_output=True,
         text=True,
         env=env,
-        timeout=30,
+        # A guard against a hang, not a time the hook is held to: one stop takes 0.33 s on one CPU here (2026-11-22),
+        # and a 30 s guard expired on a runner under load 48-70.
+        timeout=600,
     )
 
 
@@ -3269,8 +3271,8 @@ def _c5_report(task, lane, fault=None):
     return {**_l2_dev_report(task, lane=lane, lane_set=["l1", "l2"]), **C5_BASELINE, **(fault or {})}
 
 
-def _c5_setup(tmp_path, *, l1=True, l1_newer=False, canonical=False, own_fault=None, l1_fault=None):
-    s = _l2_setup(tmp_path, lane="l2", lane_set=["l1", "l2"], base_task=C5_TASK)
+def _c5_setup(tmp_path, *, l1=True, l1_newer=False, canonical=False, own_fault=None, l1_fault=None, task=C5_TASK):
+    s = _l2_setup(tmp_path, lane="l2", lane_set=["l1", "l2"], base_task=task)
     s.l1 = f"docs/dev/dev-report-{s.cycle}-l1.json"
     s.canonical = f"docs/dev/dev-report-{s.cycle}.json"
     _l2_write(s, _c5_report(s.task, "l2", own_fault))
@@ -3403,6 +3405,19 @@ def test_c5_own_report_the_producer_refuses_is_named_with_its_reason_until_repai
     proc = _l2_stop(s)
     assert proc.returncode == 0, proc.stderr
     assert (s.project / s.canonical).is_file()
+
+
+def test_c5_a_pipeline_lanes_own_refused_report_is_tied_to_it_at_its_own_stop(tmp_path):
+    """Lane l2 of a pipeline <stamp>-1: the producer names its report shard '1-l2' (lane_label), and the lane's
+    own stop is held with that reason, as for a bare fan-out."""
+    own_fault, _, reason = C5_REFUSALS["snapshot_prose"]
+    s = _c5_setup(tmp_path, own_fault=own_fault, task=f"{C5_TASK}-1")
+    _c5_edit(s, _c5_report(s.task, "l2", own_fault))
+    assert not (s.project / s.canonical).exists()
+    proc = _l2_stop(s)
+    assert proc.returncode == 2, proc.stderr
+    assert f"{s.art_path}: canonical_missing" in proc.stderr
+    assert reason.replace("shard 'l2'", "shard '1-l2'") in proc.stderr, proc.stderr
 
 
 def test_c5_the_same_unrepaired_report_is_refused_the_hundredth_stop_as_the_first(tmp_path):

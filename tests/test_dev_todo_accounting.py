@@ -151,7 +151,7 @@ def test_five_real_subagent_guards_remain(todos, guards):
         )
         results.append(
             (
-                call.get("subagent_type"),
+                next(c for c in (call if isinstance(call, list) else [call]) if not c.get("optional"))["subagent_type"],
                 any("before required subagent call" in value for value in missing),
                 not present,
             )

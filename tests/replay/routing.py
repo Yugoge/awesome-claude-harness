@@ -140,7 +140,9 @@ def assert_routed(r, *, typed: str, source: str, check: str, path: str | None = 
         # No dispatch declared the path: a fresh dispatch of the canonical step's role from the template the
         # reader returns, under the task id that template's artifacts carry.
         tpl, ob = ans.get("template") or {}, new["obligation"]
-        assert new["subagent_type"] == (ans.get("subagent_call") or {}).get("subagent_type"), (ans, new)
+        call = ans.get("subagent_call") or {}  # one call, or the round step's list of calls (each with its role)
+        roles = {c.get("subagent_type") for c in (call if isinstance(call, list) else [call])}
+        assert new["subagent_type"] in roles and (not isinstance(call, list) or new["subagent_type"] == tpl.get("role")), (ans, new)
         assert {k: ob.get(k) for k in ("role", "pipeline")} == {k: tpl.get(k) for k in ("role", "pipeline")}, (tpl, ob)
         tids = {a.get("identity", {}).get("task_id") for a in tpl.get("artifacts") or []}
         assert ob.get("task_id") in tids and path in [a.get("path") for a in ob.get("artifacts") or []], (tpl, ob)

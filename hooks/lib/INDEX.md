@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-21T16:29:10Z*
-**Total entries**: 92
+*Last updated: 2026-11-22T19:49:44Z*
+**Total entries**: 94
 **Convention**: kebab
 
 ## Tree
@@ -37,7 +37,7 @@ lib/
 ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
-├── `close_exit.py` - prompt-workflow.py (UserPromptSubmit) calls complete() for a typed /close: when the cycle's reports
+├── `close_exit.py` - the owner's --retire
 ├── `close_rating.py` - The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports.
 ├── `codex_transcript.py` - written by scripts/steps/codex-run.py, read by the gitignore preflight as its task's provenance. ...
 ├── `command_span.py` - rule of which transcript record is a prompt the human typed
@@ -53,6 +53,7 @@ lib/
 ├── `dispatch_temp.py` - <session root>/.dispatch-tmp is this module's state and _write its one writer. Line 1 names the
 ├── `dispatch_template.py` - A dispatch made from a base template before a merge carries no obligation block
 ├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
+├── `fact_cache.py` - watch() records, while a computation runs in this process, every file it opens, stats or lists an...
 ├── `final_report.py` - final_report() is the SubagentHandback message of the agent's latest run, else last_assistant_mes...
 ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
@@ -99,7 +100,8 @@ lib/
 ├── `subagent.py` - is_subagent(): whether the calling agent is a subagent, the one predicate of that fact (a
 ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
 ├── `switch_prompt.py` - A delivered or scheduled prompt reaches UserPromptSubmit as if the owner had typed it, so a promp...
-└── `todo_canonical.py` - Shared canonical todo validation utilities
+├── `todo_canonical.py` - Shared canonical todo validation utilities
+└── `transcript_index.py` - A conversation only grows. extend() keeps, per (conversation, kind of reading), the state a readi...
 ```
 <!-- /AUTO:index-stats -->
 

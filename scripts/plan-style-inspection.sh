@@ -55,10 +55,8 @@ AGENT_COUNT=$(( (TOTAL + FILES_PER_AGENT - 1) / FILES_PER_AGENT ))
 # Build JSON output
 # Use jq if available, otherwise build manually
 if command -v jq &>/dev/null; then
-  # Build all_files array
   ALL_FILES_JSON=$(printf '%s\n' "${ALL_FILES[@]}" | jq -R . | jq -s .)
 
-  # Build groups array
   GROUPS_JSON="[]"
   GROUP_ID=1
   for ((i=0; i<TOTAL; i+=FILES_PER_AGENT)); do

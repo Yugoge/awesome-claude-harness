@@ -41,7 +41,7 @@ POL = Policy()
 SETTINGS = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))
 KEPT_IN_SETTINGS = 2  # the switch's own rules, which the off form keeps
 NO_HOOK = "no hook decides this family"
-UNRELEASABLE = "the hook refuses it always and it must stay unreleasable"
+UNRELEASABLE = "a hook refuses it always; /do does not release it, only the owner's /allow does"
 
 DENY_TABLE = {
     "Bash(docker rm:*)": NO_HOOK,            # the analyzer proves docker rm no filesystem removal; no rule refuses it
@@ -63,7 +63,7 @@ DENY_TABLE = {
     "Bash(rm -rf /:*)": UNRELEASABLE,        # the removal policy refuses a removal of the root
     "Bash(rm -rf /*:*)": UNRELEASABLE,
     "Bash(git reset --hard:*)": UNRELEASABLE,
-    "Bash(git push --force:*)": UNRELEASABLE,  # the git guard refuses every force push before /do and /allow
+    "Bash(git push --force:*)": UNRELEASABLE,  # the git guard refuses every force push, /do or not
     "Bash(git push -f:*)": UNRELEASABLE,
     # Kept by the ruling of 2026-11-20. The service rule lets units listed in CLAUDE_DEV_SYSTEMD run (empty on the
     # shipped settings); a machine that sets it meets these two entries refusing what the hook allows.

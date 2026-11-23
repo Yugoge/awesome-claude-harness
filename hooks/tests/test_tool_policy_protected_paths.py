@@ -38,7 +38,8 @@ CALLERS = {"main": None, "dev": ("a0dev", "dev"), "ba": ("a0ba", "ba")}
 PRODUCT = "/nonexistent-p5-protected-paths/product"
 
 
-def run(tmp_path, tool: str, tool_input: dict, caller=None, state: bool | str = True, cwd=None, hook=HOOK):
+def run(tmp_path, tool: str, tool_input: dict, caller=None, state: bool | str = True, cwd=None, hook=HOOK,
+        config=None):
     home = tmp_path / "home"
     payload = {"session_id": SID, "transcript_path": str(home / ".claude" / "projects" / "-p" / f"{SID}.jsonl"),
                "cwd": str(cwd or PRODUCT), "hook_event_name": "PreToolUse", "tool_name": tool,
@@ -46,7 +47,7 @@ def run(tmp_path, tool: str, tool_input: dict, caller=None, state: bool | str = 
     if caller:
         payload.update(agent_id=caller[0], agent_type=caller[1], subagent_type=caller[1])
     env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
-    env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home / ".claude"), CLAUDE_PROJECT_DIR=PRODUCT,
+    env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(config or home / ".claude"), CLAUDE_PROJECT_DIR=PRODUCT,
                PYTHONDONTWRITEBYTECODE="1")
     if state:
         env["CLAUDE_STATE_DIR"] = state if isinstance(state, str) else str(tmp_path / "state")
@@ -111,13 +112,6 @@ def test_the_do_sidecar_without_a_state_dir_is_the_default_roots(tmp_path, form)
 def test_r3_engines_and_git_files_of_the_harness_home_are_denied(tmp_path, caller, form, rel):
     proc = run(tmp_path, *forms(os.path.join(ROOT, rel))[form], CALLERS[caller])
     assert_denied(proc, f"the harness home's {rel}")
-
-
-def test_a_relative_name_is_read_from_the_working_directory(tmp_path):
-    assert_denied(run(tmp_path, "Bash", {"command": "sed -i s/a/b/ .gitattributes"}, cwd=ROOT),
-                  "the harness home's .gitattributes")
-    assert_denied(run(tmp_path, "Bash", {"command": "rm -r .git"}, CALLERS["dev"], cwd=ROOT),
-                  "a directory holding the harness home's protected files or the session transcripts")
 
 
 @pytest.mark.parametrize("caller", list(CALLERS))
@@ -218,8 +212,7 @@ def test_a_directory_holding_transcripts_or_metas_is_denied(tmp_path, caller, co
     ("mv /elsewhere/{sid}.jsonl {project}/", "a session transcript or its subagent meta"),
     ("mv -f /elsewhere/b /elsewhere/agent-a1.meta.json {project}/{sid}/subagents",
      "a session transcript or its subagent meta"),
-    ("mv /elsewhere/settings.machine.json {root}/", "the harness home's settings.machine.json"),
-    ("git mv hooks {root}/.git", "the harness home's .git/hooks")])
+    ("mv /elsewhere/settings.machine.json {root}/", "the harness home's settings.machine.json")])
 def test_a_move_into_a_directory_over_a_protected_file_is_denied(tmp_path, command, what):
     """A directory moved into loses the entry of each source's name: that entry is judged."""
     project = sessions(tmp_path)
@@ -476,6 +469,57 @@ def test_a_linked_worktree_homes_other_git_files_stay_writable(tmp_path, linked_
         assert (proc.returncode, proc.stderr) == (0, ""), (path, proc.stderr)
 
 
+# -- the same cases in either kind of checkout --------------------------------------------------------
+# What the home's .git is depends on the checkout that holds this tree (a clone's directory, a linked
+# worktree's file), so each case runs against a throwaway home of each kind, never against ROOT's own.
+@pytest.fixture(scope="module")
+def clone_home(tmp_path_factory):
+    """A throwaway clone (its .git a directory) holding the files claude_home's walk needs to find the
+    copied hook's home: settings.json, hooks/, policies/, scripts/."""
+    import shutil
+
+    home = tmp_path_factory.mktemp("clone") / "home" / ".claude"
+    _git("init", "-q", str(home))
+    for name in ("settings.json", "hooks", "policies", "scripts"):
+        src = os.path.join(ROOT, name)
+        if os.path.isdir(src):
+            shutil.copytree(src, home / name, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        else:
+            shutil.copy2(src, home / name)
+    return str(home)
+
+
+@pytest.fixture(params=["clone", "linked worktree"])
+def checkout(request):
+    """(kind, home, the home's git common dir)."""
+    if request.param == "clone":
+        home = request.getfixturevalue("clone_home")
+        return request.param, home, os.path.join(home, ".git")
+    home, _git_dir, common = request.getfixturevalue("linked_home")
+    return request.param, home, common
+
+
+def test_a_relative_name_is_read_from_the_working_directory(tmp_path, checkout):
+    kind, home, _common = checkout
+    hook = os.path.join(home, "hooks", "pretool-tool-policy.py")
+    assert_denied(run(tmp_path, "Bash", {"command": "sed -i s/a/b/ .gitattributes"}, cwd=home, hook=hook),
+                  "the harness home's .gitattributes")
+    assert_denied(run(tmp_path, "Bash", {"command": "rm -r .git"}, CALLERS["dev"], cwd=home, hook=hook),
+                  "a directory holding the harness home's protected files or the session transcripts"
+                  if kind == "clone" else "the harness home's .git file")
+
+
+def test_a_move_into_the_homes_git_dir_over_its_hooks_is_denied(tmp_path, checkout):
+    """A directory moved into loses the entry of each source's name: a clone's .git/hooks, the common
+    dir's hooks of a linked worktree, and the linked worktree's .git file that the move would replace."""
+    kind, home, common = checkout
+    hook = os.path.join(home, "hooks", "pretool-tool-policy.py")
+    hooks = "the harness home's .git/hooks" if kind == "clone" else "the harness home's git common dir's hooks"
+    assert_denied(run(tmp_path, "Bash", {"command": f"git mv hooks {common}"}, cwd=home, hook=hook), hooks)
+    assert_denied(run(tmp_path, "Bash", {"command": f"git mv hooks {home}/.git"}, cwd=home, hook=hook),
+                  "the harness home's .git/hooks" if kind == "clone" else "the harness home's .git file")
+
+
 
 # -- every write form the shell has is read as `>` is -------------------------------------------------
 # The write forms below name their target as `echo x > T` does; each is refused where `>` is: on a
@@ -524,3 +568,29 @@ def test_a_path_word_that_stays_computed_is_not_judged_as_a_protected_file(tmp_p
     name = f"claude-do-task-{SID}.json"
     for command in (f'rm -f "$P14_UNSET_VAR/{name}"', f'rm -f "$(pwd)/{name}"'):
         assert run(tmp_path, "Bash", {"command": command}).returncode == 0, command
+
+
+# location-rules U3/U18: a session transcript is protected in every directory this session's configuration is in
+# (locations.config_homes: the harness home, $CLAUDE_CONFIG_DIR, ~/.claude), not only in $CLAUDE_CONFIG_DIR's.
+@pytest.mark.parametrize("kind", ["Write", "rm"])
+def test_a_transcript_is_protected_in_every_configuration_directory(tmp_path, kind):
+    config = tmp_path / "account-config"
+    for base in (config, tmp_path / "home" / ".claude", ROOT):
+        proc = run(tmp_path, *forms(os.path.join(str(base), "projects", "-p", f"{SID}.jsonl"))[kind], CALLERS["main"],
+                   config=config)
+        assert_denied(proc, "a session transcript or its subagent meta")
+    assert run(tmp_path, *forms(os.path.join(PRODUCT, "projects", "-p", f"{SID}.jsonl"))[kind], CALLERS["main"],
+               config=config).returncode == 0
+
+
+# Continuation of U3: a transcript reached through a link to a configuration directory, or through a linked
+# folder inside it, is the same transcript: refused however it is reached.
+@pytest.mark.parametrize("kind", ["Write", "rm"])
+def test_a_transcript_reached_through_a_link_is_protected(tmp_path, kind):
+    config = tmp_path / "account-config"
+    (config / "projects" / "-p").mkdir(parents=True)
+    (tmp_path / "lnk").symlink_to(config)
+    (tmp_path / "sub-lnk").symlink_to(config / "projects" / "-p")
+    for path in (tmp_path / "lnk" / "projects" / "-p" / f"{SID}.jsonl", tmp_path / "sub-lnk" / f"{SID}.jsonl"):
+        assert_denied(run(tmp_path, *forms(str(path))[kind], CALLERS["main"], config=config),
+                      "a session transcript or its subagent meta")

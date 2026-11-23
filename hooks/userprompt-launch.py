@@ -39,6 +39,7 @@ RULES = (
     Rule('bulk-commit-capability', 'userprompt-bulk-commit-capability.py'),
     Rule('dispatch-temp', 'lib/dispatch_temp.py', timeout=10),  # a dispatch whose end was never seen closes
     Rule('returns-hold', 'lib/returns_hold.py', timeout=15),  # a background return waits for its siblings
+    Rule('auto-targets', 'userprompt-auto-targets.py', timeout=120),  # an --auto run's task list, fixed once
 )
 
 if __name__ == "__main__":

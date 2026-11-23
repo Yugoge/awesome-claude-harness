@@ -130,6 +130,19 @@ def test_a_static_id_token_stands_for_any_one_id_of_the_replay():
     assert not C.matches("<proj>/.claude/r/<sid>/x.json", "<proj>/.claude/r/a/b/x.json")
 
 
+def test_a_whole_name_wildcard_joins_a_file_named_by_a_minted_id():
+    """A glob over a directory's `*.json` reads the file an agent's Write named by a minted id (the
+    replay writes that whole name <rand>); a <*> anywhere else still never matches a <rand>."""
+    grant = "<state>/agentic-commit/merge-analyst/<hex>/<sid>/<rand>.json"
+    assert C.matches("<state>/agentic-commit/merge-analyst/<*>/<sid>/<*>.json", grant)
+    assert not C.matches("<state>/agentic-commit/merge-analyst/<*>/<sid>/<*>.json",
+                         "<state>/agentic-commit/merge-analyst/<hex>/<sid>/tmp<rand>.json")
+    assert not C.matches("<state>/d/<*>.json", "<state>/d/<rand>-x.json")
+    assert not C.matches("<state>/d/<*>", "<state>/d/<rand>")
+    assert not C.matches("<state>/<*>/x.json", "<state>/<rand>/x.json")
+    assert not C.matches("<state>/d/a<*>.json", "<state>/d/a<rand>.json")
+
+
 def test_a_declared_file_no_code_writes_is_the_declared_roles(tmp_path):
     """D21: the obligation that declares a file names its producer when no trace event or code
     site writes it (the role writes it with its own tool call)."""

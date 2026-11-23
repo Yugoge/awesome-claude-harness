@@ -28,6 +28,17 @@ from tests.replay import suite
 from tests.replay.test_score_replay import OBLIGATION, clean_run, dispatches
 
 COST = {role: text for role, text, _ in score_log.CONSEQUENCES}
+
+
+def template_rounds(profile: str) -> int:
+    """The QA rounds of one /dev cycle with the profile: commands/dev.md's QA dispatch templates whose obligation
+    names it (ba_validation: the panel QA and Step 7's; final_verification: the QA after the dev), so a QA round
+    added to or taken from the command needs no edit here."""
+    with open(f"{suite.REPO}/commands/dev.md", encoding="utf-8") as fh:
+        return len(re.findall(rf'role="qa", pipeline="dev", profile="{profile}"', fh.read()))
+
+
+VALIDATION, FINAL = template_rounds("ba_validation"), template_rounds("final_verification")
 LOW_FIXTURE, HIGH_FIXTURE = "dev:apprentice,ba:disgraced,qa:journeyman", "dev:skilled,ba:senior,qa:master"
 RANK_OF = {"apprentice": "Apprentice", "disgraced": "Disgraced", "journeyman": "Journeyman", "skilled": "Skilled Craftsman",
            "senior": "Senior Craftsman", "master": "Master", "restored": "Journeyman"}
@@ -120,8 +131,9 @@ def test_every_dispatch_carries_its_roles_rank_and_that_ranks_reminder_and_no_ga
 def test_a_low_dev_and_a_low_ba_get_a_second_independent_qa_round_and_the_stop_gate_holds_it(replays, name):
     r = replays.get(KEYS[name])
     final, validation = rounds(r, "qa", "final_verification"), rounds(r, "qa", "ba_validation")
-    assert len(final) == (3 if name == "qa-fail-low" else 2), [d["tool_use_id"] for d in final]  # a QA fail: one round, the dev again, then both rounds
-    assert len(validation) == 3  # panel QA (round 1) and the two rounds of BA's final context
+    # one more round after the normal ones; a QA fail: the normal rounds, the dev again, then the normal rounds and the extra one
+    assert len(final) == FINAL * (2 if name == "qa-fail-low" else 1) + 1, [d["tool_use_id"] for d in final]
+    assert len(validation) == VALIDATION + 1  # the panel QA, Step 7's, and the extra round of BA's final context
     for first, second in zip(final[-2:-1] + validation[-2:-1], final[-1:] + validation[-1:]):
         assert second["agent_id"] != first["agent_id"] and second["tool_use_id"] != first["tool_use_id"]
         assert second["obligation"]["dispatched_at"] > first["obligation"]["dispatched_at"]
@@ -134,8 +146,8 @@ def test_a_low_dev_and_a_low_ba_get_a_second_independent_qa_round_and_the_stop_g
 @pytest.mark.parametrize("name", [pytest.param(n, id=n, marks=replay(n)) for n in ("high", "restored", "qa-fail-high")])
 def test_with_the_score_not_low_one_qa_round_runs(replays, name):
     r = replays.get(KEYS[name])
-    assert len(rounds(r, "qa", "final_verification")) == (2 if name == "qa-fail-high" else 1)  # (a QA fail's re-dispatch: one round each time)
-    assert len(rounds(r, "qa", "ba_validation")) == 2  # panel QA, then BA's final context
+    assert len(rounds(r, "qa", "final_verification")) == FINAL * (2 if name == "qa-fail-high" else 1)  # (a QA fail's re-dispatch: the rounds again)
+    assert len(rounds(r, "qa", "ba_validation")) == VALIDATION  # panel QA, then BA's final context
     assert "Your record (main)" in opener_text(r) and "Low record" not in opener_text(r)
     assert not any(text in s["text"] for s in starts(r) for _, text, _ in score_log.CONSEQUENCES), "no start text names a consequence"
 
@@ -148,9 +160,9 @@ def test_a_low_qa_holds_a_codex_debate_in_every_round_without_the_flag(replays):
     clean_run(r)  # no stop was refused: each QA stopped only after it called codex (R-022 binds it with no flag and no line)
     assert "Low record: qa: a Codex debate every round, --codex or not" in opener_text(r) and "independent QA round" not in opener_text(r)
     qa = [s for s in starts(r) if s["type"] == "qa"]
-    assert len(qa) == 3 and all(COST["qa"] in s["text"] for s in qa)  # panel QA, BA validation, final verification
+    assert len(qa) == VALIDATION + FINAL and all(COST["qa"] in s["text"] for s in qa)  # panel QA, BA validation, final verification
     called = [ev for ev in r.hook_events() if ev["event"] == "PostToolUse" and ev.get("tool") == "Skill" and ev["agent_type"] == "qa"]
-    assert len(called) == 3  # every QA round: one codex call, and the ledger hook ran on it
+    assert len(called) == len(qa)  # every QA round: one codex call, and the ledger hook ran on it
     assert all(any(h["hook"] == "hooks/posttool-codex-skill-ledger.py" and (h["rc"], h["verdict"]) == (0, "ok") for h in ev["hooks"]) for ev in called)
     assert not any(s["type"] in ("dev", "ba") and "Codex" in s["text"] for s in starts(r))  # dev and ba do not debate
 
@@ -160,7 +172,7 @@ def test_a_failed_codex_call_is_the_ledger_entry_that_lets_a_low_qa_stop(replays
     r = replays.get(KEYS["codex-fail"])
     clean_run(r)  # nothing refused: without a ledger entry the forced binding would block each QA's stop, with no flag to turn it off (D25)
     failed = [ev for ev in r.hook_events() if ev["event"] == "PostToolUseFailure" and ev.get("tool") == "Skill" and ev["agent_type"] == "qa"]
-    assert len(failed) == 3 and not [ev for ev in r.hook_events() if ev["event"] == "PostToolUse" and ev.get("tool") == "Skill"]  # panel, BA validation, final: all failed
+    assert len(failed) == VALIDATION + FINAL and not [ev for ev in r.hook_events() if ev["event"] == "PostToolUse" and ev.get("tool") == "Skill"]  # panel, BA validation, final: all failed
     assert all(any(h["hook"] == "hooks/posttool-codex-skill-ledger.py" and (h["rc"], h["verdict"]) == (0, "ok") for h in ev["hooks"]) for ev in failed)  # the launcher runs it
 
 

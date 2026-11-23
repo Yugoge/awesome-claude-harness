@@ -138,7 +138,24 @@ def test_a_cut_off_rebuild_leaves_the_aggregate_stale_and_the_qa_dispatch_check_
         env={**os.environ, "CLAUDE_PROJECT_DIR": str(project), "CLAUDE_OBLIGATION_BARRIER": "block"})
     assert gate.returncode == 2, gate.stderr
     assert f"[stale_canonical] {_canonical(project)}: older than lane report(s) {lane.name}" in gate.stderr
+    assert "its rebuild did not finish" in gate.stderr and "refused" not in gate.stderr
     assert "parallel_workers" not in gate.stderr  # nothing in the stale aggregate is judged
+    assert _canonical(project).read_bytes() == before
+
+
+def test_a_rebuild_the_aggregator_refused_is_named_as_refused_at_the_qa_dispatch(project):
+    """The rebuild ran on the newer lane report to its end and the aggregator refused it: the stale aggregate's
+    finding says so, as the Stop gate's does, never that the rebuild did not finish."""
+    assert _qa_dispatch(project).returncode == 0
+    before = _canonical(project).read_bytes()
+    lane = _bad_l1(project)
+    stamp = _canonical(project).stat().st_mtime_ns + 10**9
+    os.utime(lane, ns=(stamp, stamp))
+    gate = _qa_dispatch(project)
+    assert gate.returncode == 2, gate.stderr
+    assert f"[stale_canonical] {_canonical(project)}: older than lane report(s) {lane.name}" in gate.stderr
+    assert (f"the aggregator ran on them and refused them (its reasons: scripts/aggregate-dev-report.py --task-id "
+            f"{TID} --dry-run)") in gate.stderr and "did not finish" not in gate.stderr, gate.stderr
     assert _canonical(project).read_bytes() == before
 
 

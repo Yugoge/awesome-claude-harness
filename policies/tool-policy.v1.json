@@ -20,7 +20,7 @@
         "Read",
         "Skill",
         "Write",
-        "mcp__playwright__*",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -50,7 +50,7 @@
         "/lib/",
         "/components/"
       ],
-      "rationale": "User simulation: Playwright/read for user-flow testing; writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight, codex and scratch directories; no source/protected/test edits",
+      "rationale": "User simulation: browser tools (<browser tools>: policy_registry.BROWSER_TOOLS, any provider) and reads for user-flow testing; writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight, codex and scratch directories; no source/protected/test edits",
       "allowed_write_path_prefixes": [
         "*/dev/null",
         "*/dev/stderr",
@@ -85,7 +85,7 @@
         "Read",
         "Skill",
         "Write",
-        "mcp__playwright__*",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -232,7 +232,7 @@
         "Write",
         "Edit",
         "MultiEdit",
-        "mcp__playwright__*",
+        "<browser tools>",
         "Skill",
         "TodoWrite",
         "TodoRead",
@@ -293,7 +293,7 @@
         "Read",
         "Skill",
         "Write",
-        "mcp__playwright__*",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -339,6 +339,7 @@
         "Read",
         "Skill",
         "Write",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -394,6 +395,7 @@
         "Read",
         "Skill",
         "Write",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -963,8 +965,7 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "<session root>/push-analyst/",
-        "/tmp/agentic-commit/push-analyst/*",
-        "*/agentic-commit/push-analyst/*",
+        "<state dir>/agentic-commit/push-analyst/*",
         "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
@@ -976,7 +977,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "push-analyst: pre-push git read-only analysis; reads commits-to-push range, sensitive file patterns, and divergence; writes nonce-keyed grant to <state dir>/agentic-commit/push-analyst/ (role-specific directory only, no broad /tmp/*; the /tmp entry is the default state dir's exception to the raw-temp denial, the */ entry a CLAUDE_STATE_DIR outside the temp roots); no write access to protected infra"
+      "rationale": "push-analyst: pre-push git read-only analysis; reads commits-to-push range, sensitive file patterns, and divergence; writes nonce-keyed grant to <state dir>/agentic-commit/push-analyst/ (role-specific directory only, no broad /tmp/*; the <state dir> entry names that directory wherever the state directory lies, and no directory of that name elsewhere); no write access to protected infra"
     },
     "merge-analyst": {
       "allowed_tools": [
@@ -1002,8 +1003,7 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "<session root>/merge-analyst/",
-        "/tmp/agentic-commit/merge-analyst/*",
-        "*/agentic-commit/merge-analyst/*",
+        "<state dir>/agentic-commit/merge-analyst/*",
         "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
@@ -1015,7 +1015,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "merge-analyst: pre-merge git read-only analysis; reads branch divergence, diff stat, conflict markers, and overnight-state for consistency validation; writes one nonce-keyed grant (60s expiry) with the Write tool to <state dir>/agentic-commit/merge-analyst/, checked on that Write by posttool-allowlist-consume.py (lib/merge_grant.py) and read by /merge (role-specific directory only, no broad /tmp/*; the /tmp entry is the default state dir's exception to the raw-temp denial, the */ entry a CLAUDE_STATE_DIR outside the temp roots); no write access to protected infra"
+      "rationale": "merge-analyst: pre-merge git read-only analysis; reads branch divergence, diff stat, conflict markers, and overnight-state for consistency validation; writes one nonce-keyed grant (60s expiry) with the Write tool to <state dir>/agentic-commit/merge-analyst/, checked on that Write by posttool-allowlist-consume.py (lib/merge_grant.py) and read by /merge (role-specific directory only, no broad /tmp/*; the <state dir> entry names that directory wherever the state directory lies, and no directory of that name elsewhere); no write access to protected infra"
     },
     "pull-analyst": {
       "allowed_tools": [

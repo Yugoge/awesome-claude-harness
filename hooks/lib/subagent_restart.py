@@ -536,6 +536,58 @@ def _iter_notification_blocks(line: str) -> Iterator[str]:
         pos = end + len(NOTIFICATION_CLOSE)
 
 
+def _fold_parent_line(line: str, line_no: int, calls: dict, results: dict, latest_notifications: dict) -> None:
+    """One transcript line of _read_parent_calls, folded into its three answers."""
+    try:  # the one reading of calls; at the call, since a harness tree without command sets imports this module
+        from . import command_span
+    except ImportError:
+        import command_span  # type: ignore[no-redef]
+    try:
+        record = json.loads(line)
+    except ValueError:
+        record = None
+    # Notifications can appear as top-level queue-operation content,
+    # message.content, or attachment.prompt. Scan the complete JSONL line
+    # so all three persisted forms count; a record of another kind (the
+    # CLI's api-request-blob copy of a message) delivered nothing.
+    copy = isinstance(record, dict) and record.get("type") not in ("user", "attachment", "queue-operation")
+    for block in () if copy else _iter_notification_blocks(line):
+        match = TASK_NOTIFICATION_RE.search(block)
+        if not match:
+            continue
+        agent_id = match.group(1).strip()
+        if AGENT_RE.fullmatch(agent_id):
+            # <status> precedes <summary>, so the post-status tail covers
+            # the failure summary that carries the quota banner.
+            tail = match.group(3)
+            latest_notifications[agent_id] = {
+                "line": line_no,
+                "status": match.group(2).lower(),
+                "quota_interrupted": signals.is_quota_text(tail),
+            }
+    for block in command_span._blocks(record, sidechain=True):
+        if block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS:
+            tool_id = block.get("id")
+            if isinstance(tool_id, str) and tool_id:
+                tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+                calls[tool_id] = {
+                    "tool_use_id": tool_id,
+                    "tool_name": block.get("name"),
+                    "line": line_no,
+                    "input": tool_input,
+                    "timestamp": record.get("timestamp"),  # the dispatch's time (obligation.dispatch_time)
+                }
+        elif block.get("type") == "tool_result":
+            tool_id = block.get("tool_use_id")
+            if isinstance(tool_id, str) and tool_id:
+                result = dict(block)
+                result["_parent_line"] = line_no
+                result["_tool_use_result"] = record.get("toolUseResult")  # the CLI's own, not the report's
+                if tool_id in command_span.hook_refused(record):  # a call a hook refused: it never ran
+                    result["_hook_refused"] = True
+                results.setdefault(tool_id, []).append(result)
+
+
 def _read_parent_calls(
     transcript: Path,
 ) -> tuple[
@@ -546,60 +598,13 @@ def _read_parent_calls(
     calls: dict[str, dict[str, Any]] = {}
     results: dict[str, list[Any]] = {}
     latest_notifications: dict[str, dict[str, Any]] = {}
-    try:  # the one reading of calls; at the call, since a harness tree without command sets imports this module
-        from . import command_span
-    except ImportError:
-        import command_span  # type: ignore[no-redef]
     try:
         lines = transcript.open("r", encoding="utf-8", errors="replace")
     except OSError as exc:
         raise RestartError(f"cannot read parent transcript: {exc}") from exc
     with lines:
         for line_no, line in enumerate(lines, 1):
-            try:
-                record = json.loads(line)
-            except ValueError:
-                record = None
-            # Notifications can appear as top-level queue-operation content,
-            # message.content, or attachment.prompt. Scan the complete JSONL line
-            # so all three persisted forms count; a record of another kind (the
-            # CLI's api-request-blob copy of a message) delivered nothing.
-            copy = isinstance(record, dict) and record.get("type") not in ("user", "attachment", "queue-operation")
-            for block in () if copy else _iter_notification_blocks(line):
-                match = TASK_NOTIFICATION_RE.search(block)
-                if not match:
-                    continue
-                agent_id = match.group(1).strip()
-                if AGENT_RE.fullmatch(agent_id):
-                    # <status> precedes <summary>, so the post-status tail covers
-                    # the failure summary that carries the quota banner.
-                    tail = match.group(3)
-                    latest_notifications[agent_id] = {
-                        "line": line_no,
-                        "status": match.group(2).lower(),
-                        "quota_interrupted": signals.is_quota_text(tail),
-                    }
-            for block in command_span._blocks(record, sidechain=True):
-                if block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS:
-                    tool_id = block.get("id")
-                    if isinstance(tool_id, str) and tool_id:
-                        tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
-                        calls[tool_id] = {
-                            "tool_use_id": tool_id,
-                            "tool_name": block.get("name"),
-                            "line": line_no,
-                            "input": tool_input,
-                            "timestamp": record.get("timestamp"),  # the dispatch's time (obligation.dispatch_time)
-                        }
-                elif block.get("type") == "tool_result":
-                    tool_id = block.get("tool_use_id")
-                    if isinstance(tool_id, str) and tool_id:
-                        result = dict(block)
-                        result["_parent_line"] = line_no
-                        result["_tool_use_result"] = record.get("toolUseResult")  # the CLI's own, not the report's
-                        if tool_id in command_span.hook_refused(record):  # a call a hook refused: it never ran
-                            result["_hook_refused"] = True
-                        results.setdefault(tool_id, []).append(result)
+            _fold_parent_line(line, line_no, calls, results, latest_notifications)
 
     return calls, results, latest_notifications
 
@@ -650,6 +655,31 @@ def _lane_key(prompt: Any) -> tuple | None:
     return (doc.get("task_id"), doc["lane"], doc.get("role")) if isinstance(doc, dict) and doc.get("lane") else None
 
 
+def _messages(transcript: Path, results: dict[str, list[Any]]) -> list[dict[str, Any]]:
+    """The SendMessage calls of the transcript that delivered (a result that is no error and no hook
+    refusal): {to, line, timestamp}. Each starts a new run of the child it names."""
+    try:
+        from . import command_span
+    except ImportError:
+        import command_span  # type: ignore[no-redef]
+    sent: list[dict[str, Any]] = []
+    with transcript.open("r", encoding="utf-8", errors="replace") as lines:
+        for line_no, line in enumerate(lines, 1):
+            if '"SendMessage"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            for block in command_span._blocks(record, sidechain=True):
+                tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+                answers = results.get(block.get("id"), []) if isinstance(block.get("id"), str) else []
+                if block.get("type") == "tool_use" and block.get("name") == "SendMessage" and answers \
+                        and not any(r.get("_hook_refused") or r.get("is_error") is True for r in answers):
+                    sent.append({"to": tool_input.get("to"), "line": line_no, "timestamp": record.get("timestamp")})
+    return sent
+
+
 def own_children(transcript_path: str | Path, parsed: tuple | None = None) -> list[dict[str, Any]]:
     """This session's own subagents: the one definition (send_policy.children, discover_candidates).
 
@@ -662,10 +692,13 @@ def own_children(transcript_path: str | Path, parsed: tuple | None = None) -> li
     transcript, so nothing an agent writes makes a foreign agent own.
     Entry: agent_id, tool_use_id, name, subagent_type, description, prompt, line, background,
     returned (a result named the child), results, agent_transcript_path, replaced (a later call that
-    ran carries the same prompt or the same gated-command lane)."""
+    ran carries the same prompt or the same gated-command lane), run_line and run_started_at (the
+    child's LATEST run: the parent line and time of the latest message delivered to it by agent id or
+    name, else its dispatch's line and None)."""
     transcript = Path(transcript_path)
     calls, results, _notes = parsed if parsed is not None else _read_parent_calls(transcript)
     metadata = _metadata_by_tool_use(transcript)
+    sent = _messages(transcript, results)
     ran = sorted((c for c in calls.values() if not any(r.get("_hook_refused") for r in results.get(c["tool_use_id"], []))),
                  key=lambda c: c["line"])
     keys = [(c["input"].get("prompt"), _lane_key(c["input"].get("prompt"))) for c in ran]
@@ -682,6 +715,8 @@ def own_children(transcript_path: str | Path, parsed: tuple | None = None) -> li
             continue
         path = meta.get("agent_transcript_path") or str(transcript.with_suffix("") / "subagents" / f"agent-{agent}.jsonl")
         prompt, lane = keys[index]
+        name = tool_input.get("name") if isinstance(tool_input.get("name"), str) and tool_input.get("name") else None
+        runs = [m for m in sent if m["line"] > call["line"] and m["to"] in (agent, name)]
         own.append({
             "agent_id": agent, "tool_use_id": tool_id, "tool_name": call.get("tool_name", "Agent"),
             "name": tool_input.get("name") if isinstance(tool_input.get("name"), str) else None,
@@ -692,11 +727,13 @@ def own_children(transcript_path: str | Path, parsed: tuple | None = None) -> li
             "returned": bool(named), "results": blocks, "agent_transcript_path": path,
             "replaced": any((isinstance(prompt, str) and p == prompt) or (lane is not None and k == lane)
                             for p, k in keys[index + 1:]),
+            "run_line": runs[-1]["line"] if runs else call["line"],
+            "run_started_at": runs[-1]["timestamp"] if runs else None,
         })
     return own
 
 
-def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
+def _scan_child_transcript(agent_transcript_path: str | Path, since: Any = None) -> dict[str, Any]:
     """One pass over ONE COPY of a child transcript for the verdicts it holds.
 
     Callers want the verdict for a CHILD, not for a copy, and must go through
@@ -711,8 +748,9 @@ def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
         True iff the child emitted a terminal end_turn report. ``stop_reason``
         is written by the harness, never by report prose, so an assistant record
         carrying ``stop_reason == "end_turn"`` proves the child reached a natural
-        stopping point — including the completed-then-rewoken shape where a later
-        resume turn was itself cut off after the report already landed.
+        stopping point. Read with ``since``, only an end_turn of the latest run counts:
+        a child that finished, was given new work by a message and was cut in that
+        run is cut, whatever its first run's report says.
         Synthetic quota-abort records carry ``stop_sequence`` (plus
         ``isApiErrorMessage``) and can never satisfy this test. None when the
         transcript is missing or unreadable: liveness is then unknowable and the
@@ -729,8 +767,12 @@ def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
 
     Both verdicts come from one read because the caller needs them together and
     child transcripts are large.
+
+    ``since`` (the start time of the child's latest run, own_children's run_started_at) limits both
+    verdicts to that run: a record stamped before it, or with no stamp, belongs to an earlier run.
     """
     path = Path(agent_transcript_path)
+    start = _parse_time(since)
     verdict: dict[str, Any] = {"end_turn": None, "api_error": None, "api_error_line": None}
     try:
         handle = path.open("r", encoding="utf-8", errors="replace")
@@ -750,6 +792,9 @@ def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
             except ValueError:
                 continue
             if not isinstance(record, dict):
+                continue
+            stamp = _parse_time(record.get("timestamp")) if start is not None else None
+            if start is not None and (stamp is None or stamp < start):
                 continue
             if has_api_error:
                 signal = signals.classify_record(record)
@@ -793,7 +838,7 @@ def _child_transcript_copies(agent_transcript_path: str | Path) -> list[Path]:
     ]
 
 
-def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, Any]:
+def _child_transcript_signals(agent_transcript_path: str | Path, since: Any = None) -> dict[str, Any]:
     """Resolve a child's structural verdicts across EVERY copy of its transcript.
 
     Completion evidence is POSITIVE and MONOTONE: an end_turn record in any one
@@ -809,7 +854,7 @@ def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, An
     """
     merged: dict[str, Any] = {"end_turn": None, "api_error": None, "api_error_line": None}
     for copy in _child_transcript_copies(agent_transcript_path):
-        verdict = _scan_child_transcript(copy)
+        verdict = _scan_child_transcript(copy, since)
         if verdict["end_turn"] is None:
             continue  # this copy is absent/unreadable; it contributes no evidence
         merged["end_turn"] = bool(merged["end_turn"]) or verdict["end_turn"]
@@ -820,9 +865,9 @@ def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, An
     return merged
 
 
-def _child_reported_end_turn(agent_transcript_path: str | Path) -> bool | None:
+def _child_reported_end_turn(agent_transcript_path: str | Path, since: Any = None) -> bool | None:
     """Back-compat wrapper: only the end_turn verdict of the combined scan."""
-    return _child_transcript_signals(agent_transcript_path)["end_turn"]
+    return _child_transcript_signals(agent_transcript_path, since)["end_turn"]
 
 
 def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
@@ -837,9 +882,9 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
         tool_id, agent_id, result_blocks = call["tool_use_id"], call["agent_id"], call["results"]
         result_text = _textify(result_blocks)
         notification = latest_notifications.get(agent_id, {})
-        notification_after_call = (
+        notification_after_call = (  # a notification of the child's latest run (own_children's run_line)
             isinstance(notification.get("line"), int)
-            and notification["line"] > call["line"]
+            and notification["line"] > call["run_line"]
         )
         # A post-call status=completed notification is authoritative evidence
         # that this exact child already came to rest successfully, including
@@ -910,7 +955,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
         # test, because that record is often the only evidence in existence. A
         # hook-rejected Agent call is no own child (own_children): never resumed.
         agent_transcript_path = call["agent_transcript_path"]
-        child = _child_transcript_signals(agent_transcript_path)
+        child = _child_transcript_signals(agent_transcript_path, call["run_started_at"])  # its latest run
         # Structural liveness gate. The parent's Agent tool_result IS the
         # child's own report whenever the child completed, so the textual
         # evidence above cannot distinguish "was quota-interrupted" from
@@ -959,6 +1004,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             "parent_line": call.get("line"),
             "interruption_line": max(interruption_lines or [call["line"]]),
             "agent_transcript_path": agent_transcript_path,
+            "run_started_at": call["run_started_at"],
             "evidence": evidence,
         })
     return candidates
@@ -1537,7 +1583,7 @@ def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
         # legacy-state candidate never structurally screened) must not be
         # resumed. Only an unreadable transcript (None) stays dispatchable —
         # the same fail-toward-recovery rule discovery applies.
-        if _child_reported_end_turn(str(item.get("agent_transcript_path") or "")) is True:
+        if _child_reported_end_turn(str(item.get("agent_transcript_path") or ""), item.get("run_started_at")) is True:
             raise RestartError(
                 "target's child transcript already contains its terminal end_turn "
                 "report; completed agents are never resumed"

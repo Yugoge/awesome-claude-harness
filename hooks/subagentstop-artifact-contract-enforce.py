@@ -171,7 +171,8 @@ def _nested_claude_repo() -> list:
             capture_output=True, text=True, timeout=10,
         )
         top = proc.stdout.strip()
-        return [top] if proc.returncode == 0 and top else []
+        from lib import locations
+        return [top] if proc.returncode == 0 and top and not locations.is_fs_root(top) else []
     except Exception:
         return []
 
@@ -298,7 +299,7 @@ def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
             for code, path, _problem, *_ in g3._find_violations({family: reports}, canonicals, dev_dir, task_id):
                 if code != "canonical_missing" or label is None:
                     continue
-                refused = g3.own_refusal(g3.aggregator_refusal(dev_dir, family), label)
+                refused = g3.own_refusal(g3.aggregator_refusal(dev_dir, family), label, family)
                 if refused:
                     findings.append({"path": report_rel, "reason": code, "errors": [
                         f"{os.path.relpath(path, project_dir)} is missing: scripts/aggregate-dev-report.py refuses this report: "
@@ -320,22 +321,24 @@ def _tree_rel(path: Path) -> tuple:  # (git work tree holding path, path in it);
     return tree, path.relative_to(tree).as_posix() if tree else ""
 
 
-def _recorded(transcript):
+def _recorded(transcript, excluded=command_span.EXCLUDED_TREES):
     """(written, named) resolved paths of a transcript over every account root's copy (each a partial view,
     subagent_restart._child_transcript_copies), None if none is readable. Read on "/" to keep other
-    repositories' paths, so the excluded trees are dropped here, in each path's own repository."""
+    repositories' paths, so the excluded trees are dropped here, in each path's own repository; A3.a passes ()
+    so that a bookkeeping file the dev was asked to change (an older cycle's qa-report) counts as written."""
     copies = subagent_restart._child_transcript_copies(transcript) if transcript else []
     found = [s for s in (command_span.write_set(c, "/") for c in copies) if s is not None]
     keep = lambda rels: {p for p in (Path("/", r).resolve() for r in rels)
-                         if not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)}
+                         if not _tree_rel(p)[1].startswith(excluded)}
     return tuple(keep(set().union(*(s[i] for s in found))) for i in (0, 1)) if found else None
 
 
-def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, deadline: float) -> list:
-    """A3.a: each declared path written or named by this dev or an earlier dev dispatch of its task id and lane (QA
-    loop, completion dispatch, any session of the project), or changed by a tool their Bash ran (a formatter, a
-    generator); each written path git has a change for declared."""
-    if (own := _recorded(getattr(resolution, "transcript_path", None))) is None:
+def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, deadline: float, start=None) -> list:
+    """A3.a: each path this dispatch declared (not in `start`, the entries its report held when the dispatch began:
+    lib/lane_ledger.declared_at_start) written or named by this dev or an earlier dev dispatch of its task id and
+    lane (QA loop, completion dispatch, any session of the project), or changed by a tool their Bash ran (a
+    formatter, a generator); each written path git has a change for declared."""
+    if (own := _recorded(getattr(resolution, "transcript_path", None), ())) is None:
         return []
     (written, named), unreadable, ran, tool, uses, spans = own, [], [resolution.transcript_path], set(), {}, []
     ours = ("dev", ob.get("lane"), obligation.canonical_task_id(ob.get("task_id")))
@@ -347,6 +350,7 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     declared = {key: {(root / os.path.expanduser(p)).resolve(): p for p in dev.get(key) or []}
                 for key in ("files_modified", "files_created")}
     raw = {**declared["files_created"], **declared["files_modified"]}
+    judged = set(raw) - set(start or ())  # an entry the report held at dispatch start is an earlier round's
     change = lambda p: (t := _tree_rel(p))[0] and subprocess.run(  # git's status line for p; "" or None: none
         ["git", "--no-optional-locks", "--literal-pathspecs", "-C", str(t[0]), "status", "--porcelain", "-uall", "--",
          t[1]], capture_output=True, text=True, timeout=10).stdout
@@ -360,14 +364,14 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
                 continue
             meta = next((m for c in subagent_restart._child_transcript_copies(rec["transcript"])  # any root's
                          if (m := subagent_restart._metadata_by_tool_use(c).get(rec["tool_use_id"]))), {})
-            sets = _recorded(meta.get("agent_transcript_path"))
+            sets = _recorded(meta.get("agent_transcript_path"), ())
             if sets is None:
                 unreadable.append(f"dev dispatch {rec['tool_use_id']} in session {rec['transcript'].stem}")
             else:
                 written.update(sets[0]), named.update(sets[1]), ran.append(meta["agent_transcript_path"])
         # A tool's change: git has one, its mtime lies in such a Bash call run in its tree (its tool_use record to
         # its tool_result, a background call's to now) and no live subagent's record wrote it.
-        for at, b, cwd in ((stamp(r.get("timestamp")), b, r.get("cwd")) for t in ran if set(raw) - written - named
+        for at, b, cwd in ((stamp(r.get("timestamp")), b, r.get("cwd")) for t in ran if judged - written - named
                            for c in subagent_restart._child_transcript_copies(t) if c.is_file()  # a root may hold none
                            for _, r in command_span._records(c)
                            for b in (r.get("message") or {}).get("content") or () if isinstance(b, dict)):
@@ -377,16 +381,16 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
                 spans.append((*use[:2], time.time() if use[2].get("run_in_background") else at.timestamp()))
         live = (a for t in obligation._session_transcripts(project_dir, None) if spans for a in t.with_suffix(
             "").glob("subagents/agent-*.jsonl") if a.stat().st_mtime >= min(s[1] for s in spans))
-        tool.update(p for p in set(raw) - written - named - set().union(*(s[0] for s in map(_recorded, live) if s))
+        tool.update(p for p in judged - written - named - set().union(*(s[0] for s in map(_recorded, live) if s))
                     if p.is_file() and change(p) and not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)
                     and any(s <= p.stat().st_mtime <= e and c.is_relative_to(_tree_rel(p)[0]) for c, s, e in spans))
     try:
         _with_alarm(deadline - time.monotonic(), inherit)
     except _WireTimeout:
         unreadable.append("the search for earlier dev dispatches (wire budget spent)")
-    missing, extra = set(raw) - written - named - tool, {}
-    for p in written - set(raw):  # nothing to land (unchanged, ignored, gone, outside a tree): nothing to declare
-        if out := change(p):
+    missing, extra = judged - written - named - tool, {}
+    for p in written - set(raw):  # nothing to land (unchanged, ignored, gone, outside a tree, a bookkeeping tree)
+        if not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES) and (out := change(p)):
             extra[p] = "files_created" if out[:2] == "??" or out[0] == "A" else "files_modified"
     if not missing and not extra:
         return []
@@ -497,7 +501,7 @@ def _harness_syntax(resolution) -> list:
     return findings
 
 
-def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, resolution=None) -> list:
+def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, resolution=None, ids=None) -> list:
     """F3.a for any stopping producer (only a role the tool policy lets write the
     harness can trip it: a dev, a test-writer under tests/generated/), then the dev
     report's wires (ledger judgment, /commit's trial plan or, for a fan-out lane,
@@ -528,7 +532,9 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, reso
         else:
             findings += _wire_canonical(project_dir, report_rel, task_id)
         try:
-            lines = _file_lists_errors(project_dir, ob, report, resolution, deadline)
+            from lib import lane_ledger  # the dispatch's own record, kept until its stop stands
+            start = lane_ledger.declared_at_start(*ids, report_full, project_dir) if ids and ids[1] else None
+            lines = _file_lists_errors(project_dir, ob, report, resolution, deadline, start)
         except Exception:  # a check that cannot run judges nothing
             lines = []
         if lines and FILE_LISTS_BLOCK:
@@ -1073,7 +1079,8 @@ def main() -> None:
                 if not failures:
                     try:
                         failures.extend(_run_downstream_wires(
-                            project_dir, resolution.obligation, json_artifacts, resolution))
+                            project_dir, resolution.obligation, json_artifacts, resolution,
+                            (data.get("session_id") or data.get("sessionId"), agent_id)))
                     except Exception:
                         pass  # a crashed wire judges nothing (see its section comment)
                 who = (f"agent {agent_id} (role={resolution.obligation.get('role')}, "

@@ -150,3 +150,20 @@ def test_lane_report_listing_its_parents_transcript_is_admitted(project):
                                   'build/app.js'])
 def test_qa_of_a_report_listing_another_file_is_refused(project, path):
     assert run_gate(project, qa_of(project, TASK, ['src/new.py', path]), 'qa') == (2, BLOCKED + path)
+
+
+@pytest.mark.parametrize('cited_from', ['own', 'other'])
+def test_a_deliverable_is_judged_by_its_own_repositorys_ignore_rules(tmp_path, project, cited_from):
+    """U31 of location-rules: a deliverable in another repository that ignores it is ignored whichever
+    project's dispatch cites the report; git is asked in the deliverable's own repository."""
+    other = tmp_path / 'other'
+    (other / 'out').mkdir(parents=True)
+    (other / '.gitignore').write_text('/out/\n')
+    subprocess.run(['git', 'init', '-q'], cwd=other, check=True)
+    deliverable = str(other / 'out' / 'x.json')
+    root = other if cited_from == 'own' else project
+    (root / 'docs' / 'dev').mkdir(parents=True, exist_ok=True)
+    write_report(root, TASK, [deliverable])
+    prompt = 'Dev report file: %s\n%s' % (report_rel(TASK), obligation(
+        TASK, 'qa', 'docs/dev/qa-report-%s.json' % TASK, 'qa-report.v2'))
+    assert run_gate(root, prompt, 'qa') == (2, BLOCKED + deliverable)

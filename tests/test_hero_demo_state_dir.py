@@ -77,14 +77,13 @@ def test_two_runs_in_one_environment_give_the_committed_capture(tmp_path):
             r = subprocess.run([sys.executable, str(CAPTURE), "--capture", str(cap),
                                 "--evidence", str(tmp_path / f"evidence-{run}.json")],
                                cwd=str(REPO), env=env, capture_output=True, text=True, timeout=180)
-            # The comparison verify-hero-provenance.py makes; the duration window is the
-            # host's speed, not this property, so a run may fail it alone.
+            # The comparison verify-hero-provenance.py makes. The capture holds a run to a lower
+            # bound only (a busy host lengthens it), so every failure of it fails this test.
             c = subprocess.run([sys.executable, "-c", COMPARE, str(PROVENANCE), str(cap)],
                                cwd=str(REPO), env=env, capture_output=True, text=True, timeout=60)
             assert c.returncode == 0, (f"run {run}: the capture differs from the committed one\n"
                                        f"{cap.read_text(encoding='utf-8')}\n{c.stderr}")
-            assert r.returncode == 0 or "raw duration" in r.stderr and r.stderr.count("FAIL:") == 1, \
-                f"run {run}: rc={r.returncode}\n{r.stdout}\n{r.stderr}"
+            assert r.returncode == 0, f"run {run}: rc={r.returncode}\n{r.stdout}\n{r.stderr}"
     finally:
         stop.set()
         watcher.join(timeout=5)

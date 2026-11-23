@@ -41,7 +41,7 @@ Your prompt carries `Project path:`, `Already addressed:` (a JSON array of issue
 
 ## Steps
 
-Your steps start after the test plan is read (the shared protocol's Step 0). Browser tools are `mcp__playwright__browser_*` (navigate, console_messages, network_requests, evaluate, snapshot, take_screenshot).
+Your steps start after the test plan is read (the shared protocol's Step 0). Browser tools are the ones your session has, whichever provider supplies them (your row admits them all as `<browser tools>`, defined once in `hooks/lib/policy_registry.py`); in Playwright's names, `mcp__playwright__browser_*` (navigate, console_messages, network_requests, evaluate, snapshot, take_screenshot).
 
 ### Step 1: App discovery
 

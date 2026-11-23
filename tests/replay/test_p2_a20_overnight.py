@@ -82,7 +82,8 @@ def test_unattended_overnight_denies_every_question_and_decides_without_the_owne
     where = [(ev["label"].split(" (injected)")[0].split(" ", 1)[1], "subagent" if ev.get("agent_type") else "main")
              for ev in asked]
     assert len(asked) == 3 and [who for _w, who in where] == ["main", "subagent", "main"], where
-    assert where[0][0].startswith("Step 8") and where[1][0].startswith("Step 12") and where[2][0] == "Step 21", where
+    assert where[0][0].startswith(f"Step {night.N.ba}") and where[1][0].startswith(f"Step {night.N.dev}") \
+        and where[2][0] == f"Step {night.N.summary}", where
     for ev, (_w, who) in zip(asked, where):
         denied = [h for h in ev["hooks"] if h["hook"] == GUARD]
         assert len(denied) == 1 and denied[0]["rc"] == 2, (ev["label"], [(h["hook"], h["rc"]) for h in ev["hooks"]])

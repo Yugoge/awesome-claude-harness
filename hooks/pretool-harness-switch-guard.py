@@ -15,8 +15,9 @@ subagent, each other path by which an agent call could switch the harness or fak
                         writing disableAllHooks into any settings*.json, in any project
   Write / Edit / MultiEdit / NotebookEdit
                         a file under <H>/.harness-switch/; the home's settings files; any
-                        settings*.json that would set disableAllHooks; a script outside a harness
-                        checkout that names the switch's state
+                        settings*.json that would set disableAllHooks; a script that names the
+                        switch's state outside the harness home and outside the session's
+                        project when that is a harness checkout (_in_harness_checkout)
   every other tool      hooks/pretool-harness-switch-prompt.py's: a string of its input that types
                         /harness (the text matching of both is hooks/lib/switch_prompt.py)
 
@@ -57,7 +58,7 @@ import re  # noqa: E402
 import shlex  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
-from claude_home import load_settings  # noqa: E402 -- the one load of a settings file, for every decider
+from claude_home import load_settings, project_dir  # noqa: E402 -- the one load of a settings file, for every decider
 import shell_parse  # noqa: E402 -- the one reading of a Bash command
 import bash_read_only  # noqa: E402 -- the one list of the programs that only read
 import git_facts  # noqa: E402 -- what git's subcommands do to the files they name
@@ -71,6 +72,8 @@ STATE_DIR = os.path.join(HOME, harness_switch.DIR_NAME)
 SETTINGS_NAMES = ("settings.json", "settings.machine.json", "settings.local.json")
 SWITCH_PROGRAMS = ("harness-switch", "userprompt-harness-switch.sh")
 GIT_READ_ONLY = git_facts.GIT_KEEPS_NAMED_FILES  # git calls that write no file they name
+# The switch's directory as a whole name (a path component or a quoted word), not inside a longer file name.
+SWITCH_DIR_WORD = re.compile(r"(?<![\w.-])%s(?![\w.-])" % re.escape(harness_switch.DIR_NAME))
 NESTED = re.compile(r"(?:^|[\s;|&(/])claude(?:\s|$)", re.M)  # a Claude Code session the command starts
 WRITES = re.compile(r"(?<![<>&0-9])>|>>|\btee\b|\bsed\b[^|;&]*\s-i|\bdd\b|\btruncate\b")
 SETTINGS_ANY = re.compile(r"settings(?:\.[\w-]+)?\.json")  # check_write's names, in any directory
@@ -105,14 +108,11 @@ def _allow_settings(cwd: str) -> bool:
 
 
 def _in_harness_checkout(path: str) -> bool:
-    d = os.path.dirname(path)
-    while True:
-        if os.path.isfile(os.path.join(d, "hooks", "lib", "harness_switch.py")):
-            return True
-        parent = os.path.dirname(d)
-        if parent == d:
-            return False
-        d = parent
+    """`path` (resolved) lies in the harness home, or in the session's project when that is a harness checkout:
+    not in any directory an agent made to hold a file of that name."""
+    project = os.path.realpath(str(project_dir()))
+    roots = [HOME] + ([project] if os.path.isfile(os.path.join(project, "hooks", "lib", "harness_switch.py")) else [])
+    return any(path.startswith(r.rstrip(os.sep) + os.sep) for r in roots)
 
 
 def _text(word, env: dict) -> str:
@@ -431,7 +431,7 @@ def check_bash(command: str, cwd: str, data: dict | None = None) -> int:
             token = word.split("=", 1)[-1]
             if os.path.basename(token.rstrip("/")) in SWITCH_PROGRAMS and not _read_only(words):
                 return refuse("this Bash command runs the switch (%s)" % os.path.basename(token))
-            if harness_switch.DIR_NAME in token and writes:
+            if SWITCH_DIR_WORD.search(token) and writes:
                 return refuse("this Bash command changes the switch's state (%s)" % harness_switch.DIR_NAME)
             if os.path.basename(token) in SETTINGS_NAMES and writes and not _allow_settings(cwd):
                 if _resolve(token, cwd) in settings:

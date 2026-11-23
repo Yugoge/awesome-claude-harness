@@ -48,6 +48,12 @@ MARKS_DIR: list = []  # the replay's marker directory (Replay sets it; trace.py 
 LAUNCHED_COMMAND = 'python3 "${CLAUDE_HOME:-$HOME/.claude}/%s"'  # a hook's own registration, before the launchers
 
 
+def launched_command(hook: str) -> str:
+    """The command a launcher's rule `hook` (hooks/x.py or hooks/x.sh) had as its own registration: a shell
+    rule is registered, and launched, as `bash <file>` (hooks/lib/hook_launch.py, lib/launch_settings.py)."""
+    return (LAUNCHED_COMMAND.replace("python3 ", "bash ", 1) if hook.endswith(".sh") else LAUNCHED_COMMAND) % hook
+
+
 def matches(matcher, value) -> bool:
     if matcher in (None, "", "*"):
         return True
@@ -254,7 +260,7 @@ def _run_one(h: dict, payload_raw: str, env: dict, cwd: str) -> dict:
     rules = recs.close() if recs is not None else []
     if rules:
         rec["rules"] = [_record({"hook": r["hook"], "matcher": r.get("matcher") or None,
-                                 "command": LAUNCHED_COMMAND % r["hook"], "timeout": r.get("timeout")},
+                                 "command": launched_command(r["hook"]), "timeout": r.get("timeout")},
                                 r["rc"], r.get("stdout") or "", r.get("stderr") or "", r.get("ms", 0))
                         for r in rules]
     return rec

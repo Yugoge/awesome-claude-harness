@@ -335,11 +335,25 @@ def test_what_the_cheap_test_clears_the_hook_never_refuses():
         assert not hook._may_create(command), command
 
 
+def _cheap_test_cpu(hook, scale):
+    """CPU seconds of the cheap test over the five long texts at `scale`, the least of two runs."""
+    texts = ("g'a'" * (2 * scale) + "i", "g" + "'" * (5 * scale) + "i", "gi" + '"' * (5 * scale),
+             "g#\n" * (5 * scale // 2) + "i", "x" * (10 * scale))
+    best = None
+    for _ in range(2):
+        started = time.process_time()
+        for text in texts:
+            assert hook._may_create(text) is False
+        took = time.process_time() - started
+        best = took if best is None else min(best, took)
+    return best
+
+
 def test_the_cheap_test_is_linear():
+    # Twice the text must cost well under four times as much (a pass that pairs quotes or comments again for every
+    # position grows with the square). The two sizes are compared with each other, in CPU seconds, because no fixed
+    # bound holds on every runner: a slow or busy one stretches both alike.
     hook = _module(HOOK, "bbpw_fails_closed_linear")
-    started = time.monotonic()
-    for text in ("g'a'" * 40000 + "i", "g" + "'" * 100000 + "i", "gi" + '"' * 100000,
-                 "g#\n" * 50000 + "i", "x" * 200000):
-        assert hook._may_create(text) is False
-    assert hook._may_create("g'a'" * 40000 + "it worktree") is True
-    assert time.monotonic() - started < 20
+    small, large = _cheap_test_cpu(hook, 5000), _cheap_test_cpu(hook, 10000)
+    assert large < 3 * small, (small, large)
+    assert hook._may_create("g'a'" * 20000 + "it worktree") is True

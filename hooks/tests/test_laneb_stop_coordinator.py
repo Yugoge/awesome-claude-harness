@@ -306,7 +306,7 @@ def _stop(tmp_path: Path, root: Path, phases: list, transcript: Path, gate: str 
         capture_output=True,
         cwd=str(root),
         env=environment,
-        timeout=60,
+        timeout=300,  # an outer limit that only a hang reaches; no test compares a time with it
     )
 
 
@@ -320,6 +320,14 @@ def _completion(root: Path, body: str):
 
 
 INSTRUMENT_LINE = "COMMAND_GATE instrument failure: {}. The gate is broken; the human can type /stop\n"
+# A gate that ran out of time: no verdict, the turn not let through, /stop named; no other exit.
+TIMEOUT_LINE = ("COMMAND_GATE: the gate ran out of time after {} s and has no verdict, so this stop is not "
+                "let through as complete. The gate keeps what it computed, so the next stop continues from there. "
+                "The owner can end the command with /stop.\n")
+
+
+def _fallback_line(reason: str, limit: float = SLOW_TIMEOUT) -> str:
+    return TIMEOUT_LINE.format(f"{limit:g}") if reason == "timeout" else INSTRUMENT_LINE.format(reason)
 
 
 @pytest.mark.parametrize("failure", sorted(INSTRUMENT_FAILURES))
@@ -333,12 +341,10 @@ def test_a9_completion_instrument_failure_blocks_a_gated_span_naming_stop(
     phases = _phases(root, failure, target="completion")
     status, returncode, reason = INSTRUMENT_FAILURES[failure]
 
-    started = time.monotonic()
     proc = _stop(tmp_path, root, phases, transcript)
 
-    assert time.monotonic() - started < 300
     assert proc.returncode == 2, proc.stdout + proc.stderr
-    assert proc.stderr == INSTRUMENT_LINE.format(reason)
+    assert proc.stderr == _fallback_line(reason)
     for leaked in ("ImportError", "simulated", "Traceback", "failed_phase=", phases[COMPLETION].argv[-1]):
         assert leaked not in proc.stderr and leaked not in proc.stdout
     out = json.loads(proc.stdout)
@@ -413,7 +419,7 @@ def test_a9_a_failed_gate_blocks_while_the_window_is_open_whatever_the_command(
     proc = _stop(tmp_path, root, _phases(root, failure, target="completion"), path)
     assert proc.returncode == code, proc.stdout + proc.stderr
     reason = INSTRUMENT_FAILURES[failure][2]
-    assert proc.stderr == (INSTRUMENT_LINE.format(reason) if code else "")
+    assert proc.stderr == (_fallback_line(reason) if code else "")
 
 
 @pytest.mark.parametrize("marked", [True, False])
@@ -580,7 +586,15 @@ def test_a13_phase_order_and_timeouts_fit_the_launcher_and_the_registration() ->
     assert completion.timeout == 60
     total = sum(p.timeout for p in defaults)
     launcher = (HOOKS / "stop-launch.py").read_text(encoding="utf-8")
-    assert total == 240 < 280 and "COORDINATOR_TIMEOUT = 280" in launcher
+    assert total == 240 and "COORDINATOR_TIMEOUT = 280" in launcher
+    # The worst case: every phase runs out of time and is ended with its process group, each
+    # end costing at most KILL_GRACE; that sum fits the launcher's limit for the coordinator.
+    assert coordinator.KILL_GRACE > 0
+    # The fallback's reading of the session record is bounded too (FALLBACK_LIMIT) and counted.
+    worst = coordinator.worst_case_seconds(defaults)
+    assert coordinator.FALLBACK_LIMIT > 0
+    assert worst == total + len(defaults) * coordinator.KILL_GRACE + coordinator.FALLBACK_LIMIT
+    assert worst <= 280
     # The pre-launch missing-file check finds every default phase script.
     assert all(Path(coordinator._phase_script(p.argv)).is_file() for p in defaults)
     settings = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
@@ -662,3 +676,122 @@ def test_auto_commit_or_cleanup_exit_2_is_recorded_and_never_relayed(
     assert recorded["returncode"] == 2 and recorded["status"] != "allow"
     assert "diagnostic" not in proc.stdout
     assert _logged(root) == list(coordinator.PHASE_ORDER)
+
+
+def _running(pid: int) -> bool:
+    """The process ``pid`` exists and has not exited (a zombie has exited)."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return False
+    return stat.rsplit(")", 1)[1].split()[0] != "Z"
+
+
+# A phase that starts a grandchild (as auto-commit.sh starts git), which records its pid and
+# sleeps holding the phase's own stdout and stderr; the phase waits for the pid, then sleeps.
+GRANDCHILD_BODY = (
+    "import os, subprocess\n"
+    "pid_file = pathlib.Path({pid_file!r})\n"
+    "subprocess.Popen([sys.executable, '-c', 'import os, pathlib, sys, time; '"
+    " 'pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)', str(pid_file)])\n"
+    "while not pid_file.exists() or not pid_file.read_text():\n"
+    "    time.sleep(0.05)\n"
+    "time.sleep(60)\n"
+)
+
+
+@pytest.mark.parametrize("phase", ["auto_commit", "completion"])
+def test_a_phase_out_of_time_ends_with_everything_it_started(tmp_path: Path, phase: str) -> None:
+    """A phase that runs out of its limit is ended with its whole process group: a sleeping
+    grandchild it started is no longer running when the coordinator returns."""
+    root, transcript = _project(tmp_path, "no-command")
+    pid_file = root / "grandchild.pid"
+    phases = _phases(root)
+    index = coordinator.PHASE_ORDER.index(phase)
+    script = _phase_script(root, phase, GRANDCHILD_BODY.format(pid_file=str(pid_file)))
+    phases[index] = coordinator.Phase(phase, (sys.executable, str(script)), 5.0)
+    pid = None
+    try:
+        result, exit_code = coordinator.run_coordinator(
+            _payload(root, transcript), project_dir=root,
+            environment={**_plain_environment(tmp_path, root), coordinator.LAUNCHER_MARK: "1"},
+            phases=phases,
+        )
+        pid = int(pid_file.read_text())
+        assert result["phases"][index]["status"] == "timeout", result
+        assert exit_code == 0
+        assert not _running(pid), "the phase's grandchild outlived the coordinator"
+    finally:
+        if pid is not None and _running(pid):
+            os.kill(pid, 9)
+
+
+def test_a_gate_out_of_time_says_it_has_no_verdict_and_names_stop(tmp_path: Path) -> None:
+    """A completion phase out of time inside a gated /dev span: not let through (exit 2), the
+    text says the gate ran out of time after its limit and has no verdict, and that the owner
+    can end the command with /stop; it names no other way out."""
+    root, transcript = _project(tmp_path, "dev")
+    proc = _stop(tmp_path, root, _phases(root, "slow", target="completion"), transcript)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stderr == (
+        "COMMAND_GATE: the gate ran out of time after 0.5 s and has no verdict, so this stop is not "
+        "let through as complete. The gate keeps what it computed, so the next stop continues from there. "
+        "The owner can end the command with /stop.\n")
+    assert "--force" not in proc.stderr and "CLAUDE_COMMAND_GATE" not in proc.stderr
+
+
+def test_the_fallbacks_reading_of_the_session_record_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reading of the session record that does not return within FALLBACK_LIMIT is not waited for: the
+    fallback blocks (nothing read, nothing let through) and says the record was not read in time."""
+    monkeypatch.setattr(coordinator, "FALLBACK_LIMIT", 0.2)
+    returned = []
+
+    def hangs(payload, mode):
+        time.sleep(120)
+        returned.append(True)
+
+    monkeypatch.setattr(coordinator, "_record", hangs)
+    code, text = coordinator.fallback({"transcript_path": "unread.jsonl"}, "block", "timeout", 60.0)
+    assert not returned, "the fallback waited for the reading to return"  # no clock: it came back while the reading slept
+    assert code == 2 and text == TIMEOUT_LINE.format("60").replace(
+        "has no verdict, so", "has no verdict; the session record was not read within 0.2 s, so")
+
+
+def _background_launch(minutes_ago: float) -> list:
+    """The CLI's records of a background dev dispatch launched ``minutes_ago`` (its result: isAsync, agentbg1)."""
+    sys.path.insert(0, str(ROOT))
+    from tests.cli_shapes import synthesize
+    at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat().replace("+00:00", "Z")
+    return [synthesize("assistant", "tool_use", timestamp=at, sessionId=STOP_SESSION, message__content=[
+                {"type": "tool_use", "id": "toolu_bg01", "name": "Agent", "input": {
+                    "subagent_type": "dev", "description": "dev", "prompt": "work", "run_in_background": True}}]),
+            synthesize("user", "agent_launched", timestamp=at, sessionId=STOP_SESSION,
+                       toolUseResult__agentId="agentbg1", message__content=[
+                           {"type": "tool_result", "tool_use_id": "toolu_bg01",
+                            "content": "Async agent launched successfully"}])]
+
+
+@pytest.mark.parametrize(("transcript", "window", "minutes_ago", "code"), [
+    ("dev-overnight", True, 5, 0),       # the window open, a child running: a wait, as in the gate
+    ("dev", False, 5, 0),                # a gated /dev, a child running: a wait, as in the launcher
+    ("dev-overnight", True, 24 * 60, 2),  # a child past its bound: not running; the block holds
+])
+def test_the_coordinators_fallback_reads_a_running_child_as_the_gate_does(
+    tmp_path: Path, transcript: str, window: bool, minutes_ago: float, code: int
+) -> None:
+    """A completion that did not decide (crash) while a background child of the gated span runs: the
+    fallback reads the wait through the gate's own reading (waiting_for), also inside an open window:
+    exit 0, the text naming the failure and the child, shown to the owner; a lost child blocks."""
+    root, path = _project(tmp_path, transcript)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("".join(json.dumps(r) + "\n" for r in _background_launch(minutes_ago)))
+    if window:
+        _window(root, True)
+    proc = _stop(tmp_path, root, _phases(root, "crash", target="completion"), path)
+    assert proc.returncode == code, proc.stdout + proc.stderr
+    reason = INSTRUMENT_FAILURES["crash"][2]
+    if code:
+        assert proc.stderr == _fallback_line(reason)
+    else:
+        assert proc.stderr == f"COMMAND_GATE instrument failure: {reason}; waiting for agentbg1, still running; not complete\n"
+        assert json.loads(proc.stdout)["systemMessage"] == proc.stderr

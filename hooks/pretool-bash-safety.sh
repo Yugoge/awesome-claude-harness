@@ -52,15 +52,16 @@ _preclean_snapshot_guard() {
     126|127)          # the guard process could not be started: a deployment fault, not a verdict on the command
       _SAID="BLOCKED: /do or /allow release denied — the pre-clean guard could not run (rc=$_guard_rc), so the command cannot be checked for a destructive 'git clean' (fail-closed)"; echo "$_SAID" >&2
       echo "Command: $COMMAND" >&2
-      echo "REASON: $PYTHON_BIN could not execute $_guard_py; repair the interpreter deployment, then re-issue the command." >&2
+      echo "REASON: $PYTHON_BIN could not execute $_guard_py; the interpreter deployment needs repair. This refusal is not retried; the owner's typed /allow releases the next refused call." >&2
       exit 2
       ;;
     *)                # 11 = redirected or indeterminate target; any other rc = detector failure
       _SAID="BLOCKED: granted 'git clean' denied — no protective pre-clean WIP snapshot is possible (fail-closed)"; echo "$_SAID" >&2
       echo "Command: $COMMAND" >&2
       echo "REASON: ${_guard_reason:-the pre-clean guard could not classify this command}" >&2
-      echo "Hint: re-issue the clean from this working directory without -C/--git-dir/--work-tree" >&2
-      echo "      and without a leading cd/subshell, or snapshot the work yourself first." >&2
+      echo "Hint: only a clean of this working directory, without -C/--git-dir/--work-tree and without a" >&2
+      echo "      leading cd/subshell, can be snapshotted. This refusal is not retried; the owner's typed /allow" >&2
+      echo "      releases the next refused call." >&2
       exit 2
       ;;
   esac
@@ -84,11 +85,11 @@ _preclean_snapshot_guard() {
     _SAID="BLOCKED: granted 'git clean' denied — the protective pre-clean WIP snapshot FAILED (fail-closed)"; echo "$_SAID" >&2
     echo "Command: $COMMAND" >&2
     if [ "$_ckpt_rc" = "2" ]; then
-      echo "REASON: write_checkpoint rc=2 — this working directory is not a git repository, so untracked work cannot be snapshotted." >&2
+      echo "REASON: write_checkpoint rc=2 — this working directory is not a git repository, or not the top of its repository, so untracked work cannot be snapshotted." >&2
     else
       echo "REASON: write_checkpoint rc=$_ckpt_rc — the snapshot is not complete, so untracked work would be unrecoverable." >&2
     fi
-    echo "Hint: see ${CHECKPOINT_LOG_FILE}, fix the snapshot failure, then re-issue the clean." >&2
+    echo "Hint: see ${CHECKPOINT_LOG_FILE}. This refusal is not retried; the owner's typed /allow releases the next refused call." >&2
     exit 2
   fi
   local _ckpt_branch _ckpt_ref

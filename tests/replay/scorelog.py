@@ -110,9 +110,11 @@ def resweep(rp) -> None:
     after = _read(log)
     rebuild = os.path.join(rp.layout.out, "score-rebuild")
     shutil.rmtree(rebuild, ignore_errors=True)
-    # an empty config directory and an empty home beside the run: the log is under the home's state root
+    # an empty config directory and an empty home beside the run: the log is under the home's state root.
+    # The home holds only the installed hooks directory, where the registration's command finds the hook.
     home = os.path.join(rebuild, "home")
-    os.makedirs(home)
+    os.makedirs(os.path.join(home, ".claude"))
+    os.symlink(os.path.realpath(os.path.join(rp.env["HOME"], ".claude", "hooks")), os.path.join(home, ".claude", "hooks"))
     rebuilt = _run(rp, payload, rebuild, home)
     rebuilt["events"] = _events(_read(log_path(rp, home)))
     fact(rp, "score resweep", dict(again, tool_use_id=payload.get("tool_use_id"), rebuilt=rebuilt, log={

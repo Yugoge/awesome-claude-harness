@@ -99,6 +99,19 @@ def _run(tmp_path: Path, env: dict, script: str, cwd: Path, *, extra: dict | Non
         return None, time.monotonic() - start, ""
 
 
+def _scans(trace: Path) -> list[tuple[str, str]]:
+    """(command, working tree) of every tree scan (git status, git add) in a GIT_TRACE2_EVENT file: the work a
+    snapshot does, counted instead of timed."""
+    names, trees = {}, {}
+    for line in (trace.read_text().splitlines() if trace.exists() else []):
+        event = json.loads(line)
+        if event.get("event") == "cmd_name":
+            names[event["sid"]] = event["name"]
+        elif event.get("event") == "def_repo":
+            trees[event["sid"]] = event.get("worktree", "")
+    return sorted((name, trees.get(sid, "")) for sid, name in names.items() if name in ("status", "add"))
+
+
 def _library(tmp_path: Path, env: dict, cwd: Path, work_dir: str) -> tuple[int, str]:
     lib = tmp_path / "harness" / "hooks" / "lib" / "checkpoint-core.sh"
     proc = subprocess.run(["bash", "-c", '. "$1"; write_checkpoint "$2" test; echo "rc=$? ref=$checkpoint_ref"',
@@ -132,10 +145,11 @@ def test_a_project_below_a_larger_repository_never_snapshots_that_repository(san
     (project / "src" / "p.txt").write_text("the project's own file\n")
     before = _state(env, outer)
 
-    rc, took, out = _run(tmp_path, env, "auto-commit.sh", project)
+    trace = tmp_path / "trace2.json"
+    rc, took, out = _run(tmp_path, env, "auto-commit.sh", project, extra={"GIT_TRACE2_EVENT": str(trace)})
     assert rc == 0, out
     rc2, took2, out2 = _run(tmp_path, env, "posttool-git-checkpoint.sh", project,
-                            extra={"GIT_CHECKPOINT_THRESHOLD": "1"},
+                            extra={"GIT_CHECKPOINT_THRESHOLD": "1", "GIT_TRACE2_EVENT": str(trace)},
                             stdin=json.dumps({"tool_input": {"file_path": str(project / "src" / "p.txt")}}))
     assert rc2 == 0, out2
     print(f"below a larger repository: auto-commit.sh {took:.2f}s, posttool {took2:.2f}s")
@@ -143,7 +157,7 @@ def test_a_project_below_a_larger_repository_never_snapshots_that_repository(san
     for work_dir, cwd in (("", project), (str(project), tmp_path), (str(project / "src"), tmp_path)):
         assert _library(tmp_path, env, cwd, work_dir)[1] == "rc=2 ref=", work_dir
     assert "not the top of its repository" in _log(env)
-    assert took < 5 and took2 < 5
+    assert _scans(trace) == [], "the tree above the project was scanned"
     assert _left_running(tmp_path) == []
     # the repository's own top is still snapshotted, with everything in it
     assert _library(tmp_path, env, outer, "")[1] == "rc=0 ref=refs/checkpoints/main"
@@ -156,11 +170,12 @@ def test_a_project_in_no_repository_gets_no_snapshot_and_no_repository(sandbox) 
     project.mkdir()
     (project / "p.txt").write_text("no repository here\n")
 
-    rc, took, out = _run(tmp_path, env, "auto-commit.sh", project)
+    trace = tmp_path / "trace2.json"
+    rc, took, out = _run(tmp_path, env, "auto-commit.sh", project, extra={"GIT_TRACE2_EVENT": str(trace)})
     assert rc == 0 and "Not a git repository" in out, out
     assert _library(tmp_path, env, project, "")[1] == "rc=2 ref="
     assert not (project / ".git").exists()
-    assert took < 5 and _left_running(tmp_path) == []
+    assert _scans(trace) == [] and _left_running(tmp_path) == []
 
 
 def test_an_ordinary_project_is_snapshotted_and_its_index_left_alone(sandbox) -> None:
@@ -171,14 +186,17 @@ def test_an_ordinary_project_is_snapshotted_and_its_index_left_alone(sandbox) ->
     (project / "new.txt").write_text("new\n")
     index = (project / ".git" / "index").read_bytes()
 
-    rc, took, out = _run(tmp_path, env, "auto-commit.sh", project)
+    trace = tmp_path / "trace2.json"
+    rc, took, out = _run(tmp_path, env, "auto-commit.sh", project, extra={"GIT_TRACE2_EVENT": str(trace)})
     assert rc == 0 and "Checkpoint saved" in out, out
     tree = _git(env, project, "ls-tree", "-r", "--name-only", "refs/checkpoints/main").splitlines()
     assert tree == ["a.txt", "new.txt", "sub/b.txt"]
     assert _git(env, project, "show", "refs/checkpoints/main:a.txt") == "a changed"
     assert (project / ".git" / "index").read_bytes() == index
     assert _git(env, project, "rev-list", "--count", "main") == "1"
-    assert took < 5 and _left_running(tmp_path) == []
+    # one status and one add -A of the project: the work counted, not timed
+    assert _scans(trace) == [("add", str(project)), ("status", str(project))], _scans(trace)
+    assert _left_running(tmp_path) == []
     # from a folder inside it the project is that folder, not this repository: no snapshot
     assert _library(tmp_path, env, project / "sub", "")[1] == "rc=2 ref="
 
@@ -187,19 +205,19 @@ def test_a_scan_past_its_bound_is_ended_with_every_process_it_started(sandbox) -
     tmp_path, env = sandbox
     project = tmp_path / "slow"
     _repo(env, project, {".gitattributes": "*.dat filter=slow\n"})
-    filt = tmp_path / "slow-filter.sh"  # a clean filter that takes 20 s per file
-    filt.write_text("#!/bin/sh\nsleep 20\ncat\n")
+    filt = tmp_path / "slow-filter.sh"  # a clean filter that takes 120 s per file: far past every bound here
+    filt.write_text("#!/bin/sh\nsleep 120\ncat\n")
     filt.chmod(0o755)
     _git(env, project, "config", "filter.slow.clean", str(filt))
     _git(env, project, "config", "filter.slow.required", "true")
     (project / "big.dat").write_text("data\n")
 
-    # 10 s: the hook is killed there as the Stop coordinator kills a phase past its limit
+    # 60 s: the hook is killed there as the Stop coordinator kills a phase past its limit (rc None). An rc of 1
+    # means the 2 s scan bound ended the scan, not the limit and not the filter's 120 s: no clock is compared.
     rc, took, out = _run(tmp_path, env, "auto-commit.sh", project,
-                         extra={"CHECKPOINT_SCAN_TIMEOUT": "2"}, limit=10)
+                         extra={"CHECKPOINT_SCAN_TIMEOUT": "2"}, limit=60)
     print(f"slow scan: rc={rc} {took:.2f}s")
     assert _left_running(tmp_path) == [], "the snapshot's git outlived its hook"
     assert rc == 1 and "Checkpoint failed" in out, (rc, out)
-    assert took < 9
     assert "ran past 2s" in _log(env)
     assert _git(env, project, "for-each-ref", "refs/checkpoints") == ""

@@ -32,6 +32,7 @@ ENTRIES = {
     "codex-unavailable": ("state", "codex-unavailable.json"),
     "report-provenance": ("state", "report-provenance/k.json"),
     "dispatch-temp-state": ("scratch", f"{SID}/.dispatch-tmp"),
+    "scratch-owner": ("scratch", f"{SID}/.owner"),  # policy_registry._began_before reads it: no agent backdates it
 }
 CALLERS = {"main": None, "dev": ("a0dev", "dev")}
 
@@ -73,11 +74,12 @@ def forms(path: str) -> dict:
             "mv": ("Bash", {"command": f"mv {path} {path}.bak"})}
 
 
-def assert_refused(proc) -> None:
+def assert_refused(proc) -> str:
     assert proc.returncode == 2, proc.stderr
     assert proc.stderr.startswith("BLOCKED by tool-policy.v1: "), proc.stderr
     reason = json.loads(proc.stderr.splitlines()[0].split(": ", 1)[1])["deny_reason"]
     assert reason.endswith("no agent writes, deletes or renames it (D11/D12)"), reason
+    return reason
 
 
 def test_the_inventory_marks_each_entry_hooks_only(tmp_path, monkeypatch):
@@ -99,8 +101,15 @@ def test_every_write_form_of_a_hooks_only_entry_is_refused(tmp_path, name, form,
 @pytest.mark.parametrize("verb", ["rm -rf {d}", "mv {d} {d}.old"])
 @pytest.mark.parametrize("name", sorted(ENTRIES))
 def test_a_directory_holding_a_hooks_only_entry_is_not_removed_or_moved(tmp_path, name, verb):
-    parent = os.path.dirname(entry(tmp_path, name, create=True))
-    assert_refused(run(tmp_path, "Bash", {"command": verb.format(d=parent)}, CALLERS["dev"]))
+    """Refused as the entry it holds. An entry directly in the state root is put in the scratch root, also a root of
+    the inventory's names: removing the state root is refused as the report-provenance ledger's holder whatever it holds."""
+    root, rel = ENTRIES[name]
+    path = tmp_path / ("scratch" if root == "state" and "/" not in rel else root) / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n")
+    reason = assert_refused(run(tmp_path, "Bash", {"command": verb.format(d=path.parent)}, CALLERS["dev"]))
+    if name not in ("report-provenance", "dispatch-temp-state"):  # those two have their own, older labels
+        assert f"is harness control state ({name})" in reason, reason
 
 
 def test_reading_it_and_writing_beside_it_pass(tmp_path):
@@ -132,6 +141,25 @@ def test_the_hooks_own_writes_pass(tmp_path, monkeypatch):
     assert json.loads(Path(hold).read_text()) == {"held": []} and hold == entry(tmp_path, "returns-hold")
     assert_refused(run(tmp_path, "Edit", {"file_path": str(record), "old_string": "{", "new_string": "["},
                        CALLERS["dev"]))
+
+
+@pytest.mark.parametrize("caller", sorted(CALLERS))
+@pytest.mark.parametrize("form", sorted(forms("x")))
+def test_another_sessions_owner_record_is_refused_too(tmp_path, form, caller):
+    other = tmp_path / "scratch" / "sess-0002" / ".owner"
+    other.parent.mkdir(parents=True)
+    other.write_text(json.dumps({"sid": "sess-0002", "created_at": "2000-01-01T00:00:00Z"}))
+    assert_refused(run(tmp_path, *forms(str(other))[form], CALLERS[caller]))
+
+
+def test_the_session_start_hook_writes_the_owner_record(tmp_path):
+    """hooks/session-scratch-init.sh writes .owner without a tool call; an agent's Write of the same file is refused."""
+    env = dict(environ(tmp_path), CLAUDE_CODE_SESSION_ID=SID)
+    p = subprocess.run(["bash", str(HOOKS / "session-scratch-init.sh")], input=json.dumps({"session_id": SID}),
+                       capture_output=True, text=True, env=env, timeout=60)
+    owner = Path(entry(tmp_path, "scratch-owner"))
+    assert p.returncode == 0 and json.loads(owner.read_text())["sid"] == SID, p.stdout + p.stderr
+    assert_refused(run(tmp_path, *forms(str(owner))["Write"]))
 
 
 def _prompt(tmp_path, text: str) -> None:

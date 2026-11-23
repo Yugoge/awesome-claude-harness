@@ -60,7 +60,6 @@ IMPLICIT_REFERENCE_WORDS = [
 
 PREQUERY_SCHEMA = "graphify-prequery.v1"  # pre_query.json's schema: checked before every write
 
-# Hard token cap for structural_context
 HARD_TOKEN_CAP = 2000
 
 # Rough token estimate: 1 token ≈ 4 chars
@@ -235,7 +234,6 @@ def _truncate_structural_context(context: dict, hard_cap: int) -> tuple[dict, bo
             while context[key] and _estimate_tokens(json.dumps(context, ensure_ascii=False)) > hard_cap:
                 context[key] = context[key][:-1]
 
-    # Trim candidate_anchors if still over
     if "candidate_anchors" in context:
         while context["candidate_anchors"] and _estimate_tokens(json.dumps(context, ensure_ascii=False)) > hard_cap:
             context["candidate_anchors"] = context["candidate_anchors"][:-1]
@@ -296,7 +294,6 @@ def main() -> int:
         print(f"graphify-query: status=unavailable ({reason})")
         return 0
 
-    # Read requirement text
     req_path = Path(args.requirement_file)
     if not req_path.exists():
         result = empty_graph_context(STATUS_UNAVAILABLE, f"requirement file not found: {req_path}")

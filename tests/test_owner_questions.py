@@ -112,6 +112,48 @@ def test_a_subagent_asks_nobody(project, source):
     assert done.returncode == 2 and "a subagent asks nobody" in done.stderr, done.stderr
 
 
+# ---------------------------------------------------------------- the refusal names the means, and the means passes
+# A choice of the owner's met in /dev Step 10, asked with no metadata (2026-11-22): refused, and the refusal must say
+# which kinds pass, how a question is marked as one and in which step.
+DESIGN_Q = {"question": "Which grammar should the value ids follow?", "header": "Grammar", "multiSelect": False,
+            "options": [{"label": "Add an element part", "description": "x"}, {"label": "Keep it", "description": "y"}]}
+_FORM = re.compile(r'"source": "((?:requirement-round|producer-question|spec-question|clean-option|close-rating):[^"]+)"')
+_PLACE = {"<task>": TASK, "<role>": "dev", "<n>": "1", "<label>": "clarify-1", "<request id>": RID}
+
+
+def _fill(text: str) -> str:
+    for hole, value in _PLACE.items():
+        text = text.replace(hole, value)
+    return text
+
+
+def test_a_question_with_no_kind_is_refused_naming_the_means(project):
+    opened(project, "dev")
+    done = ask(project, None, questions=[DESIGN_Q])
+    assert done.returncode == 2 and "is no kind kept" in done.stderr, done.stderr
+    text = done.stderr.replace('\\"', '"')  # the block's JSON escapes the quotes of the reason
+    assert 'metadata: {"source": "<kind>:...' in text, text
+    assert sorted(m.split(":")[0] for m in _FORM.findall(text)) == sorted(requirement_round.KEPT), text
+    assert "producer-question:<task>:<role>" in text and "docs/dev/producer-question-<task>-<role>.json" in text
+    assert "dispatch that task's ba or dev producer with the choice" in text, text
+
+
+def test_a_question_marked_as_the_refusal_says_passes(project):
+    """Each form the refusal names, filled in, passes in the step it names: the round and the producer question
+    from their files, the spec question in /spec; the design choice is relayed as the dev producer's question."""
+    text = ask(project, None).stderr.replace('\\"', '"')
+    forms = {m.split(":")[0]: _fill(m) for m in _FORM.findall(text)}
+    assert ask(project, forms["producer-question"], questions=[DESIGN_Q]).returncode == 2  # no question file yet
+    path = re.search(r"docs/dev/producer-question-<task>-<role>\.json", text).group(0)
+    (project / _fill(path)).write_text("{}")  # what the dispatched dev producer writes in place of its report
+    for kind, questions in (("producer-question", [DESIGN_Q]), ("requirement-round", [ROUND_Q])):
+        done = ask(project, forms[kind], questions=questions)
+        assert done.returncode == 0, (kind, forms[kind], done.stderr)
+    opened(project, "spec")
+    done = ask(project, forms["spec-question"])
+    assert done.returncode == 0, (forms["spec-question"], done.stderr)
+
+
 # ---------------------------------------------------------------- no instruction asks the owner after a refusal
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _REFUSAL = re.compile(r"(?i)\brefus|\breject|hook rejection|\bdenied\b|\bdenial\b")

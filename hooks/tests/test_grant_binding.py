@@ -239,10 +239,10 @@ def _places(state, home) -> dict:
             "<STATE_DIR>": sd}
 
 
-def _documented_writes(agent: str, state, places: dict | None = None) -> list:
-    """The Write targets the agent file names, its placeholders bound."""
+def _documented_writes(agent: str, state, home: Path, places: dict | None = None) -> list:
+    """The Write targets the agent file names, its placeholders bound (${STATE_DIR}: the hook's state directory)."""
     text = (ROOT / "agents" / f"{agent}.md").read_text(encoding="utf-8")
-    sd = state or "/tmp"
+    sd = state or _default(home)
     if agent == "changelog-analyst":
         msgfiles = set(re.findall(r"MSGFILE=(\S+?commit-msg-<unique>\.txt)", text))
         annotation = re.findall(r'CLOSE_ANNOTATION="\$\{CONTROL_ROOT\}(/docs/dev/close-report-bulk-)', text)
@@ -254,18 +254,29 @@ def _documented_writes(agent: str, state, places: dict | None = None) -> list:
     return [f"{sd}{grant_dir.group(1)}{REPO_HASH}/{SID}/{NONCE}.json"] if grant_dir else []
 
 
-# Steps of the text a running agent may still hold: the push-gate token's one writer, the analysts'
-# former audit log (mkdir and append). The fd-9 lock of a flow begun before policy_version 10, in
+# Steps of the text a running agent may still hold: the push-gate token's one writer. The analysts'
+# former audit log in /tmp/agentic-commit/<analyst>/ is shared temp, no grant directory, and is refused
+# (test_an_analysts_grant_directory_is_the_state_directorys_only). The fd-9 lock of a flow begun before policy_version 10, in
 # /tmp/agentic-commit/locks/, passes while that directory is there: hooks/tests/test_role_drafts_session_root.py.
 OLDER = {
     "changelog-analyst": ['python3 ~/.claude/scripts/write-push-gate-token.py --repo-root "/r" --branch "main" '
                           '--commit "0123abc"'],
-    "push-analyst": ["mkdir -p /tmp/agentic-commit/push-analyst/audit/",
-                     f"printf 'x\\n' >> /tmp/agentic-commit/push-analyst/audit/{REPO_HASH}.log"],
-    "merge-analyst": ["mkdir -p /tmp/agentic-commit/merge-analyst/audit/",
-                      f"printf 'x\\n' >> /tmp/agentic-commit/merge-analyst/audit/{REPO_HASH}.log"],
-    "pull-analyst": [],
+    "push-analyst": [], "merge-analyst": [], "pull-analyst": [],
 }
+
+
+# An analyst's grant directory is <state dir>/agentic-commit/<analyst>/, the place the policy row names
+# (policy_registry.placed): a directory of that name anywhere else, in shared /tmp or another tree, is no
+# grant directory and is refused alike, wherever the state directory lies (location-rules U6).
+@pytest.mark.parametrize("analyst", ["push-analyst", "merge-analyst"])
+def test_an_analysts_grant_directory_is_the_state_directorys_only(tmp_path, state, analyst):
+    home = tmp_path / "home"
+    own = _dispatched(home) if analyst == "push-analyst" else None
+    tail = f"agentic-commit/{analyst}/{REPO_HASH}/{SID}/{NONCE}.json"
+    verdicts = [run("Write", {"file_path": f"{place}/{tail}", "content": "{}"}, analyst, home, state, own)[0]
+                for place in ("/tmp", "/nonexistent-p6-grant-binding/other")]
+    assert verdicts == [2, 2]
+    assert run("Write", {"file_path": _grant(analyst, state, home), "content": "{}"}, analyst, home, state, own)[0] == 0
 
 
 @pytest.mark.parametrize("agent", sorted(OLDER))
@@ -282,7 +293,7 @@ def test_a_never_registered_analyst_keeps_every_documented_step(tmp_path, state,
     for command in blocks + OLDER[agent]:
         code, err = run("Bash", {"command": command}, agent, home, state, own)
         refused += [(command[:80], err)] if code else []
-    for path in _documented_writes(agent, state, places):
+    for path in _documented_writes(agent, state, home, places):
         code, err = run("Write", {"file_path": path, "content": "{}"}, agent, home, state, own)
         refused += [(path, err)] if code else []
     assert not refused

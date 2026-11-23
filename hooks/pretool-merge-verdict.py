@@ -57,8 +57,8 @@ def refusal(data: dict) -> str:
     since = span.opened_at() if span is not None and span.command == "merge" else None
     if since is None:
         return "merge.sh runs only inside a /merge the owner typed (no /merge opener in this session)"
-    top = subprocess.run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                         timeout=10).stdout.strip() or cwd
+    from lib import locations
+    top = locations.repo_top(cwd) or cwd  # a repository at the filesystem root is no repository
     grant, why = merge_grant.approval(top, str(data.get("session_id") or ""), int(since))
     if why:
         return why

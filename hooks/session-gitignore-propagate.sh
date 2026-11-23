@@ -27,8 +27,8 @@ RUNTIME_FILES=(
   ".claude/workflow-*.json"
 )
 
-ROOT=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null) || exit 0
-[ -n "$ROOT" ] && cd "$ROOT" 2>/dev/null || exit 0
+. "$(dirname "${BASH_SOURCE[0]}")/lib/claude_home.sh" 2>/dev/null || exit 0
+ROOT=$(claude_repo_top "${CLAUDE_PROJECT_DIR:-$PWD}") && cd "$ROOT" 2>/dev/null || exit 0  # the filesystem root is no project: nothing written there
 EXCLUDE=$(git rev-parse --git-path info/exclude 2>/dev/null) || exit 0
 mkdir -p "$(dirname "$EXCLUDE")" 2>/dev/null || exit 0
 for line in "${RUNTIME_DIRS[@]}" "${RUNTIME_FILES[@]}"; do

@@ -27,7 +27,13 @@ set -u
 # stderr, which reaches no one.
 exec 3>&1 >&2
 
-ROOT="${TMPDIR:-/var/tmp/claude-scratch}"
+# The root every reader uses (lib/locations.py session_scratch_root: an absolute TMPDIR, else
+# /var/tmp/claude-scratch, real; a TMPDIR that is one session's own directory names its parent).
+ROOT=$(python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/scratch_owner.py" --root 2>/dev/null) || ROOT=""
+if [ -z "$ROOT" ]; then
+  echo "session-scratch-init: no session scratch root (lib/scratch_owner.py --root) — skipping" >&3
+  exit 0
+fi
 SID="${CLAUDE_CODE_SESSION_ID:-}"
 PID="${CLAUDE_PID:-$$}"
 

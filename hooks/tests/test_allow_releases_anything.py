@@ -112,8 +112,12 @@ def test_refused_send_message(env):
 
 
 def test_refused_write(env):
+    # A tracked file: an untracked one below a temp root (/tmp, /var/tmp, $TMPDIR: where pytest's temp lies) is
+    # output a Write may replace (lib/write_gate/overwrite_scope.py), so the refusal must not hang on where it lies.
     target = env["tmp"] / "proj" / "exists.txt"
     target.write_text("old\n")
+    for argv in (["init", "-q"], ["add", "exists.txt"]):
+        subprocess.run(["git", *argv], cwd=target.parent, env=env["env"], check=True, capture_output=True)
     w = {"file_path": str(target), "content": "new\n"}
     assert call(env, "Write", w).returncode == 2
     prompt(env, "/allow")

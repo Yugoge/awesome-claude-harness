@@ -28,9 +28,21 @@ attribution_log   scripts/verify-attribution-chain.py --json over the plan's own
                   object {"results": [], "no_events": [], "discarded_lines": []} when the plan owns
                   no path or the verifier printed nothing (exit 2, no journaled event, is no failure).
 session_id        $CLAUDE_CODE_SESSION_ID, else $CLAUDE_SESSION_ID ("" when neither is set).
-manifest_path     the dispatch-snapshot manifest's path (hooks/lib/commit_pipeline.manifest_path);
-                  null without a session id.
+manifest_path     where a session holding the old Step 5 text writes the manifest by hand
+                  (hooks/lib/commit_pipeline.manifest_path; still accepted); null without a session id.
 files_at_dispatch every plan entry's repo_root -> its `git status --porcelain=v1` lines.
+nothing_to_commit the record resolve-dev-artifact-chain.py's record_nothing_to_commit wrote at
+                  docs/dev/nothing-to-commit-<task>.json beside the reports ({"task_id", "state",
+                  "reason", "repositories"}) when every path the plan owns is in its repository's
+                  HEAD as the work tree holds it or is ignored, or, for a plan that owns no path,
+                  when unclaimed.paths is empty and /close's no-files facts hold over every
+                  session of the project
+                  (hooks/lib/close_exit.nothing_to_land); else null, and an earlier record is
+                  removed. The Stop gate verifies it again at the stop.
+
+With a session id the call also writes the dispatch-snapshot manifest the grant writer mints from
+(hooks/lib/commit_pipeline.planned_manifest_path): {"session_id", "task_id", "repository_plan",
+"files_at_dispatch"} and "unclaimed" when present, as printed; the agent writes nothing for it.
 unclaimed         present only when the plan owns no path (a cycle that declares no file): the
                   control checkout's changed paths that no open cycle claims, which this /commit
                   lands. {"repo_root", "paths", "claimed_by_open_cycles" (path -> the open task ids
@@ -45,6 +57,7 @@ unclaimed         present only when the plan owns no path (a cycle that declares
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -64,8 +77,9 @@ def run(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
 
 
 def git_top(directory: str | None = None) -> str:
-    code, out, _ = run(["git", "rev-parse", "--show-toplevel"], cwd=directory)
-    return out.strip() if code == 0 else ""
+    sys.path.insert(0, str(HARNESS_ROOT / "hooks"))
+    from lib import locations  # noqa: E402  (the filesystem root is no repository top)
+    return locations.repo_top(directory or os.getcwd()) or ""
 
 
 def as_json(text: str):
@@ -235,11 +249,8 @@ def main(argv: list[str] | None = None) -> int:
     plan_error = None if plan is not None else (err.strip() or f"resolve-commit-repos.py exited {code}")
 
     session_id = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or ""
-    manifest = None
-    if session_id:
-        sys.path.insert(0, str(HARNESS_ROOT / "hooks" / "lib"))
-        from commit_pipeline import manifest_path  # noqa: E402
-        manifest = manifest_path(session_id)
+    sys.path.insert(0, str(HARNESS_ROOT / "hooks" / "lib"))
+    import commit_pipeline  # noqa: E402
     status = {}
     for entry in (plan or {}).get("repositories") or []:
         _code, out, _err = run(["git", "-C", entry["repo_root"], "status", "--porcelain=v1"])
@@ -247,6 +258,15 @@ def main(argv: list[str] | None = None) -> int:
     owns_none = plan is not None and not any(e.get("owned_paths") for e in plan.get("repositories") or [])
     sweep = unclaimed(control_root, docs_root, task_id, args.leave_unclaimed, session_id) if owns_none else None
     extra = {"unclaimed": sweep} if sweep is not None else {}
+    if session_id:  # the dispatch-snapshot manifest scripts/write-commit-grant.py mints from
+        commit_pipeline.write_planned_manifest(session_id, {"session_id": session_id, "task_id": task_id,
+                                                            "repository_plan": plan, "files_at_dispatch": status,
+                                                            **extra})
+    spec = importlib.util.spec_from_file_location("commit_plan_chain", helper("resolve-dev-artifact-chain.py"))
+    chain = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(chain)
+    # unclaimed paths still to land: this /commit has something to commit, so no record
+    nothing = chain.record_nothing_to_commit(docs_root, task_id, None if (sweep or {}).get("paths") else plan)
 
     print(json.dumps({
         "task_id": task_id,
@@ -259,8 +279,9 @@ def main(argv: list[str] | None = None) -> int:
         "repository_plan": plan,
         "attribution_log": attribution_log(plan, [f"{control_root}/{p}" for p in (sweep or {}).get("paths", [])]),
         "session_id": session_id,
-        "manifest_path": manifest,
+        "manifest_path": commit_pipeline.manifest_path(session_id) if session_id else None,
         "files_at_dispatch": status,
+        "nothing_to_commit": nothing,
         **extra,
     }, indent=2, ensure_ascii=False))
     return 0

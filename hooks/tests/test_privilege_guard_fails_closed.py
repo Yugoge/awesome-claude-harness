@@ -50,7 +50,7 @@ BREAKAGES = {
     "lacks-imported-name": "\nglobals().pop('_basename', None)\n",
     "lacks-current-name": "\ndel GIT_GLOBAL_VALUE_OPTS\n",
     "raises-at-import": "\nraise RuntimeError('simulated classifier failure')\n",
-    "raises-when-called": ("\ndef classify_git_command(command_text):\n"
+    "raises-when-called": ("\ndef classify_git_command(command_text, cwd=None):\n"
                            "    raise RuntimeError('simulated classifier failure')\n"),
 }
 

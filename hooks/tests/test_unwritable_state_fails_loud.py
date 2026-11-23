@@ -15,8 +15,8 @@ Behaviours pinned (each hook runs as a subprocess with its own HOME, project and
 
 Two ways to make the writes fail: a state dir the test user may not write (mode 0o500; meaningful for
 an unprivileged user only, as CI runs the tests), and a full volume: a 64 KiB tmpfs mounted in a private
-mount namespace only the test's own process tree sees, filled to 0 bytes free (needs root or a user
-namespace; skipped when neither is available).
+mount namespace only the test's own process tree sees, filled to 0 bytes free (made as root, else in a user
+namespace, else through passwordless sudo, as on CI: hooks/tests/_private_ns.py).
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -32,6 +31,9 @@ import uuid
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _private_ns  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / "hooks"
@@ -42,20 +44,6 @@ COUNTED_BASH = {"command": "python3 x.py", "description": "probe"}
 UNENFORCED = "cannot be enforced"
 
 unprivileged = pytest.mark.skipif(os.geteuid() == 0, reason="a mode-0o500 directory does not stop root")
-
-
-def _namespace_prefix() -> list | None:
-    """The command that runs a process in a private mount namespace, or None when there is none here."""
-    if not shutil.which("unshare"):
-        return None
-    for prefix in (["unshare", "-m", "--propagation", "private"], ["unshare", "-r", "-m", "--propagation", "private"]):
-        if subprocess.run(prefix + ["true"], capture_output=True).returncode == 0:
-            return prefix
-    return None
-
-
-NAMESPACE = _namespace_prefix()
-full_volume = pytest.mark.skipif(NAMESPACE is None, reason="no private mount namespace here")
 
 
 class Session:
@@ -271,14 +259,14 @@ FULL = textwrap.dedent(r"""
 def full(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("full")
     s = Session(tmp, state=tmp / "state")
-    p = subprocess.run(NAMESPACE + [sys.executable, "-c", FULL, str(s.state), str(HOOKS), s.sid,
-                                    str(s.transcript), str(s.project)],
-                       capture_output=True, text=True, env=s.env(), timeout=600)
+    way = _private_ns.require("the full-volume cases")
+    p = subprocess.run(_private_ns.unshare_argv(way, s.env(), [sys.executable, "-c", FULL, str(s.state), str(HOOKS),
+                                                               s.sid, str(s.transcript), str(s.project)]),
+                       capture_output=True, text=True, timeout=600)
     assert p.returncode == 0, p
     return s, json.loads(p.stdout.splitlines()[-1])
 
 
-@full_volume
 def test_full_volume_gate_refuses_every_counted_call(full):
     s, out = full
     assert [rc for rc, _, _ in out["gate"]] == [2] * 8
@@ -287,7 +275,6 @@ def test_full_volume_gate_refuses_every_counted_call(full):
         assert UNENFORCED in err
 
 
-@full_volume
 def test_full_volume_do_and_commit_block_the_prompt(full):
     s, out = full
     for key, name in (("do", f"claude-orchestrator-consent-{s.sid}.flag"),
@@ -298,7 +285,6 @@ def test_full_volume_do_and_commit_block_the_prompt(full):
         assert name not in out["entries"], f"{name} left behind"
 
 
-@full_volume
 def test_full_volume_writers_leave_nothing_half_written(full):
     s, out = full
     rc, _, err = out["ran"]

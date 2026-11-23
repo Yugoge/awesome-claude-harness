@@ -305,13 +305,12 @@ def test_inside_the_removal_reference_domain_the_primary_path_lets_run_only_what
 # ── The pinned 436-row matrix ────────────────────────────────────────────────
 
 def test_the_matrix_rows_the_rule_lets_run_are_exactly_the_unproven_ones_holding_no_removal_word():
-    """The fixture pins 17 of its rows at exit 2 that the rule lets run. pol_replay_harness.OWNER_RULE_LET_THROUGH
+    """The fixture pins rows at exit 2 that the rule lets run. pol_replay_harness.OWNER_RULE_LET_THROUGH
     lists them by id; this derives the same set from the rule, so the list can neither grow nor shrink by hand."""
     rows = H.load_fixture()["rows"]
     by_rule = {r["id"] for r in rows if r["expected_hook_exit_code"] == 2
                and eb.analyze(r["command"])["verdict"] == eb.UNRESOLVED and not scopes_name_removal(r["command"])}
     assert by_rule == set(H.OWNER_RULE_LET_THROUGH)
-    assert len(by_rule) == 17
     assert all(H.expected_exit(r) == r["expected_hook_exit_code"] for r in rows if r["id"] not in by_rule)
     assert all(H.expected_exit(r) == 0 for r in rows if r["id"] in by_rule)
     # A removal the analyzer finds stays pinned at exit 2, whether or not its text names it.

@@ -22,7 +22,8 @@
 
 set -uo pipefail   # deliberately NOT -e: run every check, aggregate, report all drift.
 
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib" && pwd)/claude_home.sh"  # claude_repo_top: the filesystem root is no repository top
+ROOT="$(claude_repo_top . || pwd)"
 cd "$ROOT" || { echo "ERROR: cannot cd to repo root" >&2; exit 1; }
 
 MANIFEST="PUBLIC-CORE.md"

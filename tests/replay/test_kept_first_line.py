@@ -16,8 +16,9 @@ from pathlib import Path
 import pytest
 
 from tests.replay import hookrun, replay, sandbox
+from tests.replay.drivers.commit import CM
 from tests.replay.drivers.dev import KeptOnly
-from tests.replay.drivers.overnight import NormKeptOnly
+from tests.replay.drivers.overnight import N, NormKeptOnly
 from tests.replay.pipeline import Deviations
 
 FIRST = "BLOCKED: test-policy — UNRESOLVED dynamic_command_head:"
@@ -35,8 +36,8 @@ cmd = json.load(sys.stdin)["tool_input"]["command"]
 reason = "BLOCKED: json-policy refuses " + cmd.split(";")[0] + "\nCommand: " + cmd
 print(json.dumps({"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": reason}}))
 '''
-STEP = "/commit Step 5 Bash plan 0"
-DEVS = Deviations([("/commit Step 5 Bash plan *",
+STEP = f"/commit Step {CM.grant} Bash plan 0"
+DEVS = Deviations([(f"/commit Step {CM.grant} Bash plan *",
                     replay.Deviation("hooks/refuse.py", "every boundary must be provably inert", "test"))])
 KEPT_ONLY = {"dev.KeptOnly": lambda kept, rp: KeptOnly(DEVS, kept),
              "overnight.NormKeptOnly": lambda kept, rp: NormKeptOnly(DEVS, kept, rp)}
@@ -210,7 +211,7 @@ def test_the_orchestrator_gate_count_is_a_run_counter():
     """The gate's "(n/1)" counts the turn's earlier calls of the tool: the overnight driver's kept
     comparison reads it as a run counter, and still needs the same hook, step, tool and limit."""
     gate = "hooks/pretool-orchestrator-gate.py"
-    step = "C1 Step 5 Write spec-pipeline-1"
+    step = f"C1 Step {N.specs} Write spec-pipeline-1"
     line = "[Orchestrator Gate] BLOCKED: {} used consecutively beyond limit ({}/1)."
     devs = Deviations([("*Write*", replay.Deviation(gate, "used consecutively beyond limit", "test"))])
 
@@ -224,7 +225,7 @@ def test_the_orchestrator_gate_count_is_a_run_counter():
     assert d.covers(gate, "", line.format("Write", 2))                      # another count: kept
     assert not d.covers(gate, "", line.format("Edit", 2))                   # another tool: new
     assert not d.covers(gate, "", line.format("Write", 2).replace("/1)", "/2)"))   # another limit: new
-    other, = kept.at("C1 Step 19 Write cycle log")
+    other, = kept.at(f"C1 Step {N.log} Write cycle log")
     assert not other.covers(gate, "", line.format("Write", 3))              # another step: new
     # every other hook's line is compared as recorded
     hook = "hooks/refuse.py"

@@ -47,8 +47,11 @@ answered for by the watchdog the same way (``emergency``).
 
 The answer (``combine``) is what the CLI makes of the hooks' answers together:
 - a refusal (exit 2, a ``deny``, or a ``block`` decision) from any hook: exit 2, the
-  refusals' reasons in rule order on stderr;
-- ``continue: false`` from any hook: that JSON, stopping the turn;
+  refusals' reasons in rule order on stderr, then what the other hooks printed for the model
+  and the user (``additionalContext``, ``systemMessage``, plain context), each text once;
+- ``continue: false`` from any hook: that JSON, stopping the turn, the other hooks'
+  texts added to its ``systemMessage``. A hook that records it warned and then stays silent
+  (pretool-worktree-guard.sh, doc_sync/notice.py) is right only if its warning was delivered;
 - else one hook's output alone is passed on as it is; several are merged into one
   JSON object: the strongest permission decision (defer > ask > allow), the first
   ``updatedInput``, every ``additionalContext`` (and, on the events whose plain
@@ -151,6 +154,15 @@ def selected(rules, event: str, raw: bytes) -> list:
 
 # ------------------------------------------------------------------ combining
 
+def _said(event: str, r, out) -> tuple[list, list]:
+    """What one hook's printed answer tells: (its contexts for the model, its messages for the user)."""
+    if out is None:
+        return ([r.stdout.strip()] if event in PLAIN_CONTEXT_EVENTS else []), []
+    hso = out.get("hookSpecificOutput") if isinstance(out.get("hookSpecificOutput"), dict) else {}
+    ctx = hso.get("additionalContext") if hso.get("hookEventName") in (None, event) else None
+    return ([str(ctx)] if ctx else []), ([str(out["systemMessage"])] if out.get("systemMessage") else [])
+
+
 def combine(event: str, results) -> tuple[int, str, str]:
     """(exit status, stdout, stderr) the hooks' results give together, as the CLI reads them."""
     refusals, errors, stops, answers = [], [], [], []
@@ -175,10 +187,16 @@ def combine(event: str, results) -> tuple[int, str, str]:
                 refusals.append(str(out.get("reason") or r.stderr))
                 continue
         answers.append((r, out))
+    # The other hooks' warnings go out with a stop or a refusal too: a hook that records it warned (and then stays
+    # silent) is right only if what it printed was delivered.
+    said = [t for r, out in answers if r.stdout.strip() for part in _said(event, r, out) for t in part]
+    said = [t for i, t in enumerate(said) if t not in said[:i]]
     if stops:  # continue: false ends the turn, whatever else the hooks decided
-        return 0, json.dumps(stops[0]) + "\n", ""
+        stop = stops[0] if not said else {**stops[0], "systemMessage": "\n".join(
+            [str(stops[0]["systemMessage"])] * bool(stops[0].get("systemMessage")) + said)}
+        return 0, json.dumps(stop) + "\n", ""
     if refusals:
-        return 2, "", "".join(t if t.endswith("\n") else t + "\n" for t in refusals if t)
+        return 2, "", "".join(t if t.endswith("\n") else t + "\n" for t in refusals + said if t)
     printed = [(r, out) for r, out in answers if r.stdout.strip()]
     err_text = "".join(e if e.endswith("\n") else e + "\n" for e in errors if e)
     quiet = "".join(r.stderr for r, _ in answers)  # an exit-0 hook's stderr reaches no one
@@ -190,9 +208,10 @@ def combine(event: str, results) -> tuple[int, str, str]:
     spec: dict = {}
     contexts, messages, decisions = [], [], {}
     for r, out in printed:
+        ctx, msg = _said(event, r, out)
+        contexts += ctx
+        messages += msg
         if out is None:
-            if event in PLAIN_CONTEXT_EVENTS:
-                contexts.append(r.stdout.strip())
             continue
         hso = out.get("hookSpecificOutput") if isinstance(out.get("hookSpecificOutput"), dict) else {}
         if hso.get("hookEventName") not in (None, event):
@@ -204,10 +223,6 @@ def combine(event: str, results) -> tuple[int, str, str]:
             decisions.setdefault("allow", []).append(str(out.get("reason") or ""))
         if isinstance(hso.get("updatedInput"), dict) and "updatedInput" not in spec:
             spec["updatedInput"] = hso["updatedInput"]
-        if hso.get("additionalContext"):
-            contexts.append(str(hso["additionalContext"]))
-        if out.get("systemMessage"):
-            messages.append(str(out["systemMessage"]))
         if out.get("suppressOutput"):
             merged["suppressOutput"] = True
     for d in ("defer", "ask", "allow"):

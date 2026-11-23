@@ -280,13 +280,18 @@ SENSITIVE_LINES = [
 
 
 # 100 KB commands: read in bounded time.
-ADVERSARIAL_LONG = {
-    "read_handler_words": "ls " + "find " * 250 + "-q\nr''m -rf /dev/shm/v/s",
-    "read_handler_words_100kb": "ls " + "find git ssh " * 8000 + "-q\nr''m -rf /dev/shm/v/s",
-    "kubectl_nesting": "kubectl -- " * 5000 + "find /x -de''lete -q",
-    "kubectl_nesting_with_comments": "kubectl -- # " * 300 + "ls -q",
-    "nested_quotes": "x '" + "a '\\''" * 3000 + "' -q\nr''m -rf /dev/shm/v/s",
+ADVERSARIAL_LONG = {  # name: (head, repeated unit, count, tail); the line is head + unit * count + tail
+    "read_handler_words": ("ls ", "find ", 250, "-q\nr''m -rf /dev/shm/v/s"),
+    "read_handler_words_100kb": ("ls ", "find git ssh ", 8000, "-q\nr''m -rf /dev/shm/v/s"),
+    "kubectl_nesting": ("", "kubectl -- ", 5000, "find /x -de''lete -q"),
+    "kubectl_nesting_with_comments": ("", "kubectl -- # ", 300, "ls -q"),
+    "nested_quotes": ("x '", "a '\\''", 3000, "' -q\nr''m -rf /dev/shm/v/s"),
 }
+
+
+def adversarial_long(name, count=None):
+    head, unit, full, tail = ADVERSARIAL_LONG[name]
+    return head + unit * (full if count is None else count) + tail
 
 
 # Round 7: abbreviations, clusters and attached values of options that run a program; writes outside the operands
@@ -612,11 +617,27 @@ def test_over_the_generated_corpus_the_two_paths_agree_on_every_unproven_command
 
 @pytest.mark.parametrize("name", sorted(ADVERSARIAL_LONG))
 def test_adversarial_long_lines_are_read_in_bounded_time(monkeypatch, name):
-    command = ADVERSARIAL_LONG[name]
+    command = adversarial_long(name)
     no_analyzer(monkeypatch)
-    started = time.process_time()  # CPU time: a busy runner slows the wall clock, not the work
-    refused, _entry, _err = answer(command)
-    assert time.process_time() - started < 2.0, name
+
+    def cost(line):
+        """(refused, CPU seconds): the least CPU of up to nine readings of line, until one CPU second is spent."""
+        best, spent = None, 0.0
+        for _ in range(9):
+            started = time.process_time()  # CPU time: a busy runner slows the wall clock, not the work
+            refused = answer(line)[0]
+            took = time.process_time() - started
+            best, spent = (took if best is None else min(best, took)), spent + took
+            if spent > 1.0:
+                break
+        return refused, best
+
+    # Bounded: twice the line costs well under four times as much (a reading that walks the line again from each
+    # word grows with its square). Two measured readings are compared with each other: no fixed bound holds on
+    # every runner.
+    refused, large = cost(command)
+    _, small = cost(adversarial_long(name, ADVERSARIAL_LONG[name][2] // 2))
+    assert large < 3 * small, (name, small, large)
     assert refused is False and not holds_removal_word(command), name
     assert answer(command + "\nrm -rf /dev/shm/v/s")[0] is True
 

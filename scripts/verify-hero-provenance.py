@@ -119,21 +119,32 @@ def check_rerun() -> None:
             fail("normalized byte-diff between the fresh run and the committed "
                  "capture is NON-empty")
 
-        ft, ct = timestamps(fresh_text), timestamps(committed_text)
-        if len(ft) != len(ct):
-            fail(f"event count differs: fresh={len(ft)} committed={len(ct)}")
-            return
-        fdur, cdur = ft[-1] - ft[0], ct[-1] - ct[0]
-        if not (10.0 <= fdur <= 15.0):
-            fail(f"fresh raw duration {fdur:.3f}s outside [10,15]")
-        if abs(fdur - cdur) > 2.0:
-            fail(f"fresh raw duration {fdur:.3f}s disagrees with committed "
-                 f"{cdur:.3f}s by more than 2.0s")
-        for i, (a, b) in enumerate(zip(deltas(ct), deltas(ft))):
-            tol = max(0.5, abs(a) * 0.25)
-            if abs(a - b) > tol:
-                fail(f"inter-arrival delta {i} differs: committed={a}s fresh={b}s "
-                     f"tolerance=±{tol:.3f}s")
+        for msg in timing_failures(fresh_text, committed_text):
+            fail(msg)
+
+
+def timing_failures(fresh_text: str, committed_text: str) -> list[str]:
+    """Raw timing. The window [10,15] is a property of the committed recording, checked on
+    that fixed file. The fresh run is held to lower bounds only: a slower or busier host
+    only stretches it, so an upper bound on it measured the host, not the capture. Per
+    interval the fresh run may not be shorter than the committed one claims (beyond its
+    tolerance): an inflated committed timestamp, or a pause the demo no longer makes, fails.
+    No longer checked: a committed interval SHORTER than a real run's."""
+    ft, ct = timestamps(fresh_text), timestamps(committed_text)
+    if len(ft) != len(ct):
+        return [f"event count differs: fresh={len(ft)} committed={len(ct)}"]
+    out = []
+    fdur, cdur = ft[-1] - ft[0], ct[-1] - ct[0]
+    if not (10.0 <= cdur <= 15.0):
+        out.append(f"committed raw duration {cdur:.3f}s outside [10,15]")
+    if fdur < cdur - 2.0:
+        out.append(f"fresh raw duration {fdur:.3f}s is shorter than committed {cdur:.3f}s by more than 2.0s")
+    for i, (a, b) in enumerate(zip(deltas(ct), deltas(ft))):
+        tol = max(0.5, abs(a) * 0.25)
+        if b < a - tol:
+            out.append(f"inter-arrival delta {i} shorter than committed: committed={a}s fresh={b}s "
+                       f"tolerance={tol:.3f}s")
+    return out
 
 
 def check_normalizer_is_not_lossy() -> None:

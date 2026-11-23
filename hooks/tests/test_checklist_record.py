@@ -93,7 +93,7 @@ class _Session:
         return pre, post
 
     def agent(self, subagent_type):
-        tid = self.use("Agent", {"subagent_type": subagent_type, "prompt": "x", "description": "x"})
+        tid = self.use("Agent", {"subagent_type": subagent_type, "prompt": "Mode: analysis", "description": "x"})
         self.result(tid)
 
     def gate(self):
@@ -155,10 +155,12 @@ def test_a_first_list_with_an_item_completed_is_refused_before_it_runs(s):
 
 
 def test_a_short_first_list_is_refused_with_no_bookmark(s):
-    """A18: a 5-of-17 list is refused by pretool-todo-validate.py, which reads no bookmark."""
+    """A18: a 5-step first list (of /dev's canonical list, as scripts/todo/dev.py prints it) is
+    refused by pretool-todo-validate.py, which reads no bookmark."""
     s.command("/dev fix the bug")
     pre, _ = s.todo(_frontier(0)[:5])
-    assert pre.returncode == 2 and "Todo count mismatch: canonical has 17, submitted has 5" in pre.stderr
+    whole = len(_canonical())
+    assert pre.returncode == 2 and f"Todo count mismatch: canonical has {whole}, submitted has 5" in pre.stderr
     assert s.gate().returncode == 2
     assert list((s.project / ".claude").iterdir()) == []
 
@@ -222,7 +224,7 @@ def test_a_subagent_step_completes_only_after_its_dispatch(s):
         s.todo(_frontier(n))
     # Step 4 (BA) is in progress: completing it without the BA dispatch is refused.
     pre, _ = s.todo(_frontier(4))
-    assert pre.returncode == 2 and "requires a subagent call (ba)" in pre.stderr
+    assert pre.returncode == 2 and "requires a subagent call (ba with \"Mode: analysis\")" in pre.stderr
     s.agent("qa")  # another role's dispatch does not count for it
     assert s.todo(_frontier(4))[0].returncode == 2
     s.agent("ba")
@@ -238,7 +240,7 @@ def test_a_dispatch_before_the_step_went_in_progress_does_not_count(s):
     s.agent("ba")  # Step 3 in progress, BA's Step 4 still pending
     s.todo(_frontier(3))  # Step 4 (BA) in progress
     pre, _ = s.todo(_frontier(4))
-    assert pre.returncode == 2 and "requires a subagent call (ba) made after the step went in_progress" in pre.stderr
+    assert pre.returncode == 2 and "requires a subagent call (ba with \"Mode: analysis\") made after the step went in_progress" in pre.stderr
     s.agent("ba")
     assert s.todo(_frontier(4))[0].returncode == 0
 

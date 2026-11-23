@@ -368,17 +368,23 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
 
 # The owner is asked what he wants, never whether something is allowed, how to get past a refusal or whether to
 # go on. The kinds kept, each in the step that owns it (question_refusal); every other AskUserQuestion is refused
-# at the tool (hooks/pretool-tool-policy.py).
+# at the tool (hooks/pretool-tool-policy.py). Each value opens with the kind's metadata.source form.
 KEPT = {
-    "requirement-round": "/spec Step 3 or /dev Step 4: its round file's questions as written",
-    "producer-question": "the relay of a producer's question file, docs/dev/producer-question-<task>-<role>.json",
-    "close-rating": "/close Step 4, after a landed close QA of the task",
+    "requirement-round": '"requirement-round:<task>:r<n>" in /spec Step 3 or /dev Step 4, its round file\'s '
+                         "questions as written",
+    # A choice of the owner's met in any other step of a /dev cycle takes this route (the 2026-11-22 refusal).
+    "producer-question": '"producer-question:<task>:<role>" in any step once docs/dev/producer-question-<task>-<role>'
+                         ".json exists (for a choice met elsewhere, dispatch that task's ba or dev producer with the "
+                         "choice: it writes that file in place of its report; then relay it)",
+    "close-rating": '"close-rating:<task>" in /close Step 4, after a landed close QA of the task',
     # The owner stating and confirming what he wants (/spec Steps 1, 2 and 4); not a permission or a way past a refusal.
-    "spec-question": "/spec, while it is the current command",
+    "spec-question": '"spec-question:<label>" in /spec, while it is the current command',
     # Which cleanup plan he wants (/clean Step 13); the per-action approvals are not kept.
-    "clean-option": "/clean Step 13, once docs/clean/combined-report-<request id>.json exists",
+    "clean-option": '"clean-option:<request id>" in /clean Step 13, once docs/clean/combined-report-<request id>.json '
+                    "exists",
 }
-REFUSED = ("Ask the owner only what he wants: " + "; ".join(f"metadata.source {k}:... in {v}" for k, v in KEPT.items())
+REFUSED = ('Ask the owner only what he wants, marked by the AskUserQuestion input\'s metadata: {"source": '
+           '"<kind>:..."} as one of these kinds, in its step: ' + "; ".join('"source": ' + v for v in KEPT.values())
            + ". Nobody is asked whether something is allowed, how to get past a refusal or whether to go on. Go on "
            "with the work a rule allows. An operation a hook refused is not retried, disguised or worked around: "
            "put it in your report as refused, with the hook's own output.")

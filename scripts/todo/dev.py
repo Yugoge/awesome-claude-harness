@@ -5,6 +5,18 @@ Preloaded TodoList for /dev workflow.
 BA-delegated development workflow with quality gates.
 """
 
+# Every call of the requirement round (Step 4 here and in /dev-command, which imports it), each with its own role
+# and the `Mode:` line its prompt carries (commands/dev.md Step 4). A call the round may skip is optional: the BA
+# intake (with a spec) or the BA panel and its panel QA (without one). The BA analysis is required: Gate 4
+# (hooks/pretool-todo-validate.py) holds the step until a call of that role and mode came back in it, so the panel's
+# ba calls never stand in for it. Optional calls bind their templates to this step (hooks/lib/obligation.py).
+ROUND_CALLS = [
+    {"agent": "ba", "subagent_type": "ba", "prompt_mode": "intake", "optional": True},
+    {"agent": "ba", "subagent_type": "ba", "prompt_mode": "panel", "optional": True},
+    {"agent": "qa", "subagent_type": "qa", "prompt_mode": "panel", "optional": True},
+    {"agent": "ba", "subagent_type": "ba", "prompt_mode": "analysis"},
+]
+
 
 def get_todos():
     """
@@ -19,7 +31,7 @@ def get_todos():
         {"content": "Step 2: Graphify pre-BA: run graphify-query.py Bash hydrator (advisory)", "activeForm": "Step 2: Running graphify-query.py Bash hydrator", "status": "pending"},
         {"content": "Step 3: Consult specialists (optional)", "activeForm": "Step 3: Consulting specialists", "status": "pending"},
         # The requirement round (D28, D32), one step: BA intake or the BA panel, panel QA, the asks, then BA analysis.
-        {"content": "Step 4: Requirement round: BA intake or panel, panel QA, ask each round, BA analysis", "activeForm": "Step 4: Running the requirement round", "status": "pending", "subagent_call": {"agent": "ba", "subagent_type": "ba"}},
+        {"content": "Step 4: Requirement round: BA intake or panel, panel QA, ask each round, BA analysis", "activeForm": "Step 4: Running the requirement round", "status": "pending", "subagent_call": ROUND_CALLS},
         {"content": "Step 5: BA clarification loop (if needed)", "activeForm": "Step 5: Running BA clarification loop", "status": "pending"},
         {"content": "Step 6: Validate BA output", "activeForm": "Step 6: Validating BA output", "status": "pending"},
         {"content": "Step 7: QA validates BA conclusions", "activeForm": "Step 7: QA validating BA conclusions", "status": "pending", "subagent_call": {"agent": "qa", "subagent_type": "qa"}},
@@ -40,7 +52,6 @@ def get_todos():
 
 
 if __name__ == "__main__":
-    # CLI: print todos as formatted list
     import json
     todos = get_todos()
     print(json.dumps(todos, indent=2, ensure_ascii=False))

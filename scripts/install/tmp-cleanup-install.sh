@@ -78,7 +78,6 @@ sys.path.insert(0, sys.argv[1]); import locations as L; print(L.session_scratch_
   "$HARNESS_HOME/hooks/lib") || ROOTS=""
 SESSION_ROOT="${ROOTS%%$'\n'*}" CLI_ROOT="${ROOTS#*$'\n'}"
 [ "$CLI_ROOT" != "$ROOTS" ] || CLI_ROOT=""
-[ -f "$SESSION_ROOT/.owner" ] && SESSION_ROOT="${SESSION_ROOT%/*}"  # TMPDIR is one session's own directory
 case "$SESSION_ROOT/" in  # never a root in a project or in the harness home
   "${CLAUDE_PROJECT_DIR:-//}"/*|*/.claude/scratch/*|"$HARNESS_HOME"/*|/) SESSION_ROOT="" ;;
 esac

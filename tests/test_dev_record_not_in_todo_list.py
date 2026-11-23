@@ -57,9 +57,9 @@ class _Span:
         self._add({"type": "user", "message": {"role": "user", "content": "/dev fix the bug"}})
         steps = _frontier(0)
         for n in range(_index("Step 9") + 1):
-            role = (steps[n - 1].get("subagent_call") or {}).get("subagent_type") if n else None
+            role = _required_role(steps[n - 1]) if n else None
             if role:
-                self._result(self._use("Agent", {"subagent_type": role, "prompt": "x", "description": role}))
+                self._result(self._use("Agent", {"subagent_type": role, "prompt": "Mode: analysis", "description": role}))
             self._result(self._use("TodoWrite", {"todos": _frontier(n)}))
         self._result(self._use("Agent", {"subagent_type": "graphify", "prompt": "x", "description": "graphify"}))
 
@@ -113,3 +113,11 @@ def test_the_step_records_where_the_todo_hook_lets_it(tmp_path: Path, step: int,
     assert not re.search(r"\b(?:record|add|write)\b[^.]*\bin the todo list\b", text), text[:60]
     assert "`hooks/pretool-todo-validate.py`" in text
     assert re.search(r"state (?:it|the reason) in your reply", text)
+
+
+def _required_role(step):
+    """The subagent type of the call a canonical step requires (a list states every call of the step, the
+    requirement round's included: scripts/todo/dev.py ROUND_CALLS; its optional entries are not required)."""
+    call = step.get("subagent_call")
+    return next((c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+                 if isinstance(c, dict) and not c.get("optional")), None)

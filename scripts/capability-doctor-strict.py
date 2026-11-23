@@ -150,12 +150,12 @@ def _transcript_cwd(sid: str | None) -> Path | None:
 def _project_root(start: Path, exclude: tuple = ()) -> Path | None:
     """Nearest ancestor of `start` (itself included) holding .claude/settings*.json,
     else the git toplevel above it, else None. A directory in `exclude` (the user's
-    HOME, the harness home) is never taken as the project, and the walk does not
-    pass a git toplevel."""
+    HOME, the harness home) and the filesystem root are never taken as the project,
+    and the walk does not pass a git toplevel."""
     skip = {os.path.realpath(x) for x in exclude}
     for d in (start, *start.parents):
         is_git = (d / ".git").exists()
-        if os.path.realpath(d) in skip:
+        if os.path.realpath(d) in skip or d == d.parent:
             if is_git:
                 return None
             continue
@@ -173,7 +173,7 @@ def resolve_project(real_sid: str | None, probing_other: bool, home: Path) -> Pa
     Order: the cwd the probed session's own transcript records (a recorded cwd that
     no longer exists leaves the project unknown); then, only when doctor does not
     probe another session, CLAUDE_PROJECT_DIR and the nearest project root above
-    doctor's own working directory, never the user's HOME or the harness home, so
+    doctor's own working directory, never the user's HOME, the harness home or /, so
     a run's verdict does not depend on where it runs. A deleted working directory
     is skipped, never a crash."""
     tcwd = _transcript_cwd(real_sid)
@@ -184,7 +184,8 @@ def resolve_project(real_sid: str | None, probing_other: bool, home: Path) -> Pa
     if probing_other:
         return None
     env = os.environ.get("CLAUDE_PROJECT_DIR")
-    if env:
+    never = {os.path.realpath(x) for x in (Path.home(), home, os.sep)}
+    if env and os.path.realpath(env) not in never:  # the same places the walk never takes
         return Path(env)
     try:
         cwd = Path(os.getcwd())

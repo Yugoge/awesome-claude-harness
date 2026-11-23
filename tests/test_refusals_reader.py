@@ -10,6 +10,9 @@
   after it ran (no transcript line shows them), a Codex seat's record, a let-through and a denial
   by the CLI's own permission rules are counted, not compared.
 - The transcript records are built from the recorded CLI fixture (tests/fixtures/cli), never by hand.
+- It reads the record of every user of the machine (their homes' state roots), a hook refusal is what the
+  CLI's error result / stop feedback of that hook says (a command's output or a lane's own stop message that
+  only looks like one is none), and the lines a caller lists as probes (file, line) are left out and counted apart.
 - It reads the directory the writer writes, with no argument naming it (the reader is the record's
   consumer: without it this file fails, and the record would be written and never read).
 
@@ -27,7 +30,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-READER = REPO / "scripts" / "refusals"
+READER = Path(os.environ.get("REFUSALS_READER_UNDER_TEST") or REPO / "scripts" / "refusals")  # the override: a test run against an older reader
 sys.path.insert(0, str(REPO / "hooks"))
 
 try:
@@ -256,3 +259,84 @@ def test_reconcile_reads_extracted_rows_too(monkeypatch, tmp_path):
     extracted.write_text("".join(json.dumps(r) + "\n" for r in rows[1:]))
     out = reader("reconcile", "--refusals", str(extracted))
     assert out.returncode == 1 and "in the record, not in the transcripts" in out.stdout and "id=toolu_1 " in out.stdout
+
+
+def _one_refusal(monkeypatch, tool_id="toolu_a"):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", "/work/app")
+    R.write(call("Bash", {"command": "x=$(date)"}, tool_id), [REMOVAL], REMOVAL[0])
+    return next(Path(R.directory()).glob("*.jsonl"))
+
+
+def _hook_text(text):
+    return 'PreToolUse:Bash hook error: [python3 "/h/hooks/pretool-launch.py"]: ' + text
+
+
+def test_every_users_record_is_read_and_read_only(monkeypatch, cli_record, tmp_path):
+    """Sessions of two users on one machine: each refusal sits in its own user's record; the reader takes both."""
+    mine = _one_refusal(monkeypatch, "toolu_a")
+    other_home = tmp_path / "other"
+    theirs = other_home / mine.relative_to(Path(os.path.expanduser("~"))).parent
+    theirs.mkdir(parents=True)
+    day = theirs / mine.name
+    day.write_text(mine.read_text().replace("toolu_a", "toolu_b"))
+    before = day.read_text()
+    projects = transcripts(cli_record, tmp_path, {"toolu_a": _hook_text(REMOVAL[1]), "toolu_b": _hook_text(REMOVAL[1])}, [], "toolu_denied")
+    only_mine = reader("reconcile", "--transcripts", str(projects), "--homes")
+    assert only_mine.returncode == 1 and "id=toolu_b" in only_mine.stdout, only_mine.stdout + only_mine.stderr
+    both = reader("reconcile", "--transcripts", str(projects), "--homes", str(other_home), str(tmp_path / "nobody"))
+    assert both.returncode == 0 and "in the record: 2    differences: 0" in both.stdout, both.stdout + both.stderr
+    assert str(theirs) in both.stdout and day.read_text() == before
+    assert json.loads(reader("--json", "--homes", str(other_home)).stdout)["refusals"] == 2
+
+
+def test_only_what_the_hook_returned_is_a_refusal(monkeypatch, cli_record, tmp_path):
+    """A command printing an old refusal (an ordinary result) and a lane's own stop message are no hook refusals."""
+    _one_refusal(monkeypatch)
+    projects = transcripts(cli_record, tmp_path, {"toolu_a": _hook_text(REMOVAL[1])}, [], "toolu_denied")
+    main = next(projects.glob("*/*.jsonl"))
+    lines = [json.loads(x) for x in main.read_text().splitlines()]
+    result = next(r for r in lines if isinstance(r["message"]["content"], list))
+    quote = json.loads(json.dumps(result))
+    quote.update(uuid="00000000-0000-4000-8000-0000000000a1")
+    quote["message"]["content"][0].update(tool_use_id="toolu_quote", content=_hook_text("an old refusal, quoted"), is_error=False)
+    plain = next(r for r in cli_record("user") if isinstance(r["message"]["content"], str))
+    stopwait = dict(plain, isMeta=True, uuid="5a5a5a5a-0000-4000-8000-0000000000a2", sessionId=SID, timestamp=quote["timestamp"])
+    stopwait["message"]["content"] = "Stop hook feedback:\nSTOPWAIT: waited 120s (deadline). Report these file names, then end your turn."
+    main.write_text(main.read_text() + json.dumps(quote) + "\n" + json.dumps(stopwait) + "\n")
+    out = reader("reconcile", "--transcripts", str(projects), "--homes")
+    assert out.returncode == 0 and "hook refusals in the transcripts: 1    in the record: 1    differences: 0" in out.stdout, out.stdout
+
+
+def test_listed_probe_lines_are_left_out_and_counted_apart(monkeypatch, cli_record, tmp_path):
+    day = _one_refusal(monkeypatch)
+    probe = dict(json.loads(day.read_text().splitlines()[0]), tool_use_id="toolu_probe1", session="5a5a5a5a-0000-4000-8000-00000000000b")
+    day.write_text(day.read_text() + json.dumps(probe) + "\n")
+    projects = transcripts(cli_record, tmp_path, {"toolu_a": _hook_text(REMOVAL[1])}, [], "toolu_denied")
+    out = reader("reconcile", "--transcripts", str(projects), "--homes")
+    assert out.returncode == 1 and "id=toolu_probe1" in out.stdout and "probe lines left out: 0" in out.stdout
+    listed = tmp_path / "probes.tsv"
+    listed.write_text(f"file\tline\tts\n{day.name[len('refusals-'):-len('.jsonl')]}\t2\t-\n2000-01-01\t9\t-\n")
+    out = reader("reconcile", "--transcripts", str(projects), "--homes", "--probes", str(listed))
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "in the record: 1    differences: 0    probe lines left out: 1 (listed, not found in the files read: 1)" in out.stdout
+    assert json.loads(reader("--json", "--homes", "--probes", str(listed)).stdout)["probe_lines_left_out"] == 1
+    assert json.loads(reader("--json", "--homes").stdout)["refusals"] == 2
+
+
+def test_a_window_starting_inside_a_loop_of_stops_pairs_each_line_with_its_own_record(tmp_path):
+    """Four stops 200 s apart, each recorded 20 ms before its transcript line; the window opens after the first two
+    records' reach: the lines before the window have no record loaded and must not take the later ones."""
+    folder = Path(R.directory())
+    folder.mkdir(parents=True)
+    row = {"v": 1, "kind": "refusal", "event": "Stop", "session": SID, "refused": "c", "message": "m", "project": "/p",
+           "rules": [{"hook": "hooks/a.py", "id": "a", "by": "hooks/gate.py"}]}
+    times = ("09:56:40", "10:00:00", "10:03:20", "10:06:40")
+    (folder / "refusals-2026-01-10.jsonl").write_text("".join(json.dumps(dict(row, ts=f"2026-01-10T{t}.000Z")) + "\n" for t in times))
+    lines = tmp_path / "refusals.jsonl"
+    lines.write_text("".join(json.dumps({"tool_use_id": None, "record_uuid": f"u-{i}", "ts": f"2026-01-10T{t}.020Z", "session_id": SID,
+                                         "agent_id": None, "hook_event": "Stop"}) + "\n" for i, t in enumerate(times)))
+    window = ("--since", "2026-01-10T10:05", "--until", "2026-01-10T10:10")
+    out = reader("reconcile", "--refusals", str(lines), *window)
+    assert out.returncode == 0 and "differences: 0" in out.stdout and "DIFFERENCE" not in out.stdout, out.stdout + out.stderr
+    out = reader("reconcile", "--refusals", str(lines), "--since", "2026-01-10T09:50", "--until", "2026-01-10T10:10")
+    assert out.returncode == 0 and "differences: 0" in out.stdout, out.stdout + out.stderr

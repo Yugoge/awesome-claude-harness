@@ -53,7 +53,6 @@ import os
 import pathlib
 import re
 import sys
-import time
 
 CONTINUATION_RE = re.compile(
     r"^[-*+]?\s*Continuation spec(\s*\([^)]*\))?\s*:\s*`?(docs/dev/specs/spec-[^\s`]+\.md)`?\s*$"
@@ -184,7 +183,6 @@ def main() -> int:
         print(f"Step 8 skipped: changelog status={args.changelog_status}")
         return 0
 
-    # Stage (1) context.spec_path
     sp1 = _stage1_context_spec_path(task_id, dev_docs_root)
     if sp1 is not None:
         _emit(
@@ -194,7 +192,6 @@ def main() -> int:
         print(f"Stage 1 dispatch: {sp1}")
         return 0
 
-    # Stage (2) close-report continuation line
     sp2 = _stage2_close_report_continuation(task_id, dev_docs_root)
     if sp2 is not None:
         print(
@@ -208,7 +205,6 @@ def main() -> int:
         print(f"Stage 2 dispatch: {sp2}")
         return 0
 
-    # Stage (3) literal-task-id glob
     candidates = _stage3_marker_glob(task_id, dev_docs_root)
 
     # Stage (4) outcome (advisory: printed, nothing dispatched)

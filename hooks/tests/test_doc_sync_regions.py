@@ -278,20 +278,28 @@ def test_classify_matrix_cls_exhaustive_sequences_len6():
 
 
 def test_classify_matrix_cls_near_miss_linear_time():
-    """Long runs of spaces inside a marker-shaped line are classified in linear time."""
-    for size in (2000, 8000, 32000):
-        pad = ' ' * size
-        lines = [
-            '<!--' + pad + '/' + pad + 'AUTO:x' + pad,
-            '<!--' + pad + 'AUTO:x' + pad + '-->' + pad + '!',
-            '<!--' + pad + 'AUTO:x' + pad + '-->' + pad + '<!--' + pad,
-        ]
-        for line in lines:
-            started = time.perf_counter()
-            result = classify(t(line))
-            elapsed = time.perf_counter() - started
-            assert elapsed < 0.1, (size, elapsed)
+    """Long runs of spaces inside a marker-shaped line are classified in linear time.
+
+    Four times the spaces must cost well under sixteen times as much (a pattern that backtracks over two adjacent
+    space runs grows with the square). Each size is compared with the one before it, in CPU seconds and the least of
+    five runs, because no fixed bound holds on every runner; the next size is tried only after the ratio held, so a
+    quadratic classifier fails at the second size instead of running for minutes."""
+    shapes = (lambda pad: '<!--' + pad + '/' + pad + 'AUTO:x' + pad,
+              lambda pad: '<!--' + pad + 'AUTO:x' + pad + '-->' + pad + '!',
+              lambda pad: '<!--' + pad + 'AUTO:x' + pad + '-->' + pad + '<!--' + pad)
+    for shape in shapes:
+        before = None
+        for size in (2000, 8000, 32000):
+            text = t(shape(' ' * size))
+            took = None
+            for _ in range(5):
+                started = time.process_time()
+                result = classify(text)
+                elapsed = time.process_time() - started
+                took = elapsed if took is None else min(took, elapsed)
             assert result.shape.name == 'NO_MARKERS'
+            assert before is None or took < 8 * before, (size, before, took)
+            before = took
     # The linear pattern still finds the real near misses with generous spacing.
     assert names(classify(t('<!--' + ' ' * 5000 + 'AUTO:x' + ' ' * 5000 + '-->')))[0] == 'NEAR_MISS_MARKER'
 

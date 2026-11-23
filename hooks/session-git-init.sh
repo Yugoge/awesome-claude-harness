@@ -33,6 +33,20 @@ NC=
 # Configurable Co-Authorship (Claude attribution only — no third-party watermark in default)
 CO_AUTHOR=${CLAUDE_CO_AUTHOR:-"Co-Authored-By: Claude <noreply@anthropic.com>"}
 
+# The session's project (CLAUDE_PROJECT_DIR, else the cwd); a home or a directory above it, by any spelling
+# (lib/locations.py is_broad_root), is no project and is never initialised; undecided, nothing is initialised.
+cd "${CLAUDE_PROJECT_DIR:-$PWD}" || exit 0
+_broad=0
+python3 -c 'import os, sys; sys.path.insert(0, sys.argv[1]); import locations as L
+d, home = sys.argv[2], os.path.realpath(os.environ.get("HOME") or os.path.expanduser("~"))
+sys.exit(3 if L.is_broad_root(d) or L.is_broad_root(os.path.realpath(d)) or L.below(home, os.path.realpath(d)) is not None else 0)' \
+    "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib" "$PWD" || _broad=$?
+if [ "$_broad" != 0 ]; then
+  [ "$_broad" = 3 ] && echo "No Git repository created: $PWD is a home or a directory above one, not a project." >&3
+  [ "$_broad" = 3 ] || echo "No Git repository created: whether $PWD is a project could not be decided." >&3
+  exit 0
+fi
+
 # Check if already a git repository
 if git rev-parse --git-dir > /dev/null 2>&1; then
   echo -e "${GREEN}✅ Git repository already exists.${NC}" >&3

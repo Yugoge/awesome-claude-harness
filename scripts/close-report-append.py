@@ -362,9 +362,11 @@ def _handle_post_publish_failure(report_path: Path, stage: str, detail: str, pre
                     f"| rollback not confirmed: {rollback_detail}")
 
 
-def run(report_path: Path, section_path: Path, repo_root: Path) -> tuple[bool, str]:
+def run(report_path: Path, section_path: Path, repo_root: Path, allow: tuple = ()) -> tuple[bool, str]:
     """Returns (ok, stdout_line). On failure the live report is guaranteed
-    unchanged."""
+    unchanged. ``allow``: classes accepted besides the decisive ones; only
+    hooks/lib/close_exit.py passes one ("retired", the owner's /close --retire),
+    and the command line passes none."""
     cv = _load_close_verdict_module(repo_root)
 
     # Stage: read (section file QA prepared) -- read this first since it
@@ -380,7 +382,7 @@ def run(report_path: Path, section_path: Path, repo_root: Path) -> tuple[bool, s
         detail = "section file has no non-empty content"
         return False, f"CLOSE_REPORT_APPEND_ERROR: append: {detail}"
 
-    if cv.classify_line(expected_last_line) not in cv.DECISIVE_CLASSES:
+    if cv.classify_line(expected_last_line) not in tuple(cv.DECISIVE_CLASSES) + tuple(allow):
         detail = f"section's own last non-empty line is not a legal CLOSE: form: {expected_last_line!r}"
         return False, f"CLOSE_REPORT_APPEND_ERROR: append: {detail}"
 

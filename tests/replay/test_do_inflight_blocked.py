@@ -66,6 +66,7 @@ import threading
 import pytest
 
 from tests.replay import sites, suite
+from tests.replay.drivers.close import CL
 
 OLD = "a7d3a9fec736c0e64b5a822ba5da788d4f178bda"
 G2 = "hooks/subagentstop-artifact-contract-enforce.py"
@@ -209,7 +210,7 @@ def _verdict(case: str, r: suite.Result, settings: str, host: list[str]) -> list
     do_docs = _written(_tool_uses(main), f"do-report-{tid}.json")
     if [d.get("do", {}).get("status") for d in do_docs] != ["blocked"]:
         bad.append(f"the /do wrote no single blocked do-report: {[d.get('do') for d in do_docs]}")
-    steps = [f["value"] for f in r.facts if f.get("key") == "close Step 0"]
+    steps = [f["value"] for f in r.facts if f.get("key") == f"close Step {CL.disposition}"]
     if [s.get("disposition") for s in steps] != ["incomplete", "chain_pass"]:
         bad.append(f"Step 0's dispositions: {steps}")
     elif steps[0].get("gaps") != [[f"docs/dev/do-report-{tid}.json", "do.status:blocked"]]:
@@ -254,7 +255,7 @@ def _verdict(case: str, r: suite.Result, settings: str, host: list[str]) -> list
     blocks = [(b["hook"], b["step"]) for b in r.blocks]
     g2 = G2_REPORTER[settings]
     want = [(CANARY, "SessionStart startup")] if host else []
-    want += [(g2, "/close Step 0 round 1 Agent(dev) stop")] if case == "g2" else []
+    want += [(g2, f"/close Step {CL.disposition} round 1 Agent(dev) stop")] if case == "g2" else []
     if blocks != want:
         bad.append(f"blocks {blocks}, expected {want}")
     elif host:  # the host's block: the base canary's at the session's start, failing on the host's files only

@@ -59,6 +59,8 @@ import time
 import pytest
 
 from tests.replay import hookrun, landing, sites, suite
+from tests.replay.drivers.dev import S as DEV
+from tests.replay.drivers.overnight import N
 
 OLD = "a7d3a9fec736c0e64b5a822ba5da788d4f178bda"
 SETTINGS = ("base",)
@@ -75,15 +77,15 @@ COSTS = {"untracked": 100, "codex": 90, "qa": 110, "explore": 60, "overnight": 1
 # Each probe: (event, label, the n-th event with that label after the landing (1-based), the blocks it
 # must show as {hook: first-line regex}; {} for none). Every other event after the landing blocks nothing.
 PROBES = {
-    "untracked": [("SubagentStop", "Step 10 Agent(dev) stop", 1, {G2: r"^OBLIGATION_STOPGATE_BLOCKED: .*role=dev"}),
-                  ("SubagentStop", "Step 10 Agent(dev) stop", 2, {})],
-    "codex": [("SubagentStop", "Step 10 Agent(dev) stop", 1, {CODEX: r"^CODEX_ENFORCE_BLOCKED: .*\(type=dev\)"}),
+    "untracked": [("SubagentStop", f"Step {DEV.dev} Agent(dev) stop", 1, {G2: r"^OBLIGATION_STOPGATE_BLOCKED: .*role=dev"}),
+                  ("SubagentStop", f"Step {DEV.dev} Agent(dev) stop", 2, {})],
+    "codex": [("SubagentStop", f"Step {DEV.dev} Agent(dev) stop", 1, {CODEX: r"^CODEX_ENFORCE_BLOCKED: .*\(type=dev\)"}),
               ("PostToolUse", "agent:dev Skill(codex) (next round)", 1, {}),
-              ("SubagentStop", "Step 10 Agent(dev) stop", 2, {})],
-    "qa": [("SubagentStop", "Step 13 Agent(qa) stop", 1, {E2E: r"^E2E_ENFORCE_BLOCKED: .*\(type=qa\).*skipped_without_justification"}),
+              ("SubagentStop", f"Step {DEV.dev} Agent(dev) stop", 2, {})],
+    "qa": [("SubagentStop", f"Step {DEV.qa} Agent(qa) stop", 1, {E2E: r"^E2E_ENFORCE_BLOCKED: .*\(type=qa\).*skipped_without_justification"}),
            ("PostToolUse", "agent:qa Read dev.json (next round)", 1, {}),
-           ("SubagentStop", "Step 13 Agent(qa) stop", 2, {E2E: r"^E2E_ENFORCE_BLOCKED: .*\(type=qa\).*skipped_without_justification"}),
-           ("SubagentStop", "Step 13 Agent(qa) stop", 3, {})],
+           ("SubagentStop", f"Step {DEV.qa} Agent(qa) stop", 2, {E2E: r"^E2E_ENFORCE_BLOCKED: .*\(type=qa\).*skipped_without_justification"}),
+           ("SubagentStop", f"Step {DEV.qa} Agent(qa) stop", 3, {})],
     "explore": [("PreToolUse", "agent:Explore Grep", 1, {}), ("PreToolUse", "agent:Explore Glob", 1, {}),
                 ("PreToolUse", "agent:Explore Bash ls", 1, {}), ("SubagentStop", "main Agent(Explore) stop", 1, {}),
                 ("PreToolUse", "main Agent(demo-plugin:reviewer)", 1, {}),
@@ -93,10 +95,11 @@ PROBES = {
                 ("PreToolUse", "agent:demo-plugin:reviewer Write src/y.py", 1, {}),
                 ("SubagentStop", "main Agent(demo-plugin:reviewer) stop", 1, {}), ("Stop", "Stop", 1, {})],
     "overnight": [("PreToolUse", "agent:dev Write outside the working root", 1, {GUARD: r"WORKTREE"}),
-                  ("SubagentStop", "C1 Step 12 Agent(dev) pipeline 0 stop", 1, {})],
+                  ("SubagentStop", f"C1 Step {N.dev} Agent(dev) pipeline 0 stop", 1, {})],
     "grant": [("PreToolUse", "agent:changelog-analyst Write MSGFILE 0", 1, {}),
               ("PreToolUse", "agent:changelog-analyst Bash stage and commit 0", 1, {}),
               ("PreToolUse", "agent:changelog-analyst Bash push-gate token 0", 1, {}),
+              # the base framework's own driver plays this case, pinned at OLD: its label is that commit's
               ("SubagentStop", "/commit Step 7 Agent(changelog-analyst) stop", 1, {}), ("Stop", "/commit Stop", 1, {})],
 }
 

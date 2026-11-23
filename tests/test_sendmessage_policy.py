@@ -416,3 +416,45 @@ def test_a_resume_message_naming_another_agent_or_session_is_a_dispatch(session)
                     restart.build_resume_message(str(uuid.uuid4()), CHILD)):
         p = session.run(BACKGROUND, CHILD, message)
         assert p.returncode == 2 and "missing_block" in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("repeated", [False, True], ids=["bare", "block-repeated"])
+def test_a_resumed_childs_stop_is_judged_by_its_original_dispatch(tmp_path, monkeypatch, repeated):
+    """A resume (subagent_restart.is_resume_message) adds no work: the next stop is judged by the
+    declaration of the dispatch it resumes, the first record's or the latest send that was a dispatch,
+    whether or not the resume repeats that block. A send that is a dispatch is judged by its own."""
+    from lib import obligation
+    monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "restart"))
+    sid = str(uuid.uuid4())
+    parent = tmp_path / f"{sid}.jsonl"
+    agent_file = tmp_path / sid / "subagents" / f"agent-{CHILD}.jsonl"
+    agent_file.parent.mkdir(parents=True)
+    first_block = _block("dev", "^FIRST$")
+    first, again = "Fix it.\n" + first_block, "Rework it.\n" + _block("dev", "^AGAIN$")
+    resume = restart.build_resume_message(sid, CHILD) + ("\n" + first_block if repeated else "")
+
+    def sent(tool_id: str, message: str) -> dict:
+        return {"type": "assistant", "isSidechain": False, "timestamp": "2026-11-21T09:10:00Z", "message": {
+            "role": "assistant", "content": [{"type": "tool_use", "id": tool_id, "name": "SendMessage",
+                                              "input": {"to": CHILD, "summary": "go on", "message": message}}]}}
+
+    def delivered(message: str) -> dict:
+        return {"type": "user", "isSidechain": True, "origin": {"kind": "coordinator"}, "isMeta": True,
+                "message": {"role": "user", "content": "The coordinator sent a message while you were working:\n"
+                            + message + "\n\nAddress this before completing your current task."}}
+
+    parent.write_text("".join(json.dumps(r) + "\n" for r in (
+        _typed_dispatch("toolu_dev", "dev", first), sent("toolu_s1", again), sent("toolu_s2", resume))))
+    head = {"type": "user", "isSidechain": True, "message": {"role": "user", "content": first}}
+
+    def judged(*later):
+        agent_file.write_text("".join(json.dumps(r) + "\n" for r in (head, *later)))
+        found = obligation.resolve_own_obligation(sid, CHILD, tmp_path, agent_file, expected_role="dev")
+        assert isinstance(found, obligation.Resolved), found
+        return found.obligation["artifacts"][0]["terminal_line_regex"]
+
+    assert judged(delivered(resume)) == "^FIRST$"  # resumed after the cut of its first run
+    assert judged(delivered(again)) == "^AGAIN$"  # a dispatch by message: its own declaration
+    # resumed after the cut of the run that message started: that message is the dispatch it resumes
+    assert judged(delivered(again), delivered(resume)) == "^AGAIN$"
+    assert judged(delivered(resume), delivered(again), delivered(resume)) == "^AGAIN$"

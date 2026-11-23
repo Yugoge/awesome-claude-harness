@@ -47,6 +47,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
 from harness_state_dir import harness_state_dir  # noqa: E402
+import locations  # noqa: E402  (the filesystem root is no repository top)
 
 # Sentinel/grant base directory under the hook state directory, where push.sh reads it
 _SENTINEL_BASE = os.path.join(harness_state_dir(), "agentic-commit", "push-analyst")
@@ -185,7 +186,7 @@ def _inflight_token(repo_hash: str, branch: str, head: str) -> None:
     in-flight /commit's refused token Write (module docstring). Never fails
     the push: on any miss push.sh decides as before (its exit 3)."""
     try:
-        root = _git_out("rev-parse", "--show-toplevel")
+        root = locations.repo_top(os.getcwd())  # never the filesystem root
         if not root or hashlib.sha256(os.path.realpath(root).encode()).hexdigest()[:16] != repo_hash:
             return
         if _token_names_ancestor(repo_hash, branch, head):

@@ -355,19 +355,34 @@ def test_gitignored_in_repo_file_named_by_command_is_still_captured(tmp_path, mo
 
 
 def test_measured_overhead_reported(tmp_path, monkeypatch, capsys):
-    import time
+    """The shell measurement costs a fixed number of git runs, not one per dirty file (the per-file
+    run dominated the naive cost). The work is counted, no clock: 50 dirty files take as many git
+    runs as 5, and that number is small."""
     _env(tmp_path, monkeypatch)
     repo = _repo(tmp_path)
-    for i in range(50):
-        (repo / f"f{i}.txt").write_text(str(i))
     pl = {"tool_name": "Bash", "tool_input": {"command": "true"}, "session_id": "s", "tool_use_id": "t", "cwd": str(repo)}
-    t0 = time.perf_counter()
-    aj.record_pre(pl)
-    t1 = time.perf_counter()
-    aj.record_post(pl)
-    t2 = time.perf_counter()
-    print(f"overhead pre={1000*(t1-t0):.0f}ms post={1000*(t2-t1):.0f}ms (50 dirty files)")
-    assert (t2 - t0) < 5
+    real_run, calls = subprocess.run, []
+
+    def counting(cmd, *a, **k):
+        calls.append(cmd)
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(subprocess, "run", counting)
+
+    def git_runs():
+        del calls[:]
+        aj.record_pre(pl)
+        aj.record_post(pl)
+        return len(calls)
+
+    for i in range(5):
+        (repo / f"f{i}.txt").write_text(str(i))
+    few = git_runs()
+    for i in range(5, 50):
+        (repo / f"f{i}.txt").write_text(str(i))
+    many = git_runs()
+    print(f"git runs per pre+post: {few} (5 dirty files), {many} (50 dirty files)")
+    assert few == many and many <= 8
 
 
 def _dup(sid, seq, pre, post, ts, agent=None):

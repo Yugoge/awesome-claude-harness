@@ -21,7 +21,12 @@ Path prefix matching (T1.2 fix for B.11):
   - Universal allow: prefix '*' always matches.
   - Glob: prefix containing '*' uses fnmatch.fnmatchcase, with a
     trailing '*' auto-appended so '*/docs/dev/foo-' matches any suffix
-    after the prefix anchor (e.g. inside any worktree).
+    after the prefix anchor (e.g. inside any worktree). A '*/' glob that
+    names a place below a system temp directory ('*/var/tmp/codex-outputs/')
+    or a standard device ('*/dev/null') is that one place, anchored at '/'
+    (_machine_place), not a suffix. An ALLOW prefix '*/docs/...' is the
+    project's: <project>/docs/... or a docs/... below the project, a
+    worktree in it (placed, _in_project), never another directory's.
   - Absolute anchor (starts with '/'): interpreted as project-root
     anchored, not as a raw substring. For example '/.claude/hooks/'
     becomes '<CLAUDE_PROJECT_DIR>/.claude/hooks/' (plus its realpath
@@ -127,7 +132,37 @@ def get_role_policy(role: str) -> dict:
     )
 
 
+# A browser tool: one definition across the browser providers a session may have. A row's allowed_tools
+# admits them all by the one entry BROWSER_TOOLS, never by one provider's names. A file such a tool names
+# is judged as the role's own file call (browser_files): what it writes as a Write, what it uploads as a Read.
+BROWSER_TOOLS = "<browser tools>"
+BROWSER_TOOL_PREFIXES = ("mcp__playwright__", "mcp__paseo__browser_", "mcp__claude-in-chrome__",
+                         "mcp__Claude_Browser__", "mcp__remote-devices__Claude_Browser__")
+BROWSER_WRITE_KEYS = ("filename",)  # a screenshot's or a PDF's file (Playwright's take_screenshot, pdf_save)
+BROWSER_READ_KEYS = ("filePaths", "paths")  # the files a page is given (Paseo's upload, Playwright's file_upload)
+
+
+def is_browser_tool(tool_name: str) -> bool:
+    return isinstance(tool_name, str) and tool_name.startswith(BROWSER_TOOL_PREFIXES)
+
+
+def browser_files(tool_input) -> Tuple[list, list]:
+    """(the files a browser tool's call writes, the files it uploads), as its input names them."""
+    def named(keys):
+        values = [tool_input.get(k) for k in keys] if isinstance(tool_input, dict) else []
+        return [p for v in values for p in (v if isinstance(v, list) else [v]) if isinstance(p, str) and p]
+    return named(BROWSER_WRITE_KEYS), named(BROWSER_READ_KEYS)
+
+
+def browser_roles() -> list:
+    """The roles whose row admits BROWSER_TOOLS."""
+    return sorted(r for r, spec in ((load_policy() or {}).get("roles") or {}).items()
+                  if BROWSER_TOOLS in (spec.get("allowed_tools") or []))
+
+
 def _entry_matches(entry: str, tool_name: str) -> bool:
+    if entry == BROWSER_TOOLS:
+        return is_browser_tool(tool_name)
     if entry.endswith("*"):
         return tool_name.startswith(entry[:-1])
     return entry == tool_name
@@ -228,10 +263,21 @@ def _absolute_anchor_match(prefix: str, target_canonical: str) -> bool:
     )
 
 
+def _machine_place(prefix: str) -> Optional[str]:
+    """The fixed place of the machine a '*/' grant names (a place below a system temp directory, or a standard
+    device: locations.STD_SINKS), anchored at '/'; else None. Such a place exists once, so a path that merely
+    ends in its spelling (/tmp/x/var/tmp/codex-outputs/a, <project>/dev/null) is not it."""
+    rest = prefix[1:] if prefix.startswith("*/") else ""
+    return rest if rest in locations.STD_SINKS or any(rest.startswith(d + "/") for d in locations.SYSTEM_TEMP_DIRS) \
+        else None
+
+
 def _prefix_matches(prefix: str, target_canonical: str) -> bool:
     """Boundary-aware prefix match — see module docstring for full rules."""
     if prefix == "*":
         return True
+    if _machine_place(prefix) is not None:
+        return _glob_match(_machine_place(prefix), target_canonical)
     if "*" in prefix:
         return _glob_match(prefix, target_canonical)
     if prefix.startswith("/"):
@@ -362,7 +408,18 @@ def placed(prefixes, session_id=None) -> list:
     """``prefixes``, a leading <session root> (locations.session_scratch_dir) or <state dir> written as a glob."""
     roots = dict(zip(PLACES, (locations.session_scratch_dir(session_id), locations.state_root())))
     found = [(next((n for n in PLACES if str(p).startswith(n + "/")), None), p) for p in prefixes or []]
-    return [p if n is None else glob.escape(roots[n]) + p[len(n):].rstrip("*") + "*" for n, p in found if roots.get(n, 1)]
+    out = [p if n is None else glob.escape(roots[n]) + p[len(n):].rstrip("*") + "*" for n, p in found if roots.get(n, 1)]
+    return [q for p in out for q in _in_project(p)]
+
+
+def _in_project(prefix) -> list:
+    """A '*/docs/...' allow prefix as the project's own: <project>/docs/... or a docs/... below the project (a
+    worktree in it), in its logical and real spelling; not any directory anywhere whose path ends so. Else [prefix]."""
+    if not (isinstance(prefix, str) and prefix.startswith("*/docs/")):
+        return [prefix]
+    rest, project = prefix[1:].rstrip("*") + "*", _project_dir()
+    return [glob.escape(root) + mid + rest for root in dict.fromkeys((project, os.path.realpath(project)))
+            for mid in ("", "/*")]
 
 
 def _old_place(role: str, path: str, session_id=None):
@@ -382,18 +439,39 @@ def _in_flight_until() -> float:
         return 0.0
 
 
-def in_flight(role: str, target) -> bool:
+def _began_before(session_id) -> bool:
+    """The session's own .owner (hooks/session-scratch-init.sh, written at its start) dates from a whole second
+    before the policy file's arrival: the session holds the commands' text of before. The record comes from
+    scratch_owner.owner_record, the one reader of it."""
+    from datetime import datetime, timezone
+    import scratch_owner
+    record = scratch_owner.owner_record(locations.unlinked(locations.session_scratch_dir(session_id) or ""))
+    try:
+        began = datetime.strptime(record["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except (OSError, TypeError, ValueError, KeyError):
+        return False
+    return record.get("sid") == session_id and began + 1 <= _in_flight_until() - IN_FLIGHT_HOURS * 3600
+
+
+def in_flight(role: str, target, session_id=None) -> bool:
     """A dispatch begun before policy_version 10 rewrites a file it left at its old place or retakes its old lock:
     until _in_flight_until, at a path with no link in any component (its own realpath), an existing single-link
-    regular file (the old text's unexpanded lock name in its existing directory), past the role's deny prefixes."""
+    regular file (the old text's unexpanded lock name in its existing directory), past the role's deny prefixes.
+    A /commit of a session begun before (_began_before) also makes what the old text makes there: the
+    changelog-analyst's new commit-msg-*.txt and its lock, whether or not the lock directory exists yet."""
     path = str(target or "")
     if not _old_place(role, path) or time.time() >= _in_flight_until() or os.path.realpath(path) != path \
             or _write_denial(get_role_policy(role), path, carveouts=False) is not None:
         return False
-    if os.path.basename(path) == "${REPO_HASH}.lock":
-        return os.path.isdir(os.path.dirname(path))
+    where, name = os.path.split(path)
+    if name == "${REPO_HASH}.lock" and where == os.path.join(locations.DEFAULT_TEMP_DIR, "agentic-commit", "locks"):
+        return os.path.isdir(where) or _began_before(session_id)
+    made = role == "changelog-analyst" and where == os.path.join(locations.DEFAULT_TEMP_DIR, "claude-scratch", role) \
+        and name.startswith("commit-msg-") and name.endswith(".txt")
     try:
         st = os.lstat(path)
+    except FileNotFoundError:
+        return made and _began_before(session_id)
     except OSError:
         return False
     return stat.S_ISREG(st.st_mode) and st.st_nlink == 1
@@ -449,7 +527,7 @@ def is_allowed(
         if tool_check is not None:
             return tool_check
         if tool_name in WRITE_TOOLS:
-            return (True, "ok") if in_flight(role, target_path) else \
+            return (True, "ok") if in_flight(role, target_path, session_id) else \
                 _moved(role, target_path, session_id, _check_write_path(role_pol, target_path, carveouts, session_id))
         return _check_read_path(role_pol, target_path)
     except Exception as e:  # pragma: no cover

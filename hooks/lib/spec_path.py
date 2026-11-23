@@ -16,7 +16,6 @@ target resolves against the cwd its tool_use record carries, as the CLI resolved
 """
 
 import os
-import re
 
 EDIT_TOOLS = ("Write", "Edit", "MultiEdit")  # the tools that name their target in tool_input.file_path
 WRITER = "spec-write.py"

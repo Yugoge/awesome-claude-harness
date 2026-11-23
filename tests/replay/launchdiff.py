@@ -3,11 +3,14 @@
 The new path is what the replay runs: a launcher (hooks/<event>-launch.py) runs the event's
 Python hooks in its one process. The old path is each of those hooks as its own process, as
 settings.json registered them before the launchers: `python3 <hook file>`, with the event's
-payload on stdin, the env and working directory every hook gets, and its own timeout, one after
-another in the launcher's order. Before each such event, the replay runs the old path in a
+payload on stdin, the env and working directory every hook gets, and OLD_PATH_SLACK times its own
+timeout (a slow machine must not turn a decision into a timeout), one after another in the
+launcher's order. Before each such event, the replay runs the old path in a
 mount namespace of its own whose writable roots (HOME, the state dir and the temp dirs) are
 overlays of the state the event meets (differential.OVERLAY, E1's), so it sees what the launcher
-sees and nothing it writes survives; then the event runs as usual.
+sees and nothing it writes survives; then the event runs as usual. Both runs get the event's env: on a
+replay whose driver models the clock (Replay.model_clock) that is the event's time (tests/replay/clock), so
+a hook that decides by time answers in the old path as it does in the launcher's run.
 
 Per event, compare() returns the differences between the two paths:
 - each hook's exit status, stdout and stderr (the old process's against the launcher's record
@@ -38,6 +41,12 @@ import sys
 import time
 
 from . import differential, hookrun
+
+# The old path compares decisions, not latency: each hook process gets OLD_PATH_SLACK times its registered
+# timeout, so a hook that only ran slow on a loaded machine is compared by what it decided, not reported
+# as 'timeout' against the launcher's answer (C9). The record keeps the registered timeout (combine()).
+# A hook that hangs still ends as 'timeout'; whether a hook fits its registered timeout is not checked here.
+OLD_PATH_SLACK = 10
 
 # A clock reading a hook prints ("Time remaining: 7h 59m", posttool-overnight-loop.py) moves when a
 # minute boundary falls between the two runs, so it is a duration too, on every stream.
@@ -91,14 +100,18 @@ _LIBS: dict = {}
 
 def _settings_lib(harness: str):
     """hooks/lib/launch_settings.py of the tree under test (the launchers' table reader)."""
-    if harness in _LIBS:
-        return _LIBS[harness]
-    import importlib.util
     path = os.path.join(harness, "hooks", "lib", "launch_settings.py")
+    st = os.stat(path)
+    # A landing replaces the file at the same harness path: the cache is keyed by the file, not the
+    # path, so the landed tree's launchers are read by the landed tree's reader, not the base's.
+    key = (harness, st.st_mtime_ns, st.st_size, st.st_ino)
+    if key in _LIBS:
+        return _LIBS[key]
+    import importlib.util
     spec = importlib.util.spec_from_file_location("_launch_settings", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    _LIBS[harness] = mod
+    _LIBS[key] = mod
     return mod
 
 
@@ -121,8 +134,10 @@ def old_path(harness: str, launched: dict, event: str, payload: dict) -> list:
             for f, t, to in rules if tool is None or t is None or tool in t]
 
 
-def run_old(layout, hooks: list, payload_raw: str, env: dict, cwd: str) -> list:
-    """Each hook of `hooks` as its own process, in an overlay of the current state."""
+def run_old(layout, hooks: list, payload_raw: str, env: dict, cwd: str, clock: float | None = None) -> list:
+    """Each hook of `hooks` as its own process, in an overlay of the current state. `env` is the one the
+    launcher's run gets, so a replay on the modeled clock (replay.Replay.model_clock) has the own-process run
+    read the event's time too, not the real one; `clock` is that time (None: the real clock)."""
     lay = layout.to_json()
     roots = differential._roots(lay)
     spec = json.dumps({"hooks": hooks, "payload": payload_raw, "env": env, "cwd": cwd})
@@ -131,8 +146,8 @@ def run_old(layout, hooks: list, payload_raw: str, env: dict, cwd: str) -> list:
     argv = ["unshare", "--mount", "--propagation", "private", "bash", "-c", differential.OVERLAY, "overlay",
             *roots, "--", "--", "none", "", "", "env", "-i", *[f"{k}={v}" for k, v in sorted(inner.items())],
             sys.executable, "-m", f"{__package__}.launchdiff"]
-    timeout = sum(int(h["timeout"] or hookrun.DEFAULT_TIMEOUT_S) for h in hooks) + 30
-    started = time.time()  # compare() reads it: the clock the old path's first hook can meet (_window_closed)
+    timeout = sum(int(h["timeout"] or hookrun.DEFAULT_TIMEOUT_S) for h in hooks) * OLD_PATH_SLACK + 30
+    started = time.time() if clock is None else clock  # compare() reads it: the clock the old path's first hook can meet (_window_closed)
     p = subprocess.run(argv, input=spec, capture_output=True, text=True, cwd=cwd, timeout=timeout, errors="replace")
     if p.returncode != 0:
         raise RuntimeError(f"the old path's runner exited {p.returncode}: {p.stderr[-800:]}")
@@ -206,7 +221,8 @@ def compare(rp, event: str, launched: dict, old: list) -> list:
     tail = hookrun.TAIL
     # The one expected decision change: the isolation window closed between the old path's run and the
     # launcher's, so the old one was handed the boundary's bwrap rewrite and the launcher, rightly, nothing.
-    closed = bool(old) and _window_closed(rp.layout.project, min(r.get("started", 0) for r in old), time.time())
+    closed = bool(old) and _window_closed(rp.layout.project, min(r.get("started", 0) for r in old),
+                                           time.time() if getattr(rp, "clock_at", None) is None else rp.clock_at)
 
     def window_moved(full_old, b):
         return closed and not b and _boundary_rewrite(full_old)
@@ -245,7 +261,8 @@ def _main() -> int:
         timeout = int(h["timeout"] or hookrun.DEFAULT_TIMEOUT_S)
         try:
             p = subprocess.run(h["command"], shell=True, input=spec["payload"], capture_output=True, text=True,
-                               env=spec["env"], cwd=spec["cwd"], timeout=timeout, errors="replace")
+                               env=spec["env"], cwd=spec["cwd"], timeout=timeout * OLD_PATH_SLACK,
+                               errors="replace")
             rc, o, e = p.returncode, p.stdout, p.stderr
         except subprocess.TimeoutExpired:
             rc, o, e = "timeout", "", "timeout"

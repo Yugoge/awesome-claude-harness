@@ -378,8 +378,13 @@ def test_cleanup_steps_leave_nothing_in_the_checkout(tmp_path):
     repo, (wt,) = _scratch_repo(tmp_path, "clean")
     _run_cleanup_step(repo, tmp_path, _env(tmp_path), f"git worktree remove '{wt}'")
     after = _git(ROOT, "status", "--porcelain", "--ignored", "--untracked-files=all").stdout
+    # Other test files run hooks in this same checkout beside this test, and a hook of theirs
+    # leaves its own session's journal records under state/. They are not this test's steps: only
+    # a record under a session id of THIS test (the payloads' "wt-guard-" ids) counts as its own.
+    journal = "!! state/attribution-journal/pending/"
     new = [line for line in after.splitlines()
-           if line not in before.splitlines() and "__pycache__" not in line]
+           if line not in before.splitlines() and "__pycache__" not in line
+           and not (line.startswith(journal) and not line.startswith(journal + "wt-guard-"))]
     assert new == []
 
 
@@ -430,7 +435,8 @@ def test_guard_still_runs_before_every_tool(tmp_path):
     assert len(blocks) == 1
     assert blocks[0].get("matcher") in (None, "", "*")
     # The registrations as the CLI runs them run the guard (its cache, which only it
-    # writes, appears), whatever the tool; a call no other rule refuses carries the lesson.
+    # writes, appears), whatever the tool, and every call carries the lesson: on the refusal's stderr when
+    # another rule refuses it (lib/hook_launch.combine), since the guard then stays silent for CACHE_TTL.
     repo, worktrees = _scratch_repo(tmp_path, "clean")
     env = _chain_env(tmp_path, _env(tmp_path))
     cache = tmp_path / "state" / "worktree-guard-cache"
@@ -439,5 +445,6 @@ def test_guard_still_runs_before_every_tool(tmp_path):
         for hook in _pretool_commands(_settings(), tool):
             proc = subprocess.run(["bash", "-c", hook], input=_payload(repo, tool, tool_input),
                                   text=True, capture_output=True, cwd=str(repo), env=env, timeout=120)
-            assert proc.returncode == 2 or LESSON in proc.stdout.lower(), (tool, proc.stdout)
+            told = proc.stderr if proc.returncode == 2 else proc.stdout
+            assert LESSON in told.lower(), (tool, proc.returncode, proc.stdout, proc.stderr)
         assert cache.exists(), tool

@@ -19,16 +19,20 @@ import os
 import pytest
 
 from tests.replay import suite
+from tests.replay.drivers.merge import M
+from tests.replay.drivers.push import PushSteps
+
+PUSH = PushSteps(open(os.path.join(suite.REPO, "commands", "push.md"), encoding="utf-8").read())
 
 # case, the command typed, the refusal asked (step, action), the times the owner types the command,
 # the cost (untraced wall seconds, for the CI split)
 R14 = (
-    ("merge-nogrant", "merge", ("Step 3", "re-run the analysis now"), 1, 45),
-    ("merge-blocked", "merge", ("Step 3", "resolve the listed risks first"), 2, 60),
-    ("merge-moved", "merge", ("Step 4", "re-run the analysis now"), 1, 45),
-    ("merge-nosession", "merge", ("Step 1", "re-run the snapshot now"), 1, 40),
-    ("push-nosession", "push", ("Step 2", "re-run the snapshot now"), 1, 60),
-    ("push-blocked", "push", ("Step 5", "resolve the listed risks first"), 2, 90),
+    ("merge-nogrant", "merge", (f"Step {M.grant}", "re-run the analysis now"), 1, 45),
+    ("merge-blocked", "merge", (f"Step {M.grant}", "resolve the listed risks first"), 2, 60),
+    ("merge-moved", "merge", (f"Step {M.tips}", "re-run the analysis now"), 1, 45),
+    ("merge-nosession", "merge", (f"Step {M.snapshot}", "re-run the snapshot now"), 1, 40),
+    ("push-nosession", "push", (PUSH.snapshot, "re-run the snapshot now"), 1, 60),
+    ("push-blocked", "push", (PUSH.push, "resolve the listed risks first"), 2, 90),
 )
 SCENARIOS = {c: suite.Scenario(f"R14 fault {c}", "_r14", (("case", c),), (cmd,), cost) for c, cmd, _a, _n, cost in R14}
 CASES = [pytest.param(c, cmd, asked, typed, id=c,

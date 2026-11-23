@@ -36,6 +36,8 @@ from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
 
 
 class FactError(RuntimeError):
@@ -103,7 +105,7 @@ def _git(root: Path, *args: str) -> bytes:
 
 def _tracked(root: Path, *prefixes: str) -> list[str]:
     """Paths in the git index under `prefixes` (all when none), sorted."""
-    top = _git(root, "rev-parse", "--show-toplevel").decode("utf-8").strip()
+    top = locations.repo_top(root) or ""  # never the filesystem root
     if os.path.realpath(top) != os.path.realpath(root):
         raise FactError(f"{root} is not the top of a git work tree (the top is {top}): "
                         "the files that exist are the ones in the index")

@@ -1982,16 +1982,26 @@ def test_a_busy_daemon_in_another_repository_does_not_hold_the_landing(tmp_path,
 @needs_proc
 def test_daemon_restarts_stop_at_the_time_budget_and_go_on_at_the_next_turn_end(tmp_path, env):
     """R1's 15 s bound: daemons that need the KILL after the TERM wait are restarted only while the
-    landing is under 8 s; the rest wait for the next turn end, which restarts them."""
+    landing is under 8 s; the rest wait for the next turn end, which restarts them.
+
+    The clock the landing reads (bash's SECONDS) is the test's: through BASH_ENV, the landing's three
+    waits (`sleep` 0.1, 0.2 and 1) add to a counter instead of waiting, and SECONDS is set from the
+    counter before every command, so the real speed of the machine plays no part. A restart that needs
+    the KILL costs 30 x 0.1 + 0.2 + 1 = 4.2 s of that clock: the first two start (at 0 s and 4 s), the
+    third (at 8 s) does not."""
     home, rev = make_home(tmp_path, env)
+    clock = tmp_path / "fake-clock.sh"
+    clock.write_text(
+        "FAKE_MS=0\nset -T\n"
+        "sleep() { case \"$1\" in 0.1) FAKE_MS=$((FAKE_MS + 100)) ;; 0.2) FAKE_MS=$((FAKE_MS + 200)) ;;\n"
+        "  1) FAKE_MS=$((FAKE_MS + 1000)) ;; *) command sleep \"$@\" ;; esac; }\n"
+        "trap 'SECONDS=$((FAKE_MS / 1000))' DEBUG\n")
     watches = [Path(env["HOME"]) / "repos" / ("r%d" % i) for i in range(3)]
     for watch in watches:
         git(env, tmp_path, "init", "-q", str(watch))
     olds = stale_daemons(env, home, *watches, script=DAEMON.replace('"exit 0" TERM', '"" TERM'))
     try:
-        started = time.time()
-        notice = land(env, home)
-        assert time.time() - started < 15
+        notice = land(dict(env, BASH_ENV=str(clock)), home)
         assert "2 stale git-fswatch daemon(s) restarted" in notice
         assert "1 stale git-fswatch daemon(s) left for a later turn end: the landing's time budget " \
             "is used" in notice

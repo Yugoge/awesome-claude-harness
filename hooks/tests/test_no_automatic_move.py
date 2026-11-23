@@ -10,13 +10,15 @@ Safety of these tests: the old control-state directory is a directory of tmp_pat
 a private mount namespace this test starts (``unshare -m``), and HOME, TMPDIR and every state variable name
 directories of tmp_path. A sitecustomize on PYTHONPATH makes the passwd home equal that throwaway HOME, so the
 old guard ("HOME is the user's own") would have let a move run: the test is red against the old code. Without
-a private namespace the hook case is skipped, never run against the real /tmp.
+a private namespace (made as root, else a user namespace, else passwordless sudo, as on CI:
+hooks/tests/_private_ns.py) the hook case is skipped, and fails so on GitHub Actions; never run against the real /tmp.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import pwd
 import re
 import shlex
 import subprocess
@@ -31,6 +33,8 @@ LIB = HOOKS / "lib"
 sys.path.insert(0, str(LIB))
 sys.path.insert(0, str(ROOT / "scripts" / "install"))
 import harness_temp_state as hts  # noqa: E402
+sys.path.insert(0, str(ROOT / "hooks" / "tests"))
+import _private_ns  # noqa: E402
 
 SID = "sid-no-move"
 SENTINEL = ".sentinel-no-move"
@@ -94,11 +98,6 @@ def records_snapshot(records: Path) -> dict:
     return {sub: snapshot(records / sub) for sub in ("logs", "restart-state")}
 
 
-def _namespace_ok() -> bool:
-    probe = subprocess.run(["unshare", "-m", "--propagation", "private", "true"], capture_output=True)
-    return probe.returncode == 0
-
-
 PROBE = r'''
 import importlib, json, sys
 sys.path.insert(0, sys.argv[1]); sys.path.insert(0, sys.argv[1] + "/lib")
@@ -159,7 +158,16 @@ def _env(box) -> dict:
             "CLAUDE_PYTHON_BIN": sys.executable, "PYTHON_BIN": sys.executable}
 
 
-@pytest.mark.skipif("not _namespace_ok()", reason="no private mount namespace: never run against the real /tmp")
+def _alias_base() -> str:
+    """A directory of the namespace to put the alias tmpfs over: one that hides nothing this run reads, so the
+    checkout and the interpreter may lie under any of them (a runner may keep its checkout under /mnt)."""
+    used = [os.path.realpath(p) for p in (HOOKS, sys.executable, sys.prefix, sys.base_prefix, os.__file__)]
+    for cand in ("/mnt", "/media", "/srv", "/opt", pwd.getpwuid(os.getuid()).pw_dir):  # the last: computed
+        if os.path.isdir(cand) and not any(u == cand or u.startswith(cand + "/") for u in used):
+            return cand
+    pytest.fail("no directory to put the alias over that hides nothing this run needs")
+
+
 def test_no_import_and_no_hook_moves_anything_out_of_the_old_places(sandbox):
     box = sandbox
     old_before, rec_before = snapshot(box["old"]), records_snapshot(box["records"])
@@ -170,16 +178,26 @@ def test_no_import_and_no_hook_moves_anything_out_of_the_old_places(sandbox):
         runner = sys.executable if hook.endswith(".py") else "bash"
         runs += (f"printf '%s' {shlex.quote(json.dumps(payload))} | timeout 60 {runner} \"{HOOKS / hook}\" "
                  f">/dev/null 2>&1; echo \"{hook}=$?\"\n")
-    script = (f'mount --bind "{box["old"]}" /tmp || exit 97\n'
+    # The box (tmp_path) is reached at a fixed alias on a tmpfs of the namespace, bound from a descriptor opened
+    # before any mount, so the stand-in over /tmp never hides it wherever pytest's temp lies (under /tmp on CI).
+    real, mnt = os.path.realpath(box["home"].parent), _alias_base()
+    alias = f"{mnt}/.no-move-box"
+    script = (f'exec 3<"{real}"; mount -t tmpfs none {mnt} || exit 97\n'
+              f'mkdir {alias} && mount -c --bind /proc/self/fd/3 {alias} || exit 97; exec 3<&-\n'
+              f'mount --bind "{box["old"]}" /tmp || exit 97\n'
               f'[ -e /tmp/{SENTINEL} ] || exit 98\n'
               f'cd "{box["work"]}" || exit 99\n'
               f'"{sys.executable}" -c "$PROBE" "{HOOKS}"\n'
               f'bash -c \'. "{LIB / "harness_state_dir.sh"}"; harness_state_dir\'\n' + runs)
-    proc = subprocess.run(["unshare", "-m", "--propagation", "private", "bash", "-c", script],
-                          env={**_env(box), "PROBE": PROBE}, text=True, capture_output=True, timeout=1200)
+    way = _private_ns.require("the no-move case")  # never run against the real /tmp
+    script = script.replace(str(box["home"].parent), real).replace(real + "/", alias + "/")
+    env = {k: v.replace(str(box["home"].parent), real).replace(real + "/", alias + "/") for k, v in _env(box).items()}
+    proc = subprocess.run(_private_ns.unshare_argv(way, {**env, "PROBE": PROBE}, ["bash", "-c", script]),
+                          text=True, capture_output=True, timeout=1200)
     assert proc.returncode not in (97, 98, 99), proc.stdout + proc.stderr  # the stand-in really was /tmp
+    assert proc.stdout.startswith("{"), proc.stdout + proc.stderr  # the probe printed its result first
     probe = json.loads(proc.stdout.splitlines()[0])
-    assert probe["state"].startswith(str(box["home"])), probe  # the resolvers ran against the throwaway home
+    assert probe["state"].startswith(env["HOME"]), probe  # the resolvers ran against the throwaway home
     assert snapshot(box["old"]) == old_before, proc.stdout
     assert records_snapshot(box["records"]) == rec_before, proc.stdout
 

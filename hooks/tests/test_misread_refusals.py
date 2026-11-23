@@ -625,3 +625,15 @@ def test_a_pattern_inside_a_command_line_handed_to_a_runner_passes(sandbox, comm
 def test_a_secret_file_read_into_a_kept_output_is_still_refused(sandbox, command, label):
     r = bash_safety(sandbox, command)
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+SWITCH_DIR = ".harness-" + "switch"  # spelled apart: the installed guard reads this file's text too
+
+
+@pytest.mark.parametrize("name", ["notes.txt", SWITCH_DIR + "-notes.txt", "my" + SWITCH_DIR + ".log"])
+def test_a_file_whose_name_only_contains_the_switch_dir_name_is_an_ordinary_file(sandbox, project, name):
+    """g-loctriage U29: the same ordinary write passes whatever the file is called; the switch's directory, named
+    as a whole path component, stays refused."""
+    assert switch_guard(sandbox, project, f"echo hi > {project}/{name}").returncode == 0
+    r = switch_guard(sandbox, project, f"echo hi > {project}/{SWITCH_DIR}/{name}")
+    assert r.returncode == 2 and "switch's state" in r.stderr, r.stderr

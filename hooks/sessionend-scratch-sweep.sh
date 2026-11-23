@@ -24,7 +24,9 @@ set -u
 # "SessionEnd"), so each skip below is named in a comment instead of a message nobody reads.
 exec >/dev/null 2>&1
 
-ROOT="${TMPDIR:-/var/tmp/claude-scratch}"
+# The root every reader uses (lib/locations.py session_scratch_root, as hooks/session-scratch-init.sh takes it).
+ROOT=$(python3 "$(dirname "${BASH_SOURCE[0]}")/lib/scratch_owner.py" --root 2>/dev/null) || ROOT=""
+[ -n "$ROOT" ] || exit 0  # no session scratch root — skipping
 INPUT=$(cat 2>/dev/null || true)
 # The payload's id keys the project files, as their producer (prompt-workflow.py) keys them.
 PSID=$(printf '%s' "$INPUT" | python3 -c \

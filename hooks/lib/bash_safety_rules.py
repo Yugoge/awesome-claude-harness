@@ -22,7 +22,7 @@ import sys
 import time
 import urllib.parse
 
-HOOKS = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HOOKS = os.path.abspath(sys.argv[1]) if __name__ == "__main__" and len(sys.argv) > 1 else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = os.path.join(HOOKS, "lib")
 sys.path[:0] = [p for p in (HOOKS, LIB) if p not in sys.path]
 
@@ -385,7 +385,7 @@ def commit_guard(payload):
         return subprocess.run(['git', *r, *a], capture_output=True, text=True, timeout=20)
 
     def cdir(r):  # '' = no repository
-        return (o := git(r, 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip()) and os.path.realpath(o)
+        return locations.repo_common_dir(None, r) or ''  # the filesystem root is no repository's top
 
     cfg = cfg + [k for k, ds, r in loc
                  if not (c := cdir(r)) or (hc := cdir(('-C', os.path.dirname(H)))) and hc in {c, *(cdir(('-C', x)) for x in ds)}]
@@ -395,6 +395,7 @@ def commit_guard(payload):
         return 'HOOKS ' + str(why[0])
     for r in dict.fromkeys([('-C', x) for x in dirs] + commits if commits else []):
         top = git(r, 'rev-parse', '--show-toplevel').stdout.strip()
+        top = '' if locations.is_fs_root(top) else top  # the filesystem root is no repository top
         r += ('-C', top)
         if top and git(r, 'check-attr', 'filter', '--', 'settings.json').stdout.strip().endswith(': claude-settings') \
                 and git(r, 'config', '--local', '--get', 'filter.claude-settings.clean').returncode \
@@ -967,7 +968,9 @@ def daemon_rules(command, payload, env):
         refuse("BLOCKED: daemon-restart-http-stop — HTTP /stop on a localhost port is refused", f"Command: {command}",
                    "REASON: /stop on a localhost port is a daemon's shutdown endpoint; false positives on other local "
                    "services are accepted.", released_line())
-    if writes_namespace(command, re.escape(one_slash(env["grant_dir"]) + "/claude-allow-daemon-restart-")):
+    grant_ns = "claude-allow-daemon-restart-"
+    if writes_namespace(command, re.escape(one_slash(env["grant_dir"]) + "/" + grant_ns)) \
+            or _landed_names(command, (payload or {}).get("cwd"), env["grant_dir"], (grant_ns,)):  # where it lands
         refuse("BLOCKED: daemon-restart-sentinel-write — writing to the daemon-restart grant sentinel is refused",
                    f"Command: {command}",
                    f"REASON: only {hint} (run by the user from a TTY) creates the grant sentinel.", released_line())
@@ -1372,7 +1375,7 @@ def _shape_strict_ok(command, carries, sites):
     for site, res in sites:
         c = site.cmd
         heads = list(c.words[:1]) + ([res.head] if res.head is not None else [])
-        if any(w.value() is None or not _SHAPE_HEAD_RE.fullmatch(w.value()) for w in heads):
+        if any(w.value() is None or not _SHAPE_HEAD_RE.fullmatch(_plain_head(w.value())) for w in heads):
             return False
         for a in tuple(c.assignments) + tuple(res.assignments):
             if _SHAPE_ENV_OK_RE.fullmatch(a.name or ""):
@@ -1532,22 +1535,43 @@ def _xargs_fed_writer(command):
 COMMIT_GRANT_PREFIX = "claude-commit-grant-"  # the name scripts/write-commit-grant.py gives each grant
 
 
-def commit_artifact_rules(command, state):
-    """BS-14, BS-15, BS-16: the /commit user-intent flag, the dispatch attestation and the commit grant."""
+def _landed_names(command, cwd, state, prefixes):
+    """The `prefixes` a parsed write target of `command` lands on in the state directory, judged by where it lands,
+    not how it is spelt (location-rules U9, U10): placed against the directory a `cd` moved to, $TMPDIR, $TMP,
+    $TEMP, $TEMPDIR, $CLAUDE_TMPDIR and $CLAUDE_STATE_DIR read from the hook's environment, links resolved."""
+    if not any(p in command for p in prefixes):
+        return set()
+    names = _CONSENT_TMP_VARS | {"CLAUDE_STATE_DIR"}
+    here = cwd if isinstance(cwd, str) and cwd.startswith("/") else os.getcwd()
+    real_state, out = os.path.realpath(state), set()
+    try:
+        for full in _landings(command, here, {k: os.environ[k] for k in names if os.environ.get(k)}):
+            if os.path.dirname(full) == real_state:
+                out.update(x for x in prefixes if os.path.basename(full).startswith(x))
+    except Exception:  # noqa: BLE001 -- an unreadable command keeps the textual reading alone
+        return out
+    return out
+
+
+def commit_artifact_rules(command, state, cwd=None):
+    """BS-14, BS-15, BS-16: the /commit user-intent flag, the dispatch attestation and the commit grant. A write is
+    caught by the textual reading (writes_namespace) or where it lands (_landed_names)."""
     from lib.commit_pipeline import ATTEST_PREFIX
     base = one_slash(state)
-    if writes_namespace(command, re.escape(base + "/claude-commit-userintent-")):
+    landed = _landed_names(command, cwd, state, ("claude-commit-userintent-", ATTEST_PREFIX, COMMIT_GRANT_PREFIX))
+    if writes_namespace(command, re.escape(base + "/claude-commit-userintent-")) \
+            or "claude-commit-userintent-" in landed:
         refuse("BLOCKED: commit-userintent-sentinel-write — writing to the /commit mint-authorization sentinel is refused",
                    f"Command: {command}",
                    "REASON: only the UserPromptSubmit hook (fired when a human types /commit) writes this flag.",
                    released_line())
-    if writes_namespace(command, re.escape(base + "/" + ATTEST_PREFIX)):
+    if writes_namespace(command, re.escape(base + "/" + ATTEST_PREFIX)) or ATTEST_PREFIX in landed:
         refuse("BLOCKED: commit-dispatch-attestation-write — writing to the changelog-analyst dispatch-attestation "
                    "namespace is refused", f"Command: {command}",
                    "REASON: only hooks/pretool-commit-dispatch-attest.py (PreToolUse:Agent, fired by a real "
                    "changelog-analyst dispatch) writes these files; a Bash-written one would let a bare `git commit` "
                    "claim a pipeline run that never happened.", released_line())
-    if writes_namespace(command, re.escape(base + "/" + COMMIT_GRANT_PREFIX)):
+    if writes_namespace(command, re.escape(base + "/" + COMMIT_GRANT_PREFIX)) or COMMIT_GRANT_PREFIX in landed:
         refuse("BLOCKED: commit-grant-raw-write — hand-writing a /commit privilege-guard grant is refused",
                    f"Command: {command}",
                    "REASON: grants are minted only by scripts/write-commit-grant.py, which requires a live /commit "
@@ -3702,6 +3726,20 @@ def hard_ban_mask(t):
     return t if o is None or _HB_RUNS_TEXT.search("".join(u)) else "".join(o)
 
 
+_HB_BIN_REAL = {os.path.realpath(d): d for d in locations.BIN_DIRS}
+
+
+def _plain_head(word):
+    """The command word with its program directory read as the directory it is: `/usr//bin/cat` and
+    `/usr/bin/../bin/cat` come back as `/usr/bin/cat` when that directory is one of lib/locations.BIN_DIRS."""
+    d, _, name = word.rpartition("/")
+    if d.startswith("/") and name:
+        real = _HB_BIN_REAL.get(os.path.realpath(d))
+        if real is not None:
+            return real + "/" + name
+    return word
+
+
 def _hb_only_reads(command):
     """True when lib/bash_read_only.py proves the whole command read-only, a command word in a plain program directory
     (lib/locations.BIN_DIRS, as each rule here) read as its bare name: it runs nothing it chooses, so a name is only read."""
@@ -3710,8 +3748,9 @@ def _hb_only_reads(command):
         from lib.shell_parse import parse, walk
         out = list(command)
         for w in filter(None, (site.cmd.head() for site in walk(parse(command), into=()))):
-            if (name := w.text.rpartition("/"))[0] in locations.BIN_DIRS and name[2]:
-                out[w.span[0]:w.span[1]] = name[2].rjust(len(w.text))
+            where, _, name = _plain_head(w.text).rpartition("/")  # /usr//bin/cat and /usr/bin/../bin/cat are cat
+            if name and where in locations.BIN_DIRS:
+                out[w.span[0]:w.span[1]] = name.rjust(len(w.text))
         return is_read_only("".join(out))
     except Exception:  # noqa: BLE001
         return False
@@ -4495,6 +4534,17 @@ def _abs_norm(path, cwd="/"):
     return "/" + p.lstrip("/") if p.startswith("/") else p
 
 
+def _landings(command, cwd, env=None):
+    """Where each parsed write target of `command` lands, judged by what it is rather than how it is spelt: placed
+    against the directory a `cd` moved to (WriteTarget.placed), made absolute against `cwd`, `//`, `..` and links
+    resolved; `env` gives variables known before the command. A computed target is left out."""
+    from lib.shell_parse import write_targets
+    for t in write_targets(command, env=env):
+        for p in t.placed():
+            if p and p[0] not in "$~`" and "$(" not in p:
+                yield os.path.realpath(_abs_norm(p, cwd))
+
+
 def _plain_file(w, sv):
     """An ordinary file (not under /dev, /proc, /sys, /etc ...) or /dev/null, named statically."""
     v = w.value() if _plain_word(w) else None
@@ -4749,8 +4799,12 @@ def _raw_workflow(text, view):
 # The command-position readings.
 def _daemon_json_write(sv):
     """A redirection into daemon.json; tee, cp or mv naming it; dd with of= it; sed or awk editing it in place or naming
-    it in code."""
+    it in code. A write target is also compared where it lands (against the cwd a leading `cd` moved to, `//`, `..`
+    and links resolved), so the file is refused for what it is, however it is spelt (location-rules U11)."""
     from lib.shell_parse import AWK_NAMES
+    if sv.script is not None and "daemon.json" in sv.command \
+            and os.path.realpath(DOCKER_DAEMON_JSON) in _landings(sv.command, sv.cwd):
+        return True
     for site in sv.redirect_sites:
         if any(x.writes() and x.target is not None and DOCKER_DAEMON_JSON in x.target.text for x in site.cmd.redirects):
             return True
@@ -5061,7 +5115,7 @@ def snapshot_before(payload):
         return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
     except (OSError, subprocess.SubprocessError):
         top = ""
-    if not top:
+    if not top or locations.is_fs_root(top):
         return {"none": "not inside a git repository"}
     top = os.path.realpath(top)
     mark = os.path.join(state_dir(), ".checkpoint-overtime-" + hashlib.sha256(os.fsencode(top)).hexdigest()[:24])
@@ -5073,12 +5127,15 @@ def snapshot_before(payload):
                     f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(since))}; the next is tried "
                     f"{pause:g} s after it (CLAUDE_HOOK_SNAPSHOT_PAUSE)"}
     script = ('. "$2" || exit 90; export CHECKPOINT_NO_PUSH=1; write_checkpoint "$1" "$3" "pre-command snapshot"; '
-              'printf "%s\\n" "$?" "$checkpoint_commit" "$checkpoint_ref" "$checkpoint_left_out$checkpoint_notice"')
+              'printf "%s\\n" "$?" "$checkpoint_commit" "$checkpoint_ref" "$checkpoint_late" '
+              '"$checkpoint_left_out$checkpoint_notice"')
+    # The library ends its own staging scan 3 s before this limit, so it logs that itself and says so (checkpoint_late).
+    scan = min(duration(os.environ.get("CHECKPOINT_SCAN_TIMEOUT", ""), "45s") or 45.0, max(1.0, limit - 3))
     try:
         p = subprocess.Popen(["bash", "-c", script, "snapshot", cwd, os.path.join(LIB, "checkpoint-core.sh"),
                               "an unproven Bash command let through (removal policy)"],
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                             start_new_session=True)
+                             start_new_session=True, env={**os.environ, "CHECKPOINT_SCAN_TIMEOUT": f"{scan:g}"})
     except OSError as exc:
         return {"none": f"the snapshot could not start: {exc}"}
     try:
@@ -5089,9 +5146,18 @@ def snapshot_before(payload):
         p.wait()
         with contextlib.suppress(OSError), open(mark, "w", encoding="utf-8") as fh:
             fh.write(top + "\n")
-        return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT)"}
-    rc, commit, ref, note = (out.split("\n", 3) + [""] * 4)[:4]
+        with contextlib.suppress(OSError, subprocess.SubprocessError):  # the library's own log line, one writer
+            subprocess.run(["bash", "-c", '. "$1" && checkpoint_overtime "$2" "$3" "$4"', "log",
+                            os.path.join(LIB, "checkpoint-core.sh"), f"{limit:g}", "ended by the pre-command hook at "
+                            "CLAUDE_HOOK_SNAPSHOT_TIMEOUT", top], stdin=subprocess.DEVNULL, capture_output=True,
+                           timeout=5)
+        return {"none": f"the snapshot took longer than {limit:g} s (CLAUDE_HOOK_SNAPSHOT_TIMEOUT) and was ended; "
+                "logged in logs/checkpoint.log"}
+    rc, commit, ref, late, note = (out.split("\n", 4) + [""] * 5)[:5]
     note = note.strip()
+    if late:
+        with contextlib.suppress(OSError), open(mark, "w", encoding="utf-8") as fh:
+            fh.write(top + "\n")
     if rc == "0" and commit:
         shot = {"ref": ref, "commit": commit, "restore": f"git -C {top} restore --source={commit} -- <path>, or "
                 f"git -C {top} show {commit}:<path from the repository's top>"}
@@ -6376,6 +6442,8 @@ def _sd_allowed(site):
     if res.unresolved or res.head is None or res.payload is not None or res.assignments:
         return []
     hv = res.head.value()
+    if hv is not None:
+        hv = _plain_head(hv)
     if hv is None or ("/" in hv and hv.rsplit("/", 1)[0] not in _SD_HEAD_DIRS):
         return []
     docs = {}
@@ -6803,6 +6871,8 @@ def _sd_display(stage):
     if res.unresolved or res.payload is not None or res.wrappers or res.assignments or res.name not in _SD_DISPLAY:
         return False
     hv = res.head.value()
+    if hv is not None:
+        hv = _plain_head(hv)
     if hv is None or ("/" in hv and hv.rsplit("/", 1)[0] not in _SD_HEAD_DIRS):
         return False
     vals = [w.value() for w in res.args]
@@ -7048,6 +7118,8 @@ def _sd_plain_command(cmd):
     if any(w[0] not in _SD_PLAIN_WRAPPERS for w in res.wrappers):
         return False
     hv = res.head.value()
+    if hv is not None:
+        hv = _plain_head(hv)
     if hv is None or ("/" in hv and hv.rsplit("/", 1)[0] not in _SD_HEAD_DIRS):
         return False
     literal = all(w.value() is not None and all(p.kind == "lit" for p in w.parts) for w in cmd.words)
@@ -7235,7 +7307,7 @@ def decide(payload_text):
 
     env = environment()
     daemon_rules(command, payload, env)
-    commit_artifact_rules(command, state_dir())
+    commit_artifact_rules(command, state_dir(), get("cwd"))
     view = GitView(command)
     bulk_sentinel_rule(command)
     hard_ban_rule(command)

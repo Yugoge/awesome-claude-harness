@@ -57,7 +57,10 @@ through the one adapter `disposition`), the do-report's one reading
 dev-lifecycle's --auto target function, the merge-analyst's and push-analyst's
 grants (hooks/lib/merge_grant.py) and the push-gate token's path
 (scripts/write-push-gate-token.py). No target comes from a dispatch prompt or a
-tool result. The gate writes nothing but its own output and /close's probe of docs/dev when the agent
+tool result. An --auto run's targets are the list fixed at the owner's command (dev-lifecycle read_frozen);
+each task's disposition is kept while the facts it read hold (disposition, lib/fact_cache: its own records
+under the state root, a cache, never a verdict of their own).
+The gate writes nothing else but its own output and /close's probe of docs/dev when the agent
 claims it cannot be written, one byte to an unnamed temporary file it drops at once (environment_refusal) (stdout:
 the terminal time-lock status of an allowed Stop, see main), keeps no count
 and has no release but the work itself: the next compliant step clears each
@@ -66,6 +69,7 @@ offers a stop.
 """
 from __future__ import annotations
 
+import contextlib
 import errno
 import hashlib
 import importlib.util
@@ -111,6 +115,24 @@ def _git(root, *args: str) -> str | None:
     return done.stdout.strip() if done.returncode == 0 else None
 
 
+@contextlib.contextmanager
+def _one_scan():
+    """One scan of the saved conversations for every task of this Stop (obligation.transcript_scan), opened on the
+    copy of lib/obligation the chain script imports (hooks.lib.obligation: the gate's own lib.obligation is another
+    copy, whose scan the chain would never see). The copy is imported by its name, not through the chain script:
+    loading that script here would make every Stop a call of the chain function. A module that cannot be loaded
+    opens none: the call that needs it fails as it did, and is reported as an instrument failure."""
+    try:
+        from lib import locations
+        if str(HARNESS) not in sys.path:
+            sys.path.insert(0, str(HARNESS))
+        scan = importlib.import_module("hooks.lib.obligation").transcript_scan(keep=locations.state_root())
+    except Exception:
+        scan = contextlib.nullcontext()
+    with scan:
+        yield
+
+
 def _repository(root) -> None:
     """A predicate on git facts reads a repository, else its gap is an instrument failure."""
     if _git(root, "rev-parse", "--git-dir") is None:
@@ -119,20 +141,45 @@ def _repository(root) -> None:
 
 # ---------------------------------------------------------------- P3's disposition
 def disposition(root, task: str, stage: str) -> list[str]:
+    """Gap lines at ``stage`` (_disposition), kept per task while every fact it read holds (lib/fact_cache: the
+    files it opened, stat'ed or listed, each repository's HEAD, refs, staged entries and status, the harness modules): a
+    Stop with nothing changed computes nothing again, and one the limit cuts off keeps the tasks it finished."""
+    fact_cache = importlib.import_module("lib.fact_cache")
+    from lib import locations
+    record = fact_cache.record_path(locations.state_root(), os.path.realpath(str(root)), task, stage)
+    kept = fact_cache.load(record, HARNESS)
+    if isinstance(kept, list):
+        return kept
+    with fact_cache.watch() as reads:
+        lines = _disposition(root, task, stage)
+    key = fact_cache.facts(reads, HARNESS)
+    if key is not None:
+        try:
+            fact_cache.save(record, key, lines)
+        except OSError:  # an unwritable state root keeps nothing; the verdict stands
+            pass
+    return lines
+
+
+def _disposition(root, task: str, stage: str) -> list[str]:
     """Gap lines at ``stage``, [] for chain_pass: the chain's own disposition_lines (P3's disposition), verbatim;
     its instrument failure raises. The informational completeness run on demand: read here only if it can decide.
     A fan-out's canonical older than a lane report is rebuilt first; one the rebuild leaves stale is not read:
-    its own lines give way to one naming the newer lane reports, and the lane reports' lines stand."""
-    stale = _script("scripts/aggregate-dev-report.py").rebuild_if_stale(root, task)
+    its own lines give way to one naming the newer lane reports and whether the rebuild ran on them to its end
+    (the aggregator refused them; its rebuild_ended) or did not finish, and the lane reports' lines stand."""
+    aggregator = _script("scripts/aggregate-dev-report.py")
+    stale = aggregator.rebuild_if_stale(root, task)
     chain = _script("scripts/resolve-dev-artifact-chain.py")
     chain.FULL_COMPLETENESS_ON_DEMAND = True
     lines = chain.disposition_lines(root, task, stage)
     if not stale:
         return lines
     own = f"artifact=docs/dev/dev-report-{task}.json "
+    why = (f"the aggregator ran on them and refused them (its reasons: scripts/aggregate-dev-report.py --task-id "
+           f"{task} --dry-run)" if aggregator.rebuild_ended(task, stale) else "its rebuild did not finish")
     return [g for g in lines if own not in g] + [
         f"GAP {own}problem=stale_canonical: older than lane report(s) {', '.join(map(os.path.basename, stale))}; "
-        "its rebuild did not finish, so nothing in it is judged lane=-"]
+        f"{why}, so nothing in it is judged lane=-"]
 
 
 # ---------------------------------------------------------------- the text the span loaded (D15)
@@ -381,12 +428,16 @@ def _targets(span, root, action: str) -> tuple[list[str] | None, list[str]]:
     (_resolves; close.md asks for one) yields to the families the span
     dispatched, the task the turn worked on the owner's answer, which no
     predicate reads (D23); with none dispatched, the gaps name it. --auto: the
-    parents dev-lifecycle's --auto target function lists at the opener's
-    cut-off (a fresh scan) and the families the span walked, which it stops
-    listing once done; [] had none."""
+    list dev-lifecycle fixed when the owner's command arrived (read_frozen; no
+    ticket is scanned), else the parents its --auto target function lists at
+    the opener's cut-off (a fresh scan), and the families the span walked;
+    [] had none."""
     if "--auto" in shlex.split(span.args):
         lifecycle = _script("scripts/dev-lifecycle.py")
-        return sorted(set(lifecycle.auto_targets(Path(root), action, span.opened_at())) | span.session_families()), []
+        listed = lifecycle.read_frozen(Path(span.transcript_path).stem, Path(root), action, span.opened_at())
+        if listed is None:
+            listed = lifecycle.auto_targets(Path(root), action, span.opened_at())
+        return sorted(set(listed) | span.session_families()), []
     typed = _typed(span)
     held = [arg for arg, task in typed if not _resolves(root, arg, task)]
     if not held:
@@ -403,7 +454,10 @@ def _targets(span, root, action: str) -> tuple[list[str] | None, list[str]]:
 NO_TARGET_LINE = re.compile(r"^NO_TARGET: \S", re.M)
 
 
-STEP_REFUSED_LINE = re.compile(r"^REFUSED: (Step [0-9][0-9A-Za-z.]*)\b", re.M)  # dev.md, do.md: Hook rejection
+# dev.md, do.md, close.md: Hook rejection. One line the owner reads: the step and call, the hook and its rule, what next.
+STEP_REFUSED_LINE = re.compile(r"^REFUSED: (Step [0-9][0-9A-Za-z.]*)\b[^\n]*? - refused by \S[^\n]*?\. Next: \S", re.M)
+STEP_REFUSED_FORM = (" - refused by <the hook>: <the rule it applies, in plain words>. "
+                     "Next: <who must do what, and what then happens>")
 
 
 def refused_step(span) -> str | None:
@@ -596,14 +650,19 @@ def no_owner_end(span, root) -> bool:
 
 
 def code_close_end(span, root) -> bool:
-    """A /close the UserPromptSubmit hook completed by code (lib/close_exit.py: no files, or the owner's --force):
-    its result line in the hook context of this human-typed opener, and the task's close report ending on a line
-    close-verdict classifies 'yes'. No todo list, inspector or QA is owed; an agent's echo of the line is never read."""
+    """A /close the UserPromptSubmit hook completed by code (lib/close_exit.py: no files, the owner's --force, or
+    his --retire): its result line in the hook context of this human-typed opener, and the task's close report ending
+    on a line close-verdict classifies 'yes' ('retired' for a retirement). No todo list, inspector or QA is owed; an
+    agent's echo of the line is never read."""
     if span.command != "close":
         return False
-    tasks = {m.group(1) for m in span._opener_context(importlib.import_module("lib.close_exit").RESULT_RE)}
+    found = {m.groups() for m in span._opener_context(importlib.import_module("lib.close_exit").RESULT_RE)}
     verdict = _script("hooks/lib/close-verdict.py")
-    return len(tasks) == 1 and verdict.classify_file(Path(root) / "docs" / "dev" / f"close-report-{tasks.pop()}.md") == "yes"
+    if len(found) != 1:
+        return False
+    task, kind = found.pop()
+    return verdict.classify_file(Path(root) / "docs" / "dev" / f"close-report-{task}.md") == \
+        ("retired" if kind == "retired" else "yes")
 
 
 # close.md Round-open: a cause in the environment that persists. The gate's own attempt is the fact, never a line.
@@ -930,7 +989,8 @@ def _session_worktree(root, payload):
     def common(path):
         found = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
         return os.path.realpath(found) if found else None
-    top = _git(payload["cwd"], "rev-parse", "--show-toplevel") if payload.get("cwd") else None
+    from lib import locations
+    top = locations.repo_top(payload["cwd"]) if payload.get("cwd") else None  # never the filesystem root
     shared = common(top) if top else None
     return top if shared and shared == common(root) else root
 
@@ -962,7 +1022,7 @@ def p_merge(span, root, payload) -> list[str]:
     default = (subprocess.run(["bash", str(HARNESS / "scripts" / "derive-default-branch.sh")], cwd=str(root),
                               capture_output=True, text=True, timeout=20).stdout.strip())
     base, named = _source_tips(root, f"refs/heads/{default}", since)[0], refs[0] if refs else _bare_pick(root, since)
-    grant = importlib.import_module("lib.merge_grant").newest(_git(root, "rev-parse", "--show-toplevel") or str(root),
+    grant = importlib.import_module("lib.merge_grant").newest(importlib.import_module("lib.locations").repo_top(root) or str(root),
                                        payload.get("session_id"), since)
     own = [(named, *_source_tips(root, named, since))] if named else []
     granted = [(grant.get("branch"), grant.get("source_tip"), {grant.get("source_tip")})]
@@ -1124,7 +1184,7 @@ def _push_gaps(root, payload, typed, since, now, branch, opened, pinned, again=F
         up = tuple((_git(root, "for-each-ref", "--format=%(upstream:remotename) %(upstream:remoteref)",
                          f"refs/heads/{branch}") or "").split())
     up = up if up and len(up) == 2 and up[0] in remotes and (pinned is None or up[0] in pinned) else None
-    top, gaps, tips, errors = _git(root, "rev-parse", "--show-toplevel") or str(root), [], {}, {}
+    top, gaps, tips, errors = importlib.import_module("lib.locations").repo_top(root) or str(root), [], {}, {}
     unread, urls = set(), {}  # remotes git ls-remote could not read at the URL the opener recorded, and that URL
 
     def tip(remote, ref):
@@ -1510,7 +1570,8 @@ def wait_text(command: str, running: list[str], gaps: list[str]) -> str:
 
 def waiting_for(payload: dict) -> list[str]:
     """The running background children (children) of ``payload``'s gated span; [] in any other span."""
-    span = command_span.active_span(payload.get("transcript_path") or "") if payload.get("transcript_path") else None
+    with _one_scan():  # the last typed command is found in what the scans kept
+        span = command_span.active_span(payload.get("transcript_path") or "") if payload.get("transcript_path") else None
     return children(span)[0]
 
 
@@ -1527,7 +1588,8 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     if mode == "off":  # (2)
         return 0, "", None
     transcript = payload.get("transcript_path") or ""
-    span = command_span.active_span(transcript) if transcript else None  # (3)
+    with _one_scan():  # the last typed command is found in what the scans kept
+        span = command_span.active_span(transcript) if transcript else None  # (3)
     gated = span is not None and span.command in command_span.GATED_COMMANDS
     # /spec: R7 alone, never gated; a session whose loaded text asks no round is not held to R7
     asking = span is not None and _lib_round().runs_round(span)
@@ -1555,14 +1617,15 @@ def decision(payload: dict, mode: str = "block") -> tuple[int, str, str | None]:
     except Exception:  # an unread record releases nothing: the gaps below decide
         pass
     gaps, unread = [], False
-    for predicate, part in (((False, lambda: todo_gaps(span)),
-                             (True, lambda: PREDICATES[span.command](span, root, payload))) if gated else ()) \
-            + (((False, lambda: p_text_question(span, payload)),) if asking else ()):  # (6)
-        try:
-            gaps += part()
-        except Exception as exc:
-            unread = unread or predicate
-            gaps.append(f"gate instrument failure: {type(exc).__name__}: {exc}")
+    with _one_scan():
+        for predicate, part in (((False, lambda: todo_gaps(span)),
+                                 (True, lambda: PREDICATES[span.command](span, root, payload))) if gated else ()) \
+                + (((False, lambda: p_text_question(span, payload)),) if asking else ()):  # (6)
+            try:
+                gaps += part()
+            except Exception as exc:
+                unread = unread or predicate
+                gaps.append(f"gate instrument failure: {type(exc).__name__}: {exc}")
     if unread and close_stalled(span):  # the predicate cannot read the cycle the run stalled on
         return 0, "", terminal
     if all(g.startswith(OWNER_ONLY) for g in gaps):  # (7); what only the owner's command closes is named, not held
@@ -1605,7 +1668,8 @@ def analyst_refused_end(span, role: str | None) -> bool:
 
 def _exit_hint(span, refused) -> str:
     """What the block adds where an exit holds but its line is not yet written: the exact line, filled in."""
-    hint = (f"A hook refused this step's own call. To end the turn, write the line \"REFUSED: {refused}\", then the "
+    hint = (f"A hook refused this step's own call. To end the turn, write the line \"REFUSED: {refused}"
+            f"{STEP_REFUSED_FORM}\", then the "
             "hook's own output; the step stays open and the next prompt resumes it.\n" if refused else "")
     try:
         unnamed = hook_refused_parents(span)[1] if span.command == "close" and "--auto" in span.args.split() else ()

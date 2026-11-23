@@ -156,3 +156,38 @@ def test_a_stream_name_is_code_whatever_the_hook_output_is(sandbox, tmp_path, ta
         stderr = proc.stderr if mode == "pipe" else (err.seek(0), err.read())[1]
         verdicts.append((mode, proc.returncode, "BLOCKED" in stderr))
     assert [v[1:] for v in verdicts] == [(2, True), (2, True)], verdicts
+
+
+# g-loctriage U40: a file in the call's own directory is the same file however the call names it, wherever
+# the hook process itself runs. The call's directory need not exist: only paths are judged.
+CALL_DIR = "/nonexistent-u40/work"
+HERE = "cat > {t} <<'EOF'\nrun " + B + "git push" + B + " later\nEOF\n"
+
+
+def _guard_in(sandbox, command, call_cwd):
+    env, repo = sandbox
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "written-text",
+               "cwd": call_cwd, "hook_event_name": "PreToolUse", "agent_id": "agent-written-text",
+               "agent_type": "dev"}
+    return subprocess.run([sys.executable, str(GUARD)], input=json.dumps(payload), capture_output=True,
+                          text=True, env=dict(env, CLAUDE_PROJECT_DIR=repo), cwd=repo, timeout=120)
+
+
+@pytest.mark.parametrize("target", ["bin/notes.txt", CALL_DIR + "/bin/notes.txt"])
+def test_a_here_document_in_the_calls_own_directory_is_data_however_it_is_named(sandbox, target):
+    proc = _guard_in(sandbox, HERE.format(t=target), CALL_DIR)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_the_same_absolute_path_outside_the_calls_directory_stays_code(sandbox):
+    proc = _guard_in(sandbox, HERE.format(t=CALL_DIR + "/bin/notes.txt"), sandbox[1])
+    assert proc.returncode == 2 and "BLOCKED" in proc.stderr, proc.stderr
+
+
+def test_the_classifier_cache_does_not_carry_a_verdict_to_another_directory():
+    """The same command text classified for two call directories, in turn: each gets its own answer. The body
+    holds a `bash -c` string, so whether that string is a layer (_shell_layers, cached) depends on the directory."""
+    cmd = "cat > {t} <<'EOF'\nbash -c \"git push\"\nEOF\n".format(t=CALL_DIR + "/bin/n.txt")
+    assert gcc.classify_git_command(cmd, cwd=CALL_DIR)[0] == []
+    assert gcc.classify_git_command(cmd, cwd="/nonexistent-u40/elsewhere")[0] != []
+    assert gcc.classify_git_command(cmd, cwd=CALL_DIR)[0] == []

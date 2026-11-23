@@ -90,6 +90,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
+import locations  # noqa: E402  (the filesystem root is no repository top)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
     AWK_NAMES, AWK_SOURCE_OPTS, HEREDOC_OPS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
     CD_TARGET_BUILTINS, COMMAND_OPTS, DECLARATION_BUILTINS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
@@ -3571,15 +3572,34 @@ class Analyzer:
 
     # -- docker --------------------------------------------------------------
 
+    def _docker_readings(self, ws, spec, what):
+        """Every index the first operand of `what` can start at. Docker's option
+        reader knows two kinds of option: a flag, and an option taking one value
+        (attached with `=` or the next word). An option the table does not know
+        is read both ways, and the caller judges what follows under every
+        reading, so the worst of them decides: a removal stays judged wherever
+        it can stand. No reading that runs out of words is kept."""
+        ends, seen, todo = set(), set(), [0]
+        while todo:
+            s = todo.pop()
+            if s in seen:
+                continue
+            seen.add(s)
+            i, err = split_opts(ws, spec, s)
+            if err and err.startswith("unknown_option:"):
+                lit = ws[i].literal()
+                todo.append(i + 1)
+                if not (lit[:2] == "--" and "=" in lit):
+                    todo.append(i + 2)
+            elif not err and i <= len(ws):
+                ends.add(i)
+        if not ends:
+            self.structural("missing_option_value", what)
+        return sorted(ends)
+
     def _h_docker(self, name, args, redirs, env, piped):
-        i, err = split_opts(args, DOCKER_GLOBAL)
-        if err == "missing_option_value":
-            self.structural("missing_option_value", "docker")
-            return
-        if err:
-            self.scoped(err, "docker")
-            return
-        self._docker_sub(name, args, i, env)
+        for i in self._docker_readings(args, DOCKER_GLOBAL, "docker"):
+            self._docker_sub(name, args, i, env)
 
     _h_podman = _h_docker
 
@@ -3592,14 +3612,11 @@ class Analyzer:
             self.structural("dynamic_docker_subcommand", args[i].raw.text[:60])
             return
         if sub == "compose":
-            j, err = split_opts(args[i + 1:], _spec(
-                ("--ansi", "--dry-run", "--parallel", "--compatibility"),
-                ("-f", "--file", "-p", "--project-name", "--project-directory",
-                 "--profile", "--env-file")))
-            if err:
-                self.scoped(err, "docker compose")
-                return
-            self._docker_sub(name, args, i + 1 + j, env)
+            for j in self._docker_readings(args[i + 1:], _spec(
+                    ("--dry-run", "--compatibility"),
+                    ("--ansi", "--parallel", "-f", "--file", "-p", "--project-name",
+                     "--project-directory", "--profile", "--env-file")), "docker compose"):
+                self._docker_sub(name, args, i + 1 + j, env)
             return
         if sub in DOCKER_RESOURCE_NOUNS:
             self._docker_sub(name, args, i + 1, env)
@@ -3613,20 +3630,45 @@ class Analyzer:
             return
         if sub in ("exec", "run", "create"):
             spec = DOCKER_EXEC if sub == "exec" else DOCKER_RUN
-            j, err = split_opts(args[i + 1:], spec)
-            if err == "missing_option_value":
-                self.structural("missing_option_value", "docker " + sub)
-                return
-            if err:
-                self.scoped(err, "docker " + sub)
-                return
-            payload = args[i + 1 + j + 1:]   # skip the container / image operand
-            if not payload:
-                self.add(PROVEN_INERT, "docker_exec_default_entrypoint", name)
-                return
-            self.eval_argv(payload, [], Env())
+            for j in self._docker_readings(args[i + 1:], spec, "docker " + sub):
+                payload = args[i + 1 + j + 1:]   # skip the container / image operand
+                if sub != "exec" and self._docker_entrypoint(args[i + 1:i + 2 + j], j, payload):
+                    continue
+                if not payload:
+                    self.add(PROVEN_INERT, "docker_exec_default_entrypoint", name)
+                else:
+                    self.eval_argv(payload, [], Env())
             return
         self.add(PROVEN_INERT, "docker_non_removal_subcommand", "%s %s" % (name, sub))
+
+    def _docker_entrypoint(self, ws, j, payload):
+        """Judge a run / create whose options (``ws[:j]``, ``ws[j]`` the image) replace the image's entry
+        program: the program `--entrypoint` names (a separate word or `=`-joined) runs with ``payload`` as
+        its arguments, judged as any other command; a value the reading cannot resolve is unproven. An
+        empty value restores the image's own, so the payload is the command as without the option. Every
+        `--entrypoint` word is judged (the worst decides). True when one was judged."""
+        found = False
+        for k in range(min(j + 1, len(ws))):  # a reading may end with no image word left (`docker create --`)
+            lit = ws[k].literal()
+            name, eq, rest = (lit if lit is not None else ws[k].static_prefix()).partition("=")
+            if name[:2] != "--" or _resolve_long(name, DOCKER_RUN) != "--entrypoint":
+                continue
+            if lit is None or (not eq and k + 1 < j and ws[k + 1].literal() is None):
+                found = True  # `--entrypoint=$X` (read as the image) or `--entrypoint "$X"`
+                self.structural("dynamic_docker_entrypoint", ws[k].raw.text[:60])
+                continue
+            if eq:
+                content = ws[k].content()
+                piece = content.slice(len(name) + 1, len(content.text))
+                value = Word([("lit", piece, piece.off(0))], piece.off(0), piece)
+            elif k + 1 < j:  # the separate word; at the image's place this reading took `--entrypoint` as a value
+                value = ws[k + 1]
+            else:
+                continue
+            if value.literal():
+                found = True
+                self.eval_argv([value] + list(payload), [], Env())
+        return found
 
 
 _IDENT_TAIL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_.]*)$")
@@ -3984,6 +4026,8 @@ def prove_git_rm(result, cwd, home):
                 where = ls = None
             if where and where.returncode and "not a git repository" in where.stderr:
                 continue  # no repository here: git rm removes nothing
+            if where and not where.returncode and locations.is_fs_root(where.stdout.split("\n")[0]):
+                continue  # the filesystem root is no repository's top: as in no repository
             if where is None or where.returncode or ls.returncode:
                 why = "git_rm_location_unresolved"
             elif home & {os.path.realpath(os.path.join(d, x)) for x in where.stdout.splitlines()}:

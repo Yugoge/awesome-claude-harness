@@ -83,8 +83,9 @@ def test_the_preflight_refuses_reading_each_transcript_once_and_no_write_set(sto
     monkeypatch.setattr(ob, "account_project_roots", lambda: [root])
     monkeypatch.setattr(ob, "_writer", lambda *a: pytest.fail("the preflight built a write set it discards"))
     reads = []
-    real = ob.dispatch_obligations
-    monkeypatch.setattr(ob, "dispatch_obligations", lambda path, *a, **k: reads.append(Path(path).name)
+    # the whole parse of a transcript (dispatch_obligations' whole read: what a scan that keeps nothing, the preflight's, runs)
+    real = ob._whole_dispatch_obligations
+    monkeypatch.setattr(ob, "_whole_dispatch_obligations", lambda path, *a, **k: reads.append(Path(path).name)
                         or real(path, *a, **k))
     payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "dev", "description": "lane l2",
                                                    "prompt": f"Upstream lane report: {REPORT}\nBuild l2.\n"}}

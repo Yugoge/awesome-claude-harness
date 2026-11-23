@@ -571,6 +571,20 @@ def _cli_decision(perms: dict, cmd: str, work: Path, port: int, cmdfile: Path) -
     raise AssertionError(f"no tool result for {cmd!r}: {r.stderr[-400:]}")
 
 
+def _wait_listening(port: int, limit: float = 60.0) -> None:
+    """Wait for the mock server itself: connect until it accepts (the limit is an outer one, reached only by a
+    server that never comes up), instead of a pause that stands for "it is listening by now"."""
+    end = time.monotonic() + limit
+    while True:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=2).close()
+            return
+        except OSError:
+            if time.monotonic() > end:
+                raise AssertionError(f"the mock server did not listen on port {port} within {limit:g} s")
+            time.sleep(0.05)
+
+
 @pytest.mark.skipif(os.environ.get("HARNESS_LIVE_CLI") != "1" or not shutil.which("claude"),
                     reason="live CLI re-measurement is opt-in: HARNESS_LIVE_CLI=1 with `claude` installed")
 def test_live_cli_decisions(tmp_path):
@@ -584,7 +598,7 @@ def test_live_cli_decisions(tmp_path):
     cmdfile.write_text("true")
     srv = subprocess.Popen([sys.executable, "-I", str(tmp_path / "mock.py"), str(port), str(cmdfile)])
     try:
-        time.sleep(1)
+        _wait_listening(port)
         cases = dict(MEASURED)
         cases.update({ex: (None, "deny") for ex in ENTRIES.values()})
         got = {cmd: _cli_decision(perms, cmd, tmp_path, port, cmdfile) for cmd in cases}

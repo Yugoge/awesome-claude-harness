@@ -4,33 +4,40 @@ hooks/userprompt-tmpfs-pressure.sh (and hooks/session-tmpfs-banner.sh, which run
 periodic scripts/install/tmp-cleanup-install.sh share one reaction: the program's --pressure mode. Every case
 runs inside a private mount namespace that only this test's process tree sees: /tmp and /var/tmp are small
 private tmpfs mounts there, and the watched volume is a small tmpfs over a directory of the test's own, so
-nothing of the host is listed, filled or removed. Without unshare and mount rights the cases skip.
+nothing of the host is listed, filled or removed. The test's own place, /tmp/f, is a tmpfs of the namespace too,
+so the cases do not depend on where pytest's temp or the tree lie. As root the namespace is made directly, else
+as an unprivileged user namespace, else through passwordless sudo (CI's runner, whose kernel refuses the second).
+Where none of the three works the cases skip with that reason and a warning; on GitHub Actions they fail instead.
 """
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _private_ns  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "userprompt-tmpfs-pressure.sh"
 PROGRAM = ROOT / "scripts" / "install" / "tmp-cleanup-install.sh"
 
-# Inside the namespace: the private /tmp and /var/tmp, the test's directory at /tmp/f, the watched volume V at
+# Inside the namespace: the private /tmp and /var/tmp, the test's own tmpfs at /tmp/f (the tree read-only at
+# /tmp/f/repo), the watched volume V at
 # /tmp/f/vol (2 MiB), the session root, state root and CLI command output root on it, a live process L (its
 # start time in the owner mark) and a dead pid D.
 SETUP = r"""
 set -u
-TP="$1"; REPO="$2"; VOLSIZE="$3"
-# The tree may lie under /tmp or /var/tmp (a test copy), which the mounts below cover: it is reached through a
-# read-only bind at /tmp/f/repo, made before them.
-mkdir -p "$TP/repo" && mount --rbind "$REPO" "$TP/repo" && mount -o remount,bind,ro "$TP/repo" \
-  && mount -t tmpfs -o size=1m none /tmp && mkdir /tmp/f && mount --rbind "$TP" /tmp/f \
-  && mount -t tmpfs -o size=1m none /var/tmp && mkdir -p /tmp/f/vol && mount -t tmpfs -o size="$VOLSIZE" none /tmp/f/vol \
-  || exit 99
+REPO="$1"; VOLSIZE="$2"
+# The tree may lie under /tmp or /var/tmp, which the mounts below cover: it is reached from the working directory
+# (a hidden path still names it there; -c keeps mount from resolving "." to that path) by a read-only bind.
+cd "$REPO" && mount -t tmpfs -o size=1m none /tmp && mount -t tmpfs -o size=1m none /var/tmp \
+  && mkdir /tmp/f && mount -t tmpfs -o size=16m none /tmp/f && mkdir /tmp/f/repo /tmp/f/vol \
+  && mount -c --rbind . /tmp/f/repo && mount -o remount,bind,ro /tmp/f/repo \
+  && mount -t tmpfs -o size="$VOLSIZE" none /tmp/f/vol && cd / || exit 99
 F=/tmp/f; V=$F/vol; REPO=$F/repo
 [ -f "$REPO/hooks/userprompt-tmpfs-pressure.sh" ] || { echo "the tree is not reachable at $REPO" >&2; exit 98; }
 export HOME=$F/home CLAUDE_STATE_DIR=$V/state TMPDIR=$V/scratch CLAUDE_CODE_TMPDIR=$V/cli CLAUDE_HOME=$F/home
@@ -82,28 +89,26 @@ done
 """
 
 
-def _ns(tmp_path: Path, body: str, volsize: str = "2m", timeout: int = 120):
-    if not shutil.which("unshare"):
-        pytest.skip("no unshare: the cases need a private mount namespace")
-    flags = ["-m", "--propagation", "private"] if os.geteuid() == 0 else ["-rm", "--propagation", "private"]
+def _ns(body: str, volsize: str = "2m", timeout: int = 120):
+    way = _private_ns.require("the space-pressure cases")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_", "GIT_"))}
-    p = subprocess.run(["unshare", *flags, "bash", "-c", SETUP + body, "_", str(tmp_path), str(ROOT), volsize],
-                       capture_output=True, text=True, env=env, timeout=timeout)
-    if p.returncode == 99 or "unshare failed" in p.stderr:
-        pytest.skip(f"no private mount namespace here: {p.stderr.strip()[:200]}")
+    p = subprocess.run(_private_ns.unshare_argv(way, env, ["bash", "-c", SETUP + body, "_", str(ROOT), volsize]),
+                       capture_output=True, text=True, timeout=timeout)
+    if p.returncode == 99:  # a namespace can be made here (above), so a setup that fails is a defect, not a skip
+        pytest.fail(f"the case's namespace setup failed where a namespace can be made: {p.stderr.strip()[:300]}")
     return p
 
 
-def test_a_full_volume_with_an_unwritable_counter_still_gets_the_notice(tmp_path):
-    p = _ns(tmp_path, 'fill\necho "== 1"; prompt\necho "== 2"; prompt\n')
+def test_a_full_volume_with_an_unwritable_counter_still_gets_the_notice():
+    p = _ns('fill\necho "== 1"; prompt\necho "== 2"; prompt\n')
     first, second = p.stdout.split("== 2")
     for text in (first, second):  # the counter cannot be written, so the notice repeats and says why
         assert "[space] SHORT: /tmp/f/vol" in text, p.stdout + p.stderr
         assert "could not record" in text, p.stdout
 
 
-def test_the_notice_prints_once_per_change_of_state(tmp_path):
-    p = _ns(tmp_path, FIXTURES + 'echo "== 1"; prompt\necho "== 2"; prompt\nrm -f "$TMPDIR/foreign-big.bin"\n'
+def test_the_notice_prints_once_per_change_of_state():
+    p = _ns(FIXTURES + 'echo "== 1"; prompt\necho "== 2"; prompt\nrm -f "$TMPDIR/foreign-big.bin"\n'
                       'echo "== 3"; prompt\n')
     one, rest = p.stdout.split("== 2")
     two, three = rest.split("== 3")
@@ -112,8 +117,8 @@ def test_the_notice_prints_once_per_change_of_state(tmp_path):
     assert "[space] OK: /tmp/f/vol" in three and "SHORT: /tmp/f/vol" not in three, p.stdout
 
 
-def test_the_prompt_reaction_removes_only_what_is_provably_dead_and_names_the_rest(tmp_path):
-    p = _ns(tmp_path, FIXTURES + "prompt > $F/notice\n" + STATE + 'cat "$F/notice"\n')
+def test_the_prompt_reaction_removes_only_what_is_provably_dead_and_names_the_rest():
+    p = _ns(FIXTURES + "prompt > $F/notice\n" + STATE + 'cat "$F/notice"\n')
     out = p.stdout
     assert "gone s-dead/work.txt" in out and "gone output s-dead" in out, out + p.stderr
     assert "gone s-live/dispatch-old" in out, out  # retired by its session and unused
@@ -124,17 +129,17 @@ def test_the_prompt_reaction_removes_only_what_is_provably_dead_and_names_the_re
     assert "[space] removed" in out, out
 
 
-def test_nothing_is_removed_while_no_watched_volume_is_short(tmp_path):
-    p = _ns(tmp_path, FIXTURES.replace("1700000", "1000") + "prompt > $F/notice\n" + STATE, volsize="64m")
+def test_nothing_is_removed_while_no_watched_volume_is_short():
+    p = _ns(FIXTURES.replace("1700000", "1000") + "prompt > $F/notice\n" + STATE, volsize="64m")
     assert "kept s-dead" in p.stdout and "kept output s-dead" in p.stdout, p.stdout + p.stderr
 
 
-def test_the_banner_is_the_same_notice_at_session_start(tmp_path):
-    p = _ns(tmp_path, 'fill\nprintf \'{"session_id": "s-cur"}\' | bash "$REPO/hooks/session-tmpfs-banner.sh"\n')
+def test_the_banner_is_the_same_notice_at_session_start():
+    p = _ns('fill\nprintf \'{"session_id": "s-cur"}\' | bash "$REPO/hooks/session-tmpfs-banner.sh"\n')
     assert "[space] SHORT: /tmp/f/vol" in p.stdout, p.stdout + p.stderr
 
 
-def test_the_periodic_program_reacts_the_same_way_and_keeps_its_age_rules(tmp_path):
+def test_the_periodic_program_reacts_the_same_way_and_keeps_its_age_rules():
     body = FIXTURES + r"""
 touch -d '-3 days' /tmp/codex-output-old; touch /tmp/codex-output-new
 bash "$REPO/scripts/install/tmp-cleanup-install.sh" --dry-run > "$F/dry"
@@ -145,7 +150,7 @@ bash "$REPO/scripts/install/tmp-cleanup-install.sh"
 for f in codex-output-old codex-output-new; do [ -e /tmp/$f ] && echo "kept $f" || echo "gone $f"; done
 echo "== dry"; cat "$F/dry"
 """
-    p = _ns(tmp_path, body)
+    p = _ns(body)
     listed, rest = p.stdout.split("== real")
     after, dry = rest.split("== dry")
     assert "gone" not in listed, p.stdout + p.stderr  # a dry run lists and removes nothing
@@ -159,24 +164,36 @@ echo "== dry"; cat "$F/dry"
     assert "gone codex-output-old" in after and "kept codex-output-new" in after, after
 
 
-def test_the_check_at_a_prompt_is_cheap(tmp_path):
-    """Seconds per prompt: no volume short; short with 300 live session roots and nothing to remove."""
+def test_the_check_at_a_prompt_is_cheap():
+    """Work per prompt: no volume short; short with 300 live session roots and nothing to remove. The work is
+    counted as the processes a prompt starts (in a PID namespace of its own, whose last PID is that count), not
+    timed: a count is the same on a slow or busy machine (C9). The hook runs from a copy on a tmpfs of its own
+    (H), so the harness home, a watched volume, is not the disk the tree lies on, however full that is."""
     body = r"""
+H=$F/h; mkdir "$H" && mount -t tmpfs -o size=32m none "$H" && mkdir "$H/hooks" "$H/scripts" \
+  && cp -r "$REPO/hooks/lib" "$REPO/hooks/userprompt-tmpfs-pressure.sh" "$H/hooks/" \
+  && cp -r "$REPO/scripts/install" "$H/scripts/" || exit 97
 for i in $(seq 300); do owner "$TMPDIR/live-$i" "live-$i" "$L"; done
-t() { local s e; s=$(date +%s%N); prompt > /dev/null; e=$(date +%s%N); echo "$1 $(( (e - s) / 1000000 ))"; }
+t() {  # <name>: one prompt, then the processes it started
+  local n
+  n=$(unshare -pf bash -c 'printf "{\"session_id\": \"s-cur\"}" | bash "$1/hooks/userprompt-tmpfs-pressure.sh" \
+        > /dev/null; read -r n < /proc/sys/kernel/ns_last_pid; echo "$n"' _ "$H") && echo "$1 $n"
+}
 t calm; t calm
-head -c 1700000 /dev/zero > "$TMPDIR/foreign-big.bin"
+head -c 500000 /dev/zero > "$TMPDIR/foreign-big.bin"  # short (under a quarter free), the counter still written
 t short-first; t short; t short
 """
-    p = _ns(tmp_path, body, volsize="2m")
-    ms = {}
+    p = _ns(body, volsize="2m")
+    n = {}
     for line in p.stdout.splitlines():
         name, _, value = line.partition(" ")
         if value.isdigit():
-            ms[name] = int(value)
-    print("prompt cost (ms):", ms)
-    assert set(ms) == {"calm", "short-first", "short"}, p.stdout + p.stderr
-    assert ms["calm"] < 500 and ms["short"] < 1000 and ms["short-first"] < 4500, ms
+            n[name] = max(n.get(name, 0), int(value))
+    print("prompt cost (processes):", n)
+    assert set(n) == {"calm", "short-first", "short"}, p.stdout + p.stderr
+    # Calm and a short volume within a minute of the last reaction: a fixed few processes. The first reaction
+    # with 300 live session roots: about one per root, and it is that reaction (more than the short prompts after).
+    assert n["calm"] < 60 and n["short"] < 90 and n["short"] < n["short-first"] < 700, n
 
 
 # A session root with role directories (agents' own <role>/<agent id>/ and the role's drafts): <name>:<hours untouched>.
@@ -190,7 +207,7 @@ there() { for p in "$@"; do [ -e "$TMPDIR/$p" ] && echo "kept $p" || echo "gone 
 """
 
 
-def test_pressure_keeps_a_dead_sessions_young_role_directories_and_removes_old_ones_oldest_first(tmp_path):
+def test_pressure_keeps_a_dead_sessions_young_role_directories_and_removes_old_ones_oldest_first():
     body = ROLES + r"""
 owner "$TMPDIR/s-roles" s-roles "$D"; echo x > "$TMPDIR/s-roles/work.txt"
 roles "$TMPDIR/s-roles" ba:30 qa:48 pm:1
@@ -200,7 +217,7 @@ prompt > /dev/null
 there s-roles s-roles/.owner s-roles/work.txt s-roles/qa s-roles/ba s-roles/pm
 echo "== dry"; cat "$F/dry"
 """
-    p = _ns(tmp_path, body)
+    p = _ns(body)
     after, dry = p.stdout.split("== dry")
     for line in ("kept s-roles", "kept s-roles/.owner", "gone s-roles/work.txt", "gone s-roles/qa", "gone s-roles/ba",
                  "kept s-roles/pm"):
@@ -209,7 +226,7 @@ echo "== dry"; cat "$F/dry"
     assert order == ["qa", "ba"], dry
 
 
-def test_the_age_rule_takes_whole_directories(tmp_path):
+def test_the_age_rule_takes_whole_directories():
     body = ROLES + r"""
 owner "$TMPDIR/s-old" s-old "$D"; roles "$TMPDIR/s-old" qa:200 ba:50
 echo x > "$TMPDIR/s-old/old.txt"; touch -d '-100 hours' "$TMPDIR/s-old/old.txt"; echo x > "$TMPDIR/s-old/new.txt"
@@ -219,7 +236,7 @@ owner "$TMPDIR/s-empty" s-empty "$D"; touch -d '-100 hours' "$TMPDIR/s-empty/.ow
 bash "$REPO/scripts/install/tmp-cleanup-install.sh"
 there s-old/qa s-old/ba s-old/old.txt s-old/new.txt s-alive/qa s-alive/top.txt s-empty
 """
-    p = _ns(tmp_path, body, volsize="64m")
+    p = _ns(body, volsize="64m")
     for line in ("gone s-old/qa", "kept s-old/ba", "gone s-old/old.txt", "kept s-old/new.txt", "gone s-alive/qa",
                  "kept s-alive/top.txt", "gone s-empty"):
         assert line in p.stdout, p.stdout + p.stderr
@@ -236,7 +253,7 @@ there() { for p in "$@"; do [ -e "$TMPDIR/$p" ] && echo "kept $p" || echo "gone 
 CANNOT_TELL = ("kept s-dead/work.txt", "kept output s-dead", "kept s-live/dispatch-old", "kept s-held/dispatch-bg")
 
 
-def test_without_proc_nothing_is_judged_dead_or_unused(tmp_path):
+def test_without_proc_nothing_is_judged_dead_or_unused():
     """No /proc mounted (an empty /proc, as on a system without it; df keeps its mount table)."""
     body = FIXTURES + HELD + r"""
 cp /proc/self/mountinfo "$F/mi"; cp /proc/self/mounts "$F/mo"
@@ -244,13 +261,13 @@ mount -t tmpfs none /proc || exit 99
 mkdir /proc/self && cp "$F/mi" /proc/self/mountinfo && cp "$F/mo" /proc/self/mounts
 prompt > "$F/notice"; start_held
 """ + STATE + 'cat "$F/notice"\n'
-    p = _ns(tmp_path, body)
+    p = _ns(body)
     for line in CANNOT_TELL:
         assert line in p.stdout, p.stdout + p.stderr
     assert "[space] SHORT: /tmp/f/vol" in p.stdout and "[space] could not judge" in p.stdout, p.stdout
 
 
-def test_without_a_process_id_nothing_is_judged_dead(tmp_path):
+def test_without_a_process_id_nothing_is_judged_dead():
     """An owner mark that names no process (a CLI that gives hooks none): no pid, or an empty one."""
     body = FIXTURES + HELD + r"""
 for s in s-dead s-held; do sed -i 's/"pid": "[0-9]*"/"pid": ""/' "$TMPDIR/$s/.owner"; done
@@ -258,7 +275,7 @@ mkdir -p "$TMPDIR/s-nopid"; printf '{"sid": "s-nopid", "created_at": "t"}' > "$T
 echo x > "$TMPDIR/s-nopid/work.txt"
 prompt > "$F/notice"; start_held; there s-nopid/work.txt
 """ + STATE + 'cat "$F/notice"\n'
-    p = _ns(tmp_path, body)
+    p = _ns(body)
     for line in CANNOT_TELL[:2] + CANNOT_TELL[3:] + ("kept s-nopid/work.txt",):
         assert line in p.stdout, p.stdout + p.stderr
     assert "[space] could not judge" in p.stdout, p.stdout
@@ -278,8 +295,8 @@ control() { for s in s-dead s-live; do for n in claude-do-task-$s.json claude-or
 """
 
 
-def test_a_gone_session_with_an_open_command_keeps_its_control_state(tmp_path):
-    p = _ns(tmp_path, FIXTURES + CONTROL_STATE + "prompt > /dev/null\ncontrol\n" + STATE)
+def test_a_gone_session_with_an_open_command_keeps_its_control_state():
+    p = _ns(FIXTURES + CONTROL_STATE + "prompt > /dev/null\ncontrol\n" + STATE)
     assert "gone s-dead/work.txt" in p.stdout, p.stdout + p.stderr  # its temp still goes
     for s in ("s-dead", "s-live"):
         for n in (f"claude-do-task-{s}.json", f"claude-orchestrator-consent-{s}.flag", f"claude-commit-grant-{s}.json"):
@@ -287,7 +304,7 @@ def test_a_gone_session_with_an_open_command_keeps_its_control_state(tmp_path):
     assert "kept s-dead/.dispatch-tmp" in p.stdout and "kept s-dead/.owner" in p.stdout, p.stdout
 
 
-def test_control_state_past_its_own_lifetime_goes(tmp_path):
+def test_control_state_past_its_own_lifetime_goes():
     body = FIXTURES + CONTROL_STATE + r"""
 touch -d '-8 days' "$CLAUDE_STATE_DIR"/claude-*-s-dead.* "$CLAUDE_STATE_DIR"/claude-*-s-live.*
 touch -d '-4 days' "$TMPDIR/s-dead/.dispatch-tmp" "$TMPDIR/s-dead/work.txt"
@@ -295,14 +312,14 @@ echo '{}' > "$CLAUDE_STATE_DIR/claude-do-task-s-young.json"
 bash "$REPO/scripts/install/tmp-cleanup-install.sh"
 control; [ -e "$CLAUDE_STATE_DIR/claude-do-task-s-young.json" ] && echo "kept young"
 """
-    p = _ns(tmp_path, body, volsize="64m")
+    p = _ns(body, volsize="64m")
     for s in ("s-dead", "s-live"):
         for n in (f"claude-do-task-{s}.json", f"claude-orchestrator-consent-{s}.flag", f"claude-commit-grant-{s}.json"):
             assert f"gone {n}" in p.stdout, p.stdout + p.stderr
     assert "gone s-dead/.dispatch-tmp" in p.stdout and "kept young" in p.stdout, p.stdout
 
 
-def test_a_run_with_throwaway_locations_touches_nothing_outside_them(tmp_path):
+def test_a_run_with_throwaway_locations_touches_nothing_outside_them():
     """Home, state and temp are the test's own (no CLAUDE_CODE_TMPDIR, as a test sets none); the default roots of
     the namespace (/tmp, /var/tmp) hold a dead session, its command output and an old role directory, and are full.
     The reaction runs (the own volume is short too) and touches nothing but the own roots."""
@@ -320,6 +337,6 @@ world > "$F/before"; prompt > "$F/notice"; world > "$F/after"
 diff "$F/before" "$F/after" && echo "outside untouched"
 export CLAUDE_CODE_TMPDIR=$V/cli
 """ + STATE + 'cat "$F/notice"\n'
-    p = _ns(tmp_path, body)
+    p = _ns(body)
     assert "gone s-dead/work.txt" in p.stdout and "[space] removed" in p.stdout, p.stdout + p.stderr  # it ran
     assert "outside untouched" in p.stdout, p.stdout + p.stderr
