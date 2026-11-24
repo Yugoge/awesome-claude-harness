@@ -177,6 +177,24 @@ def test_shell_redirects_commands_functions_and_embedded_python(tmp_path):
     assert emb and emb[0]["component"] == "hooks/s.sh" and emb[0]["site"] == "hooks/s.sh:11"
 
 
+def test_a_test_after_a_mkdir_of_the_same_list_is_no_read(tmp_path):
+    """`mkdir -p D && [[ -w D ]]` asks whether the creation worked: D is no artifact somebody left.
+    The same test alone, or after `||`, still reads what a writer left."""
+    root = make_tree(tmp_path, {"scripts/s.sh": '''
+        #!/usr/bin/env bash
+        A="$HOME/.claude/made-here"
+        B="$HOME/.claude/left-by-other"
+        C="$HOME/.claude/or-list"
+        if mkdir -p "$A" 2>/dev/null && [[ -w "$A" ]]; then :; fi
+        if [[ -w "$B" ]]; then :; fi
+        if mkdir -p "$C" 2>/dev/null || [[ -w "$C" ]]; then :; fi
+    '''})
+    r = derive(root)
+    assert not rels(r, op="read", path="<harness>/made-here")
+    assert rels(r, op="read", path="<harness>/left-by-other", mode="name")
+    assert rels(r, op="read", path="<harness>/or-list", mode="name")
+
+
 def test_shell_parser_constructs():
     src = textwrap.dedent('''
         f() { local x="$1"; case "$x" in a|b) echo one ;; *) echo "${x%/*}" ;; esac; }
@@ -240,6 +258,32 @@ def test_command_blocks_obligations_and_placeholders(tmp_path):
 
 
 # ----------------------------------------------------------- declarations
+
+def test_a_step_stating_several_calls_is_read_with_each_call(tmp_path):
+    """The requirement round's step states every call (scripts/todo/dev.py ROUND_CALLS, which dev-command.py
+    imports): the record carries each call by what it is and names the one the step requires."""
+    root = make_tree(tmp_path, {
+        "scripts/todo/dev.py": '''
+            ROUND = [{"agent": "ba", "subagent_type": "ba", "prompt_mode": "panel", "optional": True},
+                     {"agent": "qa", "subagent_type": "qa", "prompt_mode": "panel", "optional": True},
+                     {"agent": "ba", "subagent_type": "ba", "prompt_mode": "analysis"}]
+            def get_todos():
+                return [{"content": "Step 1: Round", "status": "pending", "subagent_call": ROUND}]
+        ''',
+        "scripts/todo/dev-command.py": '''
+            from dev import ROUND
+            def get_todos():
+                return [{"content": "Step 1: Round", "status": "pending", "subagent_call": ROUND}]
+        ''',
+    })
+    r = derive(root)
+    for command in ("dev", "dev-command"):
+        (step,) = kinds(r, "declaration", type="todo_step", command=command)
+        assert step["subagent_call"] == "ba", step
+        assert [(c["role"], c["mode"], c["optional"]) for c in step["subagent_calls"]] == [
+            ("ba", "panel", True), ("qa", "panel", True), ("ba", "analysis", False)]
+    assert not kinds(r, "declaration", type="todo_unread")
+
 
 def test_todo_steps_schemas_settings_and_switches(tmp_path):
     root = make_tree(tmp_path, {
@@ -433,6 +477,23 @@ def test_state_dir_versus_fixed_tmp_differ(tmp_path):
     assert rels(r, op="write", path="<state>/claude-grant.json")
     assert rels(r, op="read", path="/tmp/claude-grant.json")
     assert not rels(r, op="read", path="<state>/claude-grant.json")
+
+
+def test_a_root_variable_with_a_fallback_names_the_root_in_every_spelling(tmp_path):
+    """`get(ROOT) or lit` is the twin of the shell's `${ROOT:-lit}` (unset and empty both take lit),
+    `get(ROOT, lit)` of `${ROOT-lit}`: each names the root alone. A variable that names no root keeps
+    its fallback literal."""
+    root = make_tree(tmp_path, {
+        "hooks/w.sh": '#!/usr/bin/env bash\necho x > "${TMPDIR:-/var/tmp/cs}/a.json"\n',
+        "hooks/r1.py": 'import os\nopen(os.path.join(os.environ.get("TMPDIR") or "/var/tmp/cs", "a.json")).read()\n',
+        "hooks/r2.py": 'import os\nopen(os.path.join(os.environ.get("TMPDIR", "/var/tmp/cs"), "a.json")).read()\n',
+        "hooks/r3.py": 'import os\nopen(os.path.join(os.environ.get("FOO_DIR") or "/var/tmp/cs", "b.json")).read()\n',
+    })
+    r = derive(root)
+    assert rels(r, op="write", path="<tmpdir>/a.json", component="hooks/w.sh")
+    for comp in ("hooks/r1.py", "hooks/r2.py"):
+        assert {x["path"] for x in rels(r, op="read", component=comp)} == {"<tmpdir>/a.json"}, comp
+    assert {x["path"] for x in rels(r, op="read", component="hooks/r3.py")} == {"/var/tmp/cs/b.json"}
 
 
 def test_tests_directories_are_out_of_scope(tmp_path):

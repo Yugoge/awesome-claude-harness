@@ -15,6 +15,7 @@ shard together. REPLAY_WORK keeps the runs (default: pytest's temp dir).
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
@@ -93,3 +94,18 @@ def replays(runner):
         keys, runner.prefetch_keys = runner.prefetch_keys, None
         runner.run_keys(keys)
     return runner
+
+
+@pytest.fixture(autouse=True)
+def _a_test_takes_the_modeled_clock_back():
+    """Replay.model_clock pushes onto replay._CLOCK, which a process reads for the rest of its life (a replay
+    runs as its own process, so only a test in this process can leave one behind). A test that sets the clock
+    takes it back; this fails the test that does not, and restores the list so the next test is not hit."""
+    def stack():
+        mod = sys.modules.get("tests.replay.replay")
+        return mod._CLOCK if mod else []
+    before = list(stack())
+    yield
+    left = [c for c in stack() if not any(c is b for b in before)]
+    stack()[:] = before
+    assert not left, "this test left a modeled clock on replay._CLOCK (pop what Replay.model_clock pushed)"

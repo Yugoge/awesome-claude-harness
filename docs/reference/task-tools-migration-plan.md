@@ -141,11 +141,11 @@ Files that never name TodoWrite but depend on whole-list semantics are counted i
 |---|---|---:|---|---|
 | Core state and validation hooks | 6 | ~590 | none | redesign: `todo_canonical.py`, `command_span.py`, `pretool-todo-validate.py`; medium: workflow gate, `prompt-workflow.py`, stop gate |
 | Other hooks and config | 12 + 1 new | ~110 | `settings.json:21`; launcher rules; orchestrator whitelist; prompt-purity `:74`; spec-block-foreground `:88` | new task-owner guard (~35); `.claude/tasks/` write refusal (new, L2b); `posttool-todo-tracker.py`; `posttool-overnight-loop.py`; `pretool-subagent-enforce.py`; frozen in-flight wording (`pretool-orchestrator-gate.py:199-205`, §3.6) |
-| Command text and scripts | ~19 | ~50 (adapter route) / ~110 (reshaped canonical format) | `CLAUDE.md:48`; `dev.md:13`; `dev-command.md:8`; `close.md:103`; `restart.md:123`; `scripts/todo/*.py` docstrings | `dev-overnight.md:882` reset and `:627` 11g detour; ledger rows H-008, H-018, H-037, H-051, H-054 |
+| Command text and scripts | ~19 | ~50 (adapter route) / ~110 (reshaped canonical format) | `CLAUDE.md:48`; `dev.md:13`; `dev-command.md:8`; `close.md:103`; `restart.md:123`; `scripts/todo/*.py` docstrings | `dev-overnight.md:882` reset and `:627` Step 11 detour; ledger rows H-008, H-018, H-037, H-051, H-054 |
 | Unit tests | 27 + 3 new | ~1,060 + ~360 | `tests/test_restart_command.py` docstring, validator script name | 8 existing files redesigned, frozen in-flight wording (`test_orchestrator_gate_in_flight.py:32-35`, §3.6), new risk tests, recorder extension, a shared recording-based task builder (~150) |
 | Replay | ~20 | ~650 | driver step labels | simulator, pipeline, overnight driver, `_deadend`, `test_live_landing` |
 | **First estimate** | **~85** | **~2,800** | ~10% of lines | ~90% of lines |
-| Missed by the first estimate (review) | see §7 | **+400 to +700** | — | mixed-family spans, 11g transition rules, the dispatch gap, porting Rule 7 and `_counted_in_flight`, frozen in-flight wordings, one dead-end case per new refusal, the replay tests the review found |
+| Missed by the first estimate (review) | see §7 | **+400 to +700** | — | mixed-family spans, Step 11 transition rules, the dispatch gap, porting Rule 7 and `_counted_in_flight`, frozen in-flight wordings, one dead-end case per new refusal, the replay tests the review found |
 | **Corrected total** | | **~3,200 to 3,500** | | |
 
 The correction is the reviewer's estimate (30-100 lines per missed item), not an item-by-item
@@ -309,7 +309,7 @@ from the CLI: the CLI accepts `pending → completed` directly (recorded). Rule 
 | `/dev` (20 steps) | 21 | 60 |
 | `/dev-overnight`, per cycle (23 steps) | ~24 | ~69 |
 | Overnight reset | 1 | 23-27 (completed → pending) or 46 (delete + recreate; ~92 per cycle in all) |
-| 11g detour (`dev-overnight.md:627`), several per cycle | 2 | 4 |
+| Step 11 detour (`dev-overnight.md:627`), several per cycle | 2 | 4 |
 | Hook processes per call | 3 | 3 |
 
 The three processes are `pretool-launch.py` and `pretool-worktree-guard.sh` (PreToolUse) and
@@ -318,11 +318,11 @@ rule on every tool call, by its dispatch-gate readers on Agent calls (§7), and 
 Task calls (the validator in `pretool-launch.py`; the tracker and the overnight loop in
 `posttool-launch.py`); `pretool-worktree-guard.sh` never reads it.
 
-The 11g detour today moves `in_progress` back to Step 11g before each graphify dispatch and
+The Step 11 detour today moves `in_progress` back to Step 11 before each graphify dispatch and
 restores 12, 13 or 17 before the dev dispatch. Under Task tools that is four updates (13 → pending,
-11g → in_progress, 11g → completed, 13 → in_progress), and it needs transitions §3.1's rule set
-does not allow (11g completed → in_progress; 12/13/17 in_progress → pending). Either a narrow
-11g-only transition is added, or L3 rewrites the detour.
+11 → in_progress, 11 → completed, 13 → in_progress), and it needs transitions §3.1's rule set
+does not allow (11 completed → in_progress; 12/13/17 in_progress → pending). Either a narrow
+Step-11-only transition is added, or L3 rewrites the detour.
 
 **The dispatch gap.** `hooks/pretool-subagent-enforce.py:296-300` lets an Agent call through when
 no step is in_progress. Two calls per step switch leave a gap between `k → completed` and
@@ -425,7 +425,7 @@ mixed span; an upper-bound test on the workflow gate's per-call read cost.
 ### L2a — write-side validation and isolation
 
 - `pretool-todo-validate.py` gains per-call checks for TaskCreate/TaskUpdate (§3.1), the ports of
-  Rule 7, `_counted_in_flight` and `_started_at`, and, if §3.5's narrow 11g transition is chosen,
+  Rule 7, `_counted_in_flight` and `_started_at`, and, if §3.5's narrow Step 11 transition is chosen,
   that rule. The TodoWrite branch stays as it is.
 - The task-owner guard and the teammate rule (§3.2).
 - The dispatch gap closed in `pretool-subagent-enforce.py:296-300` (§3.5).
@@ -466,7 +466,7 @@ and 2 TaskUpdate in one turn are not refused by the orchestrator gate; the stop 
   are worded per family. The header line "CHECKLIST PRE-INITIALIZED for /X:" stays, since
   `_recorded_start` (`:1878`) splits on it. In the Task family, the warning at `:1141-1145` gains
   its sentence (§3.7).
-- Command text: `commands/dev-overnight.md:882` (reset) and `:627` (11g detour), `:21`, `:27`;
+- Command text: `commands/dev-overnight.md:882` (reset) and `:627` (Step 11 detour), `:21`, `:27`;
   `commands/dev.md:13`; `commands/dev-command.md:8`; `commands/restart.md:123`; `commands/close.md:103`.
 - Docs: `docs/how-it-works.md:87`; `ARCHITECTURE.md:113`, `:150`, `:324`; `README.md:162`.
 

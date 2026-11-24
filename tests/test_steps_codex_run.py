@@ -76,7 +76,9 @@ class Box:
     def env(self, **extra) -> dict:
         env = {"PATH": f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin", "HOME": str(self.home),
                "CLAUDE_PROJECT_DIR": str(self.project), "CODEX_ISO_BIN": str(self.wrapper),
-               "STUB_LOG": str(self.log), "FAKE_CODEX_MARKER": str(self.marker), "PYTHONDONTWRITEBYTECODE": "1"}
+               "STUB_LOG": str(self.log), "FAKE_CODEX_MARKER": str(self.marker), "PYTHONDONTWRITEBYTECODE": "1",
+               "CLAUDE_STATE_DIR": str(self.root),  # a call's outcome updates the state dir (codex-unavailable)
+               "CODEX_OUT_DIR": str(self.root / "outputs")}  # the fallback output place: the box's, never the host's /var/tmp
         env.update(extra)
         return {key: value for key, value in env.items() if value is not None}
 
@@ -259,14 +261,9 @@ def test_unset_or_empty_names_fall_back_and_warn_only_when_one_is_set(box, task,
 
 
 def run_with_fallback(box: Box, fallback: Path, *args, env: dict):
-    """The script's own main(), with only the fallback directory constant pointed at a temp dir."""
-    driver = ("import importlib.util, sys\n"
-              f"spec = importlib.util.spec_from_file_location('codex_run', {str(SCRIPT)!r})\n"
-              "mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)\n"
-              f"from pathlib import Path; mod.FALLBACK_DIR = Path({str(fallback)!r})\n"
-              "sys.exit(mod.main(sys.argv[1:]))\n")
-    return subprocess.run([sys.executable, "-c", driver, *args], input="", text=True, capture_output=True,
-                          env=env, cwd=box.root, check=False)
+    """The script itself, with only the fallback directory (CODEX_OUT_DIR) pointed at a temp dir."""
+    return subprocess.run([sys.executable, str(SCRIPT), *args], input="", text=True, capture_output=True,
+                          env={**env, "CODEX_OUT_DIR": str(fallback)}, cwd=box.root, check=False)
 
 
 def test_the_fallback_file_is_the_printed_one_and_the_default_directory_is_var_tmp(box, tmp_path):
@@ -282,14 +279,16 @@ def test_the_fallback_file_is_the_printed_one_and_the_default_directory_is_var_t
     assert printed.read_text() == "stub-stdout\nstub-stderr\n"
 
 
-def test_without_a_project_dir_the_git_toplevel_is_the_root(box, tmp_path):
+def test_without_a_project_dir_the_working_directory_is_the_root(box, tmp_path):
+    """R1: a Bash call has no CLAUDE_PROJECT_DIR and its cwd is the session's directory, which is the
+    hooks' project root even below the git top level (a session started in a subdirectory)."""
     repo = tmp_path / "repo"
     (repo / "sub").mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
     env = box.env(CLAUDE_PROJECT_DIR=None, CODEX_OUT_TASK_ID="T", CODEX_OUT_ROLE="r")
     proc = box.run("exec", "p", env=env, cwd=repo / "sub")
     assert proc.returncode == 0, proc.stderr
-    assert Path(keys(proc.stdout)["out"]).resolve() == (repo / "docs" / "codex" / "T" / "r.txt").resolve()
+    assert Path(keys(proc.stdout)["out"]).resolve() == (repo / "sub" / "docs" / "codex" / "T" / "r.txt").resolve()
 
 
 def test_without_a_project_dir_and_no_git_it_falls_back_instead_of_writing_to_the_filesystem_root(box, tmp_path):
@@ -357,6 +356,15 @@ def test_a_bare_wrapper_name_is_resolved_on_path_but_a_bare_codex_is_never_chose
 def test_the_script_never_names_a_bare_codex_as_a_program():
     source = SCRIPT.read_text(encoding="utf-8")
     assert not re.search(r"""which\(\s*['"]codex|Popen\(\s*\[\s*['"]codex|run\(\s*\[\s*['"]codex""", source)
+
+
+def test_a_relative_output_directory_override_is_ignored_and_the_default_stays(box):
+    spec = importlib.util.spec_from_file_location("codex_run", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.fallback_dir({"CODEX_OUT_DIR": "relative/dir"}) == module.FALLBACK_DIR
+    assert module.fallback_dir({}) == module.FALLBACK_DIR
+    assert module.fallback_dir({"CODEX_OUT_DIR": str(box.root / "x")}) == box.root / "x"
 
 
 # ---- the prompt ------------------------------------------------------------------------------------------

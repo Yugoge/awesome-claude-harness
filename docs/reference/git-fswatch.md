@@ -111,10 +111,9 @@ export GIT_AUTO_PUSH=1           # push at all; any other value keeps every push
 ```
 ~/.claude/hooks/git-fswatch.sh          # main script
 ~/.claude/hooks/fswatch-manager.sh      # management tool
-~/.claude/logs/git-fswatch.log          # log file
+~/.local/state/claude-harness/<install>/logs/git-fswatch-<repo>.log   # log file (the state root: hooks/lib/harness_state_dir.sh)
 ~/.claude/systemd/git-fswatch@.service  # Systemd service
-/tmp/git-fswatch-${USER}.lock           # lock file
-/tmp/git-fswatch-state-${USER}.txt      # state file
+~/.local/state/claude-harness/<install>/state/git-fswatch-${USER}-<repo>.lock  # lock file
 ```
 
 ### Exclusion Rules
@@ -185,7 +184,7 @@ Each machine runs its own fswatch instance; conflicts are flagged for manual res
 Causes: not a git repository, fswatch not installed, or script not executable.
 ```bash
 bash ~/.claude/hooks/fswatch-manager.sh test ~/my-project
-tail -50 ~/.claude/logs/git-fswatch.log
+tail -50 ~/.local/state/claude-harness/<install>/logs/git-fswatch-<repo>.log
 ```
 
 ### Issue 2: File changes not detected
@@ -193,7 +192,7 @@ tail -50 ~/.claude/logs/git-fswatch.log
 Check for exclusion rules, watcher crash, or debounce delay too long.
 ```bash
 bash ~/.claude/hooks/fswatch-manager.sh status
-tail -f ~/.claude/logs/git-fswatch.log
+tail -f ~/.local/state/claude-harness/<install>/logs/git-fswatch-<repo>.log
 export FSWATCH_DEBOUNCE=2
 bash ~/.claude/hooks/fswatch-manager.sh restart ~/my-project
 ```
@@ -286,7 +285,7 @@ Or set `FSWATCH_DEBOUNCE=9999999` to effectively pause snapshots and pushes.
 
 ### Q6: Will the log file grow indefinitely?
 
-Yes. Add to crontab: `0 0 * * 0 find ~/.claude/logs -name "*.log" -mtime +7 -delete`
+Yes. Add to crontab: `0 0 * * 0 find ~/.local/state/claude-harness/<install>/logs -name "*.log" -mtime +7 -delete`
 
 ### Q7: Can it monitor network file systems (NFS, SMB)?
 
@@ -326,7 +325,7 @@ bash ~/.claude/hooks/fswatch-manager.sh status
 
 Report issues: https://github.com/Yugoge/awesome-claude-harness/issues
 
-Log file: `~/.claude/logs/git-fswatch.log`
+Log file: `~/.local/state/claude-harness/<install>/logs/git-fswatch-<repo>.log`
 
 ---
 

@@ -58,11 +58,8 @@ def meta_agent(transcript_path, tool_use_id: str) -> str:
     main = Path(transcript_path)
     for pattern in (f"{main.stem}/subagents/agent-*.meta.json", "*/subagents/agent-*.meta.json"):
         for meta in main.parent.glob(pattern):
-            try:
-                if json.loads(meta.read_text(encoding="utf-8")).get("toolUseId") == tool_use_id:
-                    return meta.name[len("agent-"):-len(".meta.json")]
-            except (OSError, ValueError, AttributeError):
-                continue
+            if (_lib("subagent_restart").read_meta(meta) or {}).get("tool_use_id") == tool_use_id:
+                return meta.name[len("agent-"):-len(".meta.json")]
     return ""
 
 
@@ -88,6 +85,7 @@ def _final_reply(path) -> dict | None:
     hook record; else None. A stop a hook blocked is followed by the CLI's feedback record and more of
     the agent's turn, so its tail is not this one; nor is the tail of an agent cut mid-turn."""
     last, hooked = None, False
+    turns = _lib("command_span").TURN_RECORD_TYPES
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             for line in handle:
@@ -97,7 +95,7 @@ def _final_reply(path) -> dict | None:
                     continue
                 if not isinstance(record, dict):
                     continue
-                if record.get("type") in ("user", "assistant"):
+                if record.get("type") in turns:
                     last, hooked = record, False
                 elif record.get("type") == "attachment" and isinstance(record.get("attachment"), dict):
                     hooked = hooked or record["attachment"].get("hookEvent") == "SubagentStop"

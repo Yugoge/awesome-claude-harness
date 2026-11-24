@@ -12,7 +12,11 @@ inline form, except three lines newly authored here to describe the new in-place
 
 ## State file schema
 
-**Schema**:
+**Schema** (the fields the commands read; the writer, `scripts/create-overnight-state.sh`, writes
+`schema_version` 9 and also `protected_branch`, the `isolation_*`, `main_*`, `dev_registry_*` and
+`git_*` fields, `worktree_head_at_start`, `isolation_kind`, `guarantee_level`,
+`structural_claim_allowed`, `reference_transaction_selftest_result`, `actor_git_env`, `view_paths`
+and `codex_required`; `current_phase` starts at `exploring`; no writer sets a `cycle_count`):
 ```json
 {
   "session_id": "string (from $CLAUDE_SESSION_ID or UUID)",
@@ -21,7 +25,6 @@ inline form, except three lines newly authored here to describe the new in-place
   "focus": "string (discovery hint from user, or empty)",
   "spec_mode": "autonomous|user-provided",
   "user_spec_path": "string (path to user-provided spec, or null)",
-  "cycle_count": 0,
   "issues_found": 0,
   "issues_fixed": 0,
   "issues_skipped": 0,
@@ -78,19 +81,19 @@ inline form, except three lines newly authored here to describe the new in-place
 | Aspect | /dev | /dev-overnight |
 |--------|------|----------------|
 | Input | User provides requirement | Agent discovers issues via 4 specialist subagents |
-| BA phase | Full BA + clarification loop (max 3 rounds) | BA with clarification skipped (round=3) |
-| BA validation | Step 8 | Step 9 |
+| BA phase | Full BA + clarification loop with the owner (Step 5) | No clarification loop with the owner: a BA question is decided by Hard Rule 5 and BA is re-dispatched with the decision (Step 8) |
+| BA validation | Step 6 | Step 9 |
 | Dev validation | Step 12 | Step 13 |
 | QA processing | Step 14 decision tree | Step 16 autonomous decision |
-| Iteration loop | Step 10 (max 5, asks user after 5) | Step 17 (max 5 per pipeline, auto-skip after 5) |
-| Settings update | Step 9 | Step 18 (aggregated from all pipelines) |
+| Iteration loop | Step 16 (no cap: repeats until QA passes) | Step 17 (no cap: repeats per pipeline until its QA passes) |
+| Settings update | Step 15 | Step 18 (aggregated from all pipelines) |
 | Loop | Single pass | Continuous until end-time |
-| Termination | After QA passes | After end-time expires |
+| Termination | After QA passes | After end-time, once each pipeline's QA has passed and the closeout is on disk |
 | User interaction | Required (clarification, approval) | None (fully autonomous) |
 | Scope per cycle | One complete feature/fix | User-pathway-filtered findings (parallel pipelines, gated by PM Step 4 — Tier 1 + multi-agent-consensus in autonomous mode; user-need-relevant in user-provided mode); specialists' free exploration is preserved per Section 5.7 anti-pattern #5 |
 | Subagent usage | BA + dev + QA | product-owner + architect + user + ui-specialist + BA + dev + QA |
 | Stop hook | Workflow enforcement only | Workflow + time-lock |
 | Worktree | Not used | Not used by default (`in_place`); created on first run and reused across cycles only under `--worktree` |
-| Total steps | 13 | 21 |
+| Total steps | 17 (Steps 1-17) | 22 (Steps 0-21) |
 
 ---

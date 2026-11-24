@@ -26,16 +26,14 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable
 
 # ---------------------------------------------------------------------------
 # Scope filtering -- spec §5.3 mandates excluding venv/, worktrees/, .archive,
 # plugins/. Tool runs from project root; paths are made relative for output.
+# The fragments are graphify_lib's filesystem-noise list, one list for both.
 # ---------------------------------------------------------------------------
-EXCLUDE_FRAGMENTS = (
-    "/venv/", "/worktrees/", "/.archive/", "/plugins/",
-    "/.git/", "/__pycache__/", "/node_modules/",
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from graphify_lib import _FILESYSTEM_NOISE_FRAGMENTS as EXCLUDE_FRAGMENTS  # noqa: E402
 
 # Per-source edge cap (spec-20260518-225715 Cycle 3 Debt 4 / AC-04): bound
 # the number of edges emitted with the same `from` value, so a high-fanout
@@ -432,7 +430,6 @@ def main(argv: list[str]) -> int:
     root = Path(args.root).resolve()
     phase = "2-verification" if args.git_diff else "1-prediction"
 
-    # Collect target files
     if args.git_diff:
         target_files = git_diff_files(args.base)
     else:

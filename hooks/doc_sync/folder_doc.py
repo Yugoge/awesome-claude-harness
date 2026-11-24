@@ -13,15 +13,14 @@ Usage: folder_doc.py <path>            (the new text on stdin)
        folder_doc.py --remove <path>
 """
 
-import subprocess
 import sys
 from pathlib import Path
 
 try:
-    from .config import is_github_reserved_subtree
+    from .config import is_github_reserved_subtree, work_tree_root
     from .regions import RegenStatus
 except ImportError:  # run as a file: its own directory is sys.path[0]
-    from config import is_github_reserved_subtree  # type: ignore[no-redef]
+    from config import is_github_reserved_subtree, work_tree_root  # type: ignore[no-redef]
     from regions import RegenStatus  # type: ignore[no-redef]
 
 
@@ -40,12 +39,7 @@ def write_folder_doc(path: Path, text: str | None, project_dir: Path | None = No
 def _repo_root(folder: Path) -> Path | None:
     """The work tree holding `folder`, which anchors the reserved-subtree rule as doc-sync's
     project directory does; None outside a repository (the rule then reads the path as written)."""
-    try:
-        proc = subprocess.run(['git', '-C', str(folder), 'rev-parse', '--show-toplevel'],
-                              capture_output=True, text=True, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return Path(proc.stdout.strip()) if proc.returncode == 0 and proc.stdout.strip() else None
+    return work_tree_root(folder)
 
 
 def main(argv: list[str]) -> int:

@@ -4422,9 +4422,13 @@ class TestDestinationDirectoryEntry:
 
     def test_entry_that_lands_on_the_data_file_or_an_ancestor_blocks(self, home_datafile):
         for cmd in ("mv protected-runtime.json ~/.config/claude", "cp x/protected-runtime.json ~/.config/claude/",
-                    "cp -r claude ~/.config", "mv claude/ ~/.config", "mv -T f ~", "cp -T f ~/.config",
+                    "cp -r claude ~/.config", "mv claude/ ~/.config", "cp -T f ~/.config",
                     "mv ~/.config /tmp/x", "mv f ~/.config/claude/protected-runtime.json"):
             assert ev_nested(cmd, home_datafile) == "BLOCK", cmd
+        # The home directory itself is no guarded ancestor, for any user: it is a broad root as the
+        # superuser's home always was (hooks/lib/locations.py is_broad_root), so replacing its entry
+        # decides as it did there. Before, this was BLOCK for every home but two fixed ones.
+        assert ev_nested("mv -T f ~", home_datafile) == "ALLOW"
 
 
 class TestServiceUnitFamily:
@@ -4488,6 +4492,31 @@ class TestShellPayloadIsReadLikeAnyCommand:
                     "npm install --global-style foo", 'bash -c "echo npm install -g foo"',
                     "cat <<'EOF' | tee /tmp/doc\nnpm i -g foo\nEOF"):
             assert ev(cmd, datafile, fixture_repo) == "ALLOW", cmd
+
+
+class TestConfigSelfProtectionByWhatItIs:
+    """STEP0 protects the data file and its directories for what they are: with
+    `~/.config` a link, its real directory and the real file get the verdict the
+    linked spelling gets (location-rules U37)."""
+
+    def test_real_and_linked_spellings_get_one_verdict(self, tmp_path):
+        home = tmp_path / "home"
+        real = tmp_path / "realcfg"
+        (real / "claude").mkdir(parents=True)
+        (real / "claude" / "protected-runtime.json").write_text("{}")
+        home.mkdir()
+        (home / ".config").symlink_to(real)
+        os.environ["HOME"] = str(home)
+        cfg = str(home / ".config" / "claude" / "protected-runtime.json")
+        other = tmp_path / "other"
+        other.mkdir()
+        for linked, actual in ((home / ".config", real), (home / ".config" / "claude", real / "claude"),
+                               (cfg, real / "claude" / "protected-runtime.json")):
+            for verb in ("mv", "rm -rf"):
+                tail = f" {tmp_path}/away" if verb == "mv" else ""
+                assert _ev_cfg(f"{verb} {linked}{tail}", cfg) == "BLOCK", (verb, linked)
+                assert _ev_cfg(f"{verb} {actual}{tail}", cfg) == "BLOCK", (verb, actual)
+        assert _ev_cfg(f"mv {other} {tmp_path}/away", cfg) == "ALLOW"
 
 
 if __name__ == "__main__":

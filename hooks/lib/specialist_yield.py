@@ -2,7 +2,6 @@
 
 Public API:
     classify_report(report_path) -> "productive" | "low_yield" | "clean_sweep"
-    compute_yield(specialist_type, current_report_path, history_window=5) -> dict
     record_yield(report_artifact_path, specialist_type, session_id, cycle_id,
                  classification, action) -> None
     get_degradation_state(specialist_type, session_id=None) -> dict
@@ -29,6 +28,7 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_home  # noqa: E402  (shared WS1 harness-home resolver)
+import locations  # noqa: E402  (the filesystem root is no project)
 
 try:
     import fcntl
@@ -209,37 +209,6 @@ def _trailing_run(sequence: list[Any], label: str) -> int:
     return n
 
 
-def _decide_next_action(
-    classification: str,
-    history: list[dict[str, Any]],
-    policy: dict[str, Any],
-) -> str:
-    low_t = int(policy.get("low_yield_threshold", 3))
-    cs_t = int(policy.get("clean_sweep_threshold", 5))
-    sequence = [r.get("classification") for r in history] + [classification]
-    if _trailing_run(sequence, "clean_sweep") >= cs_t:
-        return "skip_next_cycle"
-    if _trailing_run(sequence, "low_yield") >= low_t:
-        return "reduce_budget_50pct"
-    return "active"
-
-
-def compute_yield(
-    specialist_type: str,
-    current_report_path: str,
-    history_window: int = 5,
-) -> dict[str, Any]:
-    classification = classify_report(current_report_path)
-    policy = _resolve_policy_for(specialist_type)
-    window = int(policy.get("history_window", history_window))
-    history = _filter_history(_read_log_lines(), specialist_type, window)
-    return {
-        "classification": classification,
-        "history": history,
-        "next_action": _decide_next_action(classification, history, policy),
-    }
-
-
 def _build_record(
     report_artifact_path: str,
     specialist_type: str,
@@ -296,6 +265,8 @@ def record_yield(
 ) -> None:
     """Append one JSONL record to the yield log."""
     path = _log_path()
+    if locations.refuses_root(path, _project_dir(), "specialist-yield"):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     record = _build_record(
         report_artifact_path, specialist_type, session_id, cycle_id, classification, action

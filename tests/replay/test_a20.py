@@ -39,11 +39,11 @@ import pytest
 from tests.replay import sites, suite
 from tests.replay.drivers import dev as devdrv
 
-NOQA = suite.Scenario("/dev QA never dispatched (A20)", "dev", (("variant", "plain"), ("stop_before", "13")),
+NOQA = suite.Scenario("/dev QA never dispatched (A20)", "dev", (("variant", "plain"), ("stop_before", str(devdrv.S.qa))),
                       ("dev",), 100)
 QUESTION = next(s for s in suite.COMPLIANT if s.name == "/dev clarify")
 DEV = next(s for s in suite.COMPLIANT if s.name == "/dev singular")
-FOREIGN = (("fault", "foreign@Step 14 Read *=docs/dev/qa-report-*.json"),)
+FOREIGN = (("fault", f"foreign@Step {devdrv.S.qa_results} Read *=docs/dev/qa-report-*.json"),)
 NO_ANSWER = ("none", "skip", "decline")
 QUESTION_DOC = devdrv.QUESTION  # the producer question BA writes in /dev question
 
@@ -62,7 +62,7 @@ def test_a20_qa_never_dispatched_is_held_until_qa_passes(replays):
     text = early[0]["text"][0]
     assert text.startswith("COMMAND_GATE /dev: not complete") and "qa-report" in text, text
     assert "AWAITING_INPUT" not in text and "/stop" not in text
-    assert [b["step"] for b in r.blocks] == ["Stop before Step 13"], r.explain()
+    assert [b["step"] for b in r.blocks] == [f"Stop before Step {devdrv.S.qa}"], r.explain()
     assert not r.hook_errors and r.reached(), r.explain()
 
 
@@ -72,7 +72,7 @@ def test_a20_a_question_round_trip_completes_with_no_blocked_stop(replays):
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     # the producer question's relay (Step 5); P13-1's requirement round asks round 1 before it (Step 4b)
     asked = [ev for ev in r.hook_events() if ev.get("event") == "PostToolUse"
-             and ev.get("tool") == "AskUserQuestion" and str(ev.get("label", "")).startswith("Step 5")]
+             and ev.get("tool") == "AskUserQuestion" and str(ev.get("label", "")).startswith(f"Step {devdrv.S.clarify}")]
     assert len(asked) == 1, [ev.get("label") for ev in r.hook_events()]
     assert not r.blocks and not r.hook_errors and r.reached(), r.explain()
 
@@ -122,10 +122,10 @@ def test_a20_rerun_without_askuserquestion_completes_with_the_assumption_recorde
     r = replays.get(key)
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     # Step 5's relay (P13-1's requirement round asks round 1 before it, Step 4b, answered)
-    asked = [a for a in _payloads(r, "PreToolUse", "AskUserQuestion") if str(a.get("label", "")).startswith("Step 5")]
+    asked = [a for a in _payloads(r, "PreToolUse", "AskUserQuestion") if str(a.get("label", "")).startswith(f"Step {devdrv.S.clarify}")]
     assert len(asked) == (0 if form == "none" else 1), [a["label"] for a in asked]
     after = {ev.get("event") for ev in r.hook_events()
-             if ev.get("tool") == "AskUserQuestion" and str(ev.get("label", "")).startswith("Step 5")}
+             if ev.get("tool") == "AskUserQuestion" and str(ev.get("label", "")).startswith(f"Step {devdrv.S.clarify}")}
     assert after == ({"PostToolUseFailure", "PreToolUse"} if form == "decline" else
                      {"PostToolUse", "PreToolUse"} if form == "skip" else set()), after
     q = QUESTION_DOC
@@ -135,7 +135,7 @@ def test_a20_rerun_without_askuserquestion_completes_with_the_assumption_recorde
     prev = [line.strip() for line in redispatch[0]["tool_input"]["prompt"].split("\n")
             if line.strip().startswith("Previous answers:")]
     assert prev == ["Previous answers: none"], prev
-    assert r.fact("Step 5 AskUserQuestion") == {"producer_answer": None}, r.facts  # the hook wrote no answer
+    assert r.fact(f"Step {devdrv.S.clarify} AskUserQuestion") == {"producer_answer": None}, r.facts  # the hook wrote no answer
     # BA reads the question it wrote; its default stands (agents/ba.md Input Format), recorded in the
     # `assumptions` list it returns and in its spec, never as an answer in its context.
     read = [p["tool_input"]["file_path"] for p in _payloads(r, "PreToolUse", "Read") if p.get("agent_type") == "ba"]

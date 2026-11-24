@@ -58,21 +58,20 @@ try:
     import claude_home  # noqa: E402
 except Exception:  # pragma: no cover - fail-soft if lib missing
     claude_home = None  # type: ignore[assignment]
+import locations  # noqa: E402 -- the one answer for "the filesystem root is no project"
 from harness_state_dir import harness_state_dir  # noqa: E402
+from allowlist import state_entry_failure, write_state_entry  # noqa: E402
 
 
 def _try_git_toplevel() -> Path | None:
-    """Tier 4: git rev-parse --show-toplevel; None on failure."""
-    try:
-        result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True, timeout=2, check=False,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return Path(result.stdout.strip())
-    except (subprocess.SubprocessError, FileNotFoundError, OSError):
-        pass
-    return None
+    """Tier 4: the repository top (locations.repo_top, never the filesystem root); None on failure."""
+    top = locations.repo_top(os.getcwd())
+    return Path(top) if top else None
+
+
+def _root_project(path: Path) -> bool:
+    """Whether a write to ``path`` is refused: the project is the filesystem root (locations.refuses_root)."""
+    return locations.refuses_root(path, PROJECT_DIR, 'prompt-workflow')
 
 
 def resolve_project_dir(stdin_payload: dict | None = None) -> Path:
@@ -155,6 +154,8 @@ def _fsync_directory(directory: Path) -> None:
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     """Publish complete bytes at ``path`` without exposing a partial file."""
+    if _root_project(path):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(
         f'.{path.name}.tmp-{os.getpid()}-{hashlib.sha256(payload).hexdigest()[:16]}'
@@ -184,6 +185,9 @@ def _atomic_write_json(path: Path, value: object) -> None:
 @contextlib.contextmanager
 def _exclusive_lock(path: Path):
     """Serialize one Claude session only; independent sessions remain parallel."""
+    if _root_project(path):
+        yield
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -365,8 +369,10 @@ _SPEC_EXTENSION_RE = re.compile(r'[^./\\]\.[A-Za-z0-9]{1,10}$')
 _SPEC_WRAP_LEAD = '"\'`<('
 _SPEC_WRAP_TRAIL = '"\'`>),;:.'
 # A token that may precede a leading flag: an option, or /dev-overnight's end time.
+_DEV_COMMANDS = ('dev', 'dev-command', 'redev')  # the commands that start an ordinary /dev cycle
+_AMPM = 'AM|PM|am|pm'  # the meridiem spellings an end time may carry
 _SPEC_LEAD_TOKEN_RE = re.compile(
-    r'^(?:-\S*|\+?\d+(?:\.\d+)?[hm]|\d{1,2}:\d{2}(?:AM|PM|am|pm)?|AM|PM|am|pm)$')
+    r'^(?:-\S*|\+?\d+(?:\.\d+)?[hm]|\d{1,2}:\d{2}(?:%s)?|%s)$' % (_AMPM, _AMPM))
 
 
 def _unwrap_spec_token(token: str) -> str:
@@ -459,7 +465,7 @@ def _match_end_time_token(args: str) -> tuple[str, str]:
         bad = args.split(None, 1)[0]
         rest = args[len(bad):].lstrip()
         return f'INVALID:{bad}', rest
-    time_match = re.match(r'^(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\s*(.*)', args)
+    time_match = re.match(r'^(\d{1,2}:\d{2}\s*(?:%s)?)\s*(.*)' % _AMPM, args)
     if time_match:
         return time_match.group(1).strip(), time_match.group(2).strip()
     return '', args
@@ -481,7 +487,7 @@ def parse_overnight_args(prompt_text: str) -> tuple[str, str, str, bool, str]:
     would hide the conflict instead of surfacing it. '' means neither flag was
     given, which the launcher resolves to in-place.
     """
-    match = re.search(r'/dev-overnight\s+(.*)', prompt_text.strip())
+    match = re.search(r'/%s\s+(.*)' % 'dev-overnight', prompt_text.strip())  # the command's name, then its arguments
     args = match.group(1).strip() if match else ''
     # Extract --codex flag (boolean toggle, no value)
     codex_required = '--codex' in args.split()
@@ -533,9 +539,11 @@ def create_overnight_state(end_time: str, focus: str = '', spec_path: str = '', 
     cmd += ['--session-id', session_id]
     cmd += ['--project-dir', str(PROJECT_DIR)]
     try:
-        # M5/AC4: raise the timeout from 10s to >=60s — worktree creation +
-        # validation + launch self-test legitimately take longer than 10s.
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        # No limit of its own: worktree creation, validation and the launch self-test
+        # take 4-6 CPU s of git; the launcher's rule timeout (60 s, userprompt-launch.py)
+        # bounds the whole hook, and a second 60 s here ended later than it, so it only
+        # failed a slow direct run.
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(result.stderr, file=sys.stderr)
             return False
@@ -776,7 +784,8 @@ def _resolve_transcript_path(session_id: str) -> str:
     if not isinstance(session_id, str) or not session_id:
         return ''
     try:
-        for project_dir in (Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude') / 'projects').iterdir():
+        from subagent_restart import config_projects  # every configuration directory named, not only this one
+        for project_dir in (d for root in config_projects() for d in root.iterdir()):
             candidate = project_dir / f'{session_id}.jsonl'
             if candidate.exists():
                 return str(candidate)
@@ -1066,7 +1075,7 @@ def build_overnight_continuation(state: dict, include_spec: bool = True,
         f'Read {overnight.locate(state.get("session_id"), {"cwd": str(PROJECT_DIR)})[0]} and resume from phase="{phase}".',
         # Phase->step map MUST match the markdown Continuation-Mode map in
         # commands/dev-overnight.md (### Continuation Mode), the single source of
-        # truth. implementing->Step 12 lands on the shared Step 11g Dev-dispatch
+        # truth. implementing->Step 12 lands on Step 11's shared graphify Dev-dispatch
         # precondition, which enriches before Dev on resume.
         'Phase mapping: initializing/exploring->Step 2, pipeline_creation->Step 6,',
         'analyzing->Step 8, implementing->Step 12, verifying->Step 14,',
@@ -1165,9 +1174,10 @@ def wake_recovery(user_input: str) -> str:
     return '\n'.join([
         "OVERNIGHT WAKE: this /dev-overnight session's scheduled wake fired inside its span, and the",
         f'/restart capability is issued for it. Read {path} now and run its Mandatory procedure',
-        '(prepare; one SendMessage with its exact resume_message per pending candidate; status;',
-        'finalize). With 0 candidates nothing was cut: finalize. Then carry on with the /dev-overnight',
-        'checklist step in progress; never stop, ask or wait.',
+        '(prepare; one SendMessage with its exact resume_message per pending candidate; then read the',
+        'outcome line: the harness finalizes the recovery itself). With 0 candidates nothing was cut and',
+        'nothing is run. Then carry on with the /dev-overnight checklist step in progress; never stop,',
+        'ask or wait.',
     ])
 
 
@@ -1186,7 +1196,7 @@ def carry_on_line(state) -> str:
     content = str(step.get('content') or '')
     label = content.split(':', 1)[0] if content.startswith('Step ') else f'step {todos.index(step) + 1}'
     pause = ('never stop, ask or wait' if state.command == 'dev-overnight'
-             else 'pause only with AskUserQuestion')
+             else 'a refusal is reported, never asked about')
     return (f'CARRY ON: carry on with /{state.command} {label}; this turn cannot end until its '
             f'checklist is complete; {pause}; /stop is the exit.')
 
@@ -1313,12 +1323,8 @@ def handle_do_consent(sid: str) -> None:
     agent guessed its id via `ls -t /tmp/...consent-*.flag | head -1` (globally
     newest) — which aliased parallel /do sessions onto one id and overwrote each
     other's do-reports."""
-    flag = Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag")
-    try:
-        flag.write_text("true")
-        print("[/do] Consent granted. Main agent may now perform direct operations this turn.")
-    except Exception as e:
-        sys.stderr.write(f"[/do] Failed to write consent flag: {e}\n")
+    _record_or_refuse(Path(f"{harness_state_dir()}/claude-orchestrator-consent-{sid}.flag"), "/do consent", "do")
+    print("[/do] Consent granted. Main agent may now perform direct operations this turn.")
     # Mint a unique task-id and expose it via a session-keyed sidecar. Kept
     # SEPARATE from the consent flag (the orchestrator-gate trust root, whose
     # content stays "true" so every existence-checking reader is unaffected).
@@ -1331,14 +1337,15 @@ def handle_do_consent(sid: str) -> None:
         sys.stderr.write(f"[/do] Failed to mint a task-id: {e}\n")
         return
     print(f"[/do] task-id minted: {task_id} — resolve via $CLAUDE_CODE_SESSION_ID → {harness_state_dir()}/claude-do-task-<sid>.json (NOT `ls -t | head -1`).")
+    sidecar = Path(f"{harness_state_dir()}/claude-do-task-{sid}.json")
     try:
-        Path(f"{harness_state_dir()}/claude-do-task-{sid}.json").write_text(json.dumps({
+        write_state_entry(sidecar, json.dumps({
             "task_id": task_id,
             "session_id": sid,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }))
-    except Exception as e:
-        sys.stderr.write(f"[/do] Failed to write task sidecar: {e}\n")
+    except OSError as e:  # the minted line above names the id all the same
+        print(f"[/do] The task sidecar was not written ({state_entry_failure(sidecar, e)}); the task id is the one minted above.")
 
 
 def _write_userintent_sentinel(cmd_name: str, sid: str) -> None:
@@ -1346,10 +1353,20 @@ def _write_userintent_sentinel(cmd_name: str, sid: str) -> None:
     writer (this hook) and reader (pretool-wrapper-userintent.py PreToolUse
     hook) resolve sid from stdin JSON, so sid-keying round-trips correctly.
     Single-use; consumed by the PreToolUse hook before the wrapper runs."""
+    _record_or_refuse(Path(f"{harness_state_dir()}/claude-{cmd_name}-userintent-{sid}.flag"),
+                      f"That you typed /{cmd_name}", cmd_name)
+
+
+def _record_or_refuse(path: Path, what: str, cmd_name: str) -> None:
+    """Write `true` to an entry the typed command's later steps need, or block
+    the prompt (exit 2: the CLI shows the owner stderr and submits nothing)."""
     try:
-        Path(f"{harness_state_dir()}/claude-{cmd_name}-userintent-{sid}.flag").write_text("true")
-    except OSError:
-        pass
+        write_state_entry(path, "true")
+    except OSError as e:
+        sys.stderr.write(f"[/{cmd_name}] {what} could not be recorded: {state_entry_failure(path, e)}.\n"
+                         f"This prompt was not submitted and /{cmd_name} is not granted: free space on that "
+                         f"volume or make that directory writable, then type /{cmd_name} again.\n")
+        raise SystemExit(2)
 
 
 def _dev_clock() -> datetime:
@@ -1369,6 +1386,8 @@ def _reserve_dev_registry(cmd_name: str, project_dir: Path) -> tuple[str, Path]:
     prefix = 'dev-command' if cmd_name == 'dev-command' else 'dev'
     base = _dev_clock().replace(microsecond=0)
     parent = registry_dir_for(project_dir, f"{prefix}-{base.strftime('%Y%m%d-%H%M%S')}").parent
+    if _root_project(parent):
+        raise RuntimeError('the filesystem root is no project: no registry is reserved')
     parent.mkdir(parents=True, exist_ok=True)
     for offset in range(86400):
         task_id = f"{prefix}-{(base + timedelta(seconds=offset)).strftime('%Y%m%d-%H%M%S')}"
@@ -1387,6 +1406,8 @@ def _reserve_dev_registry(cmd_name: str, project_dir: Path) -> tuple[str, Path]:
 
 def _write_new_file(path: Path, payload: bytes) -> None:
     """Create an immutable task-scoped artifact; never replace prior bytes."""
+    if _root_project(path):
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -1460,6 +1481,8 @@ def _write_enforce_flags(argv: list) -> int:
     registry_dir = registry_dir_named(project_dir, session_id)
     if registry_dir is None:
         return fail(f'no registry directory for --session-id {session_id}')
+    if locations.refuses_root(registry_dir, project_dir, 'prompt-workflow'):
+        return fail('the filesystem root is no project')
     try:
         registry_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1719,8 +1742,9 @@ def _ordinary_dev_start(cmd_name: str, user_input: str, sid: str, envelope_diges
             return json.dumps(data, ensure_ascii=False, sort_keys=True)
 
         bookmark = workflow_bookmark_path(sid)
-        bookmark.parent.mkdir(parents=True, exist_ok=True)
-        write_bookmark(bookmark, _started, encoding='utf-8')
+        if not _root_project(bookmark):
+            bookmark.parent.mkdir(parents=True, exist_ok=True)
+            write_bookmark(bookmark, _started, encoding='utf-8')
 
         codex_active = '--codex' in user_input.split()
         output = ''.join([
@@ -1767,9 +1791,18 @@ def _roots_ahead_of(start, cmd_name: str, sid: str) -> None:
 
 def handle_phase_a(cmd_name: str, user_input: str, sid: str, envelope_digest: str = '') -> None:
     """Phase A: slash command detected -- setup todos, state, emit checklist."""
-    if cmd_name in ('dev', 'dev-command', 'redev'):
+    if cmd_name in _DEV_COMMANDS:
         _roots_ahead_of(lambda: _ordinary_dev_start(cmd_name, user_input, sid, envelope_digest), cmd_name, sid)
         return
+    if cmd_name == 'close':  # no files, or the owner's --force: code completes it here (lib/close_exit.py)
+        try:
+            from lib import close_exit
+            done = close_exit.complete(user_input, CURRENT_TRANSCRIPT_PATH, PROJECT_DIR)
+        except Exception:  # an unread record completes nothing: the ordinary route runs
+            done = None
+        if done:
+            print(done)
+            return
     if cmd_name != 'dev-overnight':
         print_roots(cmd_name, sid)
     if cmd_name == "push":
@@ -1826,6 +1859,9 @@ def print_roots(cmd_name: str, sid: str) -> None:
         import overnight  # hooks/lib is on sys.path (see the WS1 block above)
         state = overnight.locate(sid, {'cwd': str(PROJECT_DIR)})[1] if cmd_name == 'dev-overnight' else None
         print(root_lines(state))
+        if isinstance(state, dict) and re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', str(state.get('start_time'))):
+            # /dev-overnight's <TS> stem: the launch's own time (commands/dev-overnight.md Step 2)
+            print('RUN_STAMP=' + re.sub(r'[-:Z]', '', state['start_time']).replace('T', '-'))
 
 
 def print_push_head() -> None:
@@ -1892,6 +1928,8 @@ def start_roots(data: dict) -> str:
 def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
     """Write the workflow bookmark file."""
     bm = workflow_bookmark_path(sid)
+    if _root_project(bm):
+        return
     try:
         from lib.todo_canonical import write_bookmark
         bm.parent.mkdir(parents=True, exist_ok=True)
@@ -1908,15 +1946,17 @@ def _write_bookmark(cmd_name: str, sid: str, arguments: str = '') -> None:
         pass
 
 
-def _clear_turn_state(session_id: str, cmd_name) -> None:
+def _clear_turn_state(session_id: str, cmd_name, prompt: str = '') -> None:
     """D5/TC-9: the only clearer of the tool streak and of the /do consent flag
-    (the files hooks/pretool-orchestrator-gate.py reads). Every
-    UserPromptSubmit starts a new turn, typed or not (the CLI also fires it
-    for a scheduled task, a background task or subagent reporting back and a
-    peer message), so the streak resets and /do consent, which lasts one turn,
-    goes unless this prompt is /do itself. An AskUserQuestion answered inside
+    (the files hooks/pretool-orchestrator-gate.py reads). A UserPromptSubmit
+    starts a new turn, typed or not (the CLI also fires it for a scheduled
+    task and a peer message), so the streak resets and /do consent, which
+    lasts one turn, goes unless this prompt is /do itself. A wake by a
+    returning subagent (a prompt that is a task-notification, which cannot be
+    typed) is not a turn of the owner: it resets nothing and keeps the consent
+    (the owner's decision of 2026-11-21). An AskUserQuestion answered inside
     the turn is not a UserPromptSubmit and keeps it."""
-    if not session_id:
+    if not session_id or str(prompt).lstrip().startswith('<task-notification>'):
         return
     from allowlist import write_tool_streak  # the streak's one writer (hooks/lib)
     write_tool_streak(session_id, None)
@@ -1954,7 +1994,7 @@ def main():
         # fails closed; handle_phase_a mints a unique id for the creation half.
         session_id = data.get('session_id', '')
         cmd_name = extract_command_name(user_input)
-        _clear_turn_state(session_id, cmd_name)
+        _clear_turn_state(session_id, cmd_name, user_input)
         if not cmd_name:
             handle_phase_b(session_id)
             recovery = wake_recovery(user_input)
@@ -2036,7 +2076,7 @@ def cli(argv: list) -> int:
         sid = os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID') or ''
         user_input = sys.stdin.read().strip()
         cmd_name = extract_command_name(user_input)
-        if not sid or cmd_name not in ('dev', 'dev-command', 'redev'):
+        if not sid or cmd_name not in _DEV_COMMANDS:
             print('prompt-workflow.py start: needs CLAUDE_CODE_SESSION_ID and the '
                   '/dev, /dev-command or /redev command text on stdin', file=sys.stderr)
             return 2
@@ -2065,6 +2105,8 @@ def cli(argv: list) -> int:
         if registry_dir is None or registry_dir.is_symlink():
             print(f'arm-registry: refusing to write the registry {registry_dir or repr(args.name)}',
                   file=sys.stderr)
+            return 1
+        if locations.refuses_root(registry_dir, project_dir, 'prompt-workflow'):
             return 1
         registry_dir.mkdir(parents=True, exist_ok=True)
         # A relaunch in the same session arms the same registry again: the

@@ -16,7 +16,6 @@ Steps 1-7, 10 and 11 are scripts in `<HARNESS_ROOT>/scripts/steps/` that print `
 ### Step 1: Initialize Workflow and Load TodoList
 
 ```bash
-python3 "<HARNESS_ROOT>/scripts/todo/test.py"
 python3 "<HARNESS_ROOT>/scripts/steps/test-prepare.py" init
 ```
 
@@ -143,7 +142,7 @@ Present, as plain text without emoji:
 
 Fix every failure Step 14 presented, from its recommendation or the failed validator's fix script where one exists, then re-run from Step 10 (from Step 8 when a fix changed a validator). Step 13 routes the new report; repeat Steps 14-15 until it routes to Step 16.
 
-Ask the owner only when a fix needs a decision the recommendation, the code or a sensible default cannot make (for example, two fixes that change the project's behaviour differently): one AskUserQuestion inside the turn that names that decision and offers the candidate fixes as its options. Every option is a fix that is applied and re-run; no option ends /test, skips a validator or accepts a failure. The answer only pauses: apply the chosen fix and continue.
+Nobody is asked. Fix what lies inside the scope /test was run on, from the recommendation, the code or a sensible default. A failure whose fix lies outside it, or needs a decision none of them makes (for example, two fixes that change the project's behaviour differently), is not fixed: Step 16's report lists it as not fixed, with the candidate fixes.
 
 ### Step 16: Generate Completion Report
 

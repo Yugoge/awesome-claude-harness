@@ -1,15 +1,14 @@
 """P12's registration change in settings.json (L4 #25, L5 #26), and the write guards it replaced.
 
-At the P12 base (retired_hooks.BASE) settings.json registers 78 hooks of 77 files; the tracked file
-registers 52 of 51:
+From the P12 base (retired_hooks.BASE) to the tracked settings.json:
 
 - L4: the seven write guards' PreToolUse registrations (REPLACED) go, and hooks/pretool-write-gate.py
   is registered once, on every tool, with a 70 s timeout, where the first one stood; the five anti-loop
   hooks' registrations go (ANTI_LOOP: two on PreToolUse Agent, three on SubagentStop), and their checks,
   hooks/lib/dev_loop_checks.py, are an advise rule of the two dispatch gates below instead of two
   registrations of their own; posttool-git-warn.sh is registered on ``Bash`` (its old matcher was a
-  regex on the tool name, which never matched); the three registered stubs go (STUBS; the files stay,
-  exit 0, for a session that loaded an older list: D15).
+  regex on the tool name, which never matched); the three registered stubs go (STUBS; the files went
+  later, when no running session had loaded an older list).
 - L5: fifteen registrations (DISPATCH) become three gates (GATES), none with a timeout, as none of the
   fifteen had one.
 
@@ -68,11 +67,10 @@ DEV_LOOP = "lib.dev_loop_checks:advice"
 GIT_WARN = "posttool-git-warn.sh"
 # (event, matcher, gate file, the rule name its RULES give dev_loop_checks or None)
 GATES = (
-    ("PreToolUse", "Agent", "pretool-dispatch-gate.py", "dev-loop-before"),
-    ("PostToolUse", "Agent", "posttool-dispatch-record.py", "dev-loop-after"),
+    ("PreToolUse", "Agent|Task", "pretool-dispatch-gate.py", "dev-loop-before"),  # lib/subagent.DISPATCH_TOOLS
+    ("PostToolUse", "Agent|Task", "posttool-dispatch-record.py", "dev-loop-after"),
     ("SubagentStop", "*", "subagentstop-producer-gate.py", None),
 )
-BASE_COUNT = 78
 
 _HOME = "${CLAUDE_HOME:-$HOME/.claude}/hooks/"
 OLD_GUARDS = (  # (matcher, file, timeout) at the base; 60 is the CLI's default timeout

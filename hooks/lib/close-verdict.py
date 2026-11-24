@@ -25,6 +25,10 @@ def last_nonempty(text: str) -> str:
 # (not landed), recognised BEFORE the `CLOSE:` prefix test.
 _ROUND_OPEN_RE = re.compile(r"^CLOSE_FINDINGS:\s*\d+\s+items?\b")
 
+# The classes that decide a close (classify_line's others: "retired", the owner's retirement, which only
+# close_exit appends and dev-lifecycle verifies; "unknown"; and classify_file's "missing").
+DECISIVE_CLASSES = ("yes", "no")
+
 
 def classify_line(line: str) -> str:
     text = (line or "").strip()
@@ -38,7 +42,20 @@ def classify_line(line: str) -> str:
         return "yes"
     if upper == "NO" or upper.startswith(("NO ", "NO-", "NO(")):
         return "no"
+    if upper.startswith("RETIRED ("):  # the owner's /close --retire (hooks/lib/close_exit.py); never decisive
+        return "retired"
     return "unknown"
+
+
+# The full form close_exit appends; classify_line's class "retired" is only its prefix.
+_RETIRED_RE = re.compile(r"^CLOSE: RETIRED \(by the owner at (\S+)\): (.+)$")
+
+
+def retired_fields(line: str) -> tuple[str, str] | None:
+    """(time, reason) of a line in close_exit's full retirement form, else None: the line's one
+    reading for a reader that needs more than its class (dev-lifecycle's retired row)."""
+    found = _RETIRED_RE.match((line or "").strip())
+    return (found.group(1), found.group(2)) if found else None
 
 
 def classify_file(path) -> str:
@@ -53,8 +70,8 @@ def classify_file(path) -> str:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("usage: close-verdict.py classify-line <line> | classify-file <path> (yes, no, unknown, "
-              "or missing) | last-line <path>", file=sys.stderr)
+        print("usage: close-verdict.py classify-line <line> | classify-file <path> (yes, no, retired, "
+              "unknown or missing) | last-line <path>", file=sys.stderr)
         return 2
     mode = argv[1]
     if mode == "classify-line":

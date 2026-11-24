@@ -2,10 +2,11 @@
 """
 Validator: validate-step-numbering
 Edge Case: EC004
-Purpose: Detect decimal step numbering - ensures workflow steps use integer numbering only
+Purpose: Detect decimal and lettered step numbering - ensures workflow steps use integer numbering only
 
 Root Cause: User explicitly prohibited decimal steps (1.1, 1.2) but /clean used Step 3.5.
-This validator prevents EC004 by scanning command .md files for decimal step patterns.
+This validator prevents EC004 by scanning command .md files for decimal and lettered (Step 4a)
+step patterns; tests/test_step_numbering.py runs it over the harness's own commands/ folder.
 """
 
 import argparse
@@ -30,8 +31,8 @@ def validate(project_root: Path) -> Dict:
     """
     violations = []
 
-    # Pattern: Step followed by decimal number (Step 1.1, Step 2.5, etc)
-    decimal_step_pattern = re.compile(r'(Step\s+\d+\.\d+)', re.IGNORECASE)
+    # Pattern: Step followed by a decimal (Step 1.1, Step 2.5) or a lettered number (Step 4a, Step 10A)
+    decimal_step_pattern = re.compile(r'(Steps?\s+\d+(?:\.\d+|[A-Za-z])\b)', re.IGNORECASE)
 
     commands_dir = project_root / "commands"
     if not commands_dir.exists():

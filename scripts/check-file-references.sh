@@ -4,14 +4,12 @@
 
 set -euo pipefail
 
-# Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Usage help
 usage() {
     cat <<EOF
 Usage: $0 <file-to-check> [project-root]
@@ -41,7 +39,6 @@ EOF
     exit 3
 }
 
-# Parameter check
 if [[ $# -lt 1 ]]; then
     usage
 fi
@@ -49,7 +46,6 @@ fi
 TARGET_FILE="$1"
 PROJECT_ROOT="${2:-.}"
 
-# Ensure project root exists
 if [[ ! -d "$PROJECT_ROOT" ]]; then
     echo -e "${RED}Error: Project directory does not exist: $PROJECT_ROOT${NC}" >&2
     exit 3
@@ -58,7 +54,6 @@ fi
 HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # install location, resolved before the cd below
 cd "$PROJECT_ROOT"
 
-# Ensure file exists
 if [[ ! -f "$TARGET_FILE" ]]; then
     echo -e "${RED}Error: File does not exist: $TARGET_FILE${NC}" >&2
     exit 3
@@ -75,23 +70,16 @@ echo -e "File: ${YELLOW}$TARGET_FILE${NC}"
 echo -e "Project: ${YELLOW}$PROJECT_ROOT${NC}"
 echo ""
 
-# ============================================
-# 1. Git History Analysis
-# ============================================
 echo -e "${BLUE}## 1. Git History Analysis${NC}"
 echo ""
 
 if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
-    # File creation time
     FILE_CREATED=$(git log --diff-filter=A --follow --format=%aI -1 -- "$TARGET_FILE" 2>/dev/null || echo "Unknown")
 
-    # Last modified time
     FILE_MODIFIED=$(git log -1 --format=%aI -- "$TARGET_FILE" 2>/dev/null || echo "Unknown")
 
-    # Commit count
     COMMIT_COUNT=$(git log --follow --oneline -- "$TARGET_FILE" 2>/dev/null | wc -l)
 
-    # Last commit info
     LAST_COMMIT=$(git log -1 --format="%h - %s (%ar)" -- "$TARGET_FILE" 2>/dev/null || echo "No commit history")
 
     echo -e "  Created: ${GREEN}$FILE_CREATED${NC}"
@@ -109,9 +97,6 @@ fi
 
 echo ""
 
-# ============================================
-# 2. Documentation Reference Check
-# ============================================
 echo -e "${BLUE}## 2. Documentation Reference Check (.md, .txt, README, etc.)${NC}"
 echo ""
 
@@ -141,9 +126,6 @@ fi
 
 echo ""
 
-# ============================================
-# 3. Code Reference Check
-# ============================================
 echo -e "${BLUE}## 3. Code Reference Check (.py, .js, .ts, .sh, etc.)${NC}"
 echo ""
 
@@ -180,9 +162,6 @@ fi
 
 echo ""
 
-# ============================================
-# 4. Config File Reference Check
-# ============================================
 echo -e "${BLUE}## 4. Config File Reference Check (settings.json, package.json, Makefile, etc.)${NC}"
 echo ""
 
@@ -240,9 +219,6 @@ fi
 
 echo ""
 
-# ============================================
-# 5. Script Cross-Reference Check (source/exec)
-# ============================================
 echo -e "${BLUE}## 5. Script Cross-Reference Check (source, exec, . )${NC}"
 echo ""
 
@@ -271,9 +247,6 @@ fi
 
 echo ""
 
-# ============================================
-# 6. Import Reference Check (Python import, JS require/import)
-# ============================================
 echo -e "${BLUE}## 6. Import Reference Check (import, require, use)${NC}"
 echo ""
 
@@ -307,9 +280,6 @@ fi
 
 echo ""
 
-# ============================================
-# 7. File Modification Time Check
-# ============================================
 echo -e "${BLUE}## 7. File Modification Time Check${NC}"
 echo ""
 
@@ -329,9 +299,6 @@ fi
 
 echo ""
 
-# ============================================
-# 8. Reference Type Classification (Functional vs Historical)
-# ============================================
 echo -e "${BLUE}## 8. Reference Type Classification${NC}"
 echo ""
 
@@ -386,7 +353,6 @@ echo -e "${BLUE}## 📊 Comprehensive Evaluation${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-# Calculate total references
 TOTAL_REFS=$((DOC_REF_FOUND + CODE_REF_FOUND + CONFIG_REF_FOUND + SCRIPT_REF_FOUND + IMPORT_REF_FOUND))
 
 echo -e "Reference statistics:"

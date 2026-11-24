@@ -39,6 +39,12 @@ class RuleError(cmdtext.TextNotFound):
     """A rule of the loop the command text does not state, or states so that the scripted run cannot be played."""
 
 
+def drafts(sub) -> str:
+    """The caller's drafts directory, <session root>/<role>, as commands/close.md has it printed: the settings'
+    CLAUDE_CODE_TMPDIR, then the session id."""
+    return os.path.join(sub.rp.env.get("CLAUDE_CODE_TMPDIR") or "/var/tmp/claude-scratch", sub.s.sid, sub.agent[1])
+
+
 # ---------------------------------------------------------------- reading the text
 
 def flat(text: str) -> str:
@@ -524,7 +530,7 @@ class CloseCodex:
                 act.terminal.update({run.report_rel(): verdict, "response_line": verdict})
                 return None
             # Overwrite policy: the section to a temp file, then the append helper the text names.
-            section = os.path.join("/tmp/claude-scratch/qa", f"close-section-{tid}-r{run.round}.md")
+            section = os.path.join(drafts(sub), f"close-section-{tid}-r{run.round}.md")
             sub.write(section, text + "\n", label=f"{sub.role} Write section")
             code = run.append_call().replace('"<absolute-temp-section-path>"', shlex.quote(section)).replace(
                 "<absolute-temp-section-path>", section)

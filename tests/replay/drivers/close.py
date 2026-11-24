@@ -33,8 +33,8 @@ TodoWrite call. What each step does is read from the tree's own text at run time
   AskUserQuestion (its JSON block, the task id bound), answered as the `rating` argument says; the
   orchestrator does nothing with the answer. Stop.
 * `--auto`: the discovery block, then each step walked over every parent before it is completed;
-  the batch line; one rating question per landed parent. `--auto <task>` first asks the Close mode
-  question (the dialog picks `/close --auto`).
+  the batch line; one rating question per landed parent. `--auto <task>` is the text's flag
+  combination: no call, the run ends on its NO_TARGET: line.
 
 Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
   after=dev|dev-command   the cycle closed (default dev; /do is drivers/do.py)
@@ -53,7 +53,7 @@ Driver arguments (cli.py --arg K=V), when run on its own (`--driver close`):
                           OPERATION_STALLED: line, no question, no verdict (4 (k))
   variant=auto            `/close --auto` (the cycle's task discovered as close_pending; parents=2 runs a
                           second /dev first: acceptance 9)
-  variant=auto-task       `/close --auto <task>`: the Close mode question first (acceptance 5)
+  variant=auto-task       `/close --auto <task>`: ends on the NO_TARGET: line of the flag combination (acceptance 5)
   variant=late-repair     BA's stage (ticket, context, acceptance criteria) is removed after the cycle's
                           terminal and `/close --late-repair <task-id>` is typed: the R4 section's
                           controller calls as it spells them (init; BA, dev and QA from the cycle's
@@ -125,6 +125,25 @@ from ..replay import MODEL, Deviation, Rejected
 from . import _codex
 
 PIPELINE = "close"
+# /close's steps by what each is, from its own canonical list (scripts/todo/close.py; drivers/dev.py Steps: a step
+# gone, or the debate step no longer calling qa, raises). `live`: the list of the harness home being played at the
+# moment a step is needed, not of the home the module was loaded on (a replay may play an older /close, whose list
+# has fewer steps, until the home lands); `CL.has(name)` says whether that version has the step.
+from .dev import Steps  # noqa: E402
+CL = Steps(command="close", what={"disposition": ("Resolve the disposition", None),
+                                  "inspectors": ("Dispatch three inspectors", None),
+                                  "debate": ("Delegate close debate to QA subagent", "qa"),
+                                  "verdict": ("Echo the verdict", None), "rating": ("Ask the user to rate", None)}, live=True)
+
+
+def advance_to(o, n: int, label) -> None:
+    """Advance the checklist until Step n is in_progress, one completion per TodoWrite, each labelled by the step it
+    completes and the next one (`label` dresses the text): a step the text adds between is completed on the way."""
+    while not o.at_step(n):
+        i = o.current()
+        k = re.match(r"Step (\d+)", o.todos[i]["content"]).group(1)
+        nxt = re.match(r"Step (\d+)", o.todos[i + 1]["content"]).group(1)
+        o.advance(label=label(f"TodoWrite Step {k} done, Step {nxt} in_progress"))
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 COST = {"plain": 448, "route": 485, "append": 530, "auto": 462}
@@ -133,7 +152,7 @@ COST = {"plain": 448, "route": 485, "append": 530, "auto": 462}
 # the CLAUDE_HOME channel, so none applies to it. Kept for drivers that compose this one.
 RESPELLINGS = [
     Respelling("C3 append helper", r'python3 "\$PROJECT_ROOT/scripts/close-report-append\.py"',
-               "python3 ~/.claude/scripts/close-report-append.py", "commands/close.md Step 2 (:776 at 2acc29b)"),
+               "python3 ~/.claude/scripts/close-report-append.py", "commands/close.md, the debate step (:776 at 2acc29b)"),
 ]
 
 # Blocks the replays meet, each passed at the step it occurs on by a deviation whose comment quotes
@@ -147,7 +166,7 @@ DEVIATIONS = Deviations([
     # DEVIATION: "E2E_ENFORCE_BLOCKED: agent <agent> (type=qa) has no qa-report-*.json in <project>/docs/dev/
     # under session dev-<ts>." subagentstop-e2e-enforce.py refuses close QA's stop on a /do task where the
     # e2e flag's session holds no qa-report.
-    ("/close Step 2 Agent(qa) close round *", Deviation(
+    ("/close Step [0-9]* Agent(qa) close round *", Deviation(  # the debate step, whatever its number in the version played
         "hooks/subagentstop-e2e-enforce.py", "E2E_ENFORCE_BLOCKED",
         "close QA of a /do task writes the close-report its obligation declares, no qa-report")),
 ])
@@ -176,6 +195,22 @@ def fact(rp, key: str, value) -> None:
         doc.append({"key": key, "value": value})
         with open(path, "w") as fh:
             json.dump(doc, fh, indent=1)
+
+
+def auto_targets(rp, sid: str, action: str, parents) -> None:
+    """The --auto list the owner's typed command fixed: the replay's UserPromptSubmit runs settings.json's
+    hooks as a session's does, so userprompt-auto-targets.py wrote <state root>/auto-targets/<sid>.json at the
+    prompt (dev-lifecycle freeze_auto_targets); recorded beside the text's own discovery of ``parents``."""
+    path = os.path.join(rp.layout.state, "auto-targets", f"{sid}.json")
+    with rp.acting("driver"):
+        try:
+            with open(path) as fh:
+                doc = json.load(fh)
+        except (OSError, ValueError):
+            doc = None
+    targets = doc.get("targets") if isinstance(doc, dict) and doc.get("action") == action else None
+    fact(rp, f"{action} --auto targets fixed at the prompt",
+         {"written": doc is not None, "same_as_discovery": targets is not None and sorted(targets) == sorted(parents)})
 
 
 def resolved_role(rp, agent_id: str):
@@ -337,6 +372,11 @@ def _dispatch_answer(run, ans, path: str, detail: str, label: str, edits=None):
                          deviation=run.devs.at(lab))
         return d, role
     call = (ans or {}).get("subagent_call") if isinstance(ans, dict) else None
+    if isinstance(call, list):  # a step stating several calls (the requirement round): the one the template dispatches
+        want = ((ans.get("template") or {}).get("role"))
+        pool = [c for c in call if isinstance(c, dict)]
+        call = next((c for c in pool if c.get("subagent_type") == want), None) or next(
+            (c for c in pool if not c.get("optional")), None)
     if isinstance(ans, dict) and ans.get("source") == "todo_step" and (call or {}).get("subagent_type"):
         # "a fresh dispatch of that role under the same task id, from the template": the id the template's
         # artifacts carry (a lane's, in a fan-out cycle)
@@ -484,8 +524,11 @@ class DevProducer:
             o.s, o.devs = saved
 
     def step_of(self, role: str) -> int:
+        def required(t):  # the roles of the calls the item requires: its one call, or a list's non-optional entries
+            call = t.get("subagent_call") or {}
+            return {c.get("subagent_type") for c in (call if isinstance(call, list) else [call]) if not c.get("optional")}
         steps = [int(m.group(1)) for t in self.cyc.o.todos
-                 if (t.get("subagent_call") or {}).get("subagent_type") == role
+                 if role in required(t)
                  for m in [re.match(r"Step (\d+)", t.get("content", ""))] if m]
         if not steps:
             raise cmdtext.TextNotFound(f"no checklist step of the cycle calls {role!r}")
@@ -672,12 +715,12 @@ class CloseRun:
         self.rp.task(self.tid)
 
     # ------------------------------------------------------------ start
-    def start(self, args: str) -> None:
+    def start(self, args: str, again: str = "") -> None:
         o = self.o
-        o.slash(args, label=self.label("typed") if not self.auto else "/close --auto typed")
+        o.slash(args, label=self.label("typed" + again) if not self.auto else "/close --auto typed")
         os.environ["CLAUDE_TODO_PROMPT"] = f"/close {args}"
         try:
-            o.todo_start(label=self.label("TodoWrite canonical list"))
+            o.todo_start(label=self.label("TodoWrite canonical list" + again))
         finally:
             os.environ.pop("CLAUDE_TODO_PROMPT", None)
         o.values.update(TASK_ID=self.tid)
@@ -685,9 +728,9 @@ class CloseRun:
 
     # ------------------------------------------------------------ task-id resolution
     def resolve_typed(self) -> None:
-        """A typed path (P5 review M): "Verify it exists"; one that does not is awaiting-input cause (iii)
-        naming it, asked in the turn with ONE AskUserQuestion (D23), this conversation's task recommended.
-        The owner picks it, and the resolution resumes in place on that id (TASK_ID, as typed)."""
+        """A typed path (P5 review M): "Verify it exists"; one that does not binds no task: Task-id resolution's
+        "Which task?" ends the run on its NO_TARGET: line naming the candidates, nobody asked. The owner types
+        `/close <the task this conversation ran>`, and the run starts again on that id."""
         o = self.o
         lab = self.label("Task-id resolution Glob typed path")
         g = o.s.tool("Glob", {"pattern": os.path.basename(self.typed),
@@ -695,17 +738,13 @@ class CloseRun:
                      label=lab, deviation=self.devs.at(lab))
         if not g.ok or g.response.get("filenames"):
             raise agents.PlayError(f"Task-id resolution: the typed {self.typed} exists, or Glob failed")
-        question = f"{self.typed} does not exist, so no spec is identified. Which task do I close?"
-        lab = self.label("Task-id resolution AskUserQuestion")
-        options = [{"label": f"{self.tid} (Recommended)", "description": "the task this conversation ran"},
-                   {"label": "I name another task", "description": ""}]
-        call = o.s.tool("AskUserQuestion", {"questions": [{"question": question, "header": "Task id",
-                                                           "multiSelect": False, "options": options}]},
-                        label=lab, deviation=self.devs.at(lab))
-        answer = (call.response.get("answers") or {}).get(question, "").replace(" (Recommended)", "") if call.ok else ""
-        fact(self.rp, "close typed", {"typed": self.typed, "asked": question, "answer": answer})
-        if answer != self.tid:
-            raise agents.PlayError(f"Task-id resolution: the owner's answer {answer!r} is not {self.tid}")
+        if "print one line `NO_TARGET: `" not in " ".join(o.section("Task-id resolution").split()):
+            raise cmdtext.TextNotFound("Task-id resolution: no NO_TARGET: line for a task it cannot bind")
+        line = f"NO_TARGET: {self.typed} does not exist; /close {self.tid}"
+        ev = o.s.stop(line, label=self.label("Stop (no task)"), deviation=self.devs.at(self.label("Stop (no task)")))
+        fact(self.rp, "close typed", {"typed": self.typed, "line": line, "retyped": self.tid,
+                                      "still_blocked": bool(ev.still_blocked)})
+        self.start(self.tid, " again")
 
     def resolve_task(self) -> None:
         o = self.o
@@ -715,6 +754,7 @@ class CloseRun:
                      label=self.label("Task-id resolution Glob reports"),
                      deviation=self.devs.at(self.label("Task-id resolution Glob reports")))
         names = [os.path.basename(p) for p in (g.response.get("filenames") or [])] if g.ok else []
+        # OLDER_TEXT: "a dev-report takes precedence" -- an older Task-id resolution's rule; today's text has none
         if f"dev-report-{self.tid}.json" in names and "a dev-report takes precedence" in o.section("Task-id resolution"):
             self.do_report = None
             return
@@ -724,8 +764,8 @@ class CloseRun:
     def disposition(self, label: str) -> dict:
         """Step 0's one call (its block), its output read as the text says: the DISPOSITION line, the GAP
         lines, the CHAIN line; a non-zero exit is an instrument failure (its reason on stderr)."""
-        c = self.run_text(self.o.block("Step 0", lang="bash", index=0), self.label(f"{label} Bash disposition"),
-                          "Step 0: the task's disposition")
+        c = self.run_text(self.o.block(f"Step {CL.disposition}", lang="bash", index=0), self.label(f"{label} Bash disposition"),
+                          f"Step {CL.disposition}: the task's disposition")
         if not c.ok:
             text = (c.error or "").strip()
             reason = next((l for l in reversed(text.splitlines()) if l.strip()), text)
@@ -745,9 +785,13 @@ class CloseRun:
                 out["chain"] = json.loads(line[len("CHAIN="):])
         return out
 
-    def step0(self, label: str = "Step 0", rounds: int = 4) -> bool:
+    def step0(self, label: str | None = None, rounds: int = 4) -> bool:
         """Step 0 as the text says: one call; incomplete -> each gap routed (Routes), the call run again;
-        a non-zero exit run once more, then one OPERATION_STALLED: line. False when stalled."""
+        a non-zero exit run once more, then one OPERATION_STALLED: line. False when stalled. A version of /close
+        whose list has no such step (it resolved nothing there) does not play it: True."""
+        if not CL.has("disposition"):
+            return True
+        label = label or f"Step {CL.disposition}"
         out = self.disposition(label)
         k = 0
         while True:
@@ -755,12 +799,12 @@ class CloseRun:
                 again = self.disposition(f"{label} retry")
                 if not again["ok"]:
                     self.stalled = again["reason"]
-                    self.o.s.say(f"OPERATION_STALLED: {again['reason']}\nNext harness-repair item: the Step 0 "
+                    self.o.s.say(f"OPERATION_STALLED: {again['reason']}\nNext harness-repair item: the Step {CL.disposition} "
                                  f"disposition call for {self.tid}.")
-                    fact(self.rp, "close Step 0", {"label": label, "stalled": self.rp.norm_text(again["reason"])[:300]})
+                    fact(self.rp, f"close Step {CL.disposition}", {"label": label, "stalled": self.rp.norm_text(again["reason"])[:300]})
                     return False
                 out = again
-            fact(self.rp, "close Step 0", {"label": label, "disposition": out["disposition"],
+            fact(self.rp, f"close Step {CL.disposition}", {"label": label, "disposition": out["disposition"],
                                             "gaps": [(g["artifact"], g["problem"]) for g in out["gaps"]],
                                             "mode": out["chain"].get("mode")})
             if out["disposition"] == "chain_pass":
@@ -768,7 +812,7 @@ class CloseRun:
                 self.o.values.update(ARTIFACT_CHAIN=json.dumps(self.chain))
                 return True
             if out["disposition"] != "incomplete" or k >= rounds:
-                raise agents.PlayError(f"Step 0 still {out['disposition'] or 'unread'} after {k} routing round(s): "
+                raise agents.PlayError(f"Step {CL.disposition} still {out['disposition'] or 'unread'} after {k} routing round(s): "
                                        f"{[(g['artifact'], g['problem']) for g in out['gaps']]}")
             k += 1
             # what the main agent's own step reads when the reader names one (own_work): the gaps as errors
@@ -779,14 +823,16 @@ class CloseRun:
                 by_artifact.setdefault(g["artifact"], []).append(f"{g['problem']}: {g['message']}")
             n = len(self.routed)
             for art, problems in by_artifact.items():
-                self.route_path(art, "; ".join(problems), f"Step 0 round {k}")
+                self.route_path(art, "; ".join(problems), f"Step {CL.disposition} round {k}")
             self.repairs.extend(self.routed[n:])  # a repair Routes completed: a `## Disclosures` line
             out = self.disposition(f"{label} round {k} re-run")
 
     def cp_state(self) -> None:
         o = self.o
+        if not CL.has("disposition"):  # a Glob of Step 0's own: a version without that step has none
+            return
         g = o.s.tool("Glob", {"pattern": "cp-state-qa.json", "path": os.path.join(o.project, ".claude/specs", self.tid)},
-                     label=self.label("Step 0 Glob cp-state"), deviation=self.devs.at(self.label("Step 0 Glob cp-state")))
+                     label=self.label(f"Step {CL.disposition} Glob cp-state"), deviation=self.devs.at(self.label(f"Step {CL.disposition} Glob cp-state")))
         self.spec_id = self.tid if g.ok and g.response.get("filenames") else ""
 
     # ------------------------------------------------------------ the late-repair route (R4)
@@ -814,7 +860,7 @@ class CloseRun:
         template (no template of /close declares BA, or dev outside the /do route), against the work as it
         stands; returns the chain report its obligation declares (record-stage's --report-path)."""
         tid = self.tid
-        lab = self.label(f"Step 0 late-repair Agent({stage})")
+        lab = self.label(f"Step {CL.disposition} late-repair Agent({stage})")
         kw = {}
         if stage == "dev" and self.variant == "late-repair-drift":
             kw = {"edits": [(FINDING["path"], self.current(FINDING["path"]), self.fixed(FINDING["path"]))],
@@ -839,12 +885,12 @@ class CloseRun:
         `admitted` item says. False when Step 0 stalls."""
         o, tid = self.o, self.tid
         o.values["LATE_REPAIR"] = "true"
-        init = self.lr_run("init", "Step 0 late-repair Bash init", "Late repair: eligibility and the run record")
+        init = self.lr_run("init", f"Step {CL.disposition} late-repair Bash init", "Late repair: eligibility and the run record")
         with self.rp.acting("driver"):
             recorded = os.path.exists(os.path.join(o.project, f"docs/dev/late-repair-run-{tid}.json"))
         fact(self.rp, "late-repair run record", recorded)
         if init.get("outcome") == "refuse":
-            o.s.say(f"Late repair declined for {tid}: {init.get('reason')}. Step 0's disposition call runs "
+            o.s.say(f"Late repair declined for {tid}: {init.get('reason')}. Step {CL.disposition}'s disposition call runs "
                     "(the ordinary route).")
             o.values["LATE_REPAIR"] = "false"
             return self.step0()
@@ -853,7 +899,7 @@ class CloseRun:
         run_id = init.get("repair_run_id") or ""
         for stage in ("ba", "dev", "qa"):
             rel = self.lr_stage(stage)
-            got = self.lr_run("record-stage", f"Step 0 late-repair Bash record-stage {stage}",
+            got = self.lr_run("record-stage", f"Step {CL.disposition} late-repair Bash record-stage {stage}",
                               f"Late repair: record the {stage} stage",
                               [(r"^ba\|dev\|qa$", stage), (r"^path$", rel), (r"^id$", run_id)])
             if got.get("outcome") != "recorded":
@@ -863,23 +909,23 @@ class CloseRun:
             with self.rp.acting("driver"):
                 with open(os.path.join(o.project, FINDING["path"]), "a") as fh:
                     fh.write(PEER_LINE)
-        fin = self.lr_run("finalize", "Step 0 late-repair Bash finalize", "Late repair: drift detection",
+        fin = self.lr_run("finalize", f"Step {CL.disposition} late-repair Bash finalize", "Late repair: drift detection",
                           [(r"^id$", run_id)])
         if fin.get("outcome") != "finalized_pending_verification":
             raise agents.PlayError(f"finalize printed {fin}")
         for k in range(4):
-            ver = self.lr_run("verify-disclosure", f"Step 0 late-repair Bash verify-disclosure {k}",
+            ver = self.lr_run("verify-disclosure", f"Step {CL.disposition} late-repair Bash verify-disclosure {k}",
                               "Late repair: verify the disclosure")
             if ver.get("outcome") == "admitted":
                 break
             if not ver.get("path") or k == 3:
                 raise agents.PlayError(f"verify-disclosure printed {ver}")
-            self.route_path(ver["path"], ver.get("reason", ""), f"Step 0 late-repair verify round {k + 1}")
+            self.route_path(ver["path"], ver.get("reason", ""), f"Step {CL.disposition} late-repair verify round {k + 1}")
         item = next((it for it in re.split(r"\n(?=- )", self.lr_section()) if it.startswith("- `admitted`")), "")
         chain_call = "disposition call" in item
-        fact(self.rp, "late-repair admitted", {"admitted item runs Step 0's disposition call": chain_call})
+        fact(self.rp, "late-repair admitted", {f"admitted item runs Step {CL.disposition}'s disposition call": chain_call})
         if chain_call:
-            return self.step0("Step 0 late-repair admitted")
+            return self.step0(f"Step {CL.disposition} late-repair admitted")
         return True
 
     def late_inputs(self, where: str, **extra) -> None:
@@ -1039,7 +1085,7 @@ class CloseRun:
         """The dev-report dev wrote along the do-report's route, where the text has it conclude the /do task
         (Q7) and it exists."""
         rel = f"docs/dev/dev-report-{self.tid}.json"
-        said = "dev-report-<TASK_ID>.json" in self.o.section("Step 1")
+        said = "dev-report-<TASK_ID>.json" in self.o.section(f"Step {CL.inspectors}")
         return rel if said and os.path.exists(os.path.join(self.o.project, rel)) else None
 
     def cycle_files(self) -> list:
@@ -1047,31 +1093,31 @@ class CloseRun:
             files = list((self.load(self.do_report).get("do") or {}).get("files_modified") or [])
             rel = self.do_conclusion()
             if rel:
-                self.read(rel, self.label("Step 1 Read the /do task's dev-report"))
+                self.read(rel, self.label(f"Step {CL.inspectors} Read the /do task's dev-report"))
                 files += [f for f in (self.load(rel).get("dev") or {}).get("files_modified") or [] if f not in files]
             return files
         rel = self.chain.get("canonical_dev_report") or ""
         if not rel:
             return []
-        self.read(rel, self.label("Step 1 Read canonical dev report"))
+        self.read(rel, self.label(f"Step {CL.inspectors} Read canonical dev report"))
         return list((self.load(rel).get("dev") or {}).get("files_modified") or [])
 
     def no_registry(self) -> bool:
         """Whether the text has a /do task leave out Step 1's registry call and the FIRST ACTION line of every
         dispatch of Steps 1 and 2 (a /do task has no registry directory)."""
-        return bool(self.do_report) and "leave the FIRST ACTION line out" in self.o.section("Step 1")
+        return bool(self.do_report) and "leave the FIRST ACTION line out" in self.o.section(f"Step {CL.inspectors}")
 
     def registry_name(self) -> None:
         if self.no_registry():
             return
-        c = self.run_text(self.o.block("Step 1", lang="bash", index=0), self.label("Step 1 Bash registry-dir"),
+        c = self.run_text(self.o.block(f"Step {CL.inspectors}", lang="bash", index=0), self.label(f"Step {CL.inspectors} Bash registry-dir"),
                           "The task's registry directory")
         self.session_id = (c.response.get("stdout") or "").strip() if c.ok else ""
 
     def inspector_bullets(self) -> list:
         """(subagent_type, FIRST ACTION line, obligation, report path) of each of Step 1's three Agent calls."""
         out = []
-        for line in self.o.section("Step 1").split("\n"):
+        for line in self.o.section(f"Step {CL.inspectors}").split("\n"):
             m = re.match(r"\s*-\s+Agent (?:tool )?call \d+:\s*`subagent_type:\s*([\w-]+)`", line)
             if not m:
                 continue
@@ -1080,7 +1126,7 @@ class CloseRun:
             report = re.search(r"writes? its report to `([^`]+)`", line).group(1)
             out.append((m.group(1), first, ob, report))
         if len(out) != 3:
-            raise cmdtext.TextNotFound(f"Step 1 lists {len(out)} inspector dispatches, not three")
+            raise cmdtext.TextNotFound(f"Step {CL.inspectors} lists {len(out)} inspector dispatches, not three")
         return out
 
     def inspector_act(self, role: str) -> agents.Act:
@@ -1106,7 +1152,7 @@ class CloseRun:
         o = self.o
         self.files = self.cycle_files()
         if self.late:
-            self.late_inputs("Step 1 inputs", **{"--changed-files": list(self.files)})
+            self.late_inputs(f"Step {CL.inspectors} inputs", **{"--changed-files": list(self.files)})
         self.registry_name()
         self.inspector_reports = []
         for role, first, ob, report in self.inspector_bullets():
@@ -1118,7 +1164,7 @@ class CloseRun:
                 raise cmdtext.TextNotFound(f"inspector prompt keeps placeholders {left}")
             act = self.inspector_act(role)
             player = agents.Player(o.tree, prompt, act, role=role)
-            lab = self.label(f"Step 1 Agent({role})")
+            lab = self.label(f"Step {CL.inspectors} Agent({role})")
             o.s.dispatch(role, prompt, description=role, body=player.body, result=player.final, label=lab,
                          deviation=self.devs.at(lab))
             self.inspector_reports.append(o.bind(report))
@@ -1171,13 +1217,13 @@ class CloseRun:
 
     def qa_prompt(self) -> str:
         o = self.o
-        tpl = next(b.text for b in cmdtext.blocks(o.section("Step 2")) if "<obligation" in b.text)
+        tpl = next(b.text for b in cmdtext.blocks(o.section(f"Step {CL.debate}")) if "<obligation" in b.text)
         lines = [line for line in tpl.split("\n")
                  if (self.spec_id or not line.strip().startswith("SECOND ACTION (only if SPEC_ID is non-empty"))
                  and not (self.no_registry() and line.startswith("FIRST ACTION:"))]
         prompt = self.input_lines("\n".join(lines))
         if self.late:
-            self.late_inputs("Step 2 inputs", **{"Input artifacts": [
+            self.late_inputs(f"Step {CL.debate} inputs", **{"Input artifacts": [
                 l.replace(self.tid, "<task>")[:160] for l in prompt.split("\n")
                 if l.startswith(("- Artifact-chain result:", "- Mode:", "- Report paths:", "- QA inputs:"))]})
         prompt = o.instantiate(prompt, self.tid)
@@ -1198,9 +1244,9 @@ class CloseRun:
                  f"Rounds run: 1 (judging round {rounds} of this close)",
                  "Workflow Integrity Dimension:",
                  "1. Downstream consumability: " + ("N/A — /do path: the do-report is changelog-analyst's whitelist source"
-                                                    if self.do_report else "PASS — Step 0's chain_pass covers the chain /commit consumes"),
+                                                    if self.do_report else f"PASS — Step {CL.disposition}'s chain_pass covers the chain /commit consumes"),
                  "2. task-id chain consistency: " + ("N/A — /do path: do-report -> close-report under one task id"
-                                                     if self.do_report else "PASS — Step 0's chain_pass covers every identity"),
+                                                     if self.do_report else f"PASS — Step {CL.disposition}'s chain_pass covers every identity"),
                  "3. Pre-existing-defect rule: PASS — nothing pre-existing raised",
                  "4. Self-deployability: PASS — (i) PASS citing chain_pass, (ii) PASS (local bare origin), (iii) PASS, (iv) N/A",
                  "Codex consultation: codex_status: disabled_by_user",
@@ -1223,7 +1269,7 @@ class CloseRun:
             if not append:
                 return None
             # Overwrite policy: the section to a temp file, then the append helper the text names.
-            section = os.path.join("/tmp/claude-scratch/qa", f"close-section-{tid}-r{rounds}.md")
+            section = os.path.join(_codex.drafts(sub), f"close-section-{tid}-r{rounds}.md")
             text = f"## Close attempt (round {rounds}) {utc_now()}\n\n{body}\n\n{verdict}\n"
             sub.write(section, text, label=f"{sub.role} Write section")
             code = self.append_call()
@@ -1246,9 +1292,9 @@ class CloseRun:
         return act
 
     def append_call(self) -> str:
-        m = re.search(r"`([^`]*close-report-append\.py[^`]*)`", self.o.section("Step 2"))
+        m = re.search(r"`([^`]*close-report-append\.py[^`]*)`", self.o.section(f"Step {CL.debate}"))
         if not m:
-            raise cmdtext.TextNotFound("Step 2 names no append helper call")
+            raise cmdtext.TextNotFound(f"Step {CL.debate} names no append helper call")
         return m.group(1)
 
     def close_round(self, verdict: str, finding=None, prompt: str | None = None, label: str | None = None) -> str:
@@ -1260,7 +1306,7 @@ class CloseRun:
         prompt = prompt or self.qa_prompt()
         act = self.close_qa_act(verdict, finding, append)
         player = agents.Player(o.tree, prompt, act, role="qa")
-        lab = label or self.label(f"Step 2 Agent(qa) close round {self.round}")
+        lab = label or self.label(f"Step {CL.debate} Agent(qa) close round {self.round}")
         d = o.s.dispatch("qa", prompt, description="close debate", body=player.body, result=player.final, label=lab,
                          deviation=self.devs.at(lab))
         text = ((d.response.get("content") or [{}])[0].get("text") or "") if d.response else ""
@@ -1302,15 +1348,15 @@ class CloseRun:
         while last.startswith("CLOSE_FINDINGS") and k < 3:
             k += 1
             o.s.say(last)
-            self.read(self.report_rel(), self.label(f"Step 2 Read close-report round {self.round}"))
+            self.read(self.report_rel(), self.label(f"Step {CL.debate} Read close-report round {self.round}"))
             path = (first or {}).get("path") or self.report_rel()
             edits = [(FINDING["path"], self.current(FINDING["path"]), self.fixed(FINDING["path"]))]
             if (first or {}).get("new") is not None:  # break: the writer puts its own fix back
                 edits = [(first["path"], self.current(first["path"]), first["new"])]
             n = len(self.routed)
-            self.route_path(path, (first or FINDING)["detail"], f"Step 2 round {k}", edits=edits, close_finding=True)
+            self.route_path(path, (first or FINDING)["detail"], f"Step {CL.debate} round {k}", edits=edits, close_finding=True)
             self.repairs.extend(self.routed[n:])
-            if not self.step0(f"Step 2 round {k} Step 0"):
+            if not self.step0(f"Step {CL.debate} round {k} Step {CL.disposition}"):
                 return ""
             verdict = f"CLOSE: YES - with disclosures: {len(self.repairs)} items" if self.repairs else CLOSE_YES_PLAIN
             last = self.close_round(verdict)
@@ -1335,7 +1381,7 @@ class CloseRun:
         for item in (self.chain.get("qa_inputs") or []) if not self.do_report else []:
             rel = item if isinstance(item, str) else (item.get("path") or item.get("qa_report") or "")
             if rel and os.path.isfile(os.path.join(o.project, rel)):
-                self.read(rel, self.label(f"Step 3 Read {rel}"))
+                self.read(rel, self.label(f"Step {CL.verdict} Read {rel}"))
         o.s.say("## Session Summary\n- Accomplished: toy.add validates its arguments.\n- Not accomplished: none.\n"
                 "- User needs satisfied: non-numbers raise TypeError naming the argument.\n"
                 "- User needs not satisfied: none.\n- Bugs encountered: none.\n- Improvement opportunities: none.")
@@ -1343,7 +1389,7 @@ class CloseRun:
 
     # ------------------------------------------------------------ Step 4
     def rating_input(self) -> dict:
-        block = next(b.text for b in cmdtext.blocks(self.o.section("Step 4")) if '"questions"' in b.text)
+        block = next(b.text for b in cmdtext.blocks(self.o.section(f"Step {CL.rating}")) if '"questions"' in b.text)
         return json.loads(block.replace("<task-id>", self.tid))
 
     def step4(self, answer: str = "label", nth: int = 1) -> None:
@@ -1366,7 +1412,7 @@ class CloseRun:
             self.o.s.main._result(tid, f"<tool_use_error>Error: {err}</tool_use_error>", error=True,
                                   resp=f"Error: {err}")
             self.asked.append((self.tid, answer))
-            fact(self.rp, "close Step 4", {"task": "<task>", "header": q.get("header"), "labels": labels,
+            fact(self.rp, f"close Step {CL.rating}", {"task": "<task>", "header": q.get("header"), "labels": labels,
                                             "multiSelect": q.get("multiSelect"),
                                             "source": (tin.get("metadata") or {}).get("source"),
                                             "answer": answer, "nth": nth, "ok": False, "blocked": False,
@@ -1387,12 +1433,12 @@ class CloseRun:
                 return dict(base, answers={q["question"]: "it mostly worked"}, response="it mostly worked")
             pick = next((l for l in labels if l.startswith(answer + " ")), labels[0])
             return dict(base, answers={q["question"]: pick})
-        lab = self.label("Step 4 AskUserQuestion") + (f" again {nth}" if nth > 1 else "")
+        lab = self.label(f"Step {CL.rating} AskUserQuestion") + (f" again {nth}" if nth > 1 else "")
         c = self.o.s.tool("AskUserQuestion", tin, perform=perform, label=lab, deviation=self.devs.at(lab))
         self.asked.append((self.tid, answer))
         with self.rp.acting("driver"):
             held = [row for row in scorelog.rows(self.rp) if row.get("kind") == "rating"]
-        fact(self.rp, "close Step 4", {"task": "<task>", "header": q.get("header"), "labels": labels,
+        fact(self.rp, f"close Step {CL.rating}", {"task": "<task>", "header": q.get("header"), "labels": labels,
                                         "multiSelect": q.get("multiSelect"), "source": (tin.get("metadata") or {}).get("source"),
                                         "answer": answer, "nth": nth, "label": lab, "ok": c.ok, "blocked": c.blocked,
                                         "hook_ran": c.post is not None, "rating_rows": held})
@@ -1404,20 +1450,20 @@ class CloseRun:
         if not (self.late_repair() if self.late else self.step0()):
             return ""
         self.cp_state()
-        o.advance(label=self.label("TodoWrite Step 0 done, Step 1 in_progress"))
+        advance_to(o, CL.inspectors, self.label)
         self.step1()
-        o.advance(label=self.label("TodoWrite Step 1 done, Step 2 in_progress"))
+        advance_to(o, CL.debate, self.label)
         last = self.step2()
         if not last:
             return ""
-        o.advance(label=self.label("TodoWrite Step 2 done, Step 3 in_progress"))
+        advance_to(o, CL.verdict, self.label)
         self.step3(last)
-        o.advance(label=self.label("TodoWrite Step 3 done, Step 4 in_progress"))
+        advance_to(o, CL.rating, self.label)
         if self.landed:
             self.step4(self.ratings[0])
             for nth, answer in enumerate(self.again, 2):
                 self.step4(answer, nth)
-        o.advance(label=self.label("TodoWrite Step 4 done"))
+        o.advance(label=self.label(f"TodoWrite Step {CL.rating} done"))
         return last
 
     def steps_1_2(self) -> str:
@@ -1432,7 +1478,7 @@ class CloseRun:
         if self.typed:
             self.resolve_typed()
         last = self.body()
-        self.outcome = last or ("stalled at Step 0 (the line above)" if self.stalled else "")
+        self.outcome = last or (f"stalled at Step {CL.disposition} (the line above)" if self.stalled else "")
         ev = self.o.s.stop(f"/close {self.tid}: {self.outcome}", label="/close Stop",
                            deviation=self.devs.at("/close Stop"))
         report_last, n = self.report_form()
@@ -1466,50 +1512,50 @@ class CloseRun:
     def run_noba(self) -> None:
         """Finding 1 (D8): Step 0 names BA's missing ticket in a /close span whose task has dispatch records of
         an earlier /close but no /dev span left. Each gap goes to the reader as Routes says; one it names no
-        owner for is Routes' last bullet: one owner question (header Request), the owner's decision, where the
-        turn ends; nothing here writes BA's artifact."""
+        owner for is Routes' last bullet: a report naming it on a NO_OWNER: line, nobody asked, where the turn
+        ends and its Stop passes; nothing here writes BA's artifact."""
         o = self.o
         self.start(self.tid)
-        out = self.disposition("Step 0")
-        fact(self.rp, "close Step 0", {"label": "Step 0", "disposition": out["disposition"],
+        out = self.disposition(f"Step {CL.disposition}")
+        fact(self.rp, f"close Step {CL.disposition}", {"label": f"Step {CL.disposition}", "disposition": out["disposition"],
                                         "gaps": [(g["artifact"], g["problem"]) for g in out["gaps"]],
                                         "mode": (out["chain"] or {}).get("mode")})
+        unowed = []
         for art in dict.fromkeys(g["artifact"] for g in out["gaps"]):
-            if self.reader(art, "Step 0 round 1") is not None:
-                self.route_path(art, "the artifact Step 0 names", "Step 0 round 1 routed")
+            if self.reader(art, f"Step {CL.disposition} round 1") is not None:
+                self.route_path(art, f"the artifact Step {CL.disposition} names", f"Step {CL.disposition} round 1 routed")
                 continue
-            q = {"question": f"Task {self.tid}: no dispatch or request exists to re-run for {art}. "
-                             "What should the cycle deliver?",
-                 "header": "Request", "multiSelect": False,
-                 "options": [{"label": "The user requirement",
-                              "description": "the request the task's user-requirement file states"},
-                             {"label": "/close --auto", "description": "the other close_pending tasks"}]}
-            lab = self.label("Step 0 AskUserQuestion Request")
-            c = o.s.tool("AskUserQuestion", {"questions": [q]}, label=lab, deviation=self.devs.at(lab))
-            fact(self.rp, "close Request question", {"artifact": art.replace(self.tid, "<task>"), "header": "Request",
-                                                      "ok": c.ok, "blocked": c.blocked})
-            o.s.end("other", label="/close interrupted at the Request question")
+            unowed.append(art)
+        if not unowed:
             return
+        # Routes' last bullet (2026-11-19): nobody is asked; the run ends with the report naming each artifact
+        if "one line `NO_OWNER: <artifact>` per such artifact" not in " ".join(self.routing_section().split()):
+            raise cmdtext.TextNotFound("Routes: no NO_OWNER: line for an artifact nobody owes")
+        text = "\n".join([f"Task {self.tid}: no dispatch or request exists to re-run for {', '.join(unowed)}."]
+                          + [f"NO_OWNER: {art}" for art in unowed])
+        for art in unowed:
+            fact(self.rp, "close Request report", {"artifact": art.replace(self.tid, "<task>")})
+        ev = o.s.stop(text, label=self.label("Stop on the report of an artifact nobody owes"))
+        fact(self.rp, "close Request stop", {"still_blocked": bool(ev.still_blocked)})
 
     # ------------------------------------------------------------ --auto
-    def mode_question(self, extra: str) -> str:
-        """The --auto illegal combination (`--auto <extra>`): one AskUserQuestion, header Close mode."""
-        tin = {"questions": [{"question": f"/close --auto cannot take {extra}. Which close should run?",
-                              "header": "Close mode", "multiSelect": False,
-                              "options": [{"label": "/close --auto", "description": "every close_pending parent"},
-                                          {"label": f"/close {extra}", "description": "this task only"}]}]}
-        lab = "/close --auto AskUserQuestion Close mode"
-        c = self.o.s.tool("AskUserQuestion", tin, label=lab, deviation=self.devs.at(lab))
-        ans = (c.response.get("answers") or {}).get(tin["questions"][0]["question"], "") if c.ok else ""
-        fact(self.rp, "close --auto mode question", {"header": "Close mode", "answer": ans.replace(extra, "<task>"),
-                                                      "ok": c.ok, "blocked": c.blocked})
-        return ans
+    def auto_conflict(self, extra: str) -> list:
+        """`--auto <task>`: the text's flag-combination rule ends the run on its NO_TARGET: line, no call, nobody asked
+        (the Close mode question the text once asked is gone: it was refused by hooks/pretool-tool-policy.py)."""
+        o = self.o
+        if "take no action and end with one line `NO_TARGET: <the conflict>" not in " ".join(o.section("Argument parsing").split()):
+            raise cmdtext.TextNotFound("Flags: no NO_TARGET: line for --auto with a task-id")
+        line = f"NO_TARGET: --auto cannot take {extra}; run /close --auto (every close_pending parent) or /close <task-id>"
+        ev = o.s.stop(line, label="/close Stop", deviation=self.devs.at("/close Stop"))
+        fact(self.rp, "close --auto conflict", {"line": line.replace(extra, "<task>"), "still_blocked": bool(ev.still_blocked)})
+        self.rp.terminal("close", not ev.still_blocked, ev, outcome=line)
+        return []
 
     def run_auto(self, extra: str = "") -> list:
         o = self.o
         self.start(f"--auto {extra}".strip())
         if extra:
-            self.mode_question(extra)
+            return self.auto_conflict(extra)
         disc = o.block("`--auto` mode", lang="bash", index=0)
         c = self.run_text(disc, "/close --auto Bash discovery", "Discover the close_pending parents")
         skipped = [l for l in ((c.response.get("stderr") or "") if c.ok else (c.error or "")).splitlines()
@@ -1519,6 +1565,7 @@ class CloseRun:
         lines = ((c.response.get("stdout") or "") if c.ok else "").splitlines()
         parents = [line.split()[0] for line in lines if line.strip()]
         fact(self.rp, "close --auto parents", len(parents))
+        auto_targets(self.rp, o.s.sid, "close", parents)
         states = []
         for tid in parents:
             st = self.state()
@@ -1536,20 +1583,20 @@ class CloseRun:
         def step0(k):
             self.resolve_task()
             if not self.step0():
-                raise agents.PlayError(f"Step 0 stalled for {self.tid}")
+                raise agents.PlayError(f"Step {CL.disposition} stalled for {self.tid}")
             self.cp_state()
         each(step0)
-        o.advance(label="/close --auto TodoWrite Step 0 done, Step 1 in_progress")
+        advance_to(o, CL.inspectors, lambda t: "/close --auto " + t)
         each(lambda k: self.step1())
-        o.advance(label="/close --auto TodoWrite Step 1 done, Step 2 in_progress")
+        advance_to(o, CL.debate, lambda t: "/close --auto " + t)
         lasts = {}
         each(lambda k: lasts.__setitem__(k, self.step2()))
-        o.advance(label="/close --auto TodoWrite Step 2 done, Step 3 in_progress")
+        advance_to(o, CL.verdict, lambda t: "/close --auto " + t)
         each(lambda k: self.step3(lasts[k]))
         o.s.say("\n".join([f"{st['tid']}: {st['outcome']}" for st in states] + skipped) or "no close_pending parent")
-        o.advance(label="/close --auto TodoWrite Step 3 done, Step 4 in_progress")
+        advance_to(o, CL.rating, lambda t: "/close --auto " + t)
         each(lambda k: self.step4(self.ratings[k % len(self.ratings)]) if self.landed else None)
-        o.advance(label="/close --auto TodoWrite Step 4 done")
+        o.advance(label=f"/close --auto TodoWrite Step {CL.rating} done")
         results = [(st["tid"], st["outcome"]) for st in states]
         self.outcome = "; ".join(f"{t}: {oc}" for t, oc in results)
         ev = o.s.stop(f"/close --auto: {self.outcome}", label="/close Stop", deviation=self.devs.at("/close Stop"))

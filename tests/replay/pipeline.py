@@ -15,8 +15,8 @@ command file of the tree under test (commands/<name>.md, read at run time):
 * dispatch(): a "Use Task/Agent tool with:" template of a step, its prompt
   rendered (placeholders, the orchestrator's conditional lines, the obligation
   block instantiated from the worked example or from the template's
-  "embed ... here with role=..., artifacts=[...]" sentence, dispatched_at the
-  current UTC time), and the subagent played by agents.Player;
+  "embed ... here with role=..., artifacts=[...]" sentence; dispatched_at only
+  where the text under play asks for it), and the subagent played by agents.Player;
 * ask(): one AskUserQuestion relaying a producer question artifact (or, with the driver argument
   `ask`, none answered: the question's default taken as a recorded assumption).
 
@@ -70,7 +70,11 @@ class Deviations:
 
 
 def utc_now() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    """The replay's time as a UTC stamp: the modeled clock when a driver turned it on (Replay.model_clock), else
+    the real one. Every stamp a replay writes into its own records goes through here, so the replay's records
+    and the windows its session reads (an end_time) are on one clock."""
+    from .replay import clock_now  # replay.py is not imported at module level: no import cycle
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock_now()))
 
 
 def _matching_bracket(text: str, start: int) -> int:
@@ -324,14 +328,14 @@ class Orchestrator:
     def instantiate(self, prompt: str, task_id: str, lane=None, lane_set=None) -> str:
         """The obligation block of a template, instantiated for this dispatch."""
         now = utc_now()
-        lit = re.search(r'<obligation\s+v="1"\s*>\s*\{(?!\.\.\.\}).*?</obligation>', prompt, re.S)
+        lit_rx = re.compile(r'<obligation\s+v="1"\s*>\s*\{(?!\.\.\.\}).*?</obligation>', re.S)
+        lit = lit_rx.search(prompt)
         if lit and "embed `<obligation" not in prompt:
             body = self.bind(lit.group(0), [(r"ISO-8601", now), (r"lane-suffix", lane or "")])
             m = re.search(r"\{.*\}", body, re.S)
             ob = json.loads(m.group(0))
             if lane is not None:  # a fan-out lane dispatch: the lane values the template's adapter line names
                 ob["lane"], ob["lane_set"], ob["profile"] = lane, lane_set, self.profile
-            ob["dispatched_at"] = now
             return prompt[:lit.start()] + self._block(ob) + prompt[lit.end():]
         lines = prompt.split("\n")
         for i, line in enumerate(lines):
@@ -353,7 +357,11 @@ class Orchestrator:
                 if k not in fields:
                     raise cmdtext.TextNotFound(f"obligation instruction lacks {k}=: {line[:120]}")
                 ob[k] = fields[k]
-            ob["dispatched_at"] = now
+            # The text under play asks for a typed dispatch time (a base from before the hook took it from the
+            # dispatch record): its sentence names dispatched_at, or its worked example carries the field. A
+            # literal block keeps a base's field through bind above.
+            if "dispatched_at" in head or any('"dispatched_at"' in x for x in lit_rx.findall(self.text)):
+                ob["dispatched_at"] = now
             ob["artifacts"] = artifacts
             lines[i] = line[:line.index("embed `<obligation")] + "\n" + self._block(ob)
             return "\n".join(lines)

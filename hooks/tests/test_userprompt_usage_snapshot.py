@@ -54,19 +54,21 @@ def load_hook_module():
     return module
 
 
-def write_stub_adapter(path: Path, *, stdout_json=None, exit_code=0, sleep_seconds=0):
-    """A tiny python stub standing in for scripts/paseo-usage-read.mjs."""
+def write_stub_adapter(path: Path, *, stdout_json=None, exit_code=0, sleep_seconds=0, ended_marker=None):
+    """A tiny python stub standing in for scripts/paseo-usage-read.mjs. With ended_marker it writes
+    that file once its sleep is over: the file's absence proves the stub was cut off, no clock needed."""
     payload = json.dumps(stdout_json if stdout_json is not None else [])
     path.write_text(
         "import sys, time, json\n"
         f"time.sleep({sleep_seconds})\n"
+        + (f"open({str(ended_marker)!r}, 'w').close()\n" if ended_marker else "") +
         f"sys.stdout.write({payload!r})\n"
         f"sys.exit({exit_code})\n",
         encoding="utf-8",
     )
 
 
-def run_hook(env):
+def run_hook(env, timeout=30):
     # The callers hand the hook a scrubbed environment; keep bytecode out of the
     # checkout's hooks/lib/__pycache__/ (which may be read-only) all the same.
     return subprocess.run(
@@ -74,7 +76,7 @@ def run_hook(env):
         input="{}",
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=timeout,
         env={**env, "PYTHONDONTWRITEBYTECODE": "1"},
     )
 
@@ -297,19 +299,19 @@ def test_timeout_does_not_block_and_degrades_with_note(tmp_path, monkeypatch):
     }))
 
     stub = tmp_path / "stub_hang.py"
-    write_stub_adapter(stub, stdout_json=[], exit_code=0, sleep_seconds=30)
+    ended = tmp_path / "adapter-ended"
+    write_stub_adapter(stub, stdout_json=[], exit_code=0, sleep_seconds=300, ended_marker=ended)
     env = {"PATH": __import__("os").environ.get("PATH", "")}
     env["CLAUDE_STATE_DIR"] = str(tmp_path)
     env["CLAUDE_USAGE_ADAPTER_CMD"] = f"{sys.executable} {stub}"
 
-    started = time.monotonic()
-    r = run_hook(env)
-    elapsed = time.monotonic() - started
+    # The hook's own READ_TIMEOUT_SECONDS bounds the wait. No wall time is compared: the hook must
+    # answer while the adapter is still asleep (its 300 s sleep is not over, so no marker), and the
+    # generous 120 s outer limit is reached only by a hook that waits for the adapter.
+    r = run_hook(env, timeout=120)
 
     assert r.returncode == 0, r.stderr
-    # The hook's own READ_TIMEOUT_SECONDS (5s) bounds the wait; generous slack
-    # for process-spawn overhead, still far under the stub's 30s sleep.
-    assert elapsed < 15, f"hook took {elapsed}s -- must never block on a hung adapter"
+    assert not ended.exists(), "the hook waited for the hung adapter to end"
     out = json.loads(r.stdout)
     text = out["hookSpecificOutput"]["additionalContext"]
     assert "as_of=2026-10-04T07:00:00Z" in text

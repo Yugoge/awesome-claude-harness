@@ -10,9 +10,9 @@ variable was unset or even "0":
   1b  hooks/git-hooks/post-commit-auto-push, installed as a post-commit hook:
       background push of refs/backups/claude/<branch>/<sha12>.
   1c  the combined "Git LFS + Auto-Push" post-commit hook body that
-      hooks/install-protection-all.sh writes from its heredoc (the text is
-      extracted from the file; the installer itself is never run): background
-      push of the branch.
+      the retired hooks/install-protection-all.sh installed (its text is kept
+      in tests/fixtures/post-commit-lfs-auto-push): background push of the
+      branch.
   1e  hooks/git-fswatch.sh safe_push: synchronous push of refs/heads/<branch>
       (the watcher is never started; only its functions are loaded).
 
@@ -25,8 +25,10 @@ must push. The near misses are what tell an exact guard from a loose one (a
 non-empty, numeric, truthy-word or prefix test passes unset/"0"/"1" just as well).
 
 All cases are triggered once, up front, by one module fixture. A "1" case then
-polls its origin for up to POSITIVE_TIMEOUT seconds; any other case is only
-concluded NEGATIVE_SETTLE seconds after its own trigger. Every case is judged
+polls its origin for up to POSITIVE_TIMEOUT seconds; any other case is
+concluded once no process works in its repository or origin any more (a push
+still in flight shows as such a process: no pause stands for "it has surely
+finished"). Every case is judged
 against its own origin, while the waits of different cases overlap.
 
 Also pinned here: the shipped settings.json (its tracked clean form) sets
@@ -57,7 +59,9 @@ CHECKPOINT_LIB = HOOKS / "lib" / "checkpoint-core.sh"
 STATE_DIR_LIB = HOOKS / "lib" / "harness_state_dir.sh"
 AUTO_PUSH_LIB = HOOKS / "lib" / "auto_push.sh"
 POST_COMMIT_HOOK = HOOKS / "git-hooks" / "post-commit-auto-push"
-INSTALLER = HOOKS / "install-protection-all.sh"
+# The combined post-commit hook body the retired hooks/install-protection-all.sh wrote from its
+# heredoc; copies of it stay installed in projects and load hooks/lib/auto_push.sh.
+COMBINED_HOOK = ROOT / "tests" / "fixtures" / "post-commit-lfs-auto-push"
 FSWATCH = HOOKS / "git-fswatch.sh"
 CHECKPOINT_CMD = HOOKS / "checkpoint.sh"
 SESSION_GIT_INIT = HOOKS / "session-git-init.sh"
@@ -69,7 +73,7 @@ CASES = ("unset", "", "0", "true", "yes", " 1", "1 ", "01", "10", "1")
 _CASE_IDS = {"": "empty", " 1": "space-1", "1 ": "1-space"}
 BRANCH = "master"
 POSITIVE_TIMEOUT = 20.0
-NEGATIVE_SETTLE = 5.0
+QUIET_LIMIT = 120.0  # an outer limit, reached only by a process that never ends
 POLL_INTERVAL = 0.25
 
 # A clearly fake identity. It only ever lands in commit metadata, never in a
@@ -205,19 +209,10 @@ def _install_post_commit(repo: Path, text: str) -> None:
 
 
 def _combined_hook_body() -> str:
-    """The heredoc text between the line ending in <<'EOF' and the line EOF."""
-    lines = INSTALLER.read_text(encoding="utf-8").splitlines(keepends=True)
-    bodies = []
-    for i, line in enumerate(lines):
-        if line.rstrip("\n").endswith("<<'EOF'"):
-            end = next(j for j in range(i + 1, len(lines))
-                       if lines[j].rstrip("\n") == "EOF")
-            bodies.append("".join(lines[i + 1:end]))
-    combined = [b for b in bodies if "Git LFS + Auto-Push" in b]
-    assert len(combined) == 1, (
-        f"expected one combined LFS + auto-push heredoc in {INSTALLER}, "
-        f"found {len(combined)}")
-    return combined[0]
+    """The combined LFS + auto-push post-commit hook body, as installed copies carry it."""
+    body = COMBINED_HOOK.read_text(encoding="utf-8")
+    assert "Git LFS + Auto-Push" in body, f"{COMBINED_HOOK} is not the combined hook"
+    return body
 
 
 def _fswatch_functions(base: Path) -> Path:
@@ -237,6 +232,15 @@ def _fswatch_functions(base: Path) -> Path:
     functions = hooks_dir / "git-fswatch-functions.sh"
     functions.write_text("".join(lines[:-1]))
     return functions
+
+
+def _fswatch_log_dir(functions: Path, env: dict) -> Path:
+    """The logs/ of the state root the sourced functions resolve (made here: git-fswatch.sh's main, which
+    sourcing skips, makes it)."""
+    out = subprocess.run(["bash", "-c", '. "$1" && d="$(harness_state_root)/logs" && mkdir -p "$d" && printf %s "$d"',
+                          "_", str(functions.parent / "lib" / "harness_state_dir.sh")],
+                         env=env, text=True, capture_output=True, check=True).stdout
+    return Path(out)
 
 
 # ---------------------------------------------------------------------------
@@ -299,10 +303,11 @@ def _trigger_fswatch(base: Path, env: dict, case: str) -> Run:
     # safe_push so the exit status is safe_push's own.
     script = ('source "$1" "$2"; loaded=$?; trap - EXIT INT TERM; '
               '[ "$loaded" -eq 0 ] || exit 90; safe_push')
+    log_dir = _fswatch_log_dir(functions, env)
     proc = _run(["bash", "-c", script, "bash", functions, repo], env,
                 check=False)
     triggered_at = time.monotonic()
-    log_file = Path(env["HOME"]) / ".claude" / "logs" / f"git-fswatch-{repo.name}.log"
+    log_file = log_dir / f"git-fswatch-{repo.name}.log"
     return Run("fswatch", case, env, repo, origin, origin_before,
                f"refs/heads/{BRANCH}", head, proc.returncode,
                proc.stdout + proc.stderr, triggered_at,
@@ -329,6 +334,62 @@ def runs(tmp_path_factory) -> dict:
     return triggered
 
 
+@pytest.fixture(scope="module", autouse=True)
+def subreaper():
+    """Linux: for the tests of this module (and of the modules that import this fixture), a process whose parent has
+    ended is handed to the test process, not to init, whatever its working directory, session or name: the wait
+    below (wait_until_quiet) finds what a trigger left behind that way. Set when the module's first test starts,
+    put back to what the process had when its last test ends. Never at import: a worker imports every module,
+    and one that adopts the orphans of every other test breaks those that reason about parents and orphans."""
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        before = ctypes.c_int(0)
+        libc.prctl(37, ctypes.byref(before), 0, 0, 0)  # PR_GET_CHILD_SUBREAPER
+        libc.prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+    except (OSError, AttributeError):
+        yield
+        return
+    try:
+        yield
+    finally:
+        libc.prctl(36, before.value, 0, 0, 0)
+
+
+def _still_running(roots) -> list:
+    """Live (not zombie) children of this process, and any other process working under ``roots``."""
+    me, found = os.getpid(), []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == me:
+            continue
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as handle:
+                state, ppid = handle.read().rsplit(b")", 1)[1].split()[:2]
+            if state == b"Z":
+                continue
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+        except (OSError, ValueError):
+            continue
+        if int(ppid) == me or any(cwd == r or cwd.startswith(r + os.sep) for r in roots):
+            found.append(pid)
+    return found
+
+
+def wait_until_quiet(*dirs) -> None:
+    """Return when no leftover of a trigger is running: a trigger has returned by then, and what it left behind (a
+    detached push) was handed to this process when its parent ended (the subreaper fixture), wherever it works. A
+    process with its working directory under ``dirs`` also counts (where the hand-over is not available). Whatever
+    the machine's speed, a push still on its way is seen here."""
+    roots = [os.path.realpath(str(d)) for d in dirs]
+    end = time.monotonic() + QUIET_LIMIT
+    while True:
+        left = _still_running(roots)
+        if not left:
+            return
+        assert time.monotonic() < end, f"processes {left} still run after {QUIET_LIMIT:g} s (watching {roots})"
+        time.sleep(0.05)
+
+
 def _assert_push_follows_opt_in(run: Run) -> None:
     label = f"{run.path} with GIT_AUTO_PUSH {_case_id(run.case)}"
     if run.case == "1":
@@ -341,9 +402,7 @@ def _assert_push_follows_opt_in(run: Run) -> None:
             f"{label}: origin {run.expected_ref} is {got or 'absent'} after "
             f"{POSITIVE_TIMEOUT:.0f}s, expected {run.expected_sha}\n{run.output}")
         return
-    remaining = run.triggered_at + NEGATIVE_SETTLE - time.monotonic()
-    if remaining > 0:
-        time.sleep(remaining)
+    wait_until_quiet(run.repo, run.origin)
     after = _origin_refs(run.env, run.origin)
     assert after == run.origin_before, (
         f"{label}: origin changed without opt-in "
@@ -568,3 +627,15 @@ def test_session_git_init_ask_prints_the_command_it_would_run(tmp_path, create, 
     hint = [line.strip() for line in output.splitlines() if "Run manually:" in line]
     assert len(hint) == 1 and hint[0].endswith(expected), output
     assert ("/push" in output) == (case != "1"), output
+
+
+def test_a_detached_process_that_leaves_its_directory_is_still_waited_for(tmp_path):
+    """The wait does not rest on where a leftover process works: a detached one that changes its directory first
+    is waited for, and with none left it returns at once."""
+    marker = tmp_path / "done"
+    wait_until_quiet(tmp_path)
+    inner = f"cd /; sleep 2; echo end > '{marker}'"
+    subprocess.run(["bash", "-c", 'setsid nohup bash -c "$1" </dev/null >/dev/null 2>&1 &', "bash", inner],
+                   check=True)
+    wait_until_quiet(tmp_path)
+    assert marker.exists(), "the wait returned while a detached process that left its directory still ran"

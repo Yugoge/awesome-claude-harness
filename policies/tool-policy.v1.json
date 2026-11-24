@@ -1,5 +1,5 @@
 {
-  "policy_version": 9,
+  "policy_version": 10,
   "default_action": "deny",
   "_shared_protected_path_prefixes": [
     "/.claude/hooks/",
@@ -10,7 +10,7 @@
     "/.claude/scripts/",
     "/.claude/settings.json"
   ],
-  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style): '*/docs/dev/overnight/' matches that directory under any worktree. A prefix starting with '/' is anchored at the project root. The shared protected list is the SOLE catch-all for /.claude/ \u2014 DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree paths remain writable. Allow prefixes name directories (ending in '/') or wildcards (ending in '*'), and the /dev/null, /dev/stderr and /dev/stdout devices, never the file of an artifact: hooks/pretool-tool-policy.py derives an artifact's write permission from the session's dispatch records (P1b E3). A path a dispatch's obligation declares (with the producer question it names and what the template it was dispatched from declares in the current command files) is written by that dispatch only, whatever these rows allow, and the role's deny prefixes still apply to it; an undeclared path keeps these rows. Deny prefixes grant nothing and all stay. cp-state files have one writer, scripts/spec-check.py (pretool-cp-state-write-guard.py). The managed scratch namespace '*/.claude/scratch/' is granted to every role; raw /tmp and /var/tmp are denied for every role, including one holding '*', except that role's own exact temp entries ('*/tmp/claude-scratch/<role>/', '*/var/tmp/codex-outputs/', '<state dir>/agentic-commit/<role>/'). A JSON prefix cannot express actor identity, so raw-temp denial and owner-vs-sibling scratch exactness are enforced behaviorally by hooks/pretool-tool-policy.py; these rows are the declaration, not the sole enforcement. policy_version 8 (P1b): every allow prefix that named an artifact's file went, with user.allowed_path_prefixes, which nothing read. /clean's approved actions (P9-4): while a human-typed /clean's span is active, what its owner approved (the main agent's Write of docs/clean/user-approvals-<id>.json recorded in the session transcript: a move's or rename's destination, a fix_style file) is written by that span's cleaner only, and the project's root README.md and ARCHITECTURE.md by its rule-inspector only; that write skips the role's allow prefixes and its source and test denials, never _shared_protected_path_prefixes, and no other caller, the main agent included, writes those paths in that span (hooks/pretool-tool-policy.py, _check_clean_writes). write_carveout_prefixes (policy_version 9, owner decision 2026-11-17): a row may name project-root-anchored directories ('/' first and last, no '*', no '.' or '..' segment) its role writes although a deny prefix holds them; a target is inside one only when its normalised path AND its realpath both lie under that directory (taken under the project's logical path or its realpath, never the directory's own realpath) and an existing file there has one hard link, so '..', a symlink out or a hard link to a file elsewhere stays under the deny prefixes; such a target passes the row's allow list and the deny prefixes the carve-out sits under, and every other deny prefix still applies (hooks/lib/policy_registry.py, _write_denial). A Bash target that the same command first makes as a link, copy or move destination (the path or a directory above it) gets no carve-out, since the realpath is read before the command runs (hooks/pretool-tool-policy.py, _restaged_targets). Only qa holds one: '/reports/' and '/tests/reports/'; its '/tests/' deny keeps every other path under tests/.",
+  "_note": "Path prefixes containing '*' use glob-aware matching (fnmatch-style): '*/docs/dev/overnight/' matches that directory under any worktree. A prefix starting with '/' is anchored at the project root. The shared protected list is the SOLE catch-all for /.claude/ \u2014 DO NOT add broad '/.claude/' to denied prefixes; use only the explicit subdirs above so legitimate worktree paths remain writable. Allow prefixes name directories (ending in '/') or wildcards (ending in '*'), and the /dev/null, /dev/stderr and /dev/stdout devices, never the file of an artifact: hooks/pretool-tool-policy.py derives an artifact's write permission from the session's dispatch records (P1b E3). A path a dispatch's obligation declares (with the producer question it names and what the template it was dispatched from declares in the current command files) is written by that dispatch only, whatever these rows allow, and the role's deny prefixes still apply to it; an undeclared path keeps these rows. Deny prefixes grant nothing and all stay. cp-state files have one writer, scripts/spec-check.py (pretool-cp-state-write-guard.py). The managed scratch namespace '*/.claude/scratch/' is granted to every role; raw /tmp and /var/tmp are denied for every role, including one holding '*', except that role's own exact temp entries ('<session root>/<role>/', '*/var/tmp/codex-outputs/', '<state dir>/agentic-commit/<role>/'). An allow prefix may begin with a place resolved per write (hooks/lib/policy_registry.py, placed): '<session root>' is the session's scratch directory (the settings' TMPDIR, then the session id) and '<state dir>' the state root; a role's drafts are files in '<session root>/<role>/' (policy_version 10; a dispatch begun before rewrites what it left at its old place, policy_registry.in_flight). A JSON prefix cannot express actor identity, so raw-temp denial and owner-vs-sibling scratch exactness are enforced behaviorally by hooks/pretool-tool-policy.py; these rows are the declaration, not the sole enforcement. policy_version 8 (P1b): every allow prefix that named an artifact's file went, with user.allowed_path_prefixes, which nothing read. /clean's approved actions (P9-4): while a human-typed /clean's span is active, what its owner approved (the main agent's Write of docs/clean/user-approvals-<id>.json recorded in the session transcript: a move's or rename's destination, a fix_style file) is written by that span's cleaner only, and the project's root README.md and ARCHITECTURE.md by its rule-inspector only; that write skips the role's allow prefixes and its source and test denials, never _shared_protected_path_prefixes, and no other caller, the main agent included, writes those paths in that span (hooks/pretool-tool-policy.py, _check_clean_writes). write_carveout_prefixes (policy_version 9, owner decision 2026-11-17): a row may name project-root-anchored directories ('/' first and last, no '*', no '.' or '..' segment) its role writes although a deny prefix holds them; a target is inside one only when its normalised path AND its realpath both lie under that directory (taken under the project's logical path or its realpath, never the directory's own realpath) and an existing file there has one hard link, so '..', a symlink out or a hard link to a file elsewhere stays under the deny prefixes; such a target passes the row's allow list and the deny prefixes the carve-out sits under, and every other deny prefix still applies (hooks/lib/policy_registry.py, _write_denial). A Bash target that the same command first makes as a link, copy or move destination (the path or a directory above it) gets no carve-out, since the realpath is read before the command runs (hooks/pretool-tool-policy.py, _restaged_targets). Only qa holds one: '/reports/' and '/tests/reports/'; its '/tests/' deny keeps every other path under tests/. declared_artifact_tools: tools a row grants only on a path the caller's own dispatch declares (hooks/pretool-tool-policy.py, _declared_write_allowed); architect, product-owner and user hold Edit there, to repair the report their stop gate returns, and nowhere else.",
   "roles": {
     "user": {
       "allowed_tools": [
@@ -20,7 +20,7 @@
         "Read",
         "Skill",
         "Write",
-        "mcp__playwright__*",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -41,20 +41,23 @@
         "mcp__plugin_context7_context7__query-docs",
         "mcp__plugin_context7_context7__get-library-docs"
       ],
+      "declared_artifact_tools": [
+        "Edit"
+      ],
       "denied_path_prefixes": [
         "/src/",
         "/app/",
         "/lib/",
         "/components/"
       ],
-      "rationale": "User simulation: Playwright/read for user-flow testing; writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight, codex and scratch directories; no source/protected/test edits",
+      "rationale": "User simulation: browser tools (<browser tools>: policy_registry.BROWSER_TOOLS, any provider) and reads for user-flow testing; writes what its dispatch's obligation declares (pretool-tool-policy.py derives that permission from the dispatch record), plus its overnight, codex and scratch directories; no source/protected/test edits",
       "allowed_write_path_prefixes": [
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/user/",
+        "<session root>/user/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -82,7 +85,7 @@
         "Read",
         "Skill",
         "Write",
-        "mcp__playwright__*",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -109,7 +112,7 @@
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/ui-specialist/",
+        "<session root>/ui-specialist/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -164,7 +167,7 @@
         "*/docs/codex/",
         "*/docs/dev/overnight/",
         "*/docs/research/",
-        "*/tmp/claude-scratch/ba/",
+        "<session root>/ba/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -229,7 +232,7 @@
         "Write",
         "Edit",
         "MultiEdit",
-        "mcp__playwright__*",
+        "<browser tools>",
         "Skill",
         "TodoWrite",
         "TodoRead",
@@ -257,7 +260,7 @@
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/qa/",
+        "<session root>/qa/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -290,7 +293,7 @@
         "Read",
         "Skill",
         "Write",
-        "mcp__playwright__*",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -309,7 +312,7 @@
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/pm/",
+        "<session root>/pm/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -336,6 +339,7 @@
         "Read",
         "Skill",
         "Write",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -356,13 +360,16 @@
         "mcp__plugin_context7_context7__query-docs",
         "mcp__plugin_context7_context7__get-library-docs"
       ],
+      "declared_artifact_tools": [
+        "Edit"
+      ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/architect/",
+        "<session root>/architect/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -388,6 +395,7 @@
         "Read",
         "Skill",
         "Write",
+        "<browser tools>",
         "TodoWrite",
         "TodoRead",
         "TaskCreate",
@@ -408,13 +416,16 @@
         "mcp__plugin_context7_context7__query-docs",
         "mcp__plugin_context7_context7__get-library-docs"
       ],
+      "declared_artifact_tools": [
+        "Edit"
+      ],
       "allowed_write_path_prefixes": [
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/product-owner/",
+        "<session root>/product-owner/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -458,7 +469,7 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/cleaner/",
+        "<session root>/cleaner/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -505,7 +516,7 @@
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/cleanliness-inspector/",
+        "<session root>/cleanliness-inspector/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -550,7 +561,7 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/git-edge-case-analyst/",
+        "<session root>/git-edge-case-analyst/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -597,7 +608,7 @@
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/prompt-inspector/",
+        "<session root>/prompt-inspector/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -642,7 +653,7 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/rule-inspector/",
+        "<session root>/rule-inspector/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -689,7 +700,7 @@
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/style-inspector/",
+        "<session root>/style-inspector/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -735,7 +746,7 @@
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
-        "*/tmp/claude-scratch/test-writer/",
+        "<session root>/test-writer/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -779,7 +790,7 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/test-executor/",
+        "<session root>/test-executor/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -824,7 +835,7 @@
         "*/dev/stderr",
         "*/dev/stdout",
         "*/docs/dev/overnight/",
-        "*/tmp/claude-scratch/test-validator/",
+        "<session root>/test-validator/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -872,7 +883,7 @@
         "*/dev/stdout",
         "*/docs/codex/",
         "*/docs/dev/specs/",
-        "*/tmp/claude-scratch/spec/",
+        "<session root>/spec/",
         "*/var/tmp/codex-outputs/",
         "*/.claude/scratch/"
       ],
@@ -914,8 +925,8 @@
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
-        "*/tmp/claude-scratch/changelog-analyst/",
-        "/tmp/agentic-commit/locks/*",
+        "<session root>/changelog-analyst/",
+        "<state dir>/agentic-commit/locks/*",
         "*/docs/dev/",
         "*/.claude/scratch/"
       ],
@@ -928,7 +939,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "changelog-analyst: git commit operations; reads dev-artifacts, stages and commits source changes via Bash (git add/commit). Its Write tool writes the message file of its own `git commit -F`, a scratch input, under its scratch directory, and in bulk mode the docs/dev close annotation; its fd-9 lock is a redirect under /tmp/agentic-commit/locks/; the push-gate token is written by scripts/write-push-gate-token.py, never by Write; no write access to protected infra"
+      "rationale": "changelog-analyst: git commit operations; reads dev-artifacts, stages and commits source changes via Bash (git add/commit). Its Write tool writes the message file of its own `git commit -F`, a scratch input, in its drafts directory under the session root, and in bulk mode the docs/dev close annotation; its fd-9 lock is a redirect under <state dir>/agentic-commit/locks/; the push-gate token is written by scripts/write-push-gate-token.py, never by Write; no write access to protected infra"
     },
     "push-analyst": {
       "allowed_tools": [
@@ -953,9 +964,8 @@
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
-        "*/tmp/claude-scratch/push-analyst/",
-        "/tmp/agentic-commit/push-analyst/*",
-        "*/agentic-commit/push-analyst/*",
+        "<session root>/push-analyst/",
+        "<state dir>/agentic-commit/push-analyst/*",
         "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
@@ -967,7 +977,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "push-analyst: pre-push git read-only analysis; reads commits-to-push range, sensitive file patterns, and divergence; writes nonce-keyed grant to <state dir>/agentic-commit/push-analyst/ (role-specific directory only, no broad /tmp/*; the /tmp entry is the default state dir's exception to the raw-temp denial, the */ entry a CLAUDE_STATE_DIR outside the temp roots); no write access to protected infra"
+      "rationale": "push-analyst: pre-push git read-only analysis; reads commits-to-push range, sensitive file patterns, and divergence; writes nonce-keyed grant to <state dir>/agentic-commit/push-analyst/ (role-specific directory only, no broad /tmp/*; the <state dir> entry names that directory wherever the state directory lies, and no directory of that name elsewhere); no write access to protected infra"
     },
     "merge-analyst": {
       "allowed_tools": [
@@ -992,9 +1002,8 @@
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",
-        "*/tmp/claude-scratch/merge-analyst/",
-        "/tmp/agentic-commit/merge-analyst/*",
-        "*/agentic-commit/merge-analyst/*",
+        "<session root>/merge-analyst/",
+        "<state dir>/agentic-commit/merge-analyst/*",
         "*/.claude/scratch/"
       ],
       "denied_write_path_prefixes": [
@@ -1006,7 +1015,7 @@
         "/.claude/scripts/",
         "/.claude/settings.json"
       ],
-      "rationale": "merge-analyst: pre-merge git read-only analysis; reads branch divergence, diff stat, conflict markers, and overnight-state for consistency validation; writes one nonce-keyed grant (60s expiry) with the Write tool to <state dir>/agentic-commit/merge-analyst/, checked on that Write by posttool-allowlist-consume.py (lib/merge_grant.py) and read by /merge (role-specific directory only, no broad /tmp/*; the /tmp entry is the default state dir's exception to the raw-temp denial, the */ entry a CLAUDE_STATE_DIR outside the temp roots); no write access to protected infra"
+      "rationale": "merge-analyst: pre-merge git read-only analysis; reads branch divergence, diff stat, conflict markers, and overnight-state for consistency validation; writes one nonce-keyed grant (60s expiry) with the Write tool to <state dir>/agentic-commit/merge-analyst/, checked on that Write by posttool-allowlist-consume.py (lib/merge_grant.py) and read by /merge (role-specific directory only, no broad /tmp/*; the <state dir> entry names that directory wherever the state directory lies, and no directory of that name elsewhere); no write access to protected infra"
     },
     "pull-analyst": {
       "allowed_tools": [
@@ -1061,7 +1070,7 @@
       ],
       "allowed_write_path_prefixes": [
         "*/.claude/dev-registry/*/graphify/",
-        "*/tmp/claude-scratch/graphify/",
+        "<session root>/graphify/",
         "*/dev/null",
         "*/dev/stderr",
         "*/dev/stdout",

@@ -26,7 +26,7 @@ from pathlib import Path
 
 # The hook imports this as lib.declared_paths, so these are the lib.* modules
 # its own code and the tests patch.
-from . import command_span, dispatch_template, obligation, requirement_round, stop_contract
+from . import command_span, dispatch_template, locations, obligation, requirement_round, stop_contract
 
 _HARNESS_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _DEFAULT_SUBAGENT_TYPE = "general-purpose"  # the CLI's type for an Agent call that names none
@@ -92,10 +92,10 @@ def _shape(path: str):
         names = rest.split("/")
         if ".." in names:
             return _ANY
-        names = [n for n in names if n not in ("", ".")]
+        names = [n for n in names if n not in ("", os.curdir)]
         if names:
             return ("last", names[-1])
-    return _ANY if head in ("", ".", "..") else ("ends", head)
+    return _ANY if head in locations.NAMELESS_PARTS else ("ends", head)
 
 
 _DECISION = None  # within one decision: what it read of the command files
@@ -182,7 +182,7 @@ def _could_be_declared(shapes, forms: list) -> bool:
         return True
     for kind, value in shapes:
         for form in forms:
-            if (kind == "parts" and value and _covers(value, form)
+            if (kind == "parts" and value and _may_cover(value, form)
                     or kind == "last" and value in form
                     or kind == "ends" and any(part.endswith(value) for part in form)):
                 return True
@@ -192,33 +192,6 @@ def _could_be_declared(shapes, forms: list) -> bool:
 def _declared_paths(obligation_doc: dict) -> list:
     return [a["path"] for a in obligation_doc.get("artifacts") or []
             if isinstance(a, dict) and isinstance(a.get("path"), str) and a["path"]]
-
-
-_TEXT_ENCODING = None  # the encoding open() reads a text file with in this process, once one was opened
-
-
-def _load_json(path):
-    """json.load(open(path)): the same document, or an error of the same class
-    (OSError, ValueError), from raw reads once the encoding open() decodes with
-    in this process is known (the first file is read by open() itself). The
-    line ends open() would translate cannot change what json.loads makes of
-    the text: between tokens they are whitespace, inside a string an error."""
-    global _TEXT_ENCODING
-    if _TEXT_ENCODING is None:
-        with open(path) as fh:
-            _TEXT_ENCODING = fh.encoding
-            return json.load(fh)
-    fd = os.open(path, os.O_RDONLY)
-    try:
-        chunks = []
-        while True:
-            chunk = os.read(fd, 1 << 16)
-            if not chunk:
-                break
-            chunks.append(chunk)
-    finally:
-        os.close(fd)
-    return json.loads(b"".join(chunks).decode(_TEXT_ENCODING))
 
 
 def _plain_agent_id(agent_id) -> bool:
@@ -483,7 +456,7 @@ def _obligation_may_declare(prompt: str, targets) -> bool:
                     continue
             parts = _parts(path)
             if (parts and ".." not in parts and not path.startswith("/")
-                    and any(_covers(parts, form) for forms in targets for form in forms)):
+                    and any(_may_cover(parts, form) for forms in targets for form in forms)):
                 return True
         return False
     except Exception:
@@ -584,18 +557,14 @@ def _started_dispatches(transcript) -> list:
             continue
         # _agent_files' two paths, spelled once per dispatch as strings
         agent_transcript, meta = f"{prefix}agent-{agent_id}.jsonl", prefix + name
-        try:
-            doc = _load_json(meta)
-        except (OSError, ValueError):
-            continue
-        ident = doc.get("toolUseId") if isinstance(doc, dict) else None
-        if not isinstance(ident, str) or not ident:
+        doc = obligation.read_meta(meta)  # subagent_restart's, the one reader of the CLI's record
+        if doc is None:
             continue
         prompt = obligation.read_first_record_prompt(agent_transcript)
         if prompt is not None:
-            kind = doc.get("agentType")
-            calls.append(command_span.Call(id=ident, name="Agent", line=-1, result_line=0, ok=False, input={
-                "prompt": prompt, "subagent_type": kind if isinstance(kind, str) and kind else _DEFAULT_SUBAGENT_TYPE}))
+            calls.append(command_span.Call(id=doc["tool_use_id"], name="Agent", line=-1, result_line=0, ok=False,
+                                           input={"prompt": prompt,
+                                                  "subagent_type": doc["agent_type"] or _DEFAULT_SUBAGENT_TYPE}))
     return calls
 
 
@@ -624,6 +593,13 @@ def _caller_dispatches(data: dict, transcript, calls: list) -> set:
 
 
 def _covers(declared: tuple, target: tuple) -> bool:
+    """Whether a declared path names ``target`` (a _target_forms form, below the project root): the file
+    itself or one below the declared directory, never a file of that name in a subfolder."""
+    return target[:len(declared)] == declared
+
+
+def _may_cover(declared: tuple, target: tuple) -> bool:
+    """The filters' looser test (a run of the target's parts anywhere): it keeps every target _covers may name."""
     n = len(declared)
     return any(target[i:i + n] == declared for i in range(len(target) - n + 1))
 
@@ -633,9 +609,14 @@ def _target_forms(target: str, data: dict) -> list:
     path = os.path.expanduser(target)
     if not os.path.isabs(path):
         path = os.path.join(base, path)
-    forms = {os.path.normpath(path)}
+    forms, roots = {os.path.normpath(path)}, {os.path.normpath(base)}
+    if os.environ.get("CLAUDE_PROJECT_DIR"):
+        roots.add(os.path.normpath(os.environ["CLAUDE_PROJECT_DIR"]))
     try:
         forms.add(os.path.realpath(path))
+        roots |= {os.path.realpath(r) for r in roots}
     except OSError:
         pass
-    return [_parts(f) for f in forms]
+    # A declared path is relative to the dispatch's project: a target's parts below that root, none outside it.
+    return list({_parts(os.path.relpath(f, r)) for f in forms for r in roots
+                 if f == r or f.startswith(r.rstrip(os.sep) + os.sep)})

@@ -60,8 +60,9 @@ def config(tmp_path: Path) -> Path:
     return tmp_path / "config"
 
 
-def _log(config: Path) -> Path:
-    return config / "logs" / "lifecycle.jsonl"
+def _log(config: Path) -> Path:  # the hook's HOME is config's parent: the state root's logs/ there
+    from hooks.lib.harness_state_dir import state_root
+    return Path(state_root(home=str(config.parent)), "logs", "lifecycle.jsonl")
 
 
 def _rows(config: Path) -> list:
@@ -350,6 +351,7 @@ def _handle_with(monkeypatch, config: Path, payload: dict, **attributes) -> dict
     """close_rating.handle in this process over `config`, hooks/lib/score_events.py replaced by a module holding
     `attributes` (sweep=None: the module is absent)."""
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    monkeypatch.setenv("HOME", str(config.parent))  # as _run's hook process has it: the log is the state root's
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     stand_in = types.ModuleType("hooks.lib.score_events")
     vars(stand_in).update(attributes)
@@ -592,7 +594,7 @@ def test_the_shipped_settings_register_the_hook_once_for_askuserquestion_and_age
     settings = _expanded(json.loads((REPO_ROOT / "settings.json").read_text(encoding="utf-8")))
     found = [(event, group.get("matcher"), hook["command"]) for event, groups in settings["hooks"].items()
              for group in groups for hook in group["hooks"] if "posttool-close-rating.py" in hook["command"]]
-    assert found == [("PostToolUse", "AskUserQuestion|Agent",
+    assert found == [("PostToolUse", "AskUserQuestion|Agent|Task",  # the dispatch names, lib/subagent.DISPATCH_TOOLS
                       'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/posttool-close-rating.py"')]
 
 

@@ -66,7 +66,7 @@ def test_the_rating_step_is_step_4_in_close_md_close_py_and_the_gate():
 def test_at_step_4_no_other_command_s_template_binds_to_the_rating_step(monkeypatch):
     """The item's question, asked at the label it restores: BA's templates sit under /dev's own
     "Step 4" (the requirement round and the BA panel since P13-1; the final ticket, context and
-    acceptance criteria at Step 4c), and with /close's rating step labelled "Step 4" too,
+    acceptance criteria in its BA analysis), and with /close's rating step labelled "Step 4" too,
     _canonical_step(<task>, path, [("close", "")], ["dev"]) still names no owner for any of their
     artifacts (a label binds only inside the template's own command), while the qa-report still binds
     to the /close step whose dispatch names qa."""

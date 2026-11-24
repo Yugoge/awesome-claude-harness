@@ -132,7 +132,7 @@ def test_generic_invalid_transitions_remain_rejected(todos, guards, guard: str):
     assert _invalid_case(guard, todos, guards)
 
 
-def test_six_real_subagent_guards_remain(todos, guards):
+def test_five_real_subagent_guards_remain(todos, guards):
     gate = guards["gate"]
     results = []
     for index, item in enumerate(todos):
@@ -151,11 +151,11 @@ def test_six_real_subagent_guards_remain(todos, guards):
         )
         results.append(
             (
-                call.get("subagent_type"),
+                next(c for c in (call if isinstance(call, list) else [call]) if not c.get("optional"))["subagent_type"],
                 any("before required subagent call" in value for value in missing),
                 not present,
             )
         )
-    assert [role for role, _, _ in results] == ["ba", "ba", "qa", "graphify", "dev", "qa"]  # Steps 4 and 4c: BA
+    assert [role for role, _, _ in results] == ["ba", "qa", "graphify", "dev", "qa"]  # Step 4 (the round): BA
     assert all(rejected for _, rejected, _ in results)
     assert all(accepted for _, _, accepted in results)

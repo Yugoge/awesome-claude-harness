@@ -14,18 +14,16 @@ Activation logic:
   5. Check the cycle's codex-ledger/<agent_id>.json.
      If present: exit 0.
   6. Its own dispatch prompt is bound when it carries the line
-     `codex_required: true`, or when the dispatch template it was made from
-     (hooks/lib/dispatch_template.py: the command its obligation names, else
-     the command whose span holds the dispatch) carries that line: the session
-     runs --codex, so a dispatch of that template without the line is the
-     orchestrator's omission. The command text puts the line in exactly the
-     dispatches that must consult codex (every BA / QA / dev dispatch under
-     --codex, and any other whose template adds it); the agent's own file
-     activates codex on it. No role list here says which agents are bound.
-     A dispatch whose own obligation names pipeline close or commit is not
-     bound by the flag. Unbound: exit 0. Bound: exit 2 ("CODEX_ENFORCE_BLOCKED").
+     `codex_required: true`, and only then: that line is what the agent's own
+     file (agents/*.md "Codex:") consults codex on, and without it the agent is
+     told to skip codex. The template the dispatch was made from does not bind
+     it. No role list here says which agents are bound. A dispatch whose own
+     obligation names pipeline close or commit is not bound by the flag.
+     Unbound: exit 0. Bound: exit 2 ("CODEX_ENFORCE_BLOCKED").
   7. A QA of a /dev-family cycle whose record is low (lib/score_view.py, D32) is bound with no flag and no line; any codex call,
      failed or not, lets it stop. PostToolUseFailure records a failed Skill attempt too (D25).
+  8. A bound stop passes while a codex call on this machine was seen to hit the usage limit and its reset
+     time is ahead (lib/codex_transcript.py unavailable_until), each stop on that state; it writes no ledger entry.
 
 Exit codes:
   0: Allow stop (pass-through).
@@ -39,7 +37,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import agent_cycle, dispatch_template, score_view
+from lib import agent_cycle, codex_transcript, score_view
 from lib.agent_resolver import resolve_agent_type
 
 CODEX_REQUIRED_LINE = re.compile(r"^\s*codex_required:\s*true\s*$", re.M)
@@ -57,18 +55,6 @@ def _read_json(path: Path) -> dict:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-
-
-def _template_asks(resolution, agent_type: str, transcript) -> bool:
-    """Whether the dispatch template this agent was dispatched from carries
-    the line `codex_required: true`."""
-    prompt = getattr(resolution, "prompt", "") or ""
-    transcript = getattr(resolution, "transcript_path", None) or transcript
-    found = dispatch_template.dispatch_of(transcript) if transcript else None
-    own = getattr(resolution, "obligation", None) or {}
-    command = own.get("pipeline") or (found[0] if found else None)
-    template = dispatch_template.template_of(command, found[1] if found else agent_type, prompt) if command else None
-    return bool(template and CODEX_REQUIRED_LINE.search(template))
 
 
 def main() -> None:
@@ -103,15 +89,15 @@ def main() -> None:
         # Agent called codex: allow stop
         sys.exit(0)
 
-    # Bound only when its own dispatch, or the template it was made from, asks
-    # for codex. /close and /commit dispatches share the task's registry, whose
-    # codex flag /dev --codex armed for /dev's own; the role is bound as G2 binds it.
+    # Bound only when its own dispatch carries the line. /close and /commit dispatches share the task's registry,
+    # whose codex flag /dev --codex armed for /dev's own; the role is bound as G2 binds it.
     if own.get("pipeline") in ("close", "commit") and (not agent_type or own.get("role") == agent_type):
         sys.exit(0)
-    asked = enabled and (CODEX_REQUIRED_LINE.search(getattr(resolution, "prompt", "") or "")
-                         or _template_asks(resolution, agent_type, data.get("agent_transcript_path")))
+    asked = enabled and CODEX_REQUIRED_LINE.search(getattr(resolution, "prompt", "") or "")
     # A repeated stop is no attempt; a failed Skill call has its own ledger entry (D25).
     if not asked and not forced:
+        sys.exit(0)
+    if codex_transcript.unavailable_until():  # a real call on this machine hit the usage limit: the stop passes
         sys.exit(0)
 
     # No ledger entry: block stop

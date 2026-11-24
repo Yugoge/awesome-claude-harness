@@ -56,9 +56,9 @@ def _slug(path: Path) -> str:
 class World:
     """A throwaway project, HOME, state dir and session; the hooks run as subprocesses."""
 
-    def __init__(self, tmp: Path):
+    def __init__(self, tmp: Path, project: Path | None = None):
         self.tmp = tmp
-        self.project = tmp / "project"
+        self.project = project or tmp / "project"
         (self.project / "docs" / "dev").mkdir(parents=True)
         (self.project / "docs" / "zz").mkdir(parents=True)
         (self.project / "src").mkdir()
@@ -81,6 +81,8 @@ class World:
         env.update({"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.home / ".claude"),
                     "CLAUDE_STATE_DIR": str(self.tmp / "state"), "CLAUDE_PROJECT_DIR": str(self.project),
                     "TMPDIR": str(self.scratch), "PYTHONDONTWRITEBYTECODE": "1"})
+        # The launcher runs bash-safety, whose runtime guard needs the file bootstrap installs (conftest's copy).
+        env["CLAUDE_PROTECTED_RUNTIME_FILE"] = os.environ["CLAUDE_PROTECTED_RUNTIME_FILE"]
         return env
 
     def sh(self, command: str) -> subprocess.CompletedProcess:
@@ -153,9 +155,29 @@ class World:
                               text=True, cwd=str(self.project), env=self.env(), timeout=120)
 
 
+def project_outside_temp():
+    """A throwaway project, its own git repository, outside /tmp and /var/tmp (where the scratch rule
+    lets no role write, so the dispatch check refuses a QA its report there): under the home directory,
+    or HARNESS_TEST_PROJECT_ROOT. Removed when the test ends."""
+    import contextlib
+    import tempfile
+
+    @contextlib.contextmanager
+    def made():
+        root = Path(tempfile.mkdtemp(prefix=".provenance-", dir=os.environ.get("HARNESS_TEST_PROJECT_ROOT")
+                                     or os.path.expanduser("~")))
+        try:
+            subprocess.run(["git", "init", "-q", str(root / "project")], check=True)
+            yield root / "project"
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+    return made()
+
+
 @pytest.fixture()
 def world(tmp_path):
-    return World(tmp_path)
+    with project_outside_temp() as project:
+        yield World(tmp_path, project)
 
 
 @pytest.fixture(scope="module")

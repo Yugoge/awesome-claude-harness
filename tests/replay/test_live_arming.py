@@ -4,12 +4,18 @@ this tree's files.
 A running session keeps the hook list it loaded (D15) while the files those hooks name are this
 tree's. The pre-update list is origin/master's: settings.json's Stop group runs
 hooks/stop-workflow-coordinator.py directly, with stop-do-report-gate.py and stop-obligation-gate.py
-beside it (pre_update_settings finds it in the tree's own history: the newest settings.json whose
-Stop group runs the coordinator directly). The state and transcripts are such a session's: an
+beside it (it was found in the tree's own history: the newest settings.json whose Stop group runs
+the coordinator directly, 84de49b). The state and transcripts are such a session's: an
 in-flight /dev cycle, an in-flight /do (its consent sidecar, no completed do-report), a /merge span
 whose analysis came back blocked, an open /dev-overnight window, an ungated session. Each Stop runs
 every hook the list registers, as registered (tests/replay/hookrun.py); a PreToolUse TodoWrite runs
 pretool-tool-policy.py and pretool-todo-validate.py on the old transcript.
+
+The cases that play the pre-update list are retired (policies/replay-hook-lists.v1.json, `retired`): no
+running session holds it, and it names stop-do-report-gate.py and stop-obligation-gate.py, which this tree
+deleted. What remains replays the five sessions' state under this tree's list (and so does
+tests/replay/test_a21_old_bookmarks.py); the reader of the pre-update list and the option-2 mark went with
+those cases. The experiment below decided option 1 before its retirement.
 
 The two options: option 1, the launcher marks the coordinator it runs
 (stop-workflow-coordinator.LAUNCHER_MARK); unmarked, the coordinator runs completion advisory and
@@ -23,7 +29,6 @@ landing machinery) can build the same states with origin/master's files and call
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
@@ -44,34 +49,20 @@ DO_ID = "20261101-091500"
 SPANS = ("dev", "do", "merge")  # the pre-update spans a gated command opened
 
 
-def _coordinator():
-    spec = importlib.util.spec_from_file_location("a21_coordinator", REPO / "hooks" / "stop-workflow-coordinator.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # its dataclasses look their module up
-    spec.loader.exec_module(module)
-    return module
-
-
-MARK = _coordinator().LAUNCHER_MARK
-
-
 def _git(cwd, *args) -> str:
     return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True).stdout
 
 
-def _runs_coordinator_directly(settings: dict) -> bool:
-    return any("hooks/stop-workflow-coordinator.py" in h.get("command", "")
-               for group in settings["hooks"]["Stop"] for h in group["hooks"])
-
-
-def pre_update_settings(tree: Path = REPO) -> dict:
-    """origin/master's settings.json as a running session loaded it: the newest settings.json in the
-    tree's history whose Stop group runs the coordinator directly."""
-    for sha in _git(tree, "log", "--format=%H", "--", "settings.json").split():
-        settings = json.loads(_git(tree, "show", f"{sha}:settings.json"))
-        if _runs_coordinator_directly(settings):
-            return settings
-    raise AssertionError("no settings.json in the history runs the Stop coordinator directly")
+def stop_hooks(settings: dict) -> list[str]:
+    """The Stop hook files `settings` registers, in its order, each once (hookrun.hook_name): the hooks a Stop of
+    a session holding these settings runs."""
+    out = []
+    for group in settings["hooks"]["Stop"]:
+        for h in group["hooks"]:
+            name = hookrun.hook_name(h.get("command", ""))
+            if name not in out:
+                out.append(name)
+    return out
 
 
 def current_settings(tree: Path = REPO) -> dict:
@@ -153,7 +144,12 @@ class World:
         self.command("dev", "dev", "fix the flaky test", context="DEV_SESSION_ID pre-initialized by hook: "
                      "dev-20261101-090000\nTask id: 20261101-090000\n")
         self.todos("dev", self.canonical("dev"), 3)
-        self.tool("dev", "Agent", {"subagent_type": "ba", "description": "analyse", "prompt": "Analyse it."})
+        # The BA analysis call as the checklist's Step 4 states it (scripts/todo/dev.py ROUND_CALLS, read from the
+        # canonical list as Gate 4 does): its role and the `Mode:` line its prompt carries.
+        call = next(c for t in self.canonical("dev") if isinstance(t.get("subagent_call"), list)
+                    for c in t["subagent_call"] if not c.get("optional"))
+        self.tool("dev", "Agent", {"subagent_type": call["subagent_type"], "description": "analyse",
+                                   "prompt": f"Mode: {call['prompt_mode']}\nAnalyse it."})
 
     def _do(self):
         self.command("do", "do", "rename the heading", context=f"[/do] task-id minted: {DO_ID}\n")
@@ -178,21 +174,20 @@ class World:
         self.add("ungated", synthesize("user", "prompt", turnOrigin="human", message__content="summarise the open issues"))
 
     # -- running hooks
-    def env(self, settings, mark=False):
+    def env(self, settings):
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
         env.update(hookrun.settings_env(settings))
         env.update({"HOME": str(self.home), "CLAUDE_CONFIG_DIR": str(self.home / ".claude"),
                     "CLAUDE_STATE_DIR": str(self.state), "CLAUDE_PROJECT_DIR": str(self.project),
                     "TMPDIR": str(self.tmp / "tmp"), "CLAUDE_CODE_TMPDIR": str(self.tmp / "tmp")})
-        env.update({MARK: "1"} if mark else {})
         return env
 
     def payload(self, name):
         return {"session_id": SID[name], "transcript_path": str(self.transcripts[name]), "cwd": str(self.project),
                 "stop_hook_active": False, "permission_mode": "default"}
 
-    def run_stop(self, name, settings, mark=False):
-        return hookrun.run_event(settings, "Stop", self.payload(name), self.env(settings, mark), str(self.project))
+    def run_stop(self, name, settings):
+        return hookrun.run_event(settings, "Stop", self.payload(name), self.env(settings), str(self.project))
 
 
 def _blocked(event) -> bool:
@@ -209,39 +204,9 @@ def world(tmp_path_factory):
     return World(tmp_path_factory.mktemp("a21"))
 
 
-# ---------------------------------------------------------------- the arming experiment
-def test_arming_experiment_decides_option_1(world):
-    """Per option, the Stops blocked on a pre-update span (the open window aside): option 2 (the
-    coordinator always armed) blocks the in-flight /dev, /do and /merge spans of a session that
-    never ran the update's commands, so option 1 is taken (the default)."""
-    old = pre_update_settings()
-    counts, rows = {}, []
-    for option, mark in (("option 1", False), ("option 2", True)):
-        blocked = [name for name in SPANS if _blocked(world.run_stop(name, old, mark))]
-        counts[option] = len(blocked)
-        rows.append(f"{option}: {len(blocked)} of {len(SPANS)} pre-update spans blocked {blocked}")
-    print("\narming experiment (pre-update hook list, this tree's files):\n  " + "\n  ".join(rows))
-    assert counts["option 1"] == 0, rows
-    assert counts["option 2"] > 0, rows  # option 2 would be taken only at 0
-
-
 # ---------------------------------------------------------------- A21 under option 1
-def test_a21_pre_update_hook_list_runs_every_stop_hook_and_holds_no_span(world):
-    """Every Stop hook the pre-update list registers runs on this tree's files: the coordinator
-    directly (completion advisory: `would block` on stderr, exit 0), the retired gates as exit-0
-    stubs; no hook errs or prints a traceback; the ungated session stops."""
-    old = pre_update_settings()
-    for name in SPANS + ("ungated",):
-        event = world.run_stop(name, old)
-        hooks = [h["hook"] for h in event["hooks"]]
-        assert hooks == ["hooks/stop-workflow-coordinator.py", "hooks/stop-do-report-gate.py",
-                         "hooks/stop-obligation-gate.py"], hooks
-        assert not _healthy(event) and not _blocked(event), (name, event["hooks"])
-        coordinator = event["hooks"][0]
-        assert ("would block" in coordinator["stderr"]) == (name in SPANS), (name, coordinator["stderr"])
-        assert all((h["rc"], h["stdout"], h["stderr"]) == (0, "", "") for h in event["hooks"][1:])
-
-
+# The pre-update list's own cases (the arming experiment, the pre-update Stop list, the [pre-update] window and
+# tool-hook cases) are retired: no session that can still exist holds that list (policies/replay-hook-lists.v1.json).
 def test_a21_this_trees_hook_list_enforces_the_same_spans(world):
     """The same states under this tree's settings.json: the launcher arms the coordinator, so each
     gated span blocks naming its command (and its compliant path: the gaps, or the human's /stop),
@@ -249,7 +214,7 @@ def test_a21_this_trees_hook_list_enforces_the_same_spans(world):
     new = current_settings()
     for name in SPANS + ("ungated",):
         event = world.run_stop(name, new)
-        assert [h["hook"] for h in event["hooks"]] == ["hooks/stop-launch.py"]
+        assert [h["hook"] for h in event["hooks"]] == stop_hooks(new) and stop_hooks(new)[0] == "hooks/stop-launch.py"
         assert not _healthy(event), event["hooks"]
         launcher = event["hooks"][0]
         if name in SPANS:
@@ -259,23 +224,23 @@ def test_a21_this_trees_hook_list_enforces_the_same_spans(world):
             assert launcher["rc"] == 0, launcher["stderr"]
 
 
-@pytest.mark.parametrize("which", ["pre-update", "this tree"])
+@pytest.mark.parametrize("which", ["this tree"])
 def test_a21_the_open_window_blocks_under_both_hook_lists(world, which):
-    """The open /dev-overnight window blocks the Stop under either list (the time-lock is kept
-    unmarked). It reads P2's overnight.window_open: waits for P2's merge."""
-    settings = pre_update_settings() if which == "pre-update" else current_settings()
+    """The open /dev-overnight window blocks the Stop under this tree's list. It reads P2's
+    overnight.window_open: waits for P2's merge."""
+    settings = current_settings()
     event = world.run_stop("window", settings)
     assert not _healthy(event), event["hooks"]
     assert _blocked(event) and "overnight window open until" in event["hooks"][0]["stderr"], event["hooks"]
 
 
-@pytest.mark.parametrize("which", ["pre-update", "this tree"])
+@pytest.mark.parametrize("which", ["this tree"])
 def test_a21_the_tool_hooks_accept_the_old_transcript(world, which):
     """pretool-tool-policy.py and pretool-todo-validate.py on the in-flight /dev cycle's transcript:
     its next TodoWrite (Step 4 completed after its BA dispatch came back, the next step in progress)
     is accepted, no traceback. Each is found as the hook the list registers to run it (tool-policy is
     a rule of the write gate in this tree's list: sites.reporter)."""
-    settings = pre_update_settings() if which == "pre-update" else current_settings()
+    settings = current_settings()
     steps = world.canonical("dev")
     todos = [{"content": s["content"], "activeForm": s.get("activeForm", s["content"]),
               "status": "completed" if k < 4 else ("in_progress" if k == 4 else "pending")}

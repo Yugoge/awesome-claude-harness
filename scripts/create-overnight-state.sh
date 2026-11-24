@@ -13,6 +13,7 @@
 # Exit: 0=success, 1=error
 
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib" && pwd)/claude_home.sh"
 
 # --- M3-ORDERING: neutralise the actor marker for THIS SCRIPT'S OWN git calls ---
 # Every git invocation this launcher issues runs in the PRE-STATE region: no
@@ -89,8 +90,8 @@ WORKTREE_CHOICE=""
 # unverified. It is NOT a second implementation: it is the same lines, with
 # the isolation-creating region skipped.
 EMIT_RECORD_ONLY=0
-# Override the state directory via env var or CLI
-STATE_SUBDIR="${OVERNIGHT_STATE_SUBDIR:-.claude}"
+# The one state directory: hooks/lib/overnight.py state_path() reads only <project>/.claude
+STATE_SUBDIR=".claude"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --end-time)  END_TIME="$2"; shift 2 ;;
@@ -98,14 +99,13 @@ while [[ $# -gt 0 ]]; do
         --spec)      SPEC_PATH="$2"; shift 2 ;;
         --session-id) SESSION_ID="$2"; shift 2 ;;
         --project-dir) PROJECT_DIR="$2"; shift 2 ;;
-        --state-subdir) STATE_SUBDIR="$2"; shift 2 ;;
         --codex)     CODEX_REQUIRED=true; shift ;;
         --worktree)    WORKTREE_FLAG_SEEN=1; shift ;;
         --no-worktree) NO_WORKTREE_FLAG_SEEN=1; shift ;;
         --emit-record-only) EMIT_RECORD_ONLY=1; shift ;;
         *)
             echo "Unknown option: $1" >&2
-            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--state-subdir <dir>] [--codex] [--worktree|--no-worktree] [--emit-record-only]" >&2
+            echo "Usage: create-overnight-state.sh [--end-time <time>] [--focus <str>] [--spec <path>] [--session-id <uuid>] [--project-dir <path>] [--codex] [--worktree|--no-worktree] [--emit-record-only]" >&2
             exit 1
             ;;
     esac
@@ -143,10 +143,8 @@ fi
 # every reading.
 NOW_EPOCH="$(date +%s)"
 
-# --- Start time ---
 START_TIME="$(date -u -d "@$NOW_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
 
-# --- End time parsing ---
 parse_end_time() {
     local input="$1"
 
@@ -242,7 +240,7 @@ fi
 # --- Repo identity + MAIN_HEAD capture (side-effect-free; may precede worktree) ---
 # M1/round-3: only side-effect-free repo-identity discovery and MAIN_HEAD capture
 # may run before worktree creation. Everything fallible (spec/focus/view) runs AFTER.
-MAIN_ROOT="$("${GIT_UNMARKED[@]}" -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || echo '')"
+MAIN_ROOT="$(unset CLAUDE_OVERNIGHT_ACTOR; claude_repo_top "$PROJECT_DIR" || echo '')"  # M3-ORDERING: unmarked, as every git call here; never the filesystem root
 if [[ -z "$MAIN_ROOT" ]]; then
     echo "Error: --project-dir is not inside a git repo: $PROJECT_DIR" >&2
     exit 1

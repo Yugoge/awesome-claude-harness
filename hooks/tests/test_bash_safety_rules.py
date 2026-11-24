@@ -99,7 +99,7 @@ def test_the_docker_daemon_rule_merged_into_the_systemctl_rule(sandbox, command)
 
 def test_the_docker_daemon_disable_is_the_settings_deny():
     """BS-22's `systemctl disable docker` is refused by settings.json's permissions.deny."""
-    deny = json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
+    deny = json.loads((REPO / "policies" / "cli-deny.v1.json").read_text())["deny"]  # the deny-list rule's
     assert {"Bash(systemctl restart:*)", "Bash(systemctl stop:*)", "Bash(systemctl disable:*)"} <= set(deny)
 
 
@@ -107,7 +107,7 @@ def test_session_dirs_ban_is_the_settings_deny():
     """BS-18 merged into settings.json's permissions.deny, which refuses the file for Read and Edit and, since
     OB-L16 (owner decision: a search pattern or commit message naming it passes), per command for Bash: each
     command that reads, writes or runs it has its own entry for the name and for a `?` glob of the dot."""
-    deny = json.loads((REPO / "settings.json").read_text())["permissions"]["deny"]
+    deny = json.loads((REPO / "policies" / "cli-deny.v1.json").read_text())["deny"]  # the deny-list rule's
     assert {"Read(**/session_dirs.txt)", "Edit(**/session_dirs.txt)"} <= set(deny)
     stems = ("cat *", "cp *", "rm *", "tee *", "bash *", "sh *", "source *", ". *", "eval *", "python*")
     assert {f"Bash({stem}{tail})" for stem in stems for tail in ("session_dirs.t*", "session_dirs?*")} <= set(deny)
@@ -200,7 +200,8 @@ def test_an_over_block_is_fixed_and_its_rule_still_refuses(sandbox, fixed, refus
 ])
 def test_a_read_of_a_grant_namespace_passes_and_a_write_is_refused(sandbox, namespace, label):
     """O6: reading the /commit user-intent flag or the daemon-restart grant flag is not a write of it."""
-    ns = namespace.format(state=sandbox["env"]["CLAUDE_STATE_DIR"], tmp=sandbox["env"]["TMPDIR"])
+    ns = namespace.format(state=sandbox["env"]["CLAUDE_STATE_DIR"],
+                          tmp=sandbox["env"].get("CLAUDE_DAEMON_RESTART_SENTINEL_DIR") or "/tmp")
     for read in (f"ls {ns}x.flag 2>/dev/null", f"cat {ns}x.flag", f"cat {ns}x.flag | cat"):
         assert run(sandbox, SAFETY, read).returncode == 0, read
     for write in (f"echo x > {ns}x.flag", f"touch {ns}x.flag", f"cp /etc/hostname {ns}x.flag"):
@@ -702,3 +703,22 @@ def test_a_reader_with_a_glob_operand_beside_a_protected_name_still_reads(sandbo
     cmd = command.format(S=sandbox["env"]["CLAUDE_STATE_DIR"])
     r = run(sandbox, SAFETY, cmd)
     assert r.returncode == 0, (cmd, r.stderr)
+
+
+@pytest.mark.parametrize("spelling", ["plain", "after-cd", "through-link", "through-tmpdir"])
+def test_a_write_of_the_daemon_grant_file_is_refused_at_every_spelling(sandbox, tmp_path, spelling):
+    """g-locfind1 F3: the daemon-restart grant file is refused for where the write lands (as the commit grant is,
+    location-rules U9), not for how its path is spelt: after a cd into its folder, through a link to the folder, or
+    through $TMPDIR."""
+    grants = Path(sandbox["tmp"]) / "daemon-grants"
+    grants.mkdir(exist_ok=True)
+    (tmp_path / "link").symlink_to(grants)
+    name = "claude-allow-daemon-restart-x.flag"
+    command = {"plain": f"touch {grants}/{name}", "after-cd": f"cd {grants} && touch {name}",
+               "through-link": f"touch {tmp_path}/link/{name}",
+               "through-tmpdir": f'touch "$TMPDIR/daemon-grants/{name}"'}[spelling]
+    env = dict(sandbox["env"], CLAUDE_DAEMON_RESTART_SENTINEL_DIR=str(grants))
+    r = run(dict(sandbox, env=env), SAFETY, command)
+    assert r.returncode == 2 and "daemon-restart-sentinel-write" in r.stderr, (command, r.stderr)
+    read = run(dict(sandbox, env=env), SAFETY, f"cd {grants} && cat {name}")
+    assert read.returncode == 0, read.stderr

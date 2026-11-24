@@ -25,10 +25,10 @@ REPO_NAME=$(basename "$WATCH_PATH")
 DEBOUNCE_DELAY=${FSWATCH_DEBOUNCE:-12}       # Debounce delay (seconds, ensures <6 pushes/min GitHub limit)
 AUTO_PULL_INTERVAL=${FSWATCH_PULL_INTERVAL:-300}  # Auto pull interval (seconds, default 5 minutes)
 MAX_RETRIES=${FSWATCH_MAX_RETRIES:-3}        # Maximum retry attempts
-LOG_FILE="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}/logs/git-fswatch-${REPO_NAME}.log"
-HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd -P)"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-  || harness_state_dir() { printf '%s\n' /tmp; }
+  || { echo "git-fswatch: hooks/lib/harness_state_dir.sh is missing" >&2; exit 1; }
+LOG_FILE="$(harness_state_root)/logs/git-fswatch-${REPO_NAME}.log"
+HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd -P)"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_switch.sh" 2>/dev/null \
   || harness_switch_off() { return 1; }
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/auto_push.sh" 2>/dev/null \
@@ -341,7 +341,7 @@ safe_commit() {
         log_success "Checkpoint created: ${tip:-?} on ${ref} (at ${timestamp})"
         return 0
     else
-        log_error "Failed to create checkpoint (see ~/.claude/logs/checkpoint.log)"
+        log_error "Failed to create checkpoint (see $CHECKPOINT_LOG_FILE)"
         return 1
     fi
 }

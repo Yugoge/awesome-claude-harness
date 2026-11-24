@@ -187,18 +187,20 @@ def test_another_command_s_step_label_never_names_the_owner(tmp_path):
 
 def test_a_label_binds_only_in_the_template_s_own_command(tmp_path, monkeypatch):
     """The rule itself, whatever labels the tree's checklists carry today: a /close
-    checklist whose main-agent step is labelled "Step 4", BA's label in /dev, owes
-    none of BA's artifacts; /dev's own "Step 4c", where BA's analysis template sits, still owes them."""
+    checklist whose main-agent step carries BA's label in /dev (read from /dev's canonical list) owes
+    none of BA's artifacts; /dev's own step of that label, where BA's analysis template sits, still owes them."""
     todo = obligation._lib_module("todo_canonical")
+    real = todo.run_todo_script
+    ba_label = next(s["content"].split(":")[0] for s in real("dev")
+                    if _required_role(s) == "ba")
     steps = {"close": [{"content": "Step 2: Delegate close debate to QA subagent",
                         "subagent_call": {"agent": "qa", "subagent_type": "qa"}},
-                       {"content": "Step 4: Ask the user to rate each landed cycle"}]}
-    real = todo.run_todo_script
+                       {"content": f"{ba_label}: Ask the user to rate each landed cycle"}]}
     monkeypatch.setattr(todo, "run_todo_script", lambda command, args="": steps.get(command) or real(command, args))
     ticket = f"docs/dev/ticket-{TASK}.md"
     assert obligation._canonical_step(TASK, ticket, [("close", "")], ["dev"]) is None
     own = obligation._canonical_step(TASK, ticket, [("dev", "")], ["dev"])
-    assert own["step"].startswith("Step 4c:") and own["subagent_call"]["subagent_type"] == "ba"
+    assert own["step"].startswith(f"{ba_label}:") and _required_role(own) == "ba"
 
 
 def test_a_product_file_goes_to_the_dispatch_whose_tool_calls_wrote_it(tmp_path):
@@ -223,8 +225,8 @@ def test_a_transcript_that_never_names_the_task_is_not_parsed(tmp_path, monkeypa
     _fanout_dev_session(store)
     store.session("s-unrelated", [_typed("/dev something else")])
     walked = []
-    real = obligation.dispatch_obligations
-    monkeypatch.setattr(obligation, "dispatch_obligations",
+    real = obligation._whole_dispatch_obligations  # dispatch_obligations' whole read: what a scan that keeps nothing parses
+    monkeypatch.setattr(obligation, "_whole_dispatch_obligations",
                         lambda path, *a, **k: walked.append(Path(path).stem) or real(path, *a, **k))
     store.ask(f"docs/dev/dev-report-{TASK}-l1.json")
     assert walked == ["s-dev"]
@@ -337,3 +339,11 @@ def test_a_write_outranks_a_later_dispatch_that_only_names_the_file(tmp_path):
     store.agent("s-dev", "a-qa-l2", "toolu_qa_l2", [diff])
     answer = store.ask("src/app.py")
     assert (answer["source"], answer["tool_use_id"]) == ("writer", "toolu_dev_l1")
+
+
+def _required_role(step):
+    """The subagent type of the call a canonical step requires (a list states every call of the step, the
+    requirement round's included: scripts/todo/dev.py ROUND_CALLS; its optional entries are not required)."""
+    call = step.get("subagent_call")
+    return next((c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+                 if isinstance(c, dict) and not c.get("optional")), None)

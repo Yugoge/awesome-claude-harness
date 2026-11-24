@@ -40,6 +40,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 
 
 def _dryrun_from_prompt(prompt: str):
@@ -75,7 +76,7 @@ def main() -> int:
     if not isinstance(data, dict):
         return 0
 
-    if data.get("tool_name") not in ("Agent", "Task"):
+    if data.get("tool_name") not in DISPATCH_TOOLS:
         return 0
 
     tool_input = data.get("tool_input")

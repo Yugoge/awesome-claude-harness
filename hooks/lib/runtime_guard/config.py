@@ -29,6 +29,20 @@ except ImportError:  # executed under the top-level-script shim (no package)
     from pathmatch import _normalize_path, _strip_quotes  # type: ignore[no-redef]
 
 
+def _locations():
+    """hooks/lib/locations.py, loaded when a location is asked for and never at import: the
+    installer loads this file with pathmatch.py alone beside it (scripts/bootstrap step 4 and
+    scripts/install/render-settings read DATA_FILE_PATH, REQUIRED_KEYS and _read_config from
+    a home that may hold nothing else of hooks/lib)."""
+    try:
+        from .. import locations
+    except ImportError:  # a top-level package or the script shim: hooks/lib may not be on sys.path
+        import sys
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import locations  # type: ignore[no-redef]
+    return locations
+
+
 # ── The single generic data-file path ────────────────────────────────────────
 # Overridable for tests via env so the live machine file is never mutated by a
 # test run. The path is generic; it carries no project identity. The
@@ -164,35 +178,36 @@ def _config_path_variants() -> set:
     tilde = _home_tilde_variant(p)
     if tilde:
         variants.add(tilde)
+    variants.add(os.path.realpath(p))  # the file itself, when a link on its path leads elsewhere
     return variants
 
 
 # Generic, too-broad ancestor roots whose mutation must NOT be treated as a config
 # self-protection hit — protecting them would over-block routine filesystem ops on
 # the home/system roots (`mv /root /backup`, `rm -rf /tmp`). The data file's OWN
-# parent dir(s) BELOW these roots ARE protected. NO project names — generic POSIX
-# system/home roots derived structurally.
-_ANCESTOR_STOP_ROOTS = frozenset({
-    "/", "/root", "/home", "/etc", "/usr", "/var", "/tmp", "/opt", "/bin",
-    "/lib", "/lib64", "/sbin", "/srv", "/mnt", "/media", "/dev", "/proc",
-    "/sys", "/run", "/boot",
-})
+# parent dir(s) BELOW these roots ARE protected. The roots are lib/locations'
+# (is_broad_root): the system directories, and the user's own home and what lies
+# above it, whoever the user is.
 
 
 def _config_ancestor_dirs() -> set:
     """Proper ancestor DIRECTORIES of the data file that are protected against
     mutation/move/delete — moving or removing any of them neuters the guard's
     config. Yields each ancestor directory up to (but EXCLUDING) the generic
-    too-broad system/home roots in `_ANCESTOR_STOP_ROOTS`, so `/root/.config/claude`
+    too-broad system/home roots (lib/locations is_broad_root), so `/root/.config/claude`
     and `/root/.config` are protected while `/root` and `/` are not (a routine
     `mv /root /backup` must still ALLOW). Includes the `~/`-prefixed variant for a
     `/root/`-rooted path. Generic — no project identity (the path itself is the only
-    hardcoded constant, already generic)."""
+    hardcoded constant, already generic). A directory is protected for what it is, not
+    for how it is spelt: where a link on the path leads elsewhere (`~/.config` a link),
+    the directories the file and each written ancestor really lie in are protected too."""
     out = set()
     norm = os.path.normpath(DATA_FILE_PATH)
+    written = []
     d = os.path.dirname(norm)
-    while d and d not in _ANCESTOR_STOP_ROOTS:
+    while d and not _locations().is_broad_root(d):
         out.add(d)
+        written.append(d)
         # Generic: add the ~/-prefixed variant for ANY ancestor
         # under the real user home, not only /root/.
         tilde = _home_tilde_variant(d + "/")
@@ -202,6 +217,14 @@ def _config_ancestor_dirs() -> set:
         if parent == d:
             break
         d = parent
+    for start in [os.path.dirname(os.path.realpath(norm))] + [os.path.realpath(w) for w in written]:
+        r = start
+        while r and not _locations().is_broad_root(r) and r not in out:
+            out.add(r)
+            parent = os.path.dirname(r)
+            if parent == r:
+                break
+            r = parent
     return out
 
 

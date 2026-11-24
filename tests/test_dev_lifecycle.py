@@ -92,40 +92,6 @@ def test_do_report_lite_preflight_rejects_malformed(doc, expected_field):
 
 
 # --------------------------------------------------------------------------
-# classify_walk_outcome (AC-L18 / AC-L19)
-# --------------------------------------------------------------------------
-
-
-def test_classify_walk_outcome_hook_deny():
-    text = "PreToolUse:pretool-tool-policy.py hook error: BLOCKED by tool-policy.v1: ..."
-    assert dlc.classify_walk_outcome(text) == "hook_deny"
-
-
-def test_classify_walk_outcome_success_close():
-    assert dlc.classify_walk_outcome("...\nCLOSE: YES\n") == "success"
-
-
-def test_classify_walk_outcome_reads_the_close_verdict_of_the_last_line_only():
-    # A round-open last line is not landed, whatever an earlier line quotes.
-    assert dlc.classify_walk_outcome("CLOSE: YES (prior attempt)\nCLOSE_FINDINGS: 2 items\n") == "ordinary_reject"
-
-
-def test_classify_walk_outcome_success_commit():
-    assert dlc.classify_walk_outcome("...\nCOMMIT: APPROVE\n") == "success"
-
-
-def test_classify_walk_outcome_ordinary_reject_default():
-    assert dlc.classify_walk_outcome("resolver exit 2: status=fail") == "ordinary_reject"
-
-
-def test_classify_walk_outcome_partial_abort_overrides():
-    assert (
-        dlc.classify_walk_outcome("CLOSE: YES", partial_multi_repo_commit=True)
-        == "partial_abort"
-    )
-
-
-# --------------------------------------------------------------------------
 # validate_auto_flag_combination (Must-Have #8)
 # --------------------------------------------------------------------------
 

@@ -2,13 +2,17 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 4
+- **Total files**: 8
 - **Subdirectories**: 0
 - **Naming convention**: kebab
 
 ## Files
+- `artifact-check-accepted-reads.v1.json` - JSON config: schema, about, entries
+- `cli-deny.v1.json` - JSON config: schema, about, purposes, deny
+- `definition-lookalikes.v1.json` - Definitions of hooks/ and scripts/ that look alike and are allowed to coexist because they answer different questions. Read by tests/defs_registry (python3 -m tests.defs_registry), which groups every literal definition by the sameness rule of tests/defs_registry/check.py and fails on a group the register does not split. Each entry: a reason (required) and two or more sides; the definitions of one side answer one question, so two copies on one side are still a duplicate. A definition is identified by its scope-qualified name and the fingerprint of its sorted members (sha256, 16 hex), never by file or line; `at` is where it was when registered. Seeded from the duplicate-definition audit of f199dfb1e: its 61 different-questions families (sides = the distinct member sets of the family) and its ruled-out look-alike pairs (sides = the named definitions).
 - `protected-workflow-manifest.v1.json` - Every protected workflow and activation route the host-capability handshake gates. A route inside protected_surface_prefixes but absent from routes[] is blocked fail-closed until explicitly added; a route outside every prefix is reported not_protected so the gate cannot brick tool use it was never meant to police.
 - `public-core-residue-allowlist.v1.json` - Seed exemption set for scripts/check-public-core.sh section 5 (generic author-path residue gate). Set-based, NOT an aggregate-count ratchet: the key is (path, fingerprint, ordinal), so deleting one allowlisted occurrence never creates capacity for an unrelated new one. Every entry's `class` is RE-DERIVED structurally by the gate from the live line; a hand-written label that the source structure does not support is rejected. Entries were seeded from a live full-ledger scan, never from a number quoted in a spec.
+- `replay-hook-lists.v1.json` - JSON config: schema, about, entries, retired
 - `specialist-degradation.v1.json` - JSON config: policy_version, defaults, per_specialist_overrides
 - `tool-policy.v1.json` - JSON config: policy_version, default_action, _shared_protected_path_prefixes, _note, roles
 <!-- /AUTO:readme-stats -->

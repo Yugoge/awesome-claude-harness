@@ -4,6 +4,7 @@
 This todo script generates workflow steps for the BA-delegated dev-command workflow
 with command development best practices.
 """
+from dev import ROUND_CALLS  # the requirement round's calls, stated once (scripts/todo/dev.py)
 
 
 # (label, content, activeForm, extra_meta) tuples for each step
@@ -13,13 +14,9 @@ _STEPS = [
     # graphify pre-BA hydrator (advisory) — folded in place as Step 2
     ("2", "Graphify pre-BA: run graphify-query.py Bash hydrator (advisory)", "Running graphify-query.py Bash hydrator", None),
     ("3", "Consult specialists (optional)", "Consulting specialists", None),
-    # The requirement round (D28, D32): BA intake or the BA panel, panel QA, the asks, then BA analysis.
-    ("4", "Requirement round: BA intake, or the BA panel without a spec", "Dispatching BA for the requirement round",
-     {"subagent_call": {"agent": "ba", "subagent_type": "ba"}}),
-    # No subagent_call: with a spec there is no panel, and no QA dispatch comes under this step.
-    ("4a", "Panel QA writes round 1 (without a spec)", "Panel QA writing round 1", None),
-    ("4b", "Ask each round with AskUserQuestion", "Asking the round with AskUserQuestion", None),
-    ("4c", "BA analysis (the final BA context)", "Delegating to BA for analysis", {"subagent_call": {"agent": "ba", "subagent_type": "ba"}}),
+    # The requirement round (D28, D32), one step: BA intake or the BA panel, panel QA, the asks, then BA analysis.
+    ("4", "Requirement round: BA intake or panel, panel QA, ask each round, BA analysis", "Running the requirement round",
+     {"subagent_call": ROUND_CALLS}),
     ("5", "BA clarification loop (if needed)", "Running BA clarification loop", None),
     ("6", "Validate BA output", "Validating BA output", None),
     ("7", "QA validates BA conclusions", "QA validating BA conclusions", {"subagent_call": {"agent": "qa", "subagent_type": "qa"}}),

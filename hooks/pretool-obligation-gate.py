@@ -28,9 +28,9 @@ turn-1-one-shot-blueprint.md:36-50,147-165), first match wins:
      the harness's own schemas/registry.json (resolved from the hook's
      location, so a product repo without schemas/ works):
        - ParsedObligation -> its role must equal the dispatch's subagent_type
-         (role_mismatch) and its dispatched_at must lie within
-         DISPATCH_CLOCK_BOUND_SECONDS of now (dispatch_clock_out_of_bound; an
-         uncomparable value fails closed). Otherwise exit 0.
+         (role_mismatch). Otherwise exit 0. Its time is not the block's: a
+         dispatched_at typed in it is accepted and never judged; every reader
+         takes the CLI's record of this event (obligation.dispatch_time).
        - NoBlock (a dispatch step 2 requires a block of): missing_block.
        - Rejection (malformed block, unregistered schema id, OR
          tool_input.prompt absent/non-string -- hooks/lib/obligation.py's own
@@ -64,7 +64,7 @@ Exit codes:
        its reason on stderr; nothing is written).
   2 -- reject (block mode only: missing, malformed or invalid block or bad
        prompt where step 2's span requires a block; on any dispatch, a block
-       that parses but has a role mismatch or an out-of-bound clock).
+       that parses but has a role mismatch).
 """
 
 from __future__ import annotations
@@ -73,7 +73,6 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -82,7 +81,6 @@ from lib.obligation import (  # noqa: E402
     OBLIGATION_OPEN_TOKEN,
     NoBlock,
     ParsedObligation,
-    dispatch_clock_within_bound,
     parse_obligation,
 )
 
@@ -154,6 +152,33 @@ def _declared(obligation) -> dict:
             if isinstance(a, dict) and isinstance(a.get("path"), str)}
 
 
+_FORBID_RE = re.compile(r"^\W*(?:do not|don't|never|must not)\b", re.IGNORECASE)
+_READ_RE = re.compile(r"^\W*(?:read|open|view|consult|look at|load|rely on|use)\b", re.IGNORECASE)
+_ITEM_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s")
+
+
+def _without_forbidden_reads(prompt: str) -> str:
+    """The prompt less the lines that only forbid reading something: a line that begins with
+    do not / never and then a read verb, and a list item that begins with a read verb under a
+    heading line that begins with do not / never (a "DO NOT:" list). A path such a line names
+    is no input of this dispatch (panels dispatched side by side each forbid reading the
+    others' reports). A line that forbids another act (modify, delete) keeps its paths."""
+    kept, listed = [], False
+    for line in prompt.split("\n"):
+        if _FORBID_RE.match(line):
+            tail = _FORBID_RE.sub("", line, count=1)
+            listed = line.rstrip().endswith(":")
+            if _READ_RE.match(tail):
+                continue
+        elif listed and _ITEM_RE.match(line):
+            if _READ_RE.match(_ITEM_RE.sub("", line, count=1)):
+                continue
+        else:
+            listed = False
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset) -> list:
     """R17, read from the active span's dispatch order (the CLI's record of
     each Agent call and how its agent's end came back, never a file's mtime
@@ -161,10 +186,12 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
     declared, the latest such dispatch's agent must have stopped; and unless
     this dispatch is a verdict itself, the latest verdict naming that
     producer's artifacts must be issued after it stopped and have stopped
-    too. A refused or errored dispatch (an is_error result) ran nothing, so it
-    has not returned, unless its agent's own transcript records its stop; a
-    background, resumed or cut dispatch returned when its agent's end came
-    back (lib/agent_returns.py, the one reading of it)."""
+    too. A dispatch a hook refused never ran (Span.dispatch_calls leaves it
+    out): it declares nothing and is no verdict. An errored dispatch has not returned,
+    unless its agent's own transcript records its stop; a background, resumed
+    or cut dispatch returned when its agent's end came back
+    (lib/agent_returns.py, the one reading of it). A path the prompt names only to forbid
+    reading it (_without_forbidden_reads) is no input of this dispatch."""
     span = command_span.active_span(data["transcript_path"]) if data.get("transcript_path") else None
     if span is None:
         return []
@@ -177,12 +204,13 @@ def _order_findings(data: dict, obligation: dict, prompt: str, known: frozenset)
         return returns[0].line(call)
 
     earlier = []
-    for call in span.iter_calls("Agent", "Task", before=data.get("tool_use_id") or None):
+    for call in span.dispatch_calls(before=data.get("tool_use_id") or None):
         parsed = parse_obligation(call.input.get("prompt"), known_schema_ids=known)
         if isinstance(parsed, ParsedObligation):
             earlier.append((call, parsed.obligation.get("role"), _declared(parsed.obligation)))
     own = _declared(obligation)
-    upstream = {path: entry for entry in earlier for path in entry[2] if path not in own and path in prompt}
+    wanted = _without_forbidden_reads(prompt)
+    upstream = {path: entry for entry in earlier for path in entry[2] if path not in own and path in wanted}
     findings, seen = [], set()
     for path, (call, role, paths) in upstream.items():
         if call.id in seen:
@@ -234,13 +262,8 @@ def _evaluate(data: dict, mode: str) -> None:
     parsed = parse_obligation(prompt, known_schema_ids=known)
     if isinstance(parsed, ParsedObligation):
         obligation = parsed.obligation
-        clock = dispatch_clock_within_bound(
-            obligation.get("dispatched_at"), datetime.now(timezone.utc)
-        )
         if obligation.get("role") != subagent_type:
             reason = "role_mismatch"
-        elif clock is not True:
-            reason = "dispatch_clock_out_of_bound" if clock is False else "dispatch_clock_unverifiable"
         else:
             findings = _order_findings(data, obligation, prompt, known) if mode == "block" else []
             if findings:
@@ -260,7 +283,7 @@ def _evaluate(data: dict, mode: str) -> None:
         # OB-L41: a prompt that only mentions the tag ('<obligation> blocks', an unterminated
         # '<obligation v="1">' in prose) parses to a Rejection and carries no obligation; it is
         # refused only on a dispatch its span requires a block of. A block that parses is held
-        # to role and clock above on every dispatch.
+        # to its role above on every dispatch.
         if not _block_required(data.get("transcript_path"), subagent_type):
             return
         reason = parsed.reason + (f" at {parsed.field}" if getattr(parsed, "field", "") else "")

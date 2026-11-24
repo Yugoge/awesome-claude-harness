@@ -10,8 +10,8 @@ agent-index.json entry) and writes a ledger entry to:
 Fail-open on all error paths: if agent_id is missing or the agent names no
 existing cycle registry, exit 0 without blocking.
 
-The quota/timeout semantics: the ledger records the call with a status read from
-the Skill output (quota_error, timeout, parse_error, else called). The
+The ledger records the call with status "failed" (PostToolUseFailure) or "called"; a Skill
+call's response carries success, commandName and allowedTools, no output to classify. The
 subagentstop-codex-enforce.py hook treats any ledger entry as sufficient — the
 agent tried; infrastructure failure is not agent non-compliance. This hook is
 registered under both PostToolUse and PostToolUseFailure (matcher Skill), so an unavailable
@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from lib import agent_cycle
+from lib import agent_cycle, locations
 from lib.agent_resolver import resolve_agent_type
 
 
@@ -50,20 +50,8 @@ def _load_stdin() -> dict:
 
 
 def _determine_status(data: dict) -> str:
-    """Classify the call, including a Skill invocation that failed before any output."""
-    if data.get("hook_event_name") == "PostToolUseFailure":
-        return "failed"
-    tool_response = data.get("tool_response") or {}
-    if isinstance(tool_response, dict):
-        output = tool_response.get("output") or ""
-        if isinstance(output, str):
-            if "quota" in output.lower() or "usage limit" in output.lower():
-                return "quota_error"
-            if "timeout" in output.lower():
-                return "timeout"
-            if "error" in output.lower():
-                return "parse_error"
-    return "called"
+    """failed for a Skill invocation that failed before any output, else called."""
+    return "failed" if data.get("hook_event_name") == "PostToolUseFailure" else "called"
 
 
 def main() -> None:
@@ -100,6 +88,8 @@ def main() -> None:
     status = _determine_status(data)
 
     ledger_dir = registry / "codex-ledger"
+    if locations.refuses_root(ledger_dir, project_dir, "codex-skill-ledger"):
+        sys.exit(0)
     try:
         ledger_dir.mkdir(parents=True, exist_ok=True)
     except OSError:

@@ -207,18 +207,36 @@ def test_five_changed_hook_files_take_the_predicate_under_a_second(tmp_path, har
     transcript = tmp_path / "agent.jsonl"
     transcript.write_text("".join(json.dumps(r) + "\n" for r in base._tool_records(tmp_path, calls)),
                           encoding="utf-8")
-    timed = ("import importlib.util, sys, time, types\n"
+    # The predicate is held to the work it cannot avoid, measured in the same interpreter and run: compiling the
+    # four .py files and `bash -n` of the .sh (the least of two of each, interleaved). No fixed number of seconds
+    # holds on every runner; a slow or busy one stretches both alike.
+    timed = ("import importlib.util, subprocess, sys, time, types\n"
              "spec = importlib.util.spec_from_file_location('g2', sys.argv[1])\n"
              "g2 = importlib.util.module_from_spec(spec); spec.loader.exec_module(g2)\n"
-             "start = time.perf_counter()\n"
-             "found = g2._harness_syntax(types.SimpleNamespace(transcript_path=sys.argv[2]))\n"
-             "print(time.perf_counter() - start, len(found))\n")
-    proc = subprocess.run([sys.executable, "-B", "-c", timed, str(hook), str(transcript)],
+             "def floor():\n"
+             "    start = time.perf_counter()\n"
+             "    for p in sys.argv[3:]:\n"
+             "        if p.endswith('.sh'):\n"
+             "            subprocess.run(['bash', '-n', '--', p], check=True)\n"
+             "        else:\n"
+             "            compile(open(p, 'rb').read(), p, 'exec')\n"
+             "    return time.perf_counter() - start\n"
+             "def predicate():\n"
+             "    start = time.perf_counter()\n"
+             "    found = g2._harness_syntax(types.SimpleNamespace(transcript_path=sys.argv[2]))\n"
+             "    return time.perf_counter() - start, len(found)\n"
+             "work, (took, found) = floor(), predicate()\n"
+             "work2, (took2, _) = floor(), predicate()\n"
+             "print(min(took, took2), found, min(work, work2))\n")
+    files = [str(home / "hooks" / f"f3a-{name}") for name in (
+        "pretool-bash-safety.sh", "pretool-overnight-hook-guard.py", "prompt-workflow.py",
+        "pretool-git-privilege-guard.py", "pretool-grep-backtrack-guard.py")]
+    proc = subprocess.run([sys.executable, "-B", "-c", timed, str(hook), str(transcript), *files],
                           capture_output=True, text=True, check=True)
-    elapsed, found = proc.stdout.split()
-    print(f"F3.a predicate on 5 changed hook files: {float(elapsed):.3f} s")
+    elapsed, found, work = proc.stdout.split()
+    print(f"F3.a predicate on 5 changed hook files: {float(elapsed):.3f} s (their compile alone {float(work):.3f} s)")
     assert found == "0" and proc.stderr == "", proc.stderr
-    assert float(elapsed) < 1.0
+    assert float(elapsed) < 3 * float(work), (elapsed, work)
     assert subprocess.run(["find", str(home), "-name", "__pycache__", "-newer", str(marker)],
                           capture_output=True, text=True, check=True).stdout == ""
 

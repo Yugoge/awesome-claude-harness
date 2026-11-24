@@ -25,6 +25,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# The status values a checklist step may hold.
+TODO_STATUSES = frozenset({'pending', 'in_progress', 'completed'})
+# The fields that carry a step's text (a step matches another by either).
+STEP_TEXT_FIELDS = ('content', 'activeForm')
+
 
 def _find_todo_script(cmd_name):
     """The harness's canonical todo script (None when it has none) and the
@@ -258,7 +263,7 @@ def _ok_lists(calls):
 def step_texts(*lists):
     """The contents and activeForms of the steps of ``lists``."""
     return {t.get(k) for steps in lists for t in steps or () if isinstance(t, dict)
-            for k in ('content', 'activeForm') if t.get(k)}
+            for k in STEP_TEXT_FIELDS if t.get(k)}
 
 
 def shares_text(todos, texts):
@@ -372,7 +377,7 @@ def checklist(transcript_path):
 
 def _spec_opening_steps():
     """How many leading /spec steps belong to the turn that opened it:
-    scripts/todo/spec.py's get_blocking_count() (Steps 1-3a run in the opening
+    scripts/todo/spec.py's get_blocking_count() (Steps 1-3 run in the opening
     turn; Steps 4-7 are the multi-turn loop that later prompts continue)."""
     import importlib.util
     spec = importlib.util.spec_from_file_location('_spec_todo', _HARNESS_TODO_DIR / 'spec.py')
@@ -409,7 +414,7 @@ def spec_abandoned(state):
     """True when the /spec span of ``state`` was abandoned: a human prompt
     followed the opener while the checklist, as the last ok TodoWrite before
     that prompt left it (the canonical list before the first), still had an
-    open step among the opening turn's steps (Steps 1-3a). /spec runs those
+    open step among the opening turn's steps (Steps 1-3). /spec runs those
     steps inside the turn that opened it (its questions are AskUserQuestion
     answers, tool results, not prompts); only the Step 4 loop waits for the
     next prompt. The state is read as of that first later prompt, so no
@@ -427,8 +432,9 @@ def spec_abandoned(state):
                 break
             then = new
         then = then if then is not None else state.canonical
-        opening = {s.get('content') for s in state.canonical[:_spec_opening_steps()]}
-        return any(t.get('status') != 'completed' for t in then if t.get('content') in opening)
+        n = _spec_opening_steps()  # the steps before the loop's Step 4, on a list of any time (one with a 3a too)
+        cut = next((i for i, t in enumerate(then) if t.get('content') == state.canonical[n].get('content')), n)
+        return any(t.get('status') != 'completed' for t in then[:cut])
     except Exception:  # noqa: BLE001 -- unreadable: keep the interview's hold
         return False
 

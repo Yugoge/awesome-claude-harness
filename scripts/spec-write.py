@@ -9,7 +9,8 @@ continuation agent. A dispatch's section text (dev's report, QA's
 dispatch's own report; the continuation reads it and writes here.
 
 Usage:
-  spec-write.py create --spec PATH                  < text   (the whole new file; refuses an existing one)
+  spec-write.py create --spec PATH                  < text   (the whole new file; refuses an existing one;
+                                                              a name spec-<YYYYMMDD-HHMMSS>.md gets the writer's time)
   spec-write.py append --spec PATH --section N[.M]  < text
 
 append adds the text at the end of `## Section N` (or of its `### N.M`
@@ -29,10 +30,13 @@ import os
 import re
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 PLACEHOLDER = "_Not yet populated._"
-_NOT_SPECS = ("INDEX.md", "README.md")
+STAMP_SLOT = "<YYYYMMDD-HHMMSS>"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+from command_span import FOLDER_DOCUMENTS as _NOT_SPECS  # noqa: E402
 
 
 def _spec_file(raw):
@@ -46,6 +50,18 @@ def _spec_file(raw):
     if parent.name != "specs" or parent.parent.name != "dev" or parent.parent.parent.name != "docs":
         return None
     return path
+
+
+def _stamped(path, text):
+    """A create whose name holds `spec-<YYYYMMDD-HHMMSS>.md`: the writer's own UTC time in the name (a second
+    later while that name is taken) and in the text's `<ISO-8601>`; any other name and text as given."""
+    if STAMP_SLOT not in path.name:
+        return path, text
+    now = datetime.now(timezone.utc)
+    while path.with_name(path.name.replace(STAMP_SLOT, now.strftime("%Y%m%d-%H%M%S"))).exists():
+        now += timedelta(seconds=1)
+    return (path.with_name(path.name.replace(STAMP_SLOT, now.strftime("%Y%m%d-%H%M%S"))),
+            text.replace("<ISO-8601>", now.strftime("%Y-%m-%dT%H:%M:%SZ")))
 
 
 @contextlib.contextmanager
@@ -164,6 +180,7 @@ def main(argv=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     with _locked(path.parent):
         if args.cmd == "create":
+            path, block = _stamped(path, block)
             if path.exists():
                 sys.stderr.write(f"spec-write: refused: {path} exists; append to it instead\n")
                 return 1

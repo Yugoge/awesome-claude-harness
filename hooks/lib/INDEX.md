@@ -1,8 +1,8 @@
 # lib
 
 <!-- AUTO:index-stats -->
-*Last updated: 2026-11-17T19:34:23Z*
-**Total entries**: 79
+*Last updated: 2026-11-22T19:49:44Z*
+**Total entries**: 94
 **Convention**: kebab
 
 ## Tree
@@ -23,7 +23,8 @@ lib/
 ├── `agent_cycle.py` - producer (posttool-codex-skill-ledger.py) and the hooks that read a cycle's
 ├── `agent_resolver.py` - Refactored from pretool-subagent-code-block.py::_find_agent_type so that
 ├── `agent_returns.py` - the one reading of whether a dispatch has returned, for every hook that asks
-├── `allowlist.py` - The /allow grant file's one writer (write_sentinel_grant) and its readers,
+├── `aggregate_rebuild.py` - One staleness test and one rebuild, the aggregator's own (scripts/aggregate-dev-report.py
+├── `allowlist.py` - The /allow grant's one writer (write_sentinel_grant), its one release decision
 ├── `attribution_journal.py` - Capture side (used by pretool-attribution-pre.py / posttool-attribution-post.py):
 ├── `auto_push.sh` - auto_push.sh -- harness_auto_push, the one reader of the per-repository push switch.
 ├── `bash_active_syntax_census.py` - WHY THIS MODULE EXISTS (the "completeness obligation").  A removal policy whose
@@ -36,37 +37,50 @@ lib/
 ├── `claude_home.py` - Generalizes the in-repo gold-standard fail-closed self-resolution pattern
 ├── `claude_home.sh` - claude_home.sh — shared "harness home" resolver (shell consumable).
 ├── `close-verdict.py` - The one rule every reader of a close verdict applies: classify the close
+├── `close_exit.py` - the owner's --retire
 ├── `close_rating.py` - The owner's close rating: handle() writes its row and returns the owner summary; the predicates P5's Stop gate imports.
-├── `closeout.py` - CLI:
+├── `codex_transcript.py` - written by scripts/steps/codex-run.py, read by the gitignore preflight as its task's provenance. ...
 ├── `command_span.py` - rule of which transcript record is a prompt the human typed
 ├── `commit_journal.py` - WHY THIS EXISTS
 ├── `commit_pipeline.py` - ONE home for the two questions the commit-authorization chain could not
 ├── `contract_runtime.py` - This module is the single shared engine consumed by every contract-aware
+├── `declared_absence.py` - (hooks/subagentstop-artifact-contract-enforce.py) and the orchestrator's stop
 ├── `declared_paths.py` - hooks/pretool-tool-policy.py decides who may write a path a dispatch of the
+├── `deny_list.py` - The CLI applied its deny entries after the hooks, over a hook's allow, with no hook event and no ...
 ├── `dev_loop_checks.py` - Five hooks held these checks (pretool-layer-escalation-check.sh, pretool-bisect-gate.sh,
 ├── `dev_report_shard_patterns.py` - Single source for the per-worker / canonical dev-report filename regexes and
+├── `dispatch_return.py` - handback(payload) is the content, for the orchestrator (no agent_id) inside a gated command's span
+├── `dispatch_temp.py` - <session root>/.dispatch-tmp is this module's state and _write its one writer. Line 1 names the
 ├── `dispatch_template.py` - A dispatch made from a base template before a merge carries no obligation block
 ├── `do_report.py` - `docs/dev/do-report-<task_id>.json` has one producer, the /do main agent. Every
+├── `fact_cache.py` - watch() records, while a computation runs in this process, every file it opens, stats or lists an...
 ├── `final_report.py` - final_report() is the SubagentHandback message of the agent's latest run, else last_assistant_mes...
 ├── `gate_runner.py` - Claude Code starts every hook registered on an event at once, so two hooks that
 ├── `git_clean_guard.py` - Classifies ONE Bash command for the fail-closed pre-clean guard woven into the
 ├── `git_command_classifier.py` - classify_git_command(text) returns (invocations, residuals). Callers that
-├── `harness_state_dir.py` - Hook runtime state (consent flags, grants, sentinels, bookmarks, stamps) lives
+├── `git_facts.py` - (How a git command line parses, which word is the subcommand, lives in lib/shell_parse.py.)"""
+├── `harness_state_dir.py` - state_root(): <home>/.local/state/claude-harness/<harness home's name>-<crc32 of its real path> (...
 ├── `harness_state_dir.sh` - harness_state_dir.sh -- shell twin of hooks/lib/harness_state_dir.py.
 ├── `harness_switch.py` - The owner's typed /harness off (commands/harness.md, scripts/harness-switch) creates
 ├── `harness_switch.sh` - harness_switch.sh — the harness switch's one question for shell hooks and jobs: is this
 ├── `harness_temp_state.py` - Is a resolved path harness temp state, and which temp root is it in: the one definition
+├── `harness_vocabulary.py` - Plain data, standard library only: a hook imports it before it reads its payload
 ├── `hook_launch.py` - Claude Code starts every hook registered on an event as its own process, so one
 ├── `hook_launch_fallback.py` - A dispatcher (hooks/<event>-launch.py) uses this when its own code cannot run:
 ├── `interruption_signals.py` - Decides whether a subagent was cut off — and whether a usage limit did it — from
+├── `lane_ledger.py` - ``record`` (PreToolUse, hooks/pretool-lane-ledger.py, the record's one writer): before a dev suba...
 ├── `launch_settings.py` - A launcher (hooks/<event>-launch.py, lib/hook_launch.py) is one registration that runs an
+├── `locations.py` - What is a device or system temp, where the harness's roots are, what lies in which directory
 ├── `merge_grant.py` - The merge-analyst writes its grant with the Write tool at
 ├── `obligation.py` - Rollout step S2 of the converged zero-failure design
 ├── `overnight.py` - The state record `<main root>/.claude/overnight-state-<sid>.json` has one producer,
 ├── `pol_degraded_removal_reference.ere` - ere file
 ├── `policy_registry.py` - Reads the harness ``policies/tool-policy.v1.json`` (resolved via the shared
+├── `refusal_record.py` - The gates' advisory logs had no reader and were deleted (P1b); since then nothing could say what
+├── `refusal_record.sh` - refusal_record.sh -- a shell hook's report to the refusal record (hooks/lib/refusal_record.py).
 ├── `report_provenance.py` - hooks/subagentstop-e2e-enforce.py judges the ``e2e_enforcement.status`` of the qa-report.v2
 ├── `requirement_round.py` - the main agent asks them verbatim with one AskUserQuestion; the PostToolUse AskUserQuestion hook ...
+├── `returns_hold.py` - Each return of a background child wakes the orchestrator, and each wake re-reads its whole contex...
 ├── `roster.py` - A role exists because ``agents/<role>.md`` exists and opens with YAML front
 ├── `rule_fork.py` - A launcher (lib/hook_launch.py) holds an event's Python hooks and, once its interpreter has
 ├── `rule_runner.py` - A merged gate (hooks/pretool-write-gate.py) and the event dispatchers
@@ -78,15 +92,16 @@ lib/
 ├── `scratch_owner.py` - hooks/session-scratch-init.sh writes <root>/<sid>/.owner = {"sid": ..., ...}. One rule reads
 ├── `send_policy.py` - decide() is pretool-block-background-tasks.py's answer for a main-agent SendMessage;
 ├── `sensitive_names.py` - The default is the substring rule bash-safety has always had, case-sensitive as it was: a text is...
-├── `session_resources.py` - Every destructive operation is bound to an immutable resource session and a
 ├── `shell_parse.py` - Stdlib only. Nothing here executes, expands or evaluates the text it reads, and
 ├── `spec_path.py` - One rule, two callers: prompt-workflow.py decides a /dev, /dev-command, /redev or
 ├── `specialist_yield.py` - Public API:
 ├── `stop-commands.json` - JSON config: GATED_COMMANDS, CONTROL_COMMANDS, ASK_COMMANDS
 ├── `stop_contract.py` - is a prompt the human typed (TC-4)
-├── `subagent.py` - is_subagent_context() and supporting helpers, for the hooks that import it
+├── `subagent.py` - is_subagent(): whether the calling agent is a subagent, the one predicate of that fact (a
 ├── `subagent_restart.py` - Claude Code persists each subagent transcript under the parent session.  This
-└── `todo_canonical.py` - Shared canonical todo validation utilities
+├── `switch_prompt.py` - A delivered or scheduled prompt reaches UserPromptSubmit as if the owner had typed it, so a promp...
+├── `todo_canonical.py` - Shared canonical todo validation utilities
+└── `transcript_index.py` - A conversation only grows. extend() keeps, per (conversation, kind of reading), the state a readi...
 ```
 <!-- /AUTO:index-stats -->
 

@@ -20,8 +20,9 @@ _LAUNCH = ("WARNING: time budget <1h ({m}). Recommended minimum: 1h for 1 pipeli
 
 
 class _Rp:
-    class layout:
+    class layout:  # what compare() reads of the replay's layout; no project, so no overnight window closes
         harness = "/nonexistent"
+        project = "/nonexistent"
 
     @staticmethod
     def norm_text(text):

@@ -40,8 +40,10 @@ agent Reads it and runs its procedure.
                                      prefix) or to an id no candidate has, before the compliant ones;
                                      its refusal is kept in facts.json ("wake refusal").
 
-The owner's /restart turn follows commands/restart.md of the tree under test as written: its
-fenced blocks run as Bash calls (prepare, status, finalize), one SendMessage per pending candidate
+The owner's /restart turn follows commands/restart.md of the tree under test as written: step 2
+reads the recovery set the /restart issuer handed over (prepare runs as a Bash call only when the
+hook output holds none, and always in the wake's recovery), its other fenced blocks run as Bash
+calls (status, finalize), one SendMessage per pending candidate
 with its agent id and its exact resume message, the resumed agent goes on from where it was cut
 (first re-reading what its last call wrote, as the message tells it) and ends with the line the
 message names; the main agent then goes on with the interrupted command where it stopped. No
@@ -78,6 +80,14 @@ class SessionCut(RuntimeError):
 
 class _Abandoned(BaseException):
     """Ends a cut subagent no recovery resumed (its thread unwinds)."""
+
+
+def _required_roles(todo: dict) -> set:
+    """The roles of the calls a checklist item requires: its one call, or the required entries of the round
+    step's list of calls (scripts/todo/dev.py ROUND_CALLS; the optional ones never complete it)."""
+    call = todo.get("subagent_call") or {}
+    return {c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+            if isinstance(c, dict) and not c.get("optional")}
 
 
 def api_error(text: str) -> dict:
@@ -251,6 +261,28 @@ def notify(s, aid: str, tool_use_id: str, result: str) -> None:
                                             commandUuid=command, sessionId=s.sid, timestamp=now_iso()))
 
 
+def handed_over(text: str, hook_out: str) -> dict | None:
+    """The recovery set commands/restart.md step 2 says the /restart issuer prints: the JSON between
+    the two quoted lines that open and close it, or None when the hook output holds no such block."""
+    opened = re.search(r"`(\[/restart\] RECOVERY SET PREPARED[^`]*)`", text)
+    closed = re.search(r"`(\[/restart\] END OF RECOVERY SET)`", text)
+    if not (opened and closed) or opened.group(1) + "\n" not in hook_out:
+        return None
+    body = hook_out.split(opened.group(1) + "\n", 1)[1]
+    if "\n" + closed.group(1) not in body:  # cut short: absent, as step 2 says
+        return None
+    return json.loads(body.split("\n" + closed.group(1), 1)[0])
+
+
+def _original_block(cuts: Cuts, aid: str) -> str:
+    """restart.md step 3: the cut lane's original <obligation> block, appended after the resume message
+    ("\\n" + the block as its dispatch carried it); "" when that dispatch carried none."""
+    r = next((x for x in cuts.parked if x.sub.aid == aid), None)
+    prompt = str(((r.agent_in if r else None) or {}).get("prompt") or "")
+    m = re.search(r"<obligation v=\"1\">.*?</obligation>", prompt, re.S)
+    return "\n" + m.group(0) if m else ""
+
+
 def restart_turn(rp, s, cuts: Cuts) -> None:
     """The owner reopens the session (F5, F5f) and types /restart; the main agent runs
     commands/restart.md's procedure, then goes on with the command its subagents were cut in."""
@@ -286,7 +318,13 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
                         + (rp.blocks[-1]["text"] if call.blocked else call.error)[:600])
         return json.loads(call.response.get("stdout") or "{}")
 
-    view = run("prepare", "Prepare the recovery set")
+    # restart.md step 2: a typed /restart's issuer handed the set over between two lines the text
+    # names; prepare runs only without that block (and always in the wake's recovery)
+    view = handed_over(o.text, o.hook_out) if cron is None else None
+    from .drivers.close import fact
+    fact(rp, "restart set", {"handed_over": view is not None})
+    if view is None:
+        view = run("prepare", "Prepare the recovery set")
     pending = [c for c in view.get("candidates") or [] if c.get("status") == "pending"]
     if not pending:
         raise Stuck(f"prepare found no pending candidate: {json.dumps(view)[:600]}")
@@ -303,7 +341,7 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
                                   "text": rp.blocks[-1]["text"][:600] if call.blocked else ""})
     sent = []
     for c in pending:  # one batch: a SendMessage per pending candidate, its exact resume message
-        msg = c["resume_message"]
+        msg = c["resume_message"] + _original_block(cuts, c["agent_id"])
         call = s.tool("SendMessage", {"to": c["agent_id"], "message": msg},
                       perform=lambda aid=c["agent_id"]: resumed(aid),
                       label=f"/restart SendMessage {c.get('description') or c.get('agent_type')}")
@@ -312,10 +350,13 @@ def restart_turn(rp, s, cuts: Cuts) -> None:
         sent.append((c["agent_id"], msg, call.tool_use_id))
     for aid, msg, tool_use_id in sent:
         cuts.resume(aid, msg, tool_use_id)
-    status = run("status", "Wait for every resumed agent's response", timeout=600)
-    if not status.get("complete"):
-        raise Stuck(f"RESTART_INCOMPLETE: {status.get('incomplete_agent_ids')}")
-    run("finalize", "Finalize the recovery")
+    if "status" in cmds:  # an older text of restart.md: the main agent waits and finalizes with the helper
+        status = run("status", "Wait for every resumed agent's response", timeout=600)
+        if not status.get("complete"):
+            raise Stuck(f"RESTART_INCOMPLETE: {status.get('incomplete_agent_ids')}")
+        run("finalize", "Finalize the recovery")
+    # Since, step 4 runs nothing: each resumed agent's SubagentStop records its response and the last one
+    # finalizes the recovery (hooks/subagentstop-restart-track.py).
     s.say("Recovered " + ", ".join(f"{c['agent_id']} ({c['agent_transcript_path']})" for c in pending)
           + ". Continuing the interrupted command from its in-progress step.")
 
@@ -339,8 +380,12 @@ def facts(r) -> dict:
                 and e["payload"].get("agent_id") == c["agent"])
     sent = {}
     finalize = step_done = None
+    cut_ids = {c["agent"] for c in cuts}
+    called = any(x["label"] == "/restart Bash finalize" for x in inv)  # an older text's finalize call
     for e in inv:
         p, ti = e["payload"], e["payload"].get("tool_input") or {}
+        if not called and e["event"] == "SubagentStop" and p.get("agent_id") in cut_ids and e["seq"] > first:
+            finalize = e["seq"]  # since, the recorder finalizes at the last resumed agent's stop
         if e["event"] != "PreToolUse" or p.get("agent_id"):
             if e["event"] == "UserPromptSubmit" and e["seq"] > first:
                 out["human_after_cut"].append(p.get("prompt"))
@@ -355,7 +400,7 @@ def facts(r) -> dict:
             finalize = e["seq"]
         elif p.get("tool_name") == "TodoWrite" and step_done is None and not any(
                 h["verdict"] == "block" for h in e["hooks"]) and any(
-                t.get("status") == "completed" and (t.get("subagent_call") or {}).get("subagent_type") == role
+                t.get("status") == "completed" and role in _required_roles(t)
                 for t in ti.get("todos") or []):
             step_done = e["seq"]
     out["step_done_after"] = bool(finalize and step_done and step_done > finalize)

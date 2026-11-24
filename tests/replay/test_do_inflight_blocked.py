@@ -7,8 +7,11 @@ train 2) names a second terminal, "blocked", for a task that could not be finish
 live landing (tests/replay/landing.py): the session loads a7d3a9f's settings.json and plays its /do text
 (drivers/do.py variant=blocked; the case's left= says how much of the change the /do made),
 the /do Stop passes on the base's hooks with do.status "blocked", the harness home lands after that Stop,
-and `/close <task>` plays this tree's text. Each case runs with the base's settings.json kept for the
-whole session (D15, `kept`) and with this tree's from the landing on (`landed`, hooklist=landed).
+and `/close <task>` plays this tree's text. Each case runs with this tree's settings.json from the
+landing on (`landed`, hooklist=landed): the session resumed on the landed home with the do-report the
+base's /do left. The base's list kept for the whole session (`kept`) is retired: it names hook files
+this tree has retired, and no session holding a7d3a9f's list can still exist
+(policies/replay-hook-lists.v1.json).
 
 The other candidate, a /do cut off before Step 5 with no do-report, is not A4 (g): Step 0 names the
 missing do-report, the reader returns null and close.md asks the owner (header Request; P4-20).
@@ -63,15 +66,15 @@ import threading
 import pytest
 
 from tests.replay import sites, suite
+from tests.replay.drivers.close import CL
 
 OLD = "a7d3a9fec736c0e64b5a822ba5da788d4f178bda"
 G2 = "hooks/subagentstop-artifact-contract-enforce.py"
-# The hook that reports G2's refusal under each settings file: G2 itself under the base's list (kept),
-# the merged gate that runs it as a rule under this tree's (landed: hooks/subagentstop-producer-gate.py
-# since P12, sites.reporter).
-G2_REPORTER = {"kept": G2, "landed": sites.reporter(suite.REPO, G2)}
+# The hook that reports G2's refusal after the landing: the merged gate that runs it as a rule under
+# this tree's list (hooks/subagentstop-producer-gate.py since P12, sites.reporter).
+G2_REPORTER = {"landed": sites.reporter(suite.REPO, G2)}
 LAND = "after:/do Stop"
-SETTINGS = ("kept", "landed")
+SETTINGS = ("landed",)
 WRITES = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 # case -> its driver arguments beside variant=blocked (the module text says what each plays)
 CASES = {"plain": (("left", "half"),), "g2": (("left", "half"), ("dev_stop", "uncompleted")),
@@ -135,7 +138,7 @@ def _results(request, tmp_path_factory, case: str) -> dict:
             _STATE["runner"], _STATE["host"] = r, _host_own(r.tree)
         scn = suite.Scenario(f"A4 (g) in-flight blocked do-report, {case}", "do",
                              (("variant", "blocked"),) + CASES[case], ("do", "close"), COSTS[case])
-        extra = {"kept": (), "landed": (("hooklist", "landed"),)}
+        extra = {"landed": (("hooklist", "landed"),)}
         items = [(scn, "shipped", (("land", LAND),) + extra[s], f"~{s}") for s in SETTINGS]
         _STATE[case] = dict(zip(SETTINGS, _STATE["runner"].run_all(items)))
         return _STATE[case]
@@ -207,7 +210,7 @@ def _verdict(case: str, r: suite.Result, settings: str, host: list[str]) -> list
     do_docs = _written(_tool_uses(main), f"do-report-{tid}.json")
     if [d.get("do", {}).get("status") for d in do_docs] != ["blocked"]:
         bad.append(f"the /do wrote no single blocked do-report: {[d.get('do') for d in do_docs]}")
-    steps = [f["value"] for f in r.facts if f.get("key") == "close Step 0"]
+    steps = [f["value"] for f in r.facts if f.get("key") == f"close Step {CL.disposition}"]
     if [s.get("disposition") for s in steps] != ["incomplete", "chain_pass"]:
         bad.append(f"Step 0's dispositions: {steps}")
     elif steps[0].get("gaps") != [[f"docs/dev/do-report-{tid}.json", "do.status:blocked"]]:
@@ -252,7 +255,7 @@ def _verdict(case: str, r: suite.Result, settings: str, host: list[str]) -> list
     blocks = [(b["hook"], b["step"]) for b in r.blocks]
     g2 = G2_REPORTER[settings]
     want = [(CANARY, "SessionStart startup")] if host else []
-    want += [(g2, "/close Step 0 round 1 Agent(dev) stop")] if case == "g2" else []
+    want += [(g2, f"/close Step {CL.disposition} round 1 Agent(dev) stop")] if case == "g2" else []
     if blocks != want:
         bad.append(f"blocks {blocks}, expected {want}")
     elif host:  # the host's block: the base canary's at the session's start, failing on the host's files only

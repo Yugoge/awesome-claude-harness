@@ -90,6 +90,17 @@ def test_a_write_under_the_projects_claude_hooks_is_refused_as_monitor(session):
     assert mon.returncode == 2, (mon.stdout, mon.stderr)
 
 
+def test_a_removal_the_bash_safety_rule_refuses_is_refused_as_monitor(session):
+    # pretool-bash-safety.sh is a launcher rule now, no longer under a settings.json "Bash" matcher
+    target = session.project / "build"
+    target.mkdir()
+    bash = session.run("Bash", {"command": f"rm -r {target}", "description": "rm"})
+    assert bash.returncode == 2 and "removal-policy" in bash.stderr, bash.stderr
+    mon = session.run("Monitor", monitor(f"rm -r {target}; sleep 1"))
+    assert mon.returncode == 2 and "removal-policy" in mon.stderr, (mon.stdout, mon.stderr)
+    assert target.is_dir()
+
+
 def test_tailing_a_log_still_passes(session):
     log = session.project / "build.log"
     log.write_text("start\n")
@@ -132,13 +143,11 @@ def test_every_launcher_rule_a_bash_call_reaches_is_run_on_monitor():
     derived = [(r.name, r.path, r.tools, r.timeout) for r in lmod.RULES
                if (r.tools is not None and "Bash" in r.tools and "Monitor" not in r.tools) or r.name == "write-gate"]
     assert [(r.name, r.path, r.tools, r.timeout) for r in mod.BASH_RULES] == derived
-    assert [r[0] for r in derived] == ["write-gate", "wrapper-userintent", "grep-backtrack-guard", "attribution-pre",
-                                       "block-branch-pr-worktree", "bulk-commit-detector", "git-privilege-guard"]
-    # the other every-tool rules: the orchestrator gate decides Monitor itself (the Bash cap); the
-    # rest do not branch on Bash, or (the no-background rule) leave Monitor out on purpose
-    every_tool = [r.name for r in lmod.RULES if r.tools is None]
-    assert every_tool == ["orchestrator-gate", "block-background-tasks", "do-block-subagents", "read-size-guard",
-                          "workflow-gate", "write-gate"]
+    assert derived, "the launcher has no rule a Bash call reaches"
+    # The other every-tool rules are not listed here by name: the orchestrator gate decides Monitor
+    # itself (the Bash cap); the rest do not branch on Bash, or (the no-background rule; the time
+    # limit, which refuses only a foreground Bash call) leave Monitor out on purpose. A hand list of
+    # the launcher's rule names changed with every rule added or retired and named no defect.
     own = [r for r in lmod.RULES if r.path == "pretool-monitor-command.py"]
     assert len(own) == 1 and own[0].tools == ("Monitor",)
     # its timeout covers the Bash rules it runs one after another, so an overrun of this rule

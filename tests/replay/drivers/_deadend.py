@@ -12,9 +12,13 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
 
   do-report       Step 5's Write of the do-report is not made before the Stop: the Stop gate (P5)
                   refuses the Stop; the main agent's next action is that Write, then it stops again.
-  do-report-ask   as do-report, and between the refused Stop and the Write the main agent asks one
-                  AskUserQuestion and stops twice after the answer (D23: neither the answer nor
-                  stopping again releases the gate, so both Stops are refused too).
+  do-report-ask   as do-report, and between the refused Stop and the Write the main agent ends twice
+                  on a REFUSED: line naming Step 5 with no call a hook refused (neither releases the gate,
+                  so both Stops are refused too; nobody is asked since 2026-11-19).
+  step-refused    Step 2's own call (a dispatch, which /do runs without) is refused by a hook: a Stop on the bare
+                  REFUSED: line of the text before 2026-11-22 (a session in flight) is held, its block printing the
+                  form the gate reads; the turn ends on that form naming Step 2, the hook and what next (the
+                  Stop lets it end); a Stop on other text while the step is open is refused; the step goes on.
   do-dispatch     Step 2's work is first handed to a subagent: /do runs without subagents, so the
                   dispatch is refused; the main agent's next action does Step 2 itself.
   todo-canonical  the first TodoWrite carries the canonical list with one step's text changed: refused;
@@ -27,9 +31,10 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
   checklist-lock  the main agent runs a Bash command (a cat of a file) before its first TodoWrite:
                   refused; it makes the TodoWrite the refusal names, then runs the command. (A Read,
                   Grep or Glob passes the not-started lock since OB-L39; Bash is still held.)
-  dev-early       /dev (drivers/dev.py, plain) whose main agent marks BA's step completed before
-                  dispatching BA: refused (the step's subagent call is not made); its next action is
-                  the dispatch, then the completion; the cycle reaches its terminal.
+  dev-early       /dev (drivers/dev.py, plain) whose main agent marks Step 4 (the requirement round)
+                  completed after the panel's ba calls and panel QA, before dispatching BA's analysis:
+                  refused (the step's required call, ba with `Mode: analysis`, is not made); its next
+                  action is the dispatch, then the completion; the cycle reaches its terminal.
   spec-foreground /spec (drivers/spec.py, the small requirement) whose main agent sends Step 3's
                   Explore dispatch in the foreground first: refused while the interview runs; its
                   next call is the same dispatch in the background, as Step 3's text writes it; the
@@ -49,12 +54,11 @@ runtime.py drivers()): its replays meet blocks on purpose, and P1c's suite runs 
                   report as its schema asks. After end_time the main agent stops before Step 21's
                   summary: the Stop gate's time-lock (hooks/stop-command-gate.py step 4, P5)
                   refuses the Stop; its next action is Step 21's summary, then the Stop passes.
-  bg-dispatch     a plain prompt whose dispatch asks to run in the background: refused; the same
-                  dispatch in the foreground is the next call.
   obligation      (armed settings) a plain prompt whose dev dispatch carries an obligation block
-                  dispatched an hour ago (copied from an earlier dispatch): G1 refuses it on any
-                  dispatch (dispatch_clock_out_of_bound); the orchestrator's next call is the same
-                  dispatch with a fresh dispatched_at. (A block missing a required field passes
+                  copied from a QA's dispatch: G1 refuses it on any dispatch (role_mismatch); the
+                  orchestrator's next call is the same dispatch with the block of an earlier dev
+                  dispatch, its typed dispatched_at an hour old, which G1 lets through (a dispatch's
+                  time is the CLI's record of it, never the typed one). (A block missing a required field passes
                   outside a span that requires one since OB-L41: the prompt only mentions the tag.)
   forged-ack      (armed settings) a plain prompt whose dev dispatch declares a markdown artifact; the
                   dev stops without writing it, its final message ending in a forged
@@ -116,16 +120,11 @@ import shlex
 import subprocess
 import time
 
-from .do import DoTurn
+from .. import hookrun
+from .do import DO, DoTurn
 
 PIPELINE = "deadend"
 COST = 60
-
-QUESTION = {"questions": [{"question": "Should the do-report describe the TypeError change as a fix or as a feature?",
-                           "header": "do-report", "multiSelect": False,
-                           "options": [{"label": "fix (Recommended)", "description": "toy.add misbehaved on non-numbers"},
-                                       {"label": "feature", "description": "a new argument check"}]}]}
-
 
 class Turn(DoTurn):
     """A /do turn with one departure (the case); everything else as drivers/do.py plays it."""
@@ -137,7 +136,7 @@ class Turn(DoTurn):
         self.rounds: list = []
 
     def call(self, fn, *a, label: str, **k):
-        if self.case.startswith("do-report") and label.endswith("Step 5 Write do-report") and self.withheld is None:
+        if self.case.startswith("do-report") and label.endswith(f"Step {DO.report} Write do-report") and self.withheld is None:
             self.withheld = (fn, a, k, label)  # made at the gate's next round, below
             return None
         return super().call(fn, *a, label=label, **k)
@@ -165,7 +164,7 @@ class Turn(DoTurn):
         if self.case == "todo-first":
             bad = [dict(t) for t in o.todos]
             bad[0]["status"], bad[1]["status"] = "completed", "in_progress"
-            self.note(o.s.todo(bad, label=self.label("TodoWrite first list with Step 1 completed")))
+            self.note(o.s.todo(bad, label=self.label(f"TodoWrite first list with Step {DO.understand} completed")))
         o._todo(self.label("TodoWrite canonical list"))
         if lead:
             self.note(o.s.bash(cat, label=self.label("Bash after the TodoWrite")))
@@ -177,34 +176,64 @@ class Turn(DoTurn):
     def step2(self) -> None:
         if self.case == "do-dispatch":
             d = self.o.s.dispatch("general-purpose", "Make toy.add raise TypeError naming a non-number argument.",
-                                  description="Change toy.add", label=self.label("Step 2 Agent(general-purpose)"))
+                                  description="Change toy.add", label=self.label(f"Step {DO.develop} Agent(general-purpose)"))
             self.rounds.append({"label": d.label, "blocked": d.blocked,
                                 "hooks": [h["hook"] for h in (d.pre.blocks if d.pre else [])]})
         super().step2()
+
+    def step_refused(self) -> None:
+        """Step 2's own call refused by a hook: the turn ends on its REFUSED: line, which the Stop lets through; the
+        step stays open, and a Stop on any other text while it is open is refused. The owner's next prompt resumes
+        it (played here as the same turn going on: the replay types no prompt, which would end /do's consent)."""
+        o = self.o
+        step = o.todos[o.current()]["content"]
+        call = o.s.dispatch("general-purpose", "Make toy.add raise TypeError naming a non-number argument.",
+                            description="Change toy.add", label=self.label(f"Step {DO.develop} call refused by a hook"))
+        self.rounds.append({"label": call.label, "blocked": call.blocked,
+                            "hooks": [h["hook"] for h in (call.pre.blocks if call.pre else [])]})
+        blocks = call.pre.blocks if call.pre else []
+        output = "\n".join(hookrun.refusal(b) for b in blocks)
+        hooks = ", ".join(sorted({os.path.basename(b["hook"]) for b in blocks})) or "a hook"
+        # A session in flight on the text before 2026-11-22 writes the bare line: the Stop gate holds it and its block
+        # prints the form it reads (hooks/stop-command-gate.py _exit_hint); the next Stop writes that form and ends.
+        bare = f"REFUSED: {step}: the Agent call was refused:\n{output}"
+        full = (f"REFUSED: {step}: Agent(general-purpose) - refused by {hooks}: /do runs without subagents. "
+                f"Next: the main agent does Step {DO.develop} itself at the owner's next prompt, then Steps {DO.codex}-{DO.report}.\n{output}")
+        for lab, text in (("/do Stop on the bare refused line (old text)", bare),
+                          ("/do Stop on the step's refusal", full),
+                          ("/do Stop with the step open", f"Picked Step {DO.develop} up again.")):
+            ev = o.s.stop(text, label=lab)
+            said = "\n".join(hookrun.refusal(b) for b in ev.blocks)
+            self.rounds.append({"label": lab, "blocked": ev.still_blocked, "hooks": [h["hook"] for h in ev.blocks],
+                                "form_printed": f"REFUSED: {step} - refused by <the hook>" in said})
 
     def run(self) -> str:
         o = self.o
         self.start()
         self.step1()
-        for n, fn in ((2, self.step2), (3, self.step3), (4, self.step4), (5, self.step5)):
-            if n == 2 and self.case == "todo-sequence":
+        for n, fn in ((DO.develop, self.step2), (DO.codex, self.step3), (DO.summary, self.step4), (DO.report, self.step5)):
+            if n == DO.develop and self.case == "todo-sequence":
                 i = o.current()
                 bad = [dict(t) for t in o.todos]
                 bad[i]["status"] = bad[i + 1]["status"] = "completed"
                 bad[i + 2]["status"] = "in_progress"
-                self.note(o.s.todo(bad, label=self.label("TodoWrite Step 1 and Step 2 done at once")))
-            o.advance(label=self.label(f"TodoWrite Step {n - 1} done, Step {n} in_progress"))
+                self.note(o.s.todo(bad, label=self.label(f"TodoWrite Step {DO.understand} and Step {DO.develop} done at once")))
+            self.to(n)
+            if n == DO.develop and self.case == "step-refused":
+                self.step_refused()
             fn()
-        o.advance(label=self.label("TodoWrite Step 5 done"))
+        o.advance(label=self.label(f"TodoWrite Step {DO.report} done"))
         text = f"/do {self.tid} done: toy.add rejects non-numbers; do-report {self.report_rel}. Next: /close {self.tid}"
         ev = o.s.stop(text, label="/do Stop")
         self.rounds.append({"label": "/do Stop", "blocked": ev.still_blocked, "hooks": [h["hook"] for h in ev.blocks]})
         if self.withheld:
             if self.case == "do-report-ask":
-                o.s.tool("AskUserQuestion", QUESTION, label=self.label("AskUserQuestion after the refused Stop"))
-                for n in (1, 2):  # the answer, and stopping again and again, release nothing
-                    lab = f"/do Stop after the answer ({n})"
-                    ev = o.s.stop("Stopping after the answer.", label=lab)
+                # nobody is asked (2026-11-19); a REFUSED: line with no call a hook refused, and stopping on it
+                # again and again, release nothing (stop-command-gate.py step_refused_end reads the record)
+                for n in (1, 2):
+                    lab = f"/do Stop after an unrecorded refusal ({n})"
+                    ev = o.s.stop(f"REFUSED: Step {DO.report}: Write do-report - refused by a hook: the Write was refused. "
+                                  "Next: the main agent writes the do-report at the next prompt.", label=lab)
                     self.rounds.append({"label": lab, "blocked": ev.still_blocked,
                                         "hooks": [h["hook"] for h in ev.blocks]})
             fn, a, k, label = self.withheld
@@ -234,24 +263,17 @@ def _plain(rp, case: str) -> None:
 
     s.prompt("What does the add function in the toy package return?", label="prompt")
     path = os.path.join(project, "toy/__init__.py")
-    if case == "bg-dispatch":
-        task = ("Problem: a reader needs to know what toy.add returns.\nAcceptance criteria: the answer names "
-                "the value.\nDO NOT: modify, create or delete any file.")
-        note(s.dispatch("Explore", task, description="Describe toy.add", result="add(a, b) returns a + b.",
-                        extra_input={"run_in_background": True}, label="main Agent(Explore) in the background"))
-        note(s.dispatch("Explore", task, description="Describe toy.add", result="add(a, b) returns a + b.",
-                        label="main Agent(Explore) in the foreground"))
-    elif case in ("obligation", "forged-ack", "role-mismatch"):
+    if case in ("obligation", "forged-ack", "role-mismatch"):
         note_rel, anchor = "docs/dev/note-20990101-000001.md", "task 20990101-000001"
         if case == "role-mismatch":
             # G1 advisory (its own switch), so the dispatch whose obligation names another role runs.
             rp.env["CLAUDE_OBLIGATION_GATE"] = "advisory"
 
-        def block(fresh: bool) -> str:
+        def block(fresh: bool, role: str = "dev") -> str:
             art = ({"kind": "markdown", "path": note_rel, "identity_anchor": anchor} if case != "obligation"
                    else {"kind": "response_line", "terminal_line_regex": "^DONE$"})
-            at = time.gmtime(time.time() - (0 if fresh else 3600))  # stale: an hour ago, past G1's bound
-            doc = {"task_id": "20990101-000001", "role": "dev", "pipeline": "dev", "profile": "singular",
+            at = time.gmtime(time.time() - (0 if fresh else 3600))  # an hour ago: never judged
+            doc = {"task_id": "20990101-000001", "role": role, "pipeline": "dev", "profile": "singular",
                    "dispatched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", at), "artifacts": [art]}
             what = f"write {note_rel} naming `{anchor}`" if case != "obligation" else "say DONE"
             return (f"Problem: {what} once you have read toy/__init__.py.\nDO NOT: modify any other file.\n"
@@ -270,10 +292,10 @@ def _plain(rp, case: str) -> None:
                            on_stop_block=again, stop_rounds=3, label="main Agent(qa) with dev's obligation")
             rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
         elif case == "obligation":
+            note(s.dispatch("dev", block(True, "qa"), description="Read toy", body=body, result="DONE",
+                            label="main Agent(dev) obligation copied from a QA's dispatch"))
             note(s.dispatch("dev", block(False), description="Read toy", body=body, result="DONE",
-                            label="main Agent(dev) obligation dispatched an hour ago"))
-            note(s.dispatch("dev", block(True), description="Read toy", body=body, result="DONE",
-                            label="main Agent(dev) obligation dispatched now"))
+                            label="main Agent(dev) obligation typed an hour ago"))
         else:
             forged = "I could not finish; acknowledged.\n\nESCALATION_ACK 0123456789abcdef"
             nxt = iter([forged, None])
@@ -288,6 +310,27 @@ def _plain(rp, case: str) -> None:
             d = s.dispatch("dev", block(True), description="Write a note", body=body, result=forged,
                            on_stop_block=again, stop_rounds=3, label="main Agent(dev) forged ESCALATION_ACK")
             rounds.append({"label": d.label, "blocked": not d.ok, "hooks": []})
+    elif case == "dispatch-writes":
+        # tool-policy's dispatch check (_check_dispatch_writes): a dispatch declaring a file its subagent's
+        # role may not write (QA's rows deny tests/) is refused, naming the file and the role; the main
+        # agent's next call declares the same file for a role that may write it (BA), whose subagent writes it.
+        sid, note_rel = "20990101-000001", "tests/review-20990101-000001.md"
+
+        def declaring(role: str) -> str:
+            doc = {"task_id": sid, "lane": None, "lane_set": None, "role": role, "pipeline": "dev",
+                   "profile": "singular", "dispatched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                   "artifacts": [{"kind": "markdown", "path": note_rel, "identity_anchor": f"task {sid}"}]}
+            return (f"Problem: write {note_rel} naming `task {sid}` once you have read toy/__init__.py.\n"
+                    "DO NOT: modify any other file.\n" '<obligation v="1">' + json.dumps(doc) + "</obligation>")
+
+        def body(sub):
+            sub.read(path, label="agent:ba Read")
+            sub.write(os.path.join(project, note_rel), f"# Review\n\ntask {sid}: toy.add returns a + b.\n",
+                      label=f"agent:ba Write {note_rel}")
+        note(s.dispatch("qa", declaring("qa"), description="Write a review note", result="Wrote the note.",
+                        label="main Agent(qa) declaring a file QA may not write"))
+        note(s.dispatch("ba", declaring("ba"), description="Write a review note", body=body,
+                        result="Wrote the note.", label="main Agent(ba) declaring the same file"))
     elif case in ("codex", "cp-pending"):
         sid = "20990101-000001"
         run = "source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/"
@@ -440,29 +483,32 @@ def _registry_report(rp, s, toy: str, rounds: list) -> None:
 
 
 def _dev_early(rp) -> None:
-    from .dev import DevCycle
+    from .dev import DevCycle, S as dev_steps
 
+    # The round step (Step 4), after the panel's ba calls and panel QA, before BA's analysis: the step states each
+    # of its calls (scripts/todo/dev.py ROUND_CALLS) and Gate 4 holds it for the analysis (`Mode: analysis`).
     class Early(DevCycle):
         tried = False
 
-        def dispatch_ba(self, *a, **k):
-            if not self.tried:
+        def _dispatch(self, fields, act, label, *a, **k):
+            o = self.o
+            if not self.tried and label.endswith(" Agent(ba)") and \
+                    o.todos[o.current()]["content"].startswith(f"Step {dev_steps.round}:"):
                 self.tried = True
-                o = self.o
                 i = o.current()
                 bad = [dict(t) for t in o.todos]
                 bad[i]["status"] = "completed"
                 if i + 1 < len(bad):
                     bad[i + 1]["status"] = "in_progress"
                 o.s.todo(bad, label=f"{o.step_name(i)} TodoWrite completed before its Agent call")
-            return super().dispatch_ba(*a, **k)
+            return super()._dispatch(fields, act, label, *a, **k)
 
     Early(rp, "plain", "STANDARD").run()
 
 
 def _qa_declared(rp) -> None:
     from .. import faults
-    from .dev import DevCycle
+    from .dev import DevCycle, S as dev_steps
 
     # G2 advisory (its own switch), so the E2E rule, which has none, states the absent declared report.
     rp.env["CLAUDE_OBLIGATION_STOPGATE"] = "advisory"
@@ -473,24 +519,26 @@ def _qa_declared(rp) -> None:
 def _ask_first(rp) -> None:
     """P13-1 R5: BA analysis dispatched before round 1 is asked is refused (ASK_FIRST); the main agent's
     AskUserQuestion of the round clears it, and its next dispatch passes (drivers/dev.py round-unasked)."""
-    from .dev import DevCycle
+    from .dev import DevCycle, S as dev_steps
 
     DevCycle(rp, "round-unasked", "STANDARD").run()
 
 
 def _qa_report(rp) -> None:
     from .. import faults
-    from .dev import DevCycle
+    from .dev import DevCycle, S as dev_steps
 
     # G1 advisory (its own switch), so Step 13's QA dispatch without its obligation block runs; the
     # QA it starts writes no report (tests/replay/faults.py noblock and missing).
     rp.env["CLAUDE_OBLIGATION_GATE"] = "advisory"
-    faults.install(rp, "noblock@Step 13 Agent(qa);missing@agent:qa Write docs/dev/qa-report-*")
+    faults.install(rp, f"noblock@Step {dev_steps.qa} Agent(qa);missing@agent:qa Write docs/dev/qa-report-*")
     DevCycle(rp, "plain", "STANDARD").run()
 
 
 def _spec_foreground(rp) -> None:
+    from .dev import Steps
     from .spec import SpecRun
+    explore_step = Steps(command="spec", what={"explore": ("Write first spec, dispatch exploration", None)}).explore
 
     class Foreground(SpecRun):
         tried = False
@@ -502,7 +550,7 @@ def _spec_foreground(rp) -> None:
 
                 def foreground(*a, **k):
                     k.update(extra_input=dict(k.get("extra_input") or {}, run_in_background=False),
-                             label="Step 3 Agent(Explore) in the foreground", deviation=None)
+                             label=f"Step {explore_step} Agent(Explore) in the foreground", deviation=None)
                     return background(*a, **k)
                 self.s.dispatch = foreground
                 try:
@@ -577,10 +625,10 @@ def run(rp) -> None:
         return _qa_declared(rp)
     if case == "ask-first":
         return _ask_first(rp)
-    if case in ("bg-dispatch", "obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
+    if case in ("dispatch-writes","obligation", "forged-ack", "role-mismatch", "codex", "cp-pending", "report-schema",
                 "qa-provenance"):
         return _plain(rp, case)
     if case not in ("do-report", "do-report-ask", "do-dispatch", "todo-canonical", "todo-first", "todo-sequence",
-                    "checklist-lock"):
+                    "checklist-lock", "step-refused"):
         raise ValueError(f"unknown case {case!r}")
     Turn(rp, case).run()

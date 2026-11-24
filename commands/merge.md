@@ -28,10 +28,10 @@ In_place means the main checkout, which other sessions may share: `hooks/merge.s
 
 ## Implementation
 
-**Refusals.** Where a step below refuses, ask ONE AskUserQuestion in this turn instead of exiting: the
-question is the refusal's message with its facts; the options are the action the refusal names, marked
-(Recommended), and "I give another instruction". Act on the answer. A refusal met again after the
-answer is reported in the reply, not asked again.
+**Refusals.** Where a step below refuses, nobody is asked about it. An action the refusal names that is the
+agent's own ("re-run the snapshot now", "re-run the analysis now") is taken at once, once; met again, the refusal
+ends the run. Any other action is the owner's: end with the refusal reported in the reply, its message with its
+facts and the action it names, and the refused call is not run again. When a hook refuses the merge-analyst dispatch itself, no grant is written and Step 5 cannot run: end with one line `REFUSED: <hook> refused the merge-analyst dispatch; nothing was merged` and the hook's output; the Stop gate (`analyst_refused`) lets the run end on it when the transcript records that refusal of the last merge-analyst dispatch.
 
 ### Step 0: Determine worktree shape, then resolve branch name
 
@@ -67,7 +67,7 @@ Dispatch the `merge-analyst` subagent (Agent tool, `run_in_background: false`) w
 <the eight lines Step 1 printed>
 
 <obligation v="1">
-{"task_id": null, "lane": null, "lane_set": null, "role": "merge-analyst", "pipeline": "merge", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^merge-analyst grant written: \\S+\\.json$"}]}
+{"task_id": null, "lane": null, "lane_set": null, "role": "merge-analyst", "pipeline": "merge", "profile": "ad_hoc", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^merge-analyst grant written: \\S+\\.json$"}]}
 </obligation>
 ```
 
@@ -79,7 +79,7 @@ Read the grant at:
 ```
 <state dir>/agentic-commit/merge-analyst/<REPO_HASH>/<SESSION_ID>/<REQUEST_ID>.json
 ```
-(the state dir is `$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`) and act on its `verdict` and `risks`. `hooks/lib/merge_grant.py` validates the grant once, on the analyst's own Write (run from `hooks/posttool-allowlist-consume.py`, which the ledger rates `detected`); this step re-checks none of it.
+(the state dir is what `. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"; harness_state_dir` prints) and act on its `verdict` and `risks`. `hooks/lib/merge_grant.py` validates the grant on the analyst's own Write (run from `hooks/posttool-allowlist-consume.py`, which the ledger rates `detected`) and again at Step 5's call: `hooks/pretool-merge-verdict.py` refuses merge.sh unless this session's newest grant since the opener is `approved`, unexpired, at the live tips and for that ref, and the Stop gate counts a landed merge only with that approval. This step re-checks none of it.
 
 - No grant at that path: refuse: "merge-analyst did not write a grant" (action "re-run the analysis now").
 - `verdict` = `blocked`: refuse: "merge-analyst blocked the merge" with `risks[]` (action "resolve the listed risks first"; never "merge anyway"). Do not call merge.sh.

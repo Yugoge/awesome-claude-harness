@@ -8,8 +8,10 @@ from datetime import datetime, timezone
 
 try:  # as hooks.lib.score_events, or from hooks/lib on the path
     from . import command_span, obligation, requirement_round, score_log
+    from .subagent import DISPATCH_TOOLS
 except ImportError:
     import command_span, obligation, requirement_round, score_log  # noqa: E401
+    from subagent import DISPATCH_TOOLS
 
 
 def _event(ctx, d, event, role, why, key=None, ref=None):  # a rule's event dict: the result's time, a one-line why without task id, ref (default: d's report)
@@ -19,7 +21,7 @@ def _event(ctx, d, event, role, why, key=None, ref=None):  # a rule's event dict
 
 
 def _dispatches(span, tp):  # ok dispatches with an obligation: id, who (scored identity), task (canonical), lane, ob, path (lane QA's
-    uses, ds = {u.id: u for u in span.uses("Agent", "Task")}, []  # report), at (the result's time), sub (its own transcript)
+    uses, ds = {u.id: u for u in span.uses(*DISPATCH_TOOLS)}, []  # report), at (the result's time), sub (its own transcript)
     with open(tp, "rb") as handle:
         for call, ob in span.obligations():
             handle.seek(uses[call.id].result_at)
@@ -33,8 +35,7 @@ def _dispatches(span, tp):  # ok dispatches with an obligation: id, who (scored 
 
 def _walk(d):  # the content blocks of dispatch d's own transcript, in order
     for _, record in command_span._records(d["sub"]):
-        content = (record.get("message") or {}).get("content")
-        yield from (b for b in content if isinstance(b, dict)) if isinstance(content, list) else ()
+        yield from command_span._blocks(record, sidechain=True)
 
 
 def _once(ctx, fn, *args):  # fn(*args), answered once per sweep (the store and transcript reads behind it are slow)
@@ -46,9 +47,9 @@ def _report(ctx, d, later):  # the report file; once the next dispatch of that f
     path = os.path.join(ctx["cwd"], d["path"])
     with suppress(OSError, ValueError, TypeError, AttributeError, IndexError):  # missing, unreadable, malformed: no report
         mtime = os.stat(path).st_mtime
-        if not os.path.realpath(path).startswith(os.path.realpath(ctx["cwd"]) + os.sep) or not obligation.artifact_freshness_satisfied("json", mtime, d["ob"]["dispatched_at"]):
+        if not os.path.realpath(path).startswith(os.path.realpath(ctx["cwd"]) + os.sep) or not obligation.artifact_freshness_satisfied("json", mtime, d["ob"].get("dispatched_at")):
             return None  # stale, or a symlink out of the project
-        if not later or mtime < obligation.parse_iso8601(later["ob"]["dispatched_at"]).timestamp():
+        if not later or mtime < obligation.parse_iso8601(later["ob"].get("dispatched_at")).timestamp():
             with open(path, encoding="utf-8") as handle:
                 return json.load(handle)
         return json.loads([i.get("content") for b in _walk(d) if b.get("name") == "Write" and str((i := b.get("input") or {}).get("file_path")).endswith(d["path"])][-1])  # overwritten: as d last wrote it
@@ -150,7 +151,7 @@ def ba_panel(ctx):  # a BA panel's round 1 (its panel QA's file) and the owner's
         panel, answers = (_report(ctx, {"path": p, "ob": d["ob"]}, None) or {} for p in files)  # the answers file is the hook's alone: Skip, AFK or a decline leave none
         yield from (_event(ctx, d, "ba_root_cause_refuted", "ba", f"panel QA refuted BA {r['ba']}'s root cause", f"ba_root_cause_refuted:{d['task']}:{r['ba']}", files[0])
                     for r in (panel.get("panel") or {}).get("reports") or () if r.get("root_cause") == "refuted" and r.get("ba"))
-        picked = answers.get("answers") or {}  # the chosen BA is read as /dev Step 4c does: the first question whose answer is the label of an option that names a BA
+        picked = answers.get("answers") or {}  # the chosen BA is read as /dev Step 4's BA analysis does: the first question whose answer is the label of an option that names a BA
         if ba := next((o["ba"] for q in panel.get("questions") or () for o in q.get("options") or () if o.get("ba") and picked.get(q.get("question")) == o.get("label")), None):
             yield _event(ctx, {**d, "at": answers.get("asked_at")}, "ba_option_chosen", "ba", f"the owner chose BA {ba}'s option", f"ba_option_chosen:{d['task']}", files[1])
 
@@ -179,5 +180,5 @@ def sweep(transcript_path, cwd):  # all ok dispatches of the span, every run: fi
 
 
 def observe(payload):  # the PostToolUse hook's entry: the main agent's dispatches only
-    if isinstance(payload, dict) and not payload.get("agent_id") and payload.get("tool_name") in ("Agent", "Task"):
+    if isinstance(payload, dict) and not payload.get("agent_id") and payload.get("tool_name") in DISPATCH_TOOLS:
         sweep(payload.get("transcript_path"), payload.get("cwd"))

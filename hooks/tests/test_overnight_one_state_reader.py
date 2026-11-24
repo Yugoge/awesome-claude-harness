@@ -190,7 +190,7 @@ def test_steps_come_from_the_canonical_todo():
     # Each dispatching step after PM TRIAGE, and the re-dispatches of BA (9, 11), dev (13) and
     # dev and QA (17), in step order (P2 R13).
     assert [(label, call["subagent_type"]) for label, call in contract_runtime.post_triage_steps(steps)] == [
-        ("8", "ba"), ("9", "ba"), ("10", "qa"), ("11", "ba"), ("11g", "graphify"), ("12", "dev"),
+        ("8", "ba"), ("9", "ba"), ("10", "qa"), ("11", "graphify"), ("11", "ba"), ("12", "dev"),
         ("13", "dev"), ("15", "qa"), ("17", "dev"), ("17", "qa"), ("20", "pm")]
     assert contract_runtime.triage_call(steps)["mode"] == "TRIAGE"
 
@@ -230,7 +230,7 @@ def session(tmp_path):
     return project
 
 
-_LABELS = ("1", "2", "3", "4", "8", "10", "11g", "12", "15", "20")
+_LABELS = ("1", "2", "3", "4", "8", "10", "11", "12", "15", "20")
 
 
 def _todos(label: str | None, done: str = "") -> list:
@@ -394,8 +394,8 @@ def test_triage_handler_writes_the_contract_and_the_dispatch_hook_reads_it(sessi
     contract = json.loads(path.read_text())
     assert [(c["step"], c["role"], c["mode"]) for c in contract["required_calls"]] == [
         ("8", "ba", None), ("8", "ba", None), ("9", "ba", None), ("9", "ba", None),
-        ("10", "qa", None), ("10", "qa", None), ("11", "ba", None), ("11", "ba", None),
-        ("11g", "graphify", None), ("11g", "graphify", None),
+        ("10", "qa", None), ("10", "qa", None), ("11", "graphify", None), ("11", "graphify", None),
+        ("11", "ba", None), ("11", "ba", None),
         ("12", "dev", None), ("12", "dev", None), ("13", "dev", None), ("13", "dev", None),
         ("15", "qa", None), ("15", "qa", None),
         ("17", "dev", None), ("17", "dev", None), ("17", "qa", None), ("17", "qa", None),
@@ -409,6 +409,28 @@ def test_triage_handler_writes_the_contract_and_the_dispatch_hook_reads_it(sessi
     path.unlink()
     assert _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: PLAN")).returncode == 0
     assert not path.exists()
+
+
+def test_a_list_in_flight_at_step_11g_dispatches_graphify_under_either_contract(session, monkeypatch):
+    """In flight: a list written when graphify's Dev-dispatch precondition was Step 11g keeps that
+    label. Under a contract rendered since (Step 11 carries graphify) and under one its cycle
+    rendered before the fold (Step 11g), its graphify dispatch at 11g passes and a dev one is refused."""
+    monkeypatch.setitem(globals(), "_LABELS", ("1", "2", "3", "4", "8", "10", "11", "11g", "12", "15", "20"))
+    _triage_report(session, 1, fixes=1)
+    assert _run("posttool-subagent-track.py", session, _agent("pm", "PM_MODE: TRIAGE")).returncode == 0
+    path = session / "docs" / "dev" / "overnight" / SID / "cycle-1" / "cycle-contract.json"
+    contract = json.loads(path.read_text())
+    _bookmark(session, "11g")
+    for rendered in ("since", "before"):
+        if rendered == "before":
+            for entry in contract["required_calls"]:
+                entry["step"] = "11g" if (entry["step"], entry["role"]) == ("11", "graphify") else entry["step"]
+            path.write_text(json.dumps(contract))
+        assert _run("pretool-subagent-enforce.py", session, _agent("graphify", "enrich")).returncode == 0, rendered
+        refused = _run("pretool-subagent-enforce.py", session, _agent("dev", "implement"))
+        assert refused.returncode == 2, rendered
+    _bookmark(session, "11")
+    assert _run("pretool-subagent-enforce.py", session, _agent("ba", "re-investigate")).returncode == 0
 
 
 def test_triage_handler_reads_the_report_its_dispatch_names(session):
@@ -493,7 +515,7 @@ def test_collection_reads_the_schema_from_the_obligation_and_names_artifact_and_
     old = _run("posttool-overnight-file-check.py", session, dispatch)
     assert old.returncode == 2
     assert f"{rel} (schema dev-report.v2): <root>: 'dev' is a required property" in old.stderr
-    assert "Dispatch dev again with the same obligation template and a fresh dispatched_at" in old.stderr
+    assert "Dispatch dev again with the same obligation template;" in old.stderr
     assert "escalat" not in old.stderr.lower()
     report.unlink()
     missing = _run("posttool-overnight-file-check.py", session, dispatch)

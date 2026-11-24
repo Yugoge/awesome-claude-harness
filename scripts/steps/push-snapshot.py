@@ -32,6 +32,10 @@ import os
 import secrets
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
 
 
 def git(*args: str) -> tuple[int, str]:
@@ -47,8 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--remote", default="", help="the remote typed after /push (default: none)")
     args = parser.parse_args(argv)
 
-    code, top = git("rev-parse", "--show-toplevel")
-    if code != 0 or not top:
+    top = locations.repo_top(os.getcwd())  # never the filesystem root
+    if top is None:
         print("push-snapshot: not inside a git work tree", file=sys.stderr)
         return 1
     repo_root = os.path.realpath(top)

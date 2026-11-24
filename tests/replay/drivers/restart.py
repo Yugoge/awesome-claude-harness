@@ -11,9 +11,10 @@ call, the main agent's StopFailure). Then, in order:
             (send_policy.decide: the cut agent resumes only through /restart; no valid /restart
             capability), the one decision on the grant
   restart   the owner types /restart: the authorizer (hooks/userprompt-restart-authorize.py) mints the
-            grant, and the main agent runs restart.md's procedure as written (recovery.restart_turn):
-            prepare, one SendMessage per pending candidate with its exact resume message, the resumed
-            agent's end, status with response evidence for every candidate, finalize
+            grant and prepares the recovery set, and the main agent runs restart.md's procedure as
+            written (recovery.restart_turn): reads that set, one SendMessage per pending candidate
+            with its exact resume message, the resumed agent's end, status with response evidence
+            for every candidate, finalize
   reuse     the same SendMessage again after finalize consumed the grant: refused
 
 then a Stop. What each case showed is kept in out/facts.json ("restart no-grant", "restart",
@@ -44,8 +45,9 @@ TASK = (
 )
 # The subagent's first call, after which the usage limit cuts it
 CUT = "restart-sub Read *"
-# What prepare says without a valid grant (hooks/lib/subagent_restart.py NO_GRANT_NOTICE)
-NO_GRANT_NOTICE = "no valid restart grant: every resume send will be refused until /restart mints one"
+# What prepare says without a valid grant (hooks/lib/subagent_restart.py NO_GRANT_NOTICE): since sends to an
+# own subagent are judged as dispatches of its type, the grant is no permission and the send is not refused
+NO_GRANT_NOTICE = "no valid restart grant: the resume sends are judged as dispatches all the same"
 
 
 def _explore(sub):
@@ -109,13 +111,13 @@ def run(rp) -> None:
     recovered = [{"agent_id": r.sub.aid, "sent": r.sub.aid in sent, "resumed": r.done} for r in cuts.parked]
     fact(rp, "restart", {"recovered": recovered})
 
-    # reuse: the same exact message once more, the grant consumed by finalize
+    # reuse: the same exact message once more, after the recovery finalized: judged as a dispatch, not refused
     aid = cuts.parked[0].sub.aid
     reuse = dict(_send(s, rp, aid, sent[aid], "reuse SendMessage"), same_message=sent[aid] == message)
     fact(rp, "restart reuse", reuse)
 
     stop = s.stop("add(a, b) returns a + b.", label="Stop")
-    reached = (no_grant["prepare_ok"] and no_grant["notice"] and no_grant["send"]["refused"]
-               and all(r["sent"] and r["resumed"] for r in recovered) and reuse["refused"])
+    reached = (no_grant["prepare_ok"] and no_grant["notice"] and not no_grant["send"]["refused"]
+               and all(r["sent"] and r["resumed"] for r in recovered) and not reuse["refused"])
     rp.terminal("restart", reached, stop)
 

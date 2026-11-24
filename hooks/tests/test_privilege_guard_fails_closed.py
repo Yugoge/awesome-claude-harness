@@ -34,13 +34,12 @@ IDENTITY = ("-c", "user.name=sandbox", "-c", "user.email=sandbox@example.invalid
 CALLER_IMPORTS = (
     "from lib.git_command_classifier import (\n"
     "    _unquote_token,\n"
-    "    _segments as _shell_segments,\n"
     "    _command_token_index as _cmd_token_index,\n"
     "    _ENV_ASSIGN_RE as _ENV_ASSIGN_RE,\n"
     "    GIT_GLOBAL_VALUE_OPTS, GIT_GLOBAL_FLAGS,\n"
     ")\n"
     "from lib.git_command_classifier import (\n"
-    "    _segments, _basename, _WRAPPERS, _ENV_ASSIGN_RE,\n"
+    "    _basename, _WRAPPERS, _ENV_ASSIGN_RE,\n"
     "    _command_token_index, _git_subcommand, iter_shell_texts,\n"
     ")\n"
 )
@@ -48,10 +47,10 @@ CALLER_IMPORTS = (
 # Ways the classifier can break, each appended to a copy of it.
 BREAKAGES = {
     # The guard imports a name the classifier lacks.
-    "lacks-imported-name": "\nglobals().pop('_segments', None)\n",
+    "lacks-imported-name": "\nglobals().pop('_basename', None)\n",
     "lacks-current-name": "\ndel GIT_GLOBAL_VALUE_OPTS\n",
     "raises-at-import": "\nraise RuntimeError('simulated classifier failure')\n",
-    "raises-when-called": ("\ndef classify_git_command(command_text):\n"
+    "raises-when-called": ("\ndef classify_git_command(command_text, cwd=None):\n"
                            "    raise RuntimeError('simulated classifier failure')\n"),
 }
 
@@ -167,20 +166,22 @@ def test_the_table_answers_which_options_take_the_next_word():
 
 def test_the_merged_guard_loads_and_judges(box):
     guard = box.hooks_copy("merged", caller_imports=True)
-    box.grant()
-    assert box.run(guard, box.commit).returncode == 0
+    proc = box.run(guard, box.commit)
+    assert proc.returncode == 2 and "BLOCKED: agent git commit" in proc.stderr, proc.stderr
     assert box.run(guard, "ls -la").returncode == 0
     assert box.run(guard, "git push origin HEAD").returncode == 2
 
 
-# (ii) A commit naming its repository and message file, under a sentinel grant.
+# (ii) A commit naming its repository and message file is refused as an agent commit. The guard
+# reads no /allow grant: the owner's /allow releases the refusal in the launcher
+# (test_allow_releases_anything.py), so the grant half of this case is retired.
 
-def test_a_granted_commit_is_allowed_and_an_ungranted_one_refused(box):
+def test_an_ungranted_commit_is_refused_and_a_grant_file_changes_nothing(box):
     proc = box.run(GUARD, box.commit)
     assert proc.returncode == 2 and "BLOCKED: agent git commit" in proc.stderr, proc.stderr
     box.grant()
     proc = box.run(GUARD, box.commit)
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode == 2 and "BLOCKED: agent git commit" in proc.stderr, proc.stderr
 
 
 # (iii) A broken classifier refuses what may run git; (iv) it lets the rest through.

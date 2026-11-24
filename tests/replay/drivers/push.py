@@ -122,6 +122,7 @@ from .. import agents, cmdtext, hookrun
 from ..pipeline import _ASSIGN_RE, Deviations, Orchestrator, Respelling
 from . import close as closedrv
 from . import merge as mergedrv
+from .dev import Steps
 
 PIPELINE = "push"
 # The artifact check's cost of this driver (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -146,6 +147,32 @@ def steps(text: str) -> dict:
             for k, m in enumerate(ms)}
 
 
+# What each step of the dispatch protocol IS, for the driver: name -> (the heading it opens with, the subagent
+# it must dispatch). /push has no step-list script (scripts/todo): the checklist its Stop gate checks is the
+# command's own text (the gate finds a step by its `Step N` heading line there), so the driver reads the same
+# text, `steps()`, and a step is found by its heading as dev's `Steps` finds one in its list.
+WHAT = {"remote": ("Parse arguments", None), "token": ("Push-gate token", None),
+        "snapshot": ("Compute pre-push snapshot", None), "dispatch": ("Dispatch", "push-analyst"),
+        "push": ("Call push.sh", None)}
+
+
+class PushSteps(Steps):
+    """The text's steps as `Step N` keys of `steps()`, by name (`S.dispatch`): a step whose heading is gone, or
+    that no longer dispatches its role, raises LookupError naming it."""
+
+    def __init__(self, text: str):
+        todos = []
+        for key, body in steps(text).items():
+            head = re.match(r"[#*\s]*Step \d+[:\s]*([^\n*]*)", body)
+            role = re.search(r"Dispatch the `([\w-]+)` subagent", body)
+            todos.append({"content": f"{key}: {head.group(1).strip() if head else ''}",
+                          "subagent_call": {"subagent_type": role.group(1)} if role else None})
+        super().__init__(todos, "push", WHAT)
+
+    def __getattr__(self, name: str) -> str:
+        return f"Step {super().__getattr__(name)}"
+
+
 def item_codes(text: str, anchor: str) -> list:
     """Backtick spans of the one paragraph or list item of `text` that holds `anchor` (whitespace folded)."""
     items = [it for it in re.split(r"\n(?=\s*(?:[-*]|\d+\.)\s)|\n\s*\n", text) if anchor in it]
@@ -166,7 +193,7 @@ def form(block: str, auto: bool) -> str:
             parts[cur].append(line)
     want = "With --auto" if auto else "Without --auto"
     if want not in parts:
-        raise cmdtext.TextNotFound(f"Step 5's block has no `# {want}` form")
+        raise cmdtext.TextNotFound(f"the push step's block has no `# {want}` form")
     return "\n".join(parts[want]).strip("\n") + "\n"
 
 
@@ -210,6 +237,7 @@ class PushRun:
         rp.deviation_at = self.devs.at  # the analyst's own calls take the same deviations by label
         self.o = Orchestrator(rp, "push", session=session, deviations=self.devs, rules=self._rules())
         self.steps = steps(self.o.text)
+        self.S = PushSteps(self.o.text)
         if state_mode == "respelled":
             self.o.respellings = self.state_respellings()
         self.analyst_text = self.o.tree.agent_text(self.role())
@@ -236,15 +264,15 @@ class PushRun:
         return self.steps[name]
 
     def role(self) -> str:
-        m = re.search(r"Dispatch the `([\w-]+)` subagent", self.step("Step 3"))
+        m = re.search(r"Dispatch the `([\w-]+)` subagent", self.step(self.S.dispatch))
         if not m:
-            raise cmdtext.TextNotFound("Step 3 names no `<role>` subagent to dispatch")
+            raise cmdtext.TextNotFound(f"{self.S.dispatch} names no `<role>` subagent to dispatch")
         return m.group(1)
 
     def state_respellings(self) -> list:
         """The text's Step 5 names the chain-B sentinel under a literal directory: Step 5's call runs with
         CLAUDE_STATE_DIR set to it in that call's environment (module docstring, "State dir")."""
-        m = re.search(r"`(/[^`<$\s]*?)/agentic-commit/push-analyst/<REPO_HASH>/", self.step("Step 5"))
+        m = re.search(r"`(/[^`<$\s]*?)/agentic-commit/push-analyst/<REPO_HASH>/", self.step(self.S.push))
         if not m:
             return []
         named = m.group(1)
@@ -253,7 +281,7 @@ class PushRun:
         return [Respelling("P-SD state dir",
                            r"(?m)^python3 ((?:~/\.claude|\"\$\{CLAUDE_HOME:-\$HOME/\.claude\})/scripts/execute-push\.py\"?)(?=\s)",
                            f"CLAUDE_STATE_DIR={named} python3 \\1",
-                           "commands/push.md Step 5 (:214, :222-236 at 2acc29b): the sentinel directory the text "
+                           f"commands/push.md {self.S.push} (:214, :222-236 at 2acc29b): the sentinel directory the text "
                            "names, which execute-push.py writes and push.sh reads only through CLAUDE_STATE_DIR")]
 
     def say_stop(self, text: str, on_block=None) -> None:
@@ -286,10 +314,10 @@ class PushRun:
 
     # ------------------------------------------------------------ Step 0
     def step0(self) -> None:
-        if not cmdtext.blocks(self.step("Step 0"), None, "bash"):
+        if not cmdtext.blocks(self.step(self.S.remote), None, "bash"):
             return  # the text resolves the remote in Step 2's call
-        block = cmdtext.block(self.step("Step 0"), lang="bash")
-        self.captured(block, self.label("Step 0 Bash resolve remote"), "Step 0: resolve the push remote",
+        block = cmdtext.block(self.step(self.S.remote), lang="bash")
+        self.captured(block, self.label(f"{self.S.remote} Bash resolve remote"), f"{self.S.remote}: resolve the push remote",
                       ("RESOLVED_REMOTE",))
         self.own_remote = self.o.values.get("RESOLVED_REMOTE", "")
         if self.typed_remote:  # "Explicit user-provided remote argument overrides the above"
@@ -298,7 +326,7 @@ class PushRun:
     # ------------------------------------------------------------ Step 1
     def step1(self) -> bool:
         """The base text's own token validation; on a text where the step reads nothing, no call."""
-        o, sec = self.o, self.step("Step 1")
+        o, sec = self.o, self.step(self.S.token)
         if re.search(r"reads nothing", sec):
             return True
         where = re.search(r"under `([^`]*<repo-hash>/?)`", sec)
@@ -306,30 +334,30 @@ class PushRun:
         find = next((c for c in item_codes(o.section("Session commit prerequisite"), "READ side")
                      if c.startswith("find ")), "")
         if not (where and test and find):
-            raise cmdtext.TextNotFound("Step 1 names no token directory, scan or ancestor test")
+            raise cmdtext.TextNotFound(f"{self.S.token} names no token directory, scan or ancestor test")
         # The repo hash and branch, as Step 2's own lines compute them.
-        lines = [l for l in cmdtext.block(self.step("Step 2"), lang="bash").split("\n")
+        lines = [l for l in cmdtext.block(self.step(self.S.snapshot), lang="bash").split("\n")
                  if re.match(r"^(REPO_ROOT|REPO_HASH|BRANCH)=", l)]
-        self.captured("\n".join(lines), self.label("Step 1 Bash repo hash"), "Step 1: repo hash and branch",
+        self.captured("\n".join(lines), self.label(f"{self.S.token} Bash repo hash"), f"{self.S.token}: repo hash and branch",
                       ("REPO_ROOT", "REPO_HASH", "BRANCH"))
         v = o.values
         tdir = where.group(1).replace("<repo-hash>", v.get("REPO_HASH", "")).rstrip("/")
         cmd = (find.replace("<repo-hash-dir>", tdir)
                .replace("<branch-encoded>", v.get("BRANCH", "").replace("/", "__")))
-        c = self.check(o.run(cmd, "Step 1: the push-gate token candidates", self.label("Step 1 Bash token scan")))
+        c = self.check(o.run(cmd, f"{self.S.token}: the push-gate token candidates", self.label(f"{self.S.token} Bash token scan")))
         cands = [l.strip() for l in (c.response.get("stdout") or "").split("\n") if l.strip()] if c.ok else []
         ok = ""
         for k, path in enumerate(cands):
-            r = self.check(o.s.read(path, label=self.label(f"Step 1 Read token {k}"),
-                                    deviation=self.devs.at(self.label(f"Step 1 Read token {k}"))))
+            r = self.check(o.s.read(path, label=self.label(f"{self.S.token} Read token {k}"),
+                                    deviation=self.devs.at(self.label(f"{self.S.token} Read token {k}"))))
             try:
                 sha = json.loads(agents.peek(self.rp, "main", path)).get("commit_sha") if r.ok else ""
             except ValueError:
                 sha = ""  # "Malformed/unparseable candidates are skipped"
             if not sha:
                 continue
-            t = self.check(o.run(test.replace("<commit_sha>", sha), "Step 1: is the token's commit an ancestor of HEAD",
-                                 self.label(f"Step 1 Bash ancestor {k}")))
+            t = self.check(o.run(test.replace("<commit_sha>", sha), f"{self.S.token}: is the token's commit an ancestor of HEAD",
+                                 self.label(f"{self.S.token} Bash ancestor {k}")))
             if t.ok:
                 ok = path
                 break
@@ -354,33 +382,33 @@ class PushRun:
                 parts[cur].append(line)
         want = bool(self.typed_remote)
         if want not in parts:
-            raise cmdtext.TextNotFound(f"Step 2's block has no form for {'a typed remote' if want else 'a bare /push'}")
+            raise cmdtext.TextNotFound(f"{self.S.snapshot}'s block has no form for {'a typed remote' if want else 'a bare /push'}")
         return "\n".join(parts[want]).strip("\n") + "\n"
 
     def snapshot(self, label: str) -> None:
         """Step 2's call. The snapshot script prints `KEY=value` lines: the main agent copies them into the
         later steps' placeholders (the run's values). A text that spells the snapshot as a shell block runs
         that block, its variables kept."""
-        block = cmdtext.block(self.step("Step 2"), lang="bash")
+        block = cmdtext.block(self.step(self.S.snapshot), lang="bash")
         if "push-snapshot" not in block:
             names = tuple(dict.fromkeys(_ASSIGN_RE.findall(block)))
-            self.captured(block, label, "Step 2: pre-push snapshot", names)
+            self.captured(block, label, f"{self.S.snapshot}: pre-push snapshot", names)
             return
         cmd = self.o.bind(self.snapshot_form(block), [(r"^remote$", self.typed_remote)])
-        c = self.check(self.o.run(cmd, "Step 2: pre-push snapshot", label))
+        c = self.check(self.o.run(cmd, f"{self.S.snapshot}: pre-push snapshot", label))
         self.o.values.update(re.findall(r"^([A-Z][A-Z_]*)=(.*)$", (c.response.get("stdout") or ""), re.M))
         self.own_remote = self.own_remote or self.o.values.get("DEFAULT_REMOTE", "")
 
     def step2(self) -> bool:
-        self.snapshot(self.label("Step 2 Bash snapshot"))
+        self.snapshot(self.label(f"{self.S.snapshot} Bash snapshot"))
         self.rp.rand(self.o.values.get("REQUEST_ID"))
         if self.o.values.get("BRANCH") == "HEAD":
-            self.refuse("Step 2", "If `BRANCH` is `HEAD`")
+            self.refuse(self.S.snapshot, "If `BRANCH` is `HEAD`")
             self.end("/push: HEAD is detached; nothing pushed until the branch to push is checked out.")
             return False
         if not self.o.values.get("SESSION_ID"):
-            if self.refuse("Step 2", "If `SESSION_ID` is"):
-                self.snapshot(self.label("Step 2 Bash snapshot again"))
+            if self.refuse(self.S.snapshot, "If `SESSION_ID` is"):
+                self.snapshot(self.label(f"{self.S.snapshot} Bash snapshot again"))
                 self.rp.rand(self.o.values.get("REQUEST_ID"))
             if not self.o.values.get("SESSION_ID"):
                 self.end("/push: still no session id after your answer; nothing pushed.")
@@ -390,16 +418,16 @@ class PushRun:
     # ------------------------------------------------------------ Step 3 and the analyst
     def prompt(self) -> str:
         o = self.o
-        fence = next(b.text for b in cmdtext.blocks(self.step("Step 3")) if "REQUEST_ID=" in b.text)
+        fence = next(b.text for b in cmdtext.blocks(self.step(self.S.dispatch)) if "REQUEST_ID=" in b.text)
         left: list = []
         prompt = o.bind(o.instantiate(fence, None), unbound=left)
         if left:
-            raise cmdtext.TextNotFound(f"Step 3 prompt: unbound placeholders {sorted(set(left))}")
+            raise cmdtext.TextNotFound(f"{self.S.dispatch} prompt: unbound placeholders {sorted(set(left))}")
         return prompt.rstrip("\n")
 
     def step3(self) -> None:
         o = self.o
-        lab = self.label(f"Step 3 Agent({self.role()})")
+        lab = self.label(f"{self.S.dispatch} Agent({self.role()})")
         prompt = self.prompt()
         analyst = Analyst(self, prompt)
         player = agents.Player(o.tree, prompt, agents.Act(work=analyst.work, summary="pre-push analysis"),
@@ -421,9 +449,9 @@ class PushRun:
     # ------------------------------------------------------------ Step 5
     def step5(self):
         o = self.o
-        cmd = form(cmdtext.block(self.step("Step 5"), lang="bash"), self.auto)
-        c = self.check(o.run(o.shell_bind(o.bind(cmd)), "Step 5: execute-push.py validates, spends the grant and "
-                             "execs push.sh", self.label("Step 5 Bash execute-push")))
+        cmd = form(cmdtext.block(self.step(self.S.push), lang="bash"), self.auto)
+        c = self.check(o.run(o.shell_bind(o.bind(cmd)), f"{self.S.push}: execute-push.py validates, spends the grant and "
+                             "execs push.sh", self.label(f"{self.S.push} Bash execute-push")))
         out = (c.response.get("stdout") or "") + (c.response.get("stderr") or "") if c.ok else (c.error or "")
         rc = 0 if c.ok else int((re.match(r"Exit code (\d+)", c.error or "") or [0, -1])[1])
         st = origin_state(self.rp)
@@ -476,9 +504,9 @@ class PushRun:
             nxt.typed_remote = remote  # Step 2's call, run again for the remote the owner chose
             return nxt.dispatch_and_push() if nxt.step2() else nxt.outcome
         if rc == 3:
-            self.refuse("Step 5", "exit 3, no push-gate token", out[-800:])
+            self.refuse(self.S.push, "exit 3, no push-gate token", out[-800:])
         elif "push BLOCKED by push-analyst" in out:
-            self.refuse("Step 5", "Its refusals:", out[-800:])
+            self.refuse(self.S.push, "Its refusals:", out[-800:])
         meaning = {1: "detached HEAD, missing remote, a refused grant or sentinel, or a failed push",
                    2: "a blocked option or an infrastructure failure",
                    3: "no push-gate token names an ancestor of HEAD: run /commit (in any session) first"}
@@ -489,6 +517,11 @@ class PushRun:
         the configured remotes its facts), asked once as the Refusals rule says, the push to Step 0's own
         remote recommended: that remote when the owner picks it, else ''."""
         m = re.search(r"remote '([^']+)' not found", out)
+        if mergedrv.REPORTED in " ".join(self.o.text.split()):  # reported in the turn's text, nobody asked
+            if m and self.own_remote not in ("", m.group(1)):
+                closedrv.fact(self.rp, "push refusal", {"step": self.S.push, "action": f"push to {self.own_remote}",
+                                                        "answer": None})
+            return ""
         other = re.search(r'\(Recommended\), and "([^"]+)"', self.o.text)
         if not m or m.group(1) != self.o.values.get("RESOLVED_REMOTE") or self.own_remote in ("", m.group(1)):
             return ""
@@ -497,7 +530,7 @@ class PushRun:
         facts = [l.strip() for l in out.split("\n") if l.startswith("   ")]
         question = "\n".join([f"Error: remote '{m.group(1)}' not found. Configured remotes:", *facts])
         action = f"push to {self.own_remote}"
-        lab = self.label("Step 5 AskUserQuestion")
+        lab = self.label(f"{self.S.push} AskUserQuestion")
         options = [{"label": action + " (Recommended)", "description": ""},
                    {"label": " ".join(other.group(1).split()), "description": ""}]
         call = self.o.s.tool("AskUserQuestion", {"questions": [{"question": question, "header": "Refused",
@@ -506,7 +539,7 @@ class PushRun:
         if call.blocked:
             raise mergedrv.Paused(f"a hook refused {lab!r}")
         answer = (call.response.get("answers") or {}).get(question, "").replace(" (Recommended)", "")
-        closedrv.fact(self.rp, "push refusal", {"step": "Step 5", "action": action, "answer": answer})
+        closedrv.fact(self.rp, "push refusal", {"step": self.S.push, "action": action, "answer": answer})
         return self.own_remote if answer == action else ""
 
     # ------------------------------------------------------------ P5 review H2: a refusal made true

@@ -68,8 +68,9 @@ def read_lines(path: str) -> list[tuple[int, dict]]:
 
 def project_key(cwd) -> str:
     """First 12 hex of the sha256 of cwd's resolved git common directory, which linked working copies share (else cwd)."""
-    common = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--git-common-dir"], capture_output=True, text=True).stdout.strip()
-    return hashlib.sha256(os.path.realpath(os.path.join(cwd, common)).encode()).hexdigest()[:12]
+    locations = importlib.import_module(".locations" if __package__ else "locations", __package__ or None)
+    common = locations.repo_common_dir(cwd) or os.path.realpath(cwd)  # none at the filesystem root's repository
+    return hashlib.sha256(common.encode()).hexdigest()[:12]
 
 
 def points_for(event: str, role: str) -> int | None:
@@ -81,8 +82,9 @@ def identity(role, pipeline) -> str | None:
     return "close-qa" if (role, pipeline) == ("qa", "close") else role or None
 
 
-def log_path() -> Path:
-    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "logs" / "lifecycle.jsonl"
+def log_path() -> Path:  # one log per install, on disk (lib/harness_state_dir.py), whichever account runs the session
+    where = importlib.import_module(".harness_state_dir" if __package__ else "harness_state_dir", __package__ or None)
+    return Path(where.state_root(), "logs", "lifecycle.jsonl")
 
 
 @contextmanager
@@ -98,12 +100,14 @@ def _ob(name):  # obligation is imported late: a caller may put hooks/lib on the
     return getattr(importlib.import_module(".obligation" if __package__ else "obligation", __package__ or None), name)
 
 
+def marks(row):  # what makes a row a repeat: its key, and for a rating row its canonical task id
+    found = {("key", row["key"])} if isinstance(row.get("key"), str) else set()
+    return found | {("rating", _ob("canonical_task_id")(row.get("task_id")))} if row.get("kind") == "rating" else found
+
+
 def append_all(log, rows) -> int:
     """Under ``locked(log)``: write the rows (a list) with one write and one fsync; returns how many. The first row per "key" wins; a
     rating row yields only to a RATING row of the same canonical task id; a row with neither goes as is; an unserialisable one is skipped."""
-    def marks(row):  # what makes a row a repeat: its key, and for a rating row its canonical task id
-        found = {("key", row["key"])} if isinstance(row.get("key"), str) else set()
-        return found | {("rating", _ob("canonical_task_id")(row.get("task_id")))} if row.get("kind") == "rating" else found
     data = Path(log).read_bytes() if os.path.exists(log) else b""
     if data and not data.endswith(b"\n"):  # a crash left a fragment: cut it back to the last newline, or the next row is glued to it
         os.truncate(log, len(data := data[:data.rfind(b"\n") + 1]))
@@ -126,6 +130,28 @@ def append_all(log, rows) -> int:
 
 def append(log, row: dict) -> bool:
     return append_all(log, [row]) == 1
+
+
+def join_older(log, older: str) -> int:
+    """Under ``locked(log)``: put the lines of an earlier version's log (text) before the log's own in one replace. An earlier line is
+    dropped when it repeats a line already taken, whole or by ``marks`` (append_all's rule: what the log holds wins, then the first).
+    Returns how many were dropped."""
+    def found(line):  # a damaged line, or one that is no object: only an identical line repeats it
+        with suppress(ValueError, AttributeError):
+            return marks(json.loads(line))
+        return set()
+    new_rows = Path(log).read_text().splitlines(keepends=True) if os.path.exists(log) else []
+    seen, taken, kept = set(new_rows), set().union(*map(found, new_rows)), []
+    for line in [r if r.endswith("\n") else r + "\n" for r in older.splitlines(True)]:
+        if line not in seen and not found(line) & taken:
+            kept.append(line)
+            seen.add(line)
+            taken |= found(line)
+    tmp = f"{log}.carry-{os.getpid()}"
+    with open(tmp, "w") as fh:
+        fh.writelines(kept + new_rows)
+    os.replace(tmp, log)
+    return len(older.splitlines()) - len(kept)
 
 
 def _live(rows, project, as_of):

@@ -85,6 +85,15 @@ def test_overwrite_of_session_scratch_report_passes(lab):
     assert _passes(lab, _existing(_session_scratch(lab) / "report.md"))
 
 
+def test_overwrite_of_a_draft_in_a_subagents_own_scratch_below_the_session_passes(lab):
+    """<session scratch directory>/<role>/<agent id>/, the directory hooks/pretool-tool-policy.py calls its own;
+    the same place below another session's directory stays refused."""
+    assert _passes(lab, _existing(_session_scratch(lab) / "architect" / "a-architect" / "draft.md"))
+    other = lab["tmp"] / "scratch-root" / "other-sess"
+    _existing(other / ".owner", json.dumps({"sid": "other-sess"}))
+    assert _refused(_write(lab, _existing(other / "architect" / "a-architect" / "draft.md")))
+
+
 def test_overwrite_of_a_temp_file_that_is_not_harness_state_passes(lab):
     # Below $TMPDIR (the lab's scratch root), a temp root wherever pytest's basetemp lives
     # (a --basetemp under /dev/shm is no temp root).
@@ -172,7 +181,7 @@ def test_session_scratch_owner_record_still_refused(lab):
     assert _refused(_write(lab, _session_scratch(lab) / ".owner"))
 
 
-@pytest.mark.parametrize("name", ["dev-output-1.json", "checkpoint-result.1.2", "runtime-guard-ab"])
+@pytest.mark.parametrize("name", ["checkpoint-result.1.2", "runtime-guard-ab"])
 def test_harness_process_scratch_still_refused(lab, name):
     """Scratch a harness process writes and reads back is not an agent's scratch."""
     assert _refused(_write(lab, _existing(lab["state"] / name)))
@@ -620,3 +629,32 @@ def test_replace_refs_do_not_hide_head(lab):
     _gc("-C", str(proj), "replace", "HEAD", fake)
     _gc("-C", str(proj), "rm", "-q", "--cached", "src/app.py")
     assert _refused(_write(lab, proj / "src" / "app.py"))
+
+
+# --- the project's place does not decide (g-loctriage U23) -------------------------------------
+
+@pytest.mark.parametrize("place", [("a", "p"), ("b", ".claude", "work", "p")])
+def test_a_projects_place_below_a_claude_directory_does_not_decide(lab, place):
+    """The same untracked output in the same project passes, and the project's own .claude/ file
+    stays refused, whether or not the project lies below some `.claude` directory."""
+    proj = _committed_project(lab["tmp"].joinpath("u23", *place))
+    assert not _refused(_write(lab, proj / "build" / "out.txt"))
+    assert _refused(_write(lab, _existing(proj / ".claude" / "notes.txt")))
+    assert _refused(_write(lab, proj / "src" / "app.py"))
+
+
+@pytest.mark.parametrize("tmpdir_is", ["the-root", "the-sessions-directory"])
+def test_a_tmpdir_that_is_the_sessions_own_directory_names_the_same_scratch(lab, monkeypatch, tmpdir_is):
+    """g-locfind1 F2: with TMPDIR = <root>/<sid> (inherited from the session's shell) the session's own scratch is
+    still its own, as with TMPDIR = <root>; another session's directory is not."""
+    sys.path.insert(0, str(ROOT / "hooks" / "lib" / "write_gate"))
+    sys.path.insert(0, str(ROOT / "hooks" / "lib"))
+    import harness_temp_state
+    import overwrite_scope
+    root = lab["tmp"] / "scratch-root"
+    own = _existing(root / SID / ".owner", json.dumps({"sid": SID})).parent
+    other = _existing(root / "other-sess" / ".owner", json.dumps({"sid": "other-sess"})).parent
+    monkeypatch.setenv("CLAUDE_STATE_DIR", str(lab["state"]))
+    monkeypatch.setenv("TMPDIR", str(own if tmpdir_is == "the-sessions-directory" else root))
+    assert overwrite_scope._own_scratch(os.path.realpath(_existing(own / "r.md")), SID, harness_temp_state)
+    assert not overwrite_scope._own_scratch(os.path.realpath(_existing(other / "r.md")), SID, harness_temp_state)

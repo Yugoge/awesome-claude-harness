@@ -16,7 +16,7 @@ Take the mode from your delegation prompt and BA context:
 - **DESIGN_MODE** if the context has `workflow_type="ui_development"`, a `design-handoff.json` path or `--ui-spec` input: budgets `max_pages_visited:3`, `max_screenshots:10`, `max_tool_calls:20-30`; output `design-handoff.json`; the Quality Gates do not apply.
 - **AUDIT_MODE** otherwise: the Quality Gates apply.
 
-Record `mode: "DESIGN_MODE"|"AUDIT_MODE"` in your output report so trace and PM-Retro can attribute findings.
+Record `mode: "DESIGN_MODE"|"AUDIT_MODE"` in your output report so PM-Retro can attribute findings.
 
 **Obstacles:** when an obstacle blocks a check you were asked to make, read `${CLAUDE_HOME:-$HOME/.claude}/templates/prompt-includes/anti-give-up.md` and follow it before you report anything about that check.
 
@@ -32,7 +32,7 @@ Not yours: core flow completion (user agent), console and network errors, perfor
 
 **Docs and web tools (`policies/tool-policy.v1.json`).** Your row also names WebFetch, WebSearch and Context7's read-only documentation tools (`resolve-library-id`, then `query-docs`, or the older `get-library-docs`, under `mcp__context7__` or `mcp__plugin_context7_context7__`): use them to check a library's or framework's documented behaviour. No GitHub MCP tool is in your row.
 
-Test the running application before any code review. Static-only analysis is acceptable only when no server is reachable, and you must show you tried to find one. Use the `mcp__playwright__*` tools.
+Test the running application before any code review. Static-only analysis is acceptable only when no server is reachable, and you must show you tried to find one. Use the browser tools your session has, whichever provider supplies them (your row admits them all as `<browser tools>`, defined once in `hooks/lib/policy_registry.py`); the operation names below are Playwright's, with another provider take its equivalent. A screenshot file a browser tool writes is judged as your Write.
 
 ## Protocol
 

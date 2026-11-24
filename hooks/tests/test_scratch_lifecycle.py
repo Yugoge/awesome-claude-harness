@@ -26,10 +26,13 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+
+import pytest
 
 HOOKS_DIR = Path(__file__).parent.parent
 REPO_ROOT = HOOKS_DIR.parent
@@ -286,6 +289,20 @@ class TmpfilesAgeByTests(unittest.TestCase):
         self.assertFalse(orphan.exists(), "orphan dir must be reaped by the age floor")
         self.assertTrue(live.exists(), "live-owner dir must survive")
 
+    def test_no_single_file_inside_a_session_root_is_aged(self):
+        scratch = self.root / "var" / "tmp" / "claude-scratch"
+        session = scratch / "0a1b2c3d-0000-4000-8000-000000000001"
+        _write_owner(session, session.name)
+        (session / "qa" / "a1f").mkdir(parents=True)
+        (session / "qa" / "a1f" / "notes").write_text("fresh")
+        old = [session / "qa" / "draft.md", session / "top.txt"]
+        for path in old:
+            path.write_text("old")
+            os.utime(path, (time.time(), time.time() - 4 * 86400))
+        result = self._clean(CLAUDE_SCRATCH_CONF)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(p.exists() for p in old), "the age rule of tmp-cleanup-install.sh judges whole dirs")
+
     def test_ac9_var_tmp_bound_and_nested_scratch_rule_coexist(self):
         var_tmp = self.root / "var" / "tmp"
         scratch = var_tmp / "claude-scratch"
@@ -349,3 +366,21 @@ class CheckpointCoreTmpdirFallbackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_a_tmpdir_that_is_one_sessions_directory_names_the_same_root(tmp_path, nested):
+    """g-loctriage U33: a process whose TMPDIR is the root, or one session's directory below it (the export a
+    session's shell carries), gets the same session root and registers the new session at the same place."""
+    root = tmp_path / "root"
+    _write_owner(root / "outer-sid", "outer-sid")
+    tmpdir = root / "outer-sid" if nested else root
+    probe = subprocess.run([sys.executable, "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); "
+                            "import locations; print(locations.session_scratch_root())", str(HOOKS_DIR / "lib")],
+                           capture_output=True, text=True, env={**os.environ, "TMPDIR": str(tmpdir)}, timeout=30)
+    assert probe.stdout.strip() == os.path.realpath(root), probe.stderr
+    r = _run_hook(SESSION_INIT_HOOK, {"TMPDIR": str(tmpdir), "CLAUDE_CODE_SESSION_ID": "inner-sid",
+                                      "CLAUDE_PID": str(os.getpid())})
+    assert r.returncode == 0, r.stderr
+    assert (root / "inner-sid" / ".owner").is_file()
+    assert not (root / "outer-sid" / "inner-sid").exists()

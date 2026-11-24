@@ -640,7 +640,10 @@ def test_cp_enforce_and_role_resolution_take_one_running_rule(tmp_path):
     fresh["checked_in_at"] = _now_iso()
     stale = dict(fresh, checked_in_at="2020-01-01T00:00:00Z")
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(tmp_path), "CP_ENFORCE_MODE": "block"}
-    for payload, running, code in ((fresh, True, 2), (stale, False, 0)):
+    # The stale slot counted as not running until the owner's ruling of 2026-11-20 (age alone no longer
+    # leaves it out); a slot with no readable check-in time still does not count.
+    unreadable = dict(fresh, checked_in_at=None)
+    for payload, running, code in ((fresh, True, 2), (stale, True, 2), (unreadable, False, 0)):
         _make_cp_state(tmp_path, spec_id, agent, payload)
         assert cp_state_running(payload) is running
         # The stopping subagent is the slot's owner (P1c X6, P9 E4: the hook judges only its own slots).

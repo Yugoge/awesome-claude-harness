@@ -17,8 +17,8 @@ Monitor every managed paseo session, keep each account (PASEO_DAEMON_ACCOUNTS, c
 
 1. **Liveness is not health.** Judge progress by `get_agent_activity` `updateCount` progression together with status and `lastUserMessageAt`, never by liveness or `updatedAt` alone. Metadata churn never clears a SUSPECT verdict.
 2. **Daemon-supported channels only.** Observe and repair only through the paseo MCP tools (`list_agents`, `get_agent_activity`, `get_agent_status`, `update_agent`, `send_agent_prompt`, `create_heartbeat`, `create_schedule`) and documented CLIs. Never write paseo internal state or databases directly.
-3. **Never restart a daemon you depend on for verification.** The only options: a sandboxed parallel daemon against a throwaway state directory; a static read of the post-build artifact; or the pause, one specific AskUserQuestion inside the turn naming the restart command, after whose answer you continue.
-4. **No background dispatch.** Every Agent dispatch passes `run_in_background: false` (`hooks/pretool-block-background-tasks.py` checks it). Keep work synchronous and observable.
+3. **Never restart a daemon you depend on for verification.** The only options: a sandboxed parallel daemon against a throwaway state directory; a static read of the post-build artifact; or leaving the restart undone and reporting it, naming the restart command; then continue.
+4. **Foreground dispatch.** Every Agent dispatch of this command passes `run_in_background: false`, so its result is in hand before the next step (a background dispatch is allowed by the harness; this command does not use it).
 5. **Bootstrap, not daemon.** A durable ledger on disk, scheduled ticks with re-arm, one bulk reconciliation per tick, a durable backlog drained across turns within the orchestrator gate's budgets (one non-whitelist same-name tool per turn, three per retrieval tool, at most five consecutive Bash calls; `hooks/pretool-orchestrator-gate.py`), and leader-lease succession. No resident process of any kind.
 6. **Readers, not histories.** Never read workspace or session histories yourself. Every per-workspace inspection goes to a dedicated read-only reader subagent (Explore type, `run_in_background: false`, exactly ONE workspace per reader) with a fixed four-question report: which step of spec→dev→close→commit→push it fixes / what real-world problem and its root-cause point / where it stands and its terminal state / what uncommitted residue remains. Board reports and handovers run readers first; memory never substitutes for a fresh reader pass.
 7. **Close-out standard.** A workspace may be closed only when it answers the four questions in one line each AND has zero uncommitted residue. Command lines drive progress (one bare slash command; prose is not dispatch). Authorization happens at the permission layer, never by asking a seat to route around a hook. A QA rejection is accepted as BLOCKED and never overridden, but BLOCKED is a waypoint, not a terminal: at once trace it to its root cause and turn it into a concrete repair route (which layer holds the defect, which owner fixes it, when to resubmit). Record-only output (specs never developed, notes never landed) is not delivery.
@@ -166,12 +166,12 @@ Generations: each carries generation/parent/source_watermark/hash/committed. The
 
 ## Escalation whitelist
 
-Escalation to the user is a CLOSED five-class enum:
+Escalation to the user is a report, never a question (`hooks/pretool-tool-policy.py` refuses an `AskUserQuestion` outside the kinds `hooks/lib/requirement_round.py` keeps), in a CLOSED five-class enum:
 1. whether a session may close;
 2. accumulated harness issues ready to open a spec;
 3. destructive-operation authorization;
 4. out-of-scope new discovery;
-5. a capability/invariant-caused blockage that cannot recover by itself: human-only hook rejection, all accounts blocked without a reliable nextEligibleAt, incomplete recovery identity, dossier validation failure. Wait or escalate with the reason stated; never rotate accounts endlessly, resend prompts, report false completion or bypass a hook.
+5. a capability/invariant-caused blockage that cannot recover by itself: human-only hook rejection, all accounts blocked without a reliable nextEligibleAt, incomplete recovery identity, dossier validation failure. Report it with the reason stated and go on with what a rule allows; never rotate accounts endlessly, resend prompts, report false completion or bypass a hook.
 
 Escalations outside this enum are absorbed, not raised. Quota waits WITH a reliable nextEligibleAt auto-suspend without escalation.
 
@@ -180,7 +180,7 @@ Escalations outside this enum are absorbed, not raised. Quota waits WITH a relia
 The prohibitions in Constraints 2-4 and the ledger rule above bind equally.
 
 - DO NOT modify the paseo kernel or any external asset: `/opt/paseo/**`, the operator's helper binaries (account router, account-matrix generator, timeline healer, per-account usage reader), `/etc/paseo-*`, systemd units. ALL are read-only evidence.
-- DO NOT bypass, wrap, or edit hooks, and DO NOT retry, disguise or circumvent a hook-rejected operation (controller or subagent). On a hook rejection ask one specific AskUserQuestion inside the turn naming the operation, the exact command and the hook output (the pause; it releases no gate; Subagent Hook Discipline). The answer authorizes no retry: the operation runs again only after the owner's `/allow` grant for it, typed as their own prompt, where the refusing hook reads one (it lets the command through once); a hook that reads no grant goes on refusing it, and the operation is withdrawn. If the owner declines, or the operation is withdrawn, the same role resumes without it while every acceptance criterion stays achievable without it (Hook Discipline #4); a decline never ends the command.
+- DO NOT bypass, wrap, or edit hooks, and DO NOT retry, disguise or circumvent a hook-rejected operation (controller or subagent). Nobody asks the owner about a hook rejection (Subagent Hook Discipline): the operation, the exact command and the hook output go into the ledger's verbatim zone and the report, as refused. The operation runs again only on the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses, where the refusing hook reads one (it lets the command through once); no agent asks for one, and a hook that reads no grant goes on refusing it: the operation is withdrawn. The same role resumes without it while every acceptance criterion stays achievable without it (Hook Discipline #4); a criterion that needs it is reported as not met. A refusal never ends the command.
 
 ## Knob defaults
 

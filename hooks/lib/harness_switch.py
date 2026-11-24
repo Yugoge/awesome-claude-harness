@@ -18,6 +18,12 @@ import sys
 
 DIR_NAME = ".harness-switch"
 MARKER = "off"
+VERBS = ("off", "on", "status")  # the /harness command's verbs
+# The CLI's own tools whose input reaches no session as a prompt (readers, the caller's own lists and tasks, the
+# owner's; a Monitor's command meets the Bash rule): hooks/pretool-harness-switch-guard.py reads every other tool's.
+NO_PROMPT = frozenset({"Read", "Glob", "Grep", "WebFetch", "WebSearch", "ToolSearch", "TodoWrite", "TodoRead",
+                       "TaskCreate", "TaskGet", "TaskList", "TaskUpdate", "TaskOutput", "BashOutput", "TaskStop",
+                       "KillShell", "AskUserQuestion", "PushNotification", "ExitPlanMode", "Monitor"})
 
 
 def harness_home() -> str:

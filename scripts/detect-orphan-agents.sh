@@ -4,23 +4,19 @@
 # Exit codes: 0=success
 
 set -euo pipefail
+META_AGENTS_RE='^(orchestrator|dispatcher|coordinator)$'  # agents that dispatch others, never orphans
 
-# Parameters
 PROJECT_ROOT="${1:-.}"
 HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # install location, resolved before the cd below
 
-# Navigate to project root
 cd "$PROJECT_ROOT"
 
-# Get .claude directory (check both local and global)
 CLAUDE_DIR="${PROJECT_ROOT}/.claude"
 GLOBAL_CLAUDE_DIR="$HARNESS_HOME"
 
-# Initialize JSON output
 orphan_agents=""
 total_count=0
 
-# Function to check if agent is referenced by commands
 check_agent_references() {
     local agent_name="$1"
 
@@ -37,7 +33,6 @@ check_agent_references() {
         fi
     fi
 
-    # Check in .claude/commands/*.md (global)
     if [[ -d "${GLOBAL_CLAUDE_DIR}/commands" ]]; then
         if grep -rqwF --include='*.md' --exclude=INDEX.md --exclude=README.md -e "${agent_name}" "${GLOBAL_CLAUDE_DIR}/commands/" 2>/dev/null; then
             referenced=true
@@ -64,7 +59,6 @@ check_agent_references() {
     echo "$referenced"
 }
 
-# Function to get last modified time
 get_last_modified() {
     local file="$1"
     local current_time
@@ -75,7 +69,6 @@ get_last_modified() {
     echo "${days_ago} days ago"
 }
 
-# Function to get commit count
 get_commit_count() {
     local file="$1"
     local count
@@ -97,7 +90,6 @@ ORPHAN_MAJOR_COMMIT_THRESHOLD="${ORPHAN_MAJOR_COMMIT_THRESHOLD:-2}"
 ORPHAN_MAJOR_DAYS_THRESHOLD="${ORPHAN_MAJOR_DAYS_THRESHOLD:-60}"
 ORPHAN_MAJOR_AGE_THRESHOLD="${ORPHAN_MAJOR_AGE_THRESHOLD:-90}"
 
-# Function to determine severity
 get_severity() {
     local commit_count="$1"
     local days_ago="$2"
@@ -114,21 +106,17 @@ get_severity() {
     fi
 }
 
-# Scan agents in local .claude/agents/ directory
 if [[ -d "${CLAUDE_DIR}/agents" ]]; then
     for agent_file in "${CLAUDE_DIR}/agents/"*.md; do
         [[ ! -f "$agent_file" ]] && continue
 
         agent_name=$(basename "$agent_file" .md)
 
-        # Skip INDEX.md and README.md
         [[ "$agent_name" == "INDEX" ]] && continue
         [[ "$agent_name" == "README" ]] && continue
 
-        # Skip meta-agents
-        [[ "$agent_name" =~ ^(orchestrator|dispatcher|coordinator)$ ]] && continue
+        [[ "$agent_name" =~ $META_AGENTS_RE ]] && continue
 
-        # Check if referenced
         is_referenced=$(check_agent_references "$agent_name")
 
         if [[ "$is_referenced" == "false" ]]; then
@@ -136,7 +124,6 @@ if [[ -d "${CLAUDE_DIR}/agents" ]]; then
             commit_count=$(get_commit_count "$agent_file")
             severity=$(get_severity "$commit_count" "$last_modified")
 
-            # Build JSON object
             if [[ -n "$orphan_agents" ]]; then
                 orphan_agents="${orphan_agents},"
             fi
@@ -155,21 +142,17 @@ if [[ -d "${CLAUDE_DIR}/agents" ]]; then
     done
 fi
 
-# Scan agents in global ~/.claude/agents/ directory
 if [[ -d "${GLOBAL_CLAUDE_DIR}/agents" ]]; then
     for agent_file in "${GLOBAL_CLAUDE_DIR}/agents/"*.md; do
         [[ ! -f "$agent_file" ]] && continue
 
         agent_name=$(basename "$agent_file" .md)
 
-        # Skip INDEX.md and README.md
         [[ "$agent_name" == "INDEX" ]] && continue
         [[ "$agent_name" == "README" ]] && continue
 
-        # Skip meta-agents
-        [[ "$agent_name" =~ ^(orchestrator|dispatcher|coordinator)$ ]] && continue
+        [[ "$agent_name" =~ $META_AGENTS_RE ]] && continue
 
-        # Check if referenced
         is_referenced=$(check_agent_references "$agent_name")
 
         if [[ "$is_referenced" == "false" ]]; then
@@ -177,7 +160,6 @@ if [[ -d "${GLOBAL_CLAUDE_DIR}/agents" ]]; then
             commit_count=$(get_commit_count "$agent_file")
             severity=$(get_severity "$commit_count" "$last_modified")
 
-            # Build JSON object
             if [[ -n "$orphan_agents" ]]; then
                 orphan_agents="${orphan_agents},"
             fi
@@ -196,7 +178,6 @@ if [[ -d "${GLOBAL_CLAUDE_DIR}/agents" ]]; then
     done
 fi
 
-# Output JSON
 cat <<EOF
 {
   "orphan_agents": [${orphan_agents}

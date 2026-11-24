@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -95,9 +96,15 @@ def mint(state, repo, task_id="20261028-100000", sid=SID):
              "branch": git(repo, "branch", "--show-current"), "expected_head": git(repo, "rev-parse", "HEAD"),
              "created_at": (now - timedelta(seconds=2)).isoformat(),
              "expires_at": (now + timedelta(minutes=30)).isoformat(),
-             "minted_by": {"origin": CP.PIPELINE_ORIGIN}}
+             "minted_by": {"origin": CP.PIPELINE_ORIGIN,
+                           "evidence": {"manifest_dispatched_at": (now - timedelta(seconds=30)).isoformat()}}}
     path = Path(state) / f"claude-commit-grant-{sid}-{nonce}.json"
     path.write_text(json.dumps(grant))
+    # The pre-commit review approved this round (commands/commit.md Step 6); docs/dev stays out of the commit.
+    (Path(repo) / "docs" / "dev").mkdir(parents=True, exist_ok=True)
+    (Path(repo) / "docs" / "dev" / f"commit-qa-report-{task_id}.md").write_text("# pre-commit QA\n\nCOMMIT: APPROVE\n")
+    with open(Path(repo) / ".git" / "info" / "exclude", "a") as handle:
+        handle.write("docs/dev/\n")
     return str(path), grant
 
 
@@ -382,9 +389,17 @@ def test_a_fifo_at_a_pointer_name_does_not_stall_the_reader(world):
     state = os.environ["CLAUDE_STATE_DIR"]
     fifo = CJ.pointer_path("tu-fifo")
     os.mkfifo(fifo)
-    started = time.monotonic()
-    parsed, ident = CJ.read_untrusted_json_ident(fifo)
-    assert parsed is None and ident is not None and time.monotonic() - started < 2
+    box = []
+    reader = threading.Thread(target=lambda: box.append(CJ.read_untrusted_json_ident(fifo)), daemon=True)
+    reader.start()
+    reader.join(60)  # generous outer limit: a reader that opens the fifo blocking never returns by itself
+    stuck = reader.is_alive()
+    if stuck:  # release the blocked open, so the test ends and nothing stays behind
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join(10)
+    assert not stuck, "the reader stalled on a fifo"
+    parsed, ident = box[0]
+    assert parsed is None and ident is not None
     assert CJ.unlink_verified(fifo, ident)
     assert os.listdir(state) == []
 

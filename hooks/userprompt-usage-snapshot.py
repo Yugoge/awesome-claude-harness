@@ -56,13 +56,13 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.allowlist import write_state_entry  # noqa: E402
 
 HOOK_EVENT_NAME = "UserPromptSubmit"
 CACHE_TTL_SECONDS = 300
@@ -91,16 +91,7 @@ def _read_cache(path: Path) -> dict:
 def _write_cache(path: Path, data: dict) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".usage-cache-")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(data, fh)
-            os.replace(tmp_name, path)
-        except Exception:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
+        write_state_entry(path, json.dumps(data), 0o600)
     except Exception:
         pass  # a cache write failure must never block the user turn
 

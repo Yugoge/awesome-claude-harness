@@ -62,7 +62,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.agent_resolver import resolve_agent_type, resolve_dev_registry_entry
 from lib import claude_home, command_span, subagent_restart
 from lib.claude_home import settings_switch
+from lib.harness_vocabulary import GATE_MODES
 from lib import contract_runtime
+from lib import declared_absence
 from lib import final_report
 from lib import dispatch_template
 from lib import obligation
@@ -107,6 +109,16 @@ def _classify_verdict_line(line: str) -> str:
         return module.classify_line(line)
     except Exception:
         return "unknown"
+
+
+# The decisive verdict classes, the classifier's own (hooks/lib/close-verdict.py DECISIVE_CLASSES);
+# none when it cannot load, which never trips the inconsistency check, as 'unknown' never does.
+try:
+    from importlib.machinery import SourceFileLoader as _Loader
+    _DECISIVE = _Loader("close_verdict", str(Path(__file__).parent / "lib" / "close-verdict.py")) \
+        .load_module().DECISIVE_CLASSES
+except Exception:
+    _DECISIVE = ()
 
 
 def _dispatch_obligation(prompt) -> dict:
@@ -159,7 +171,8 @@ def _nested_claude_repo() -> list:
             capture_output=True, text=True, timeout=10,
         )
         top = proc.stdout.strip()
-        return [top] if proc.returncode == 0 and top else []
+        from lib import locations
+        return [top] if proc.returncode == 0 and top and not locations.is_fs_root(top) else []
     except Exception:
         return []
 
@@ -269,13 +282,10 @@ AGGREGATE_CHECK = Path(__file__).resolve().parent / "pretool-aggregate-check.py"
 
 
 def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
-    """C5 for G3's canonical_missing: the canonical aggregate's one producer,
-    the lane-completeness watch, runs on a lane report's Write or Edit. While
-    G3's own rule (pretool-aggregate-check.py _find_violations) finds the
-    canonical missing, the lane whose report is its fan-out's newest is
-    returned at its own stop: that report reached disk another way (a shell
-    redirection), and its Edit runs the producer. A sibling's later report is
-    the sibling's own (its watch may still be running)."""
+    """C5 for G3's canonical_missing (pretool-aggregate-check.py _find_violations), for what this lane's report
+    repairs: the aggregator's reasons for refusing it by itself. Nothing else holds the lane: a rebuild that did not
+    finish, or a sibling's report the aggregator refuses, is no edit of this lane's; G3 at the QA dispatch and the
+    Stop gate rebuild and name it to the main agent."""
     try:
         spec = importlib.util.spec_from_file_location("pretool_aggregate_check", AGGREGATE_CHECK)
         g3 = importlib.util.module_from_spec(spec)
@@ -285,16 +295,15 @@ def _wire_canonical(project_dir: str, report_rel: str, task_id: str) -> list:
         own = (Path(project_dir) / report_rel).resolve()
         findings = []
         for family, reports in lane_reports.items():
-            stamps = {path.resolve(): path.stat().st_mtime_ns for path in reports.values()}
-            if stamps.get(own) != max(stamps.values()):
-                continue
-            for code, path, problem, *_ in g3._find_violations({family: reports}, canonicals, dev_dir, task_id):
-                if code == "canonical_missing":
+            label = next((label for label, path in reports.items() if path.resolve() == own), None)
+            for code, path, _problem, *_ in g3._find_violations({family: reports}, canonicals, dev_dir, task_id):
+                if code != "canonical_missing" or label is None:
+                    continue
+                refused = g3.own_refusal(g3.aggregator_refusal(dev_dir, family), label, family)
+                if refused:
                     findings.append({"path": report_rel, "reason": code, "errors": [
-                        f"{os.path.relpath(path, project_dir)}: {problem}. Its producer, "
-                        "hooks/posttool-lane-completeness-watch.py, runs on a lane report's Write or Edit, "
-                        "and this report, the fan-out's newest, reached disk another way: Read it, save it "
-                        "again with Edit (its timestamp), then stop again."]})
+                        f"{os.path.relpath(path, project_dir)} is missing: scripts/aggregate-dev-report.py refuses this report: "
+                        f"{'; '.join(refused)}. Correct that, then stop again: the stop runs it again."]})
         return findings
     except Exception:
         return []  # a wire that cannot run judges nothing
@@ -312,22 +321,24 @@ def _tree_rel(path: Path) -> tuple:  # (git work tree holding path, path in it);
     return tree, path.relative_to(tree).as_posix() if tree else ""
 
 
-def _recorded(transcript):
+def _recorded(transcript, excluded=command_span.EXCLUDED_TREES):
     """(written, named) resolved paths of a transcript over every account root's copy (each a partial view,
     subagent_restart._child_transcript_copies), None if none is readable. Read on "/" to keep other
-    repositories' paths, so the excluded trees are dropped here, in each path's own repository."""
+    repositories' paths, so the excluded trees are dropped here, in each path's own repository; A3.a passes ()
+    so that a bookkeeping file the dev was asked to change (an older cycle's qa-report) counts as written."""
     copies = subagent_restart._child_transcript_copies(transcript) if transcript else []
     found = [s for s in (command_span.write_set(c, "/") for c in copies) if s is not None]
     keep = lambda rels: {p for p in (Path("/", r).resolve() for r in rels)
-                         if not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)}
+                         if not _tree_rel(p)[1].startswith(excluded)}
     return tuple(keep(set().union(*(s[i] for s in found))) for i in (0, 1)) if found else None
 
 
-def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, deadline: float) -> list:
-    """A3.a: each declared path written or named by this dev or an earlier dev dispatch of its task id and lane (QA
-    loop, completion dispatch, any session of the project), or changed by a tool their Bash ran (a formatter, a
-    generator); each written path git has a change for declared."""
-    if (own := _recorded(getattr(resolution, "transcript_path", None))) is None:
+def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, deadline: float, start=None) -> list:
+    """A3.a: each path this dispatch declared (not in `start`, the entries its report held when the dispatch began:
+    lib/lane_ledger.declared_at_start) written or named by this dev or an earlier dev dispatch of its task id and
+    lane (QA loop, completion dispatch, any session of the project), or changed by a tool their Bash ran (a
+    formatter, a generator); each written path git has a change for declared."""
+    if (own := _recorded(getattr(resolution, "transcript_path", None), ())) is None:
         return []
     (written, named), unreadable, ran, tool, uses, spans = own, [], [resolution.transcript_path], set(), {}, []
     ours = ("dev", ob.get("lane"), obligation.canonical_task_id(ob.get("task_id")))
@@ -339,6 +350,7 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
     declared = {key: {(root / os.path.expanduser(p)).resolve(): p for p in dev.get(key) or []}
                 for key in ("files_modified", "files_created")}
     raw = {**declared["files_created"], **declared["files_modified"]}
+    judged = set(raw) - set(start or ())  # an entry the report held at dispatch start is an earlier round's
     change = lambda p: (t := _tree_rel(p))[0] and subprocess.run(  # git's status line for p; "" or None: none
         ["git", "--no-optional-locks", "--literal-pathspecs", "-C", str(t[0]), "status", "--porcelain", "-uall", "--",
          t[1]], capture_output=True, text=True, timeout=10).stdout
@@ -347,19 +359,19 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
         for rec in obligation._task_records(ob.get("task_id"), project_dir, None):
             other = rec["obligation"]
             at = stamp(other.get("dispatched_at"))
-            if (rec["prompt"] == resolution.prompt or (mine and at and at > mine) or ours != (
+            if ((at >= mine if mine and at else rec["prompt"] == resolution.prompt) or ours != (
                     other.get("role"), other.get("lane"), obligation.canonical_task_id(other.get("task_id")))):
                 continue
             meta = next((m for c in subagent_restart._child_transcript_copies(rec["transcript"])  # any root's
                          if (m := subagent_restart._metadata_by_tool_use(c).get(rec["tool_use_id"]))), {})
-            sets = _recorded(meta.get("agent_transcript_path"))
+            sets = _recorded(meta.get("agent_transcript_path"), ())
             if sets is None:
                 unreadable.append(f"dev dispatch {rec['tool_use_id']} in session {rec['transcript'].stem}")
             else:
                 written.update(sets[0]), named.update(sets[1]), ran.append(meta["agent_transcript_path"])
         # A tool's change: git has one, its mtime lies in such a Bash call run in its tree (its tool_use record to
         # its tool_result, a background call's to now) and no live subagent's record wrote it.
-        for at, b, cwd in ((stamp(r.get("timestamp")), b, r.get("cwd")) for t in ran if set(raw) - written - named
+        for at, b, cwd in ((stamp(r.get("timestamp")), b, r.get("cwd")) for t in ran if judged - written - named
                            for c in subagent_restart._child_transcript_copies(t) if c.is_file()  # a root may hold none
                            for _, r in command_span._records(c)
                            for b in (r.get("message") or {}).get("content") or () if isinstance(b, dict)):
@@ -369,16 +381,16 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
                 spans.append((*use[:2], time.time() if use[2].get("run_in_background") else at.timestamp()))
         live = (a for t in obligation._session_transcripts(project_dir, None) if spans for a in t.with_suffix(
             "").glob("subagents/agent-*.jsonl") if a.stat().st_mtime >= min(s[1] for s in spans))
-        tool.update(p for p in set(raw) - written - named - set().union(*(s[0] for s in map(_recorded, live) if s))
+        tool.update(p for p in judged - written - named - set().union(*(s[0] for s in map(_recorded, live) if s))
                     if p.is_file() and change(p) and not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES)
                     and any(s <= p.stat().st_mtime <= e and c.is_relative_to(_tree_rel(p)[0]) for c, s, e in spans))
     try:
         _with_alarm(deadline - time.monotonic(), inherit)
     except _WireTimeout:
         unreadable.append("the search for earlier dev dispatches (wire budget spent)")
-    missing, extra = set(raw) - written - named - tool, {}
-    for p in written - set(raw):  # nothing to land (unchanged, ignored, gone, outside a tree): nothing to declare
-        if out := change(p):
+    missing, extra = judged - written - named - tool, {}
+    for p in written - set(raw):  # nothing to land (unchanged, ignored, gone, outside a tree, a bookkeeping tree)
+        if not _tree_rel(p)[1].startswith(command_span.EXCLUDED_TREES) and (out := change(p)):
             extra[p] = "files_created" if out[:2] == "??" or out[0] == "A" else "files_modified"
     if not missing and not extra:
         return []
@@ -390,7 +402,7 @@ def _file_lists_errors(project_dir: str, ob: dict, report: dict, resolution, dea
              f"written but not declared: {listed(map(show, extra))}", "set dev.files_modified and dev.files_created "
              "to exactly: " + "; ".join(f"{key}: {', '.join(sorted(v)) or '[]'}" for key, v in expected.items())]
     lines += ["a file your own Bash produced counts once one of your Bash commands names it (for example "
-              "`ls -l <path>`): name it and keep it listed"] if missing else []
+              "`ls -l <path>`): name it and keep it listed"] if any(map(change, missing)) else []  # else nothing lands
     if unreadable:
         lines.append(f"unreadable, so its files count only once your own Bash names them: {listed(unreadable)}")
     return lines
@@ -489,7 +501,7 @@ def _harness_syntax(resolution) -> list:
     return findings
 
 
-def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, resolution=None) -> list:
+def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, resolution=None, ids=None) -> list:
     """F3.a for any stopping producer (only a role the tool policy lets write the
     harness can trip it: a dev, a test-writer under tests/generated/), then the dev
     report's wires (ledger judgment, /commit's trial plan or, for a fan-out lane,
@@ -520,13 +532,23 @@ def _run_downstream_wires(project_dir: str, ob: dict, json_artifacts: list, reso
         else:
             findings += _wire_canonical(project_dir, report_rel, task_id)
         try:
-            lines = _file_lists_errors(project_dir, ob, report, resolution, deadline)
+            from lib import lane_ledger  # the dispatch's own record, kept until its stop stands
+            start = lane_ledger.declared_at_start(*ids, report_full, project_dir) if ids and ids[1] else None
+            lines = _file_lists_errors(project_dir, ob, report, resolution, deadline, start)
         except Exception:  # a check that cannot run judges nothing
             lines = []
         if lines and FILE_LISTS_BLOCK:
             findings.append({"path": report_rel, "reason": "file_lists_differ", "errors": lines})
         elif lines:
             sys.stderr.write(f"A3.a would block: {report_rel}: file_lists_differ\n" + "".join(f"    {x}\n" for x in lines))
+        try:  # the orchestrator stop's ABSENT_DECLARED_PATH predicate, here at the lane's own end
+            gone = declared_absence.absent(project_dir, report)
+        except Exception:  # a check that cannot run judges nothing
+            gone = []
+        if gone:
+            findings.append({"path": report_rel, "reason": "absent_declared_path", "errors": [
+                f"declared but neither on disk nor deleted since baseline_head_sha: {', '.join(gone)}; "
+                "restore the file or drop it from dev.files_modified / dev.files_created"]})
     return findings
 
 
@@ -630,8 +652,8 @@ def _stale_findings(project_dir: str, ob: dict, declared: list, checked: list) -
     at = ob.get("dispatched_at")
     dispatched = obligation.parse_iso8601(at)
     if dispatched is None or dispatched.timestamp() > time.time():
-        # A dispatched_at ahead of this stop's clock is G1's clock bound to judge; here no write
-        # could ever satisfy it, so it decides nothing.
+        # A dispatched_at ahead of this stop's clock (a typed one where no record time stands in,
+        # obligation.dispatch_time): no write could ever satisfy it, so it decides nothing.
         return []
 
     def files(art):
@@ -703,10 +725,8 @@ def _tool_call_texts(transcript_path) -> list | None:
             record = json.loads(line)
         except ValueError:
             continue
-        message = record.get("message") if isinstance(record, dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
-        for block in content if isinstance(content, list) else ():
-            if isinstance(block, dict) and block.get("type") == "tool_use":
+        for block in command_span._blocks(record, sidechain=True):
+            if block.get("type") == "tool_use":
                 texts.append("\n".join(_call_strings(block.get("input"))))
     return texts
 
@@ -816,7 +836,7 @@ def main() -> None:
     env_mode = os.environ.get("CLAUDE_OBLIGATION_STOPGATE")
     stopgate_mode = (env_mode.strip().lower() if env_mode is not None
                      else settings_switch("CLAUDE_OBLIGATION_STOPGATE", "advisory"))
-    if stopgate_mode not in {"advisory", "block", "off"}:
+    if stopgate_mode not in GATE_MODES:
         stopgate_mode = "advisory"
     resolution = None
     if stopgate_mode != "off":
@@ -1040,7 +1060,7 @@ def main() -> None:
                         )
                         resp_class = _classify_verdict_line(_last_nonempty_line(resp_text))
                         if (
-                            md_class in ("yes", "no") and resp_class in ("yes", "no")
+                            md_class in _DECISIVE and resp_class in _DECISIVE
                             and md_class != resp_class
                         ):
                             failures.append(
@@ -1059,7 +1079,8 @@ def main() -> None:
                 if not failures:
                     try:
                         failures.extend(_run_downstream_wires(
-                            project_dir, resolution.obligation, json_artifacts, resolution))
+                            project_dir, resolution.obligation, json_artifacts, resolution,
+                            (data.get("session_id") or data.get("sessionId"), agent_id)))
                     except Exception:
                         pass  # a crashed wire judges nothing (see its section comment)
                 who = (f"agent {agent_id} (role={resolution.obligation.get('role')}, "

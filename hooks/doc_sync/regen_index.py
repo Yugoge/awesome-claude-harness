@@ -47,24 +47,6 @@ def _detect_convention(dir_path: Path) -> str:
     return 'kebab'
 
 
-def _build_stats(dir_path: Path) -> dict:
-    published = tracked_names(dir_path)
-    total = 0
-    dirs = 0
-    for item in dir_path.iterdir():
-        if item.name in ('INDEX.md', 'README.md', '__init__.py', '.DS_Store'):
-            continue
-        if item.name.startswith('.'):
-            continue
-        # AC-WS5-1: when git is consulted, list only published (tracked) entries.
-        if published is not None and item.name not in published:
-            continue
-        total += 1
-        if item.is_dir():
-            dirs += 1
-    return {'total': total, 'dirs': dirs}
-
-
 # A build_tree line is "<indent><connector> <body>", where <indent> is N
 # repetitions of a 4-char unit ("│   " or "    "), <connector> is "├── "/"└── ",
 # and <body> is either "`name` - desc" (a file) or "name/" (a directory). Parsing

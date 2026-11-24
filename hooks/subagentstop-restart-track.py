@@ -17,7 +17,8 @@ def main() -> int:
         payload = json.load(sys.stdin)
     except Exception:
         return 0
-    # An observer: the evidence it records is what /restart reads (lib/subagent_restart). It
+    # An observer: it records the response evidence and, when the last response is in, finalizes
+    # the recovery (lib/subagent_restart; the parent's next prompt is told the result). It
     # prints nothing, because at SubagentStop any output that reaches the model keeps the
     # stopping subagent running, and plain stdout reaches no one.
     # A resumed agent in auto mode answers through SubagentHandback: its report is that

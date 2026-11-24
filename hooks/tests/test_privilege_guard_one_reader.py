@@ -54,6 +54,11 @@ class Box:
         path.write_text(json.dumps({
             "kind": "bulk-commit", "sid": SID, "nonce": "00aa", "origin": "userpromptsubmit-hook",
             "created_at": now.isoformat(), "expires_at": (now + timedelta(minutes=30)).isoformat()}))
+        # The bulk run's pre-commit review approved (commands/commit.md Step 6); docs/dev stays out of git.
+        (self.repo / "docs" / "dev").mkdir(parents=True, exist_ok=True)
+        (self.repo / "docs" / "dev" / "commit-qa-report-bulk.md").write_text("COMMIT: APPROVE\n")
+        with open(self.repo / ".git" / "info" / "exclude", "a") as handle:
+            handle.write("docs/dev/\n")
         return path
 
     def commit_grant(self) -> Path:
@@ -68,7 +73,7 @@ class Box:
         return path
 
     def run(self, command: str):
-        data = {"session_id": SID, "agent_id": "agent-1", "tool_name": "Bash",
+        data = {"session_id": SID, "agent_id": "agent-1", "agent_type": "changelog-analyst", "tool_name": "Bash",
                 "tool_input": {"command": command}, "cwd": str(self.repo),
                 "hook_event_name": "PreToolUse"}
         return subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(data),

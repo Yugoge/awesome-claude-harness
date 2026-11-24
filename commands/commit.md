@@ -22,15 +22,15 @@ supported without a project-root override.
 
 | Flag | Meaning |
 |------|---------|
-| `<task-id>` | Optional when the session identifies the active cycle (Step 2: ambiguity is asked, never guessed). An explicit task-id that names a task is authoritative (Step 2 checks it). Unused with `--bulk`; not allowed with `--auto`. |
+| `<task-id>` | Optional when the session identifies the active cycle (Step 2: ambiguity ends the run with the candidates, never guessed). An explicit task-id that names a task is authoritative (Step 2 checks it). Unused with `--bulk`; not allowed with `--auto`. |
 | `--force` | No-op alias of the normal path: Step 3 and Step 6 both still run. Its one effect is Step 4's audit-log append. |
 | `--bulk` | Batch mode: group by task-id then subsystem, commit coherently, flag orphan files separately. Skips Step 3; keeps the Step 6 QA gate. |
 | `--dry-run` | Step 3 completes the cycle as a real run does; Steps 5-6 plan and review; print the plan and the QA verdict; commit nothing. |
 | `--codex` | Step 6's QA adds a Codex round on the planned per-file changes (each `PLAN_GROUPS` path vs HEAD). Without it QA reviews once itself. |
 | `--auto` | Walk every `commit_pending` parent task-id, one at a time, through Steps 3-8 (`--auto` mode below). Not `--bulk`. |
 
-`/commit` is human-only: `disable-model-invocation: true` plus the `Skill(commit)` deny in
-`settings.json`.
+`/commit` is human-only: `disable-model-invocation: true` plus the `Skill(commit)` entry of the
+deny list (`policies/cli-deny.v1.json`, refused by `hooks/pretool-deny-list.py`).
 
 ## Step-by-step workflow
 
@@ -42,16 +42,11 @@ token, if any, is `TASK_ID`.
 
 **`--auto` flag combination**: `--auto` takes no task-id, `--force` or `--bulk`
 (`validate_auto_flag_combination` in `scripts/dev-lifecycle.py`). When `AUTO=true` and any of the
-three is set, take no action and ask one AskUserQuestion: header `Flags`, question `--auto takes
-no task-id, --force or --bulk: which /commit should run?`, options:
-- `--auto`: every `commit_pending` parent, each through Steps 3-8;
-- `<task-id> only`: the task-id typed, else the first parent Step 2's `list-actionable` call
-  lists, alone through Steps 3-8;
-- `--bulk` (only when `--bulk` was typed): the batch sweep, Steps 5-8, with no Step 3.
-
-Continue in this turn with the mode the answer names (`--force`, a no-op, is dropped; `--dry-run`
-and `--codex` stay as typed). A legal `--auto` skips Step 2: the `--auto` mode section binds
-`TASK_ID` once per discovered parent.
+three is set, take no action and end with one line `NO_TARGET: --auto takes no task-id, --force or
+--bulk; run /commit --auto, /commit <task-id> or /commit --bulk`. Nobody is asked; the Stop gate
+(`stop-command-gate.py`, `no_target_end`) lets a run that dispatched nothing end on that
+line. A legal `--auto` skips Step 2: the `--auto` mode section binds `TASK_ID` once per discovered
+parent.
 
 ### Step 2: Resolve task-id (unless --bulk or --auto)
 
@@ -60,9 +55,8 @@ If `BULK=false` and `AUTO=false`:
   it in its name (the task's own report or ticket, or a lane's of that parent), or, typed as a
   path, that file exists. Check it before Step 3 (that look verifies the typed id; it picks no
   task, so it is not the scan the next bullet forbids). One that names no task (a mistyped id) is
-  not authoritative, and no conversation candidate replaces it unasked: ask the `Which task`
-  question below, as `close.md`'s Task-id resolution asks it for a path that does not exist, and
-  bind the answer. The `/commit` Stop reads the same rule (`_targets` in the command Stop gate,
+  not authoritative, and no conversation candidate replaces it: end as the `Which task` bullet
+  below says, as `close.md`'s Task-id resolution does for a path that does not exist. The `/commit` Stop reads the same rule (`_targets` in the command Stop gate,
   `stop-command-gate.py`): a typed id that names no task gives way to the task this `/commit`'s
   dispatches name, and with none dispatched the Stop holds, naming the typed id.
 - Otherwise (no `TASK_ID` supplied) infer it from the conversation: the parent task-id of the
@@ -71,13 +65,14 @@ If `BULK=false` and `AUTO=false`:
   reports). Inference succeeds
   only when the conversation names exactly one candidate: Step 3 completes and closes whatever
   task it is given, so with two or more candidates, or any doubt, do not guess.
-- No unambiguous candidate: ask one AskUserQuestion, header `Task`, question `Which task should
-  /commit land?`, options: up to three parents that
+- No unambiguous candidate (`Which task`): nobody is asked. Print one line `NO_TARGET: ` followed
+  by the parents that
   `python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/dev-lifecycle.py" list-actionable --next-action commit --project-dir "<PROJECT_ROOT>"`
   lists (the first word of each line), then those `--next-action close` lists (Step 3 closes them
-  first), each labelled with its task-id, plus `/commit --auto`. Bind `TASK_ID` to the answer, or
-  run `--auto` mode. When neither list names a parent, print `No task to commit: dev-lifecycle.py
-  lists no commit_pending or close_pending parent.` and end.
+  first), each as `/commit <task-id>`, plus `/commit --auto`, and end; the owner types `/commit`
+  again with the id. When neither list names a parent, the line is `NO_TARGET: dev-lifecycle.py
+  lists no commit_pending or close_pending parent.` The Stop gate (`stop-command-gate.py`,
+  `no_target_end`) lets a run that bound no task and dispatched nothing end on that line.
 
 If `BULK=true`, `TASK_ID` may stay empty.
 
@@ -100,8 +95,8 @@ found. Act on its JSON answer:
   fan-out, as its canonical aggregate, which the lane-completeness hook writes when a lane's dev
   writes its report; the main agent runs no aggregator) or `writer` (a product file: the dispatch
   whose own tool calls wrote it): dispatch it again, a fresh synchronous Agent call
-  (`run_in_background: false`) with the same `subagent_type`, `task_id`, `lane` and obligation and
-  a fresh `dispatched_at` (G1 refuses a re-dispatch whose obligation differs), its prompt naming
+  (`run_in_background: false`) with the same `subagent_type`, `task_id`, `lane` and obligation
+  (G1 refuses a re-dispatch whose obligation differs), its prompt naming
   the gap or finding.
 - `source` `todo_step` (no dispatch has declared the path yet): with a `template`, a fresh
   synchronous dispatch of that step's role under the same task id, from the template of the
@@ -109,7 +104,7 @@ found. Act on its JSON answer:
   is the main agent's own (as `/dev` Step 11): run it yourself under the same task id.
 - A `/do` task's do-report, and a file the answer names no owner for (`null`) in a `/do`
   task (its main agent wrote it): dispatch dev under the same task id with the obligation
-  `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this call>", "artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<TASK_ID>.json", "schema": "dev-report.v2", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>`
+  `<obligation v="1">{"task_id": "<TASK_ID>", "role": "dev", "pipeline": "do", "profile": "singular", "artifacts": [{"kind": "json", "path": "docs/dev/dev-report-<TASK_ID>.json", "schema": "dev-report.v2", "identity": {"task_id": "<TASK_ID>"}}]}</obligation>`
   to complete the `/do` work, never `/do`'s own steps; its dev-report, which G2 verifies at dev's
   stop, concludes a `/do` task whose do-report is not `completed` (Step 3's call takes it), and
   the `/commit` orchestrator writes no report. That dev-report lists, beside the files dev wrote,
@@ -118,11 +113,12 @@ found. Act on its JSON answer:
 - `null` in a commit-QA round, and a commit-QA finding that cites no artifact: the path becomes
   that round's own report, `docs/dev/commit-qa-report-<TASK_ID>.md`, whose QA dispatch runs again
   (Step 6) and names a path, routed as above.
-- `null` for any other path: no dispatch or request exists to re-run. Ask one AskUserQuestion
-  (header `Request`) what the cycle should deliver, naming the task and the artifact; the options
-  are the requests the task's own artifacts state (its ticket or user-requirement file) and up to
-  two parents `dev-lifecycle.py list-actionable --next-action commit` lists (`Commit <task-id>
-  instead`); then dispatch dev under the same task id for the answer.
+- `null` for any other path: no dispatch or request exists to re-run. Nobody is asked: end with a
+  report naming the task, the artifact and that no dispatch or request owes it, with the requests
+  the task's own artifacts state (its ticket or user-requirement file), and one line
+  `NO_OWNER: <artifact>` per such artifact, as Step 3's GAP line names it. The Stop gate
+  (`stop-command-gate.py`, `_owed_gap`) owes that gap no more when the reader names no owner for
+  it; every other gap still holds.
 
 There is no default role. Once the dispatch returns, run again the one check that named the path;
 a gap or finding it names again is routed the same way, with no round cap.
@@ -137,20 +133,16 @@ the dev report.
 ### Step 3: Resolve the disposition; complete the cycle when incomplete (skip if BULK=true)
 
 `--force` never skips this step, and `--dry-run` completes the cycle here exactly as a real run
-does: only the commit itself is previewed. One Bash call binds the close-report's path (used
-inside the call only), prints its mtime in epoch seconds (nothing when there is no file), and
-prints the task's disposition at the close stage, the dev stage plus a close-report whose last
-non-empty line classifies `yes`:
+does: only the commit itself is previewed. One Bash call prints the task's disposition at the
+close stage, the dev stage plus a close-report whose last non-empty line classifies `yes`:
 
 ```bash
-CLOSE_REPORT="$(bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-close-report.sh" "$TASK_ID")" || true
-stat -c %Y "$CLOSE_REPORT" 2>/dev/null || stat -f %m "$CLOSE_REPORT" 2>/dev/null || true
 python3 "${CLAUDE_HOME:-$HOME/.claude}"/scripts/resolve-dev-artifact-chain.py --disposition --stage close --task-id "$TASK_ID" --project-dir "<PROJECT_ROOT>"
 ```
 
 Its output is data, read verbatim:
 
-- `DISPOSITION=chain_pass`: go on to check 3, then Step 4.
+- `DISPOSITION=chain_pass`: go on to Step 4.
 - `DISPOSITION=incomplete`: complete the cycle, then run this call again, until it prints
   `chain_pass`. Each `GAP artifact=<path> problem=<code>: <message> lane=<lane>` line on an
   artifact other than the close-report is a dev-stage gap: route it (Routes). The gap on the
@@ -167,12 +159,6 @@ The same output carries a `/dev` task's chain data fields (`mode`, `lanes`, `rep
 `CHAIN=` line: each run binds `ARTIFACT_CHAIN` to that JSON verbatim (empty for a `/do` task,
 whose run prints none), and `close.md` Steps 1-2, Step 5 and Step 7 read the latest run's.
 No second chain call is made.
-
-**Check 3 — close-report age (advisory, never aborts)**: if the `chain_pass` run's mtime is older
-than 86400 seconds (24 h), print `Close-gate: WARNING — close-report for task ${TASK_ID} is older
-than 24h (mtime: <mtime>). Proceeding — staleness is advisory. Re-run /close if the tree has
-drifted since this approval.` and continue. Age alone never blocks a commit: Step 6 reviews every
-planned file's actual change vs HEAD on every invocation.
 
 ### Step 4: Deprecated --force usage audit (only when FORCE=true)
 
@@ -192,7 +178,7 @@ with Bash: the hook is the sole minter. Go to Step 6: `--bulk` and `--force` are
 the QA gate. The privilege guard decides on the sentinel at each auto-bulk commit.
 
 **BULK=false.** One Bash call (a fresh shell: nothing carries over in variables) resolves the task's
-report and builds the repository plan, the attribution slice and the manifest inputs:
+report, builds the repository plan and the attribution slice, and writes the dispatch-snapshot manifest:
 
 ```bash
 python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/steps/commit-plan.py" --task-id "$TASK_ID"
@@ -212,8 +198,25 @@ It prints one JSON object whose keys the script's header defines. Steps 5-7 read
   fact-based staging source `agents/changelog-analyst.md` reads beside the dev-report's own ledger;
   `no_events[]` lists paths the journal does not cover, for which the analyst's backup investigation
   applies, never a block.
-- `control_root`, `nested_repo`, `close_report`, `session_id`, `manifest_path` and `files_at_dispatch`
-  feed Step 7's prompt and the manifest below.
+- `control_root`, `nested_repo` and `close_report` feed Step 7's prompt; `session_id` is read below.
+- `unclaimed` (only when the plan owns no path, a cycle that declares no file): `unclaimed.paths`
+  are the control checkout's changes no open cycle claims; this `/commit` lands them, nobody is
+  asked. Paths in `claimed_by_open_cycles` stay for their cycles, and paths in
+  `claimed_by_open_commands` (edits the attribution journal credits to a command still open in
+  another session, with or without a report) stay for those sessions. Its absence changes nothing.
+- `nothing_to_commit`: the code's decision that the task has nothing to commit, written to
+  `docs/dev/nothing-to-commit-<task-id>.json` with its reason (non-null only when the plan computed
+  OK and either every owned path is in its repository's HEAD as the work tree holds it or is
+  ignored by the repository, or the plan owns no path, `unclaimed.paths` is empty and /close's
+  no-files facts hold over every session of the project: the reports say the task finished
+  (status `completed`) and declare no file, and no span
+  of the task wrote a project file, `hooks/lib/close_exit.nothing_to_land`; `null` removes an
+  earlier record). It is the only
+  "nothing to commit" the Stop gate accepts in place of a `Task-id:` commit, and the gate verifies
+  it again at the stop, against HEAD and, for a plan that owns no path, against the session records
+  (`nothing_to_commit` in `scripts/resolve-dev-artifact-chain.py`, the one test both run). A pending
+  owned change, a span that wrote a project file, a missing artifact or a broken or missing record
+  keeps the task owed; no line an agent writes counts.
 
 Two outcomes are findings (Routes), each followed by this call run again: `late_repair.state`
 `invalid` (a finding on `late_repair.path`), and a `null` `repository_plan` (a malformed report,
@@ -221,10 +224,10 @@ an unattached branch, an absent HEAD, an unsupported owner, an identity mismatch
 `task_report`). It is never an empty plan or "nothing to commit"; no grant is issued and nothing is
 staged while it holds.
 
-**Write the dispatch-snapshot manifest before minting any grant.** Write `manifest_path` with the
-Write tool: JSON holding `session_id`, `task_id`, `dispatched_at` (now, UTC), the complete
-`repository_plan` (with its report digest), the exact `ARTIFACT_CHAIN` JSON (when non-empty) and
-`files_at_dispatch`. With no session id (`session_id` empty) print `OPERATION_STALLED:
+**The dispatch-snapshot manifest is the plan call's.** With a session id it writes the manifest the
+minter reads (`session_id`, `task_id`, `repository_plan` with its report digest, `files_at_dispatch`,
+`unclaimed` when present; its time is the file's own); write nothing for it. With no session id
+(`session_id` empty) print `OPERATION_STALLED:
 write-commit-grant.py has no session id (CLAUDE_CODE_SESSION_ID and CLAUDE_SESSION_ID unset)`,
 record it as the session's next harness-repair item, and dispatch nothing. `write-commit-grant.py`
 refuses to mint without the manifest: a live `/commit` user-intent sentinel alone is not enough,
@@ -285,8 +288,10 @@ the Step 5 grant (its `DRYRUN` guard, `agents/changelog-analyst.md`). Capture fr
 - If the dry-run reports `nothing_to_commit` / an empty plan, compare it to the plan first. If the
   plan computed OK, its owned paths exist and they are not already landed, the disagreement
   between the owned-edit declaration and the live bytes is a finding on the dev report (Routes),
-  not a silent no-op; rerun the planning phase after the fix. Only when the plan computed OK and
-  the paths are already landed (or it lists no owned path), print `Nothing to commit (plan
+  not a silent no-op; rerun the planning phase after the fix. Only when Step 5's `nothing_to_commit`
+  is non-null (or the plan lists no owned path and `unclaimed.paths` is empty while
+  `nothing_to_commit` is null: the task's records do not show that it wrote nothing, and the Stop
+  gate keeps naming its missing `Task-id:` commit), print `Nothing to commit (plan
   computed OK; dry-run found no pending change) — QA gate skipped.` (never after a failed plan
   computation), revoke the Step 5 grant (Grant hygiene below), and go to Step 7, which also
   no-ops. Dispatch no QA on an empty plan.
@@ -316,7 +321,6 @@ TASK_ID: <TASK_ID or "bulk">   BULK: <true|false>
   "role": "qa",
   "pipeline": "commit",
   "profile": "commit-qa",
-  "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>",
   "artifacts": [
     {"kind": "markdown", "path": "docs/dev/commit-qa-report-<TASK_ID or \"bulk\">.md",
      "identity_anchor": "<TASK_ID or \"bulk\">",
@@ -346,6 +350,8 @@ Judge by intelligent review — NEVER a hardcoded junk list. REJECT the commit i
   2. Secrets / sensitive content (credentials, keys, tokens, .env material).
   3. Scope contamination — files unrelated to TASK_ID (BULK=false); or, WITHIN ONE proposed
      group, files belonging to two different task-ids / unrelated subsystems (BULK=true).
+     UNCLAIMED_PATHS (<Step 5's unclaimed.paths, or none>) are admitted by the flow: never
+     scope contamination; rules 1, 2 and 4 apply to them, and a REJECT names each by path.
   4. Obvious correctness/quality defects in the diff (syntax-broken code, committed debug
      leftovers, accidental large/binary blobs).
 
@@ -372,7 +378,10 @@ That line is your verdict; nothing else carries it.
 
 **Decision phase.** The verdict is the last non-empty line of
 `docs/dev/commit-qa-report-<TASK_ID or "bulk">.md`, read verbatim: the producer-stop gate (G2)
-checked that file and that line at the QA subagent's own stop.
+checked that file and that line at the QA subagent's own stop. The privilege guard reads it again before
+a commit lands: it refuses one unless the report ends in `COMMIT: APPROVE` and is newer than the plan the
+grant was minted on (bulk: the run's sentinel, and only changelog-analyst commits). A REJECT with no commit
+made is a finished state for the Stop gate: the turn may end reporting the rejection and its reasons.
 
 **Grant hygiene** (`BULK=false`, at every unstage pause, REJECT routing and the `--dry-run` preview
 end): besides unstaging, revoke the Step 5 commit grant, so a gate under repair never leaves live
@@ -401,7 +410,9 @@ real-commit path keeps the grant: Step 7 consumes it.
        `commit-qa-report` and its verdict line) goes to the dispatch that declared the file or, for
        a product file, the dispatch whose own tool calls wrote it; a finding that names no file, or
        only a file no dispatch of the task wrote, goes to that round's own report, whose QA
-       dispatch runs again to name a path. QA never edits the subject.
+       dispatch runs again to name a path. QA never edits the subject. An offending file in
+       `unclaimed.paths` has no owner: it stays in the tree, Step 5 runs again with
+       `--leave-unclaimed <path>` for each, and the summary lists them as left.
     2. **A fresh round.** After the owners' fixes, rebuild the plan (Step 5), rerun the planning
        dry-run, and dispatch a NEW QA subagent (a fresh dispatch; no prior verdict or finding in its
        prompt) that re-judges the actual changes against HEAD. A further `COMMIT: REJECT` repeats
@@ -436,6 +447,7 @@ BULK=<true|false>
 DRYRUN=<true|false>
 FORCE=<true|false>
 QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo; non-empty whenever the planned file set was non-empty>
+UNCLAIMED_PATHS=<Step 5's unclaimed.paths (control repo, repo-relative), exact; empty when absent>
 
 <obligation v="1">
 {
@@ -443,7 +455,6 @@ QA_APPROVED_FILES=<the Step 6 decision-phase QA-approved file set, per repo; non
   "role": "changelog-analyst",
   "pipeline": "commit",
   "profile": <"commit-landing" when BULK=false, else "commit-bulk">,
-  "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>",
   "artifacts": [
     {
       "kind": "response_block",
@@ -481,6 +492,10 @@ those of the agent definition; this prompt adds only these):
   yields a file outside it (the working tree changed since QA reviewed) is not committed; if the
   divergence is material (an approved file vanished, or a new non-approved candidate appeared that
   you would otherwise commit), ABORT with `failure_code: scope_violation`.
+- `UNCLAIMED_PATHS`, when non-empty, are whitelisted candidates of the control-repo entry for this
+  run: Phase 2 admits them, Phase 7's orphan rule does not apply to them, Phase 1's partition check
+  stays over `owned_paths`, and Phases 5-6 group and attribute them as any candidate. Each commit
+  holding one says so in its body: `Unclaimed: <n> file(s) no open cycle claims, landed by /commit`.
 - BULK mode: every commit message begins with `auto-bulk: end-of-cycle commit for
   <current-branch>` (the actual branch of the repo being committed). The privilege guard requires
   the Step 5 bulk sentinel for that prefix. Never use it when BULK=false.
@@ -573,20 +588,21 @@ with no round cap. `scope_violation` means the tree changed after QA reviewed it
 and dispatch a fresh QA over the actual set.
 
 **A hook rejection** (`hook_blocked`, or any hook refusing a tool call during `/commit`) is
-the owner's decision (CLAUDE.md Subagent Hook Discipline #1-#3): the rejected operation is
-never retried without the owner's grant, and never wrapped or bypassed. This rule does not
+reported, never asked about (CLAUDE.md Subagent Hook Discipline #1-#4): the rejected operation is
+never retried, wrapped or bypassed. This rule does not
 cover `grant_missing`, `grant_expired` and `grant_consumed`, though each reaches the analyst as
 the privilege guard refusing the commit for want of a live grant: they are the commit grant's
 own lifecycle (absent, past `expires_at`, or spent by an earlier attempt;
 `agents/changelog-analyst.md` § failure_code values keeps them apart from `hook_blocked`), not a
 hook refusing an operation. The Retryable rule above takes a fresh grant for them and asks
-nothing, and after a landing the Non-retryable rule routes them. Ask one
-AskUserQuestion — header `Authorize`,
-question `<hook> refused <the operation> for task <TASK_ID>: authorize it?` with the hook's
-output verbatim, options `Authorize it` (description: the exact command the owner runs to
-authorize it, for example `/allow <op> <args>`; `/commit` runs the operation again once the
-grant exists) and `Do not authorize` (description: `/commit` goes on without that operation
-where every acceptance criterion still holds without it, Hook Discipline #4).
+nothing, and after a landing the Non-retryable rule routes them. For a hook rejection, print one
+line `REFUSED: <hook> refused <the operation> for task <TASK_ID>` and the hook's output verbatim,
+with the remedy the hook names or the `/allow` line that would let it through, and end (the same
+line ends the run when a hook refused the task's own dispatch itself, so that no analyst ran;
+`hook_refused_parents` reads that refusal from the transcript): the commit
+is not retried, and the Stop gate (`stop-command-gate.py`, `hook_refused_tasks`) owes that
+task's landing no more once that line names it. The operation runs again only on
+the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses; no agent asks for one.
 
 ### Step 8: Spec-update dispatch (post-commit, advisory)
 
@@ -609,9 +625,9 @@ predicate is anchored to the current `TASK_ID`; an artifact of another cycle is 
    Exactly one matching line whose path exists is the spec to update; print `WARNING: linked via
    close-report, not context.spec_path`.
 3. **Specs of this cycle.** Otherwise take the files `<DEV_DOCS_ROOT>/specs/spec-YYYYMMDD-HHMMSS.md`
-   (that basename form only) modified between 24 hours before and 1 hour after the close report's
-   modification time and holding the literal line `<!-- spec-continuation-of: <TASK_ID> -->`. That
-   line is the only content test: no other search, no free-form scan of a spec.
+   (that basename form only) holding the literal line `<!-- spec-continuation-of: <TASK_ID> -->`,
+   whenever they were modified. That line is the only content test: no other search, no free-form
+   scan of a spec.
 4. **Outcome (advisory: print, dispatch nothing).** No file: `No spec associated with task-id
    <TASK_ID>`. One file: `spec produced this cycle but not linked in context: <path>`. Several:
    `multiple specs produced this cycle without context linkage: <paths>; explicit context.spec_path
@@ -672,13 +688,14 @@ time, through the same unmodified Step 3 to Step 8 an explicit `/commit <task-id
    landed. Bind `DRYRUN` and `QA_CODEX` as passed to the batch, and run Step 3 through Step 8 exactly
    as written; nothing in them is aware `--auto` drives them.
 3. **Each parent completes**: its walk ends only by landing (`commit_status` in `committed`,
-   `nothing_to_commit`, `push_gate_reconciled`, `nothing_to_commit_precommitted`) or, under
-   `--dry-run`, the preview end. Gaps, a `COMMIT: REJECT` and changelog-analyst failures are routed
+   `push_gate_reconciled`, `nothing_to_commit_precommitted`, or `nothing_to_commit` where Step 5's
+   `nothing_to_commit` record is non-null, the one such state the Stop gate accepts), by a hook's
+   refusal reported on its `REFUSED:` line, or, under `--dry-run`, the preview end. Gaps, a `COMMIT: REJECT` and changelog-analyst failures are routed
    inside the walk (Steps 3-7); a `partially_committed` parent continues its remaining repositories
-   in order under fresh grants (Step 7). A hook rejection, or another decision only the owner can
-   make, is one AskUserQuestion naming that parent and the decision (Step 7's question for a hook);
-   the walk goes on after the answer.
-4. **Batch summary**: once every parent has landed, print one line per parent:
+   in order under fresh grants (Step 7). A hook rejection is reported for that parent as Step 7
+   reports it (`REFUSED:` and the hook's output), never asked about; the walk goes on to the next
+   parent, and the parents that can land do.
+4. **Batch summary**: once every parent has landed or been refused, print one line per parent:
    `task-id: <landed outcome>`.
 
 ## Privilege guard

@@ -143,6 +143,12 @@ class Result:
             lines.append(f"  HOOK ERROR {e['hook']} at {e['step']!r} ({e['how']}): {e.get('stderr', '')[-300:]}")
         for p in self.scenario.pipelines:
             lines.append(f"  terminal {p}: {self.terminal(p)}")
+        if self.rc:  # the command's own output (cli.py's traceback, a failed launch): the only place a non-zero exit explains itself
+            try:
+                with open(os.path.join(self.out, "replay.log"), encoding="utf-8", errors="replace") as fh:
+                    lines.append(f"  the replay command's output (replay.log, last 2000 characters):\n{fh.read()[-2000:]}")
+            except OSError as e:
+                lines.append(f"  replay.log unreadable: {e}")
         return "\n".join(lines)
 
 

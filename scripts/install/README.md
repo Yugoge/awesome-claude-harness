@@ -2,11 +2,12 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 13
+- **Total files**: 15
 - **Subdirectories**: 2
 - **Naming convention**: lower
 
 ## Files
+- `carry_state.py` - An earlier version kept its control state directly in /tmp, its score log in <harness home>/logs/...
 - `install` - install file
 - `installer.py` - Subcommands: plan | apply | uninstall | snapshot
 - `land` - land file
@@ -14,6 +15,7 @@
 - `push-guard` - push-guard file
 - `render-settings` - render-settings file
 - `tmp-cleanup-install.sh` - /usr/local/sbin/tmp-cleanup.sh
+- `tmp-cleanup.cron` - cron file
 - `tmpfiles-claude-scratch.conf` - conf file
 - `tmpfiles-tmp-override.conf` - conf file
 - `tmpfiles-var-tmp-override.conf` - conf file

@@ -50,12 +50,13 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 # Same cross-directory import shape as scripts/write-commit-grant.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
 from harness_state_dir import harness_state_dir  # noqa: E402
+import locations  # noqa: E402  (the filesystem root is no repository top)
+from allowlist import state_entry_failure, write_state_entry  # noqa: E402
 
 EXIT_RACE = 3
 EXIT_COLLISION = 4
@@ -99,7 +100,7 @@ def main(argv=None) -> int:
                         help="print the token path and write nothing")
     args = parser.parse_args(argv)
 
-    repo_root = _git(args.repo_root, "rev-parse", "--show-toplevel")
+    repo_root = locations.repo_top(args.repo_root) or ""  # never the filesystem root
     if not repo_root or not args.branch.strip() or not args.commit.strip():
         print(f"push-gate token not written: {args.repo_root!r} is not a git "
               "repository, or --branch/--commit is empty", file=sys.stderr)
@@ -128,17 +129,10 @@ def main(argv=None) -> int:
     token = {"commit_sha": commit, "branch": args.branch, "repo_root": repo_root,
              "session_id": sid}
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".token-", suffix=".tmp")
     try:
-        with os.fdopen(handle, "w") as fp:
-            json.dump(token, fp)
-        os.replace(tmp, path)
+        write_state_entry(path, json.dumps(token), 0o600)
     except OSError as exc:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        print(f"push-gate token not written: {exc}", file=sys.stderr)
+        print(f"push-gate token not written: {state_entry_failure(path, exc)}", file=sys.stderr)
         return 2
     if _git(repo_root, "rev-parse", "HEAD") != commit:
         print(f"push_gate_race: HEAD moved while {path} was written", file=sys.stderr)

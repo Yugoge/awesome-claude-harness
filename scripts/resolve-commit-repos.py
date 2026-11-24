@@ -25,6 +25,8 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from sibling_loader import load_sibling_module  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
 
 
 SCHEMA_VERSION = 1
@@ -69,7 +71,10 @@ def _git_capture(repo_or_path: Path, *args: str) -> str:
 
 def _repo_root(path: Path) -> Path:
     anchor = path if path.is_dir() else path.parent
-    return Path(_git_capture(anchor, "rev-parse", "--show-toplevel")).resolve()
+    top = locations.repo_top(anchor)  # never the filesystem root
+    if not top:
+        raise PlanError(f"git -C {anchor}: not inside a git work tree whose top is not the filesystem root")
+    return Path(top).resolve()
 
 
 def _existing_ancestor(path: Path) -> Path:

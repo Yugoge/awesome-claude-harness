@@ -34,6 +34,11 @@ label (fnmatch patterns) before and after it, so a later phase can inject a
 fault at any step without editing the driver. Writes the driver performs on an
 agent's behalf run inside Replay.acting(role), which leaves a marker the trace
 uses to attribute them to that role.
+
+The driver argument request_copies=1 writes the CLI's api-request-blob records into every
+transcript (CLI 2.1.322, tests/cli_shapes.py with_request_copies): before the model's message that
+follows a user record, a copy of each message before that user record not yet copied, its tool_use
+and tool_result blocks with them.
 """
 from __future__ import annotations
 
@@ -200,8 +205,17 @@ ENVELOPE = ("uuid", "parentUuid", "isSidechain", "agentId", "userType", "cwd", "
 TOOL_EVENTS = {"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"}
 
 
+CLOCK_STEP_S = 0.25  # the modeled clock's advance per hook event and per Bash call (Replay.model_clock)
+_CLOCK: list = []  # the Replay whose modeled clock this process reads, if one turned it on
+
+
+def clock_now() -> float:
+    """The replay's clock: the modeled one when a driver turned it on (Replay.model_clock), else the real."""
+    return _CLOCK[-1].clock_at if _CLOCK else time.time()
+
+
 def now_iso() -> str:
-    t = time.time()
+    t = clock_now()
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".%03dZ" % (int(t * 1000) % 1000)
 
 
@@ -259,6 +273,8 @@ class Replay:
         self.env = self._env(self.env_extra)
         # E5: the CLI exports CLAUDE_PROJECT_DIR to hooks only; its Bash tool leaves it unset.
         self.bash_env = {k: v for k, v in self.env.items() if k != "CLAUDE_PROJECT_DIR"}
+        self.clock_at: float | None = None  # the modeled clock (model_clock), None: the real clock
+        self.clock_ahead = 0.0  # how far the replay itself moved the model past the real clock (advance_clock)
         self.args: dict = {}  # the driver's arguments (cli.py --arg K=V)
         self.respellings: list = []  # row 7 respellings a driver applied, one record per call
         self.fault_records: list = []  # the injected faults (faults.py), written to faults.json
@@ -287,6 +303,39 @@ class Replay:
         hookrun.MARKS_DIR[:] = [layout.markers]  # a launcher marks the hook it runs (trace.py)
 
     # ------------------------------------------------------------ environment
+    def model_clock(self) -> None:
+        """Hooks, Bash calls and the replay's own timestamps read a modeled clock from now on: it starts at
+        the replay's start and advances CLOCK_STEP_S per hook event and per Bash call, whatever they took,
+        so a rule that compares two of the replay's times (a grant's 60 s expiry, hooks/lib/merge_grant.py)
+        decides alike on a fast and a slow machine. Python reads it (tests/replay/clock) and so does `date`
+        named without a time of its own (tests/replay/clock/bin/date, first on the processes' PATH); file
+        mtimes and git keep the real clock, which the modeled one never passes until the replay itself lets
+        time pass (advance_clock): from that jump on its steps are the events' alone."""
+        # a whole minute at or before the start: the model's times (a clock time rounded up to the minute, a
+        # `date +%s` second) then do not depend on which second of the minute the replay began in
+        self.clock_at = self.window.start // 60 * 60
+        _CLOCK.append(self)
+
+    def advance_clock(self, to: float) -> None:
+        """The replay lets time pass up to `to` (a session idling until its window's end): the model
+        jumps there at once, instead of the replay waiting on the real clock."""
+        if self.clock_at is not None and to > self.clock_at:
+            self.clock_ahead = max(self.clock_ahead, to - time.time())
+            self.clock_jumped = True
+            self.clock_at = to
+
+    def clock_env(self, env: dict) -> dict:
+        """`env` for a process started now: advanced and set to the modeled clock when it is on."""
+        if self.clock_at is None:
+            return env
+        self.clock_at += CLOCK_STEP_S  # a step per process, whatever the machine's speed
+        if not getattr(self, "clock_jumped", False):  # before any jump the model never passes the real clock
+            self.clock_at = min(self.clock_at, time.time() + getattr(self, "clock_ahead", 0.0))
+        pp, clock = env.get("PYTHONPATH"), os.path.join(self.layout.sb, "replay", "clock")
+        return dict(env, REPLAY_CLOCK_AT=repr(self.clock_at), REPLAY_CLOCK_REAL=repr(time.time()),
+                    PATH=os.path.join(clock, "bin") + os.pathsep + env.get("PATH", ""),
+                    PYTHONPATH=clock + (os.pathsep + pp if pp else ""))
+
     def _env(self, extra: dict) -> dict:
         lay = self.layout
         user = pwd.getpwuid(os.getuid()).pw_name
@@ -389,8 +438,10 @@ class Replay:
         # the transcripts as this event's hooks see them (the replay only appends to them after it)
         sizes = {os.path.join(d, f): os.path.getsize(os.path.join(d, f)) for d, _s, fs in os.walk(session.tdir)
                  for f in fs if f.endswith(".jsonl")}
-        old_paths = self._old_paths(event, payload)
-        rec = hookrun.run_event(self.settings, event, payload, self.env, self.layout.project, self.parallel)
+        env = self.clock_env(self.env)
+        at = clock_now()  # the event's clock: the differential re-runs it at this time (replay/clock)
+        old_paths = self._old_paths(event, payload, env, at)  # the launch differential too: same env, same time
+        rec = hookrun.run_event(self.settings, event, payload, env, self.layout.project, self.parallel)
         for launched in rec.get("launched", []):
             if launched["hook"] in old_paths:
                 for d in launchdiff.compare(self, event, launched, old_paths[launched["hook"]]):
@@ -399,6 +450,7 @@ class Replay:
         rec["launched"] = [{k: v for k, v in r.items() if k != "rules"} for r in rec.get("launched", [])]
         self._inv.write(json.dumps({"seq": self.n_events + 1, "event": event, "label": label,
                                     "payload": dict(payload, hook_event_name=event), "transcripts": sizes,
+                                    "at": at,
                                     # the processes started, and each hook a launcher ran with the
                                     # command it had alone: E1's differential re-runs a hook by the
                                     # origin the trace names (a launcher's hook, by its mark)
@@ -421,7 +473,7 @@ class Replay:
         self._log.flush()
         return Event(rec)
 
-    def _old_paths(self, event: str, payload: dict) -> dict:
+    def _old_paths(self, event: str, payload: dict, env: dict, at: float) -> dict:
         """P12-L7's differential (launchdiff.py): before the event, each launcher's hooks run as their
         own processes in an overlay of the state the event meets; {launcher: their results}."""
         if not self.launch_differential:
@@ -433,7 +485,8 @@ class Replay:
                 if launchdiff.launcher_rules(self.layout.harness, h["hook"]) is not None else None
             if hooks:
                 self.launch_events += 1
-                out[h["hook"]] = launchdiff.run_old(self.layout, hooks, json.dumps(full), self.env, self.layout.project)
+                out[h["hook"]] = launchdiff.run_old(self.layout, hooks, json.dumps(full), env, self.layout.project,
+                                                   at if self.clock_at is not None else None)
         return out
 
     def norm_text(self, text: str) -> str:
@@ -530,6 +583,7 @@ class Session:
         self.parent = None
         self._agent_parent: dict[str, str | None] = {}
         self._queued = False
+        self._uncopied: dict[str, list] = {}  # request_copies=1: each file's messages not yet copied
         self.main = Actor(self, None)
 
     def agent_tpath(self, agent_id: str) -> str:
@@ -556,6 +610,14 @@ class Session:
         for k, v in (("userType", "external"), ("cwd", self.rp.layout.project), ("sessionId", self.sid),
                      ("version", CLI_VERSION), ("timestamp", now_iso())):
             rec.setdefault(k, v)
+        if getattr(self.rp, "args", {}).get("request_copies") == "1" and rec.get("type") in ("user", "assistant") \
+                and cli_shapes._content(rec) is not None:
+            uncopied = self._uncopied.setdefault(path, [])
+            if rec["type"] == "assistant" and uncopied and uncopied[-1]["type"] == "user":  # a model request
+                for copy in cli_shapes.request_copies(uncopied[:-1]):
+                    self._write(path, copy)
+                del uncopied[:-1]
+            uncopied.append(rec)
         self._write(path, rec)
         return rec
 
@@ -709,7 +771,7 @@ class Actor:
         if self.rp.settle(call.pre, label, step["deviation"]):
             call.blocked = True
             text = "\n".join(hookrun.refusal(b) for b in call.pre.blocks)
-            self._result(tid, f"PreToolUse:{name} hook error: {text}", error=True)
+            self._result(tid, f"PreToolUse:{name} hook error: {text}", error=True, hook=True)
             self.rp.after(step, call)
             return call
         tinput = updated_input(call.pre, tinput)
@@ -740,7 +802,8 @@ class Actor:
         self.rp.after(step, call)
         return call
 
-    def _result(self, tid: str, content, error: bool = False, resp=None, denial: str | None = None) -> None:
+    def _result(self, tid: str, content, error: bool = False, resp=None, denial: str | None = None,
+                hook: bool = False) -> None:
         block = {"type": "tool_result", "tool_use_id": tid, "content": content}
         if error:
             block["is_error"] = True
@@ -749,6 +812,9 @@ class Actor:
             rec["toolUseResult"] = resp
         if denial:
             rec["toolDenialKind"] = denial
+        if hook:  # a PreToolUse hook refused it: the decision the CLI records beside the result (2.1.322)
+            rec["permissionDecision"] = {"decision": "reject", "source": "hook", "reasonType": "hook",
+                                         "reasonCode": "hook:PreToolUse"}
         self.s.append(rec, self.aid)
 
     def bash(self, command: str, description: str = "", label: str | None = None, deviation=None,
@@ -800,7 +866,7 @@ class Actor:
         if self.rp.settle(d.pre, label, step["deviation"]):
             d.blocked = True
             text = "\n".join(hookrun.refusal(b) for b in d.pre.blocks)
-            self._result(tid, f"PreToolUse:Agent hook error: {text}", error=True)
+            self._result(tid, f"PreToolUse:Agent hook error: {text}", error=True, hook=True)
             self.rp.after(step, d)
             return d
         d.agent_id = aid = "a" + uuid.uuid4().hex[:16]
@@ -896,6 +962,14 @@ def updated_input(pre: Event | None, tinput: dict) -> dict:
     return tinput
 
 
+def _stamp(rp, path: str) -> None:
+    """On the modeled clock (Replay.model_clock), a file the session's Write or Edit wrote carries the
+    modeled time as its mtime: a rule comparing that mtime with a time the session recorded (a dispatch's
+    `dispatched_at`) sees the two on one clock, also after the replay let time pass (advance_clock)."""
+    if getattr(rp, "clock_at", None) is not None:
+        os.utime(path, (rp.clock_at, rp.clock_at))
+
+
 def _result_text(resp) -> str:
     if isinstance(resp, dict):
         if "stdout" in resp:
@@ -926,6 +1000,7 @@ def _default_perform(actor: Actor, name: str, ti: dict):
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(content)
+        _stamp(actor.rp, path)
         return {"type": kind, "filePath": path, "content": content, "structuredPatch": []}
 
     def edit():
@@ -941,13 +1016,14 @@ def _default_perform(actor: Actor, name: str, ti: dict):
             raise ToolError(f"Found {n} matches of the string to replace, but replace_all is false.")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(text.replace(old, new) if ti.get("replace_all") else text.replace(old, new, 1))
+        _stamp(actor.rp, path)
         return {"filePath": path, "oldString": old, "newString": new, "originalFile": text,
                 "structuredPatch": [], "userModified": False, "replaceAll": bool(ti.get("replace_all"))}
 
     def bash():
         timeout = (ti.get("timeout") or BASH_TIMEOUT_S * 1000) / 1000
         # The CLI's Bash exports the session id (landscape B-breakages.md:45), the one a subagent's calls share.
-        env = dict(actor.rp.bash_env, CLAUDE_CODE_SESSION_ID=actor.s.sid)
+        env = actor.rp.clock_env(dict(actor.rp.bash_env, CLAUDE_CODE_SESSION_ID=actor.s.sid))
         try:
             p = subprocess.run(["bash", "-c", ti["command"]], cwd=project, env=env, capture_output=True,
                                text=True, timeout=timeout, errors="replace")

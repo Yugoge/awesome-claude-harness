@@ -14,9 +14,12 @@ branch equal to HEAD; and the Stop that ends each with no block.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tests.replay import suite
+from tests.replay.drivers.dev import S
 
 CASES = [pytest.param(suite.replay_key(scn, s), id=f"{scn.name}-{s}",
                       marks=pytest.mark.replay(suite.replay_key(scn, s), scn.cost))
@@ -93,14 +96,35 @@ def test_dev_question_pauses_and_the_same_role_resumes(replays, key):
     # every question but P13-1's requirement round (Step 4b, asked before BA's analysis since #38)
     asked = [ev["label"] for ev in evs if ev.get("event") == "PostToolUse" and ev.get("tool") == "AskUserQuestion"
              and not str(ev.get("label", "")).startswith("Step 4b ")]
-    assert asked == ["Step 12 AskUserQuestion"], asked
+    assert asked == [f"Step {S.validate_dev} AskUserQuestion"], asked
     dev_writes = [ev["label"] for ev in evs if ev.get("event") == "PostToolUse" and ev.get("agent_type") == "dev"
                   and ev.get("tool") in ("Write", "Edit")]
     first = dev_writes.index(next(w for w in dev_writes if "docs/dev/dev-report-" in w or "toy/" in w))
     assert first == 1 and "docs/dev/producer-question-" in dev_writes[0] and dev_writes[0].endswith("-dev.json"), \
         dev_writes
     stops = [ev["label"] for ev in evs if ev.get("event") == "SubagentStop" and ev.get("agent_type") == "dev"]
-    assert stops == ["Step 10 Agent(dev) stop", "Step 12 Agent(dev) clarification round 1 stop"], stops
+    assert stops == [f"Step {S.dev} Agent(dev) stop", f"Step {S.validate_dev} Agent(dev) clarification round 1 stop"], stops
     main_stops = [ev["label"] for ev in evs if ev.get("event") == "Stop"]
     assert main_stops == ["Stop"], main_stops
+    assert not r.blocks and not r.hook_errors and r.reached(), r.explain()
+
+
+# ---------------------------------------------------------------- C3: the CLI's request copies
+
+COPIES = (("request_copies", "1"),)
+COPIED = [pytest.param(suite.replay_key(scn, s, COPIES), id=f"{scn.name}-{s}",
+                       marks=pytest.mark.replay(suite.replay_key(scn, s, COPIES), scn.cost))
+          for scn in suite.COMPLIANT if scn.name in ("/dev singular", "/commit") for s in suite.SETTINGS]
+
+
+@pytest.mark.parametrize("key", COPIED)
+def test_compliant_run_with_the_cli_s_request_copies(replays, key):
+    """CLI 2.1.322 repeats each message of its next model request in an api-request-blob record, a call's
+    tool_use among them, after the call's result (tests/fixtures/cli-request-copies; the replay writes them
+    with request_copies=1). G1's order rule took a returned dispatch's copy for one with no result: the
+    /dev panel QA was refused and the cycle stopped there. With the copies the run is the compliant one."""
+    r = replays.get(key)
+    assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
+    copied = [p for p in Path(r.run_dir, "transcripts").rglob("*.jsonl") if '"api-request-blob"' in p.read_text()]
+    assert copied, "the replay wrote no request copy"
     assert not r.blocks and not r.hook_errors and r.reached(), r.explain()

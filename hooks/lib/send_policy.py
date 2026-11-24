@@ -1,135 +1,55 @@
-"""The main agent's SendMessage policy (CLAUDE.md lesson 16, Orchestrator-Only Rule).
+"""The main agent's SendMessage policy (CLAUDE.md lesson 16, the owner's ruling of 2026-11-21).
 
 decide() is pretool-block-background-tasks.py's answer for a main-agent SendMessage;
 record() is posttool-restart-sendmessage.py's journal of a send that was not a /restart one.
 
-1. A /restart candidate (lib/subagent_restart state) gets subagent_restart.authorize_send_message's
-   answer and nothing else: the exact recovery message, pending, under a live grant.
-2. Any other target must be an agent id, or the `name` input, of an Agent call of this session's
-   transcript whose result the CLI recorded. CLI 2.1.325 records it as the tool_result's
-   toolUseResult {"status": "completed", "agentId": "<id>", ...} (an async launch:
-   {"status": "async_launched", "agentId": ...}, completed by a later <task-notification> whose
-   <task-id> is that id); the result text ends "agentId: <id> (use SendMessage with to: '<id>' ...".
-   `main`, another session and the `name [ref]` form are no such target.
-3. That child must have finished (a completed result or notification, no quota or interruption
-   text: a cut child resumes only through /restart), carry no obligation block in its dispatch
-   prompt (an obligation is the pipeline's to close, which this module does not read), and have
-   been dispatched outside every span a gated command opened (lib/stop-commands.json).
-   Steering a lane is refused rather than routed through the dispatch gate.
-   A send resumes its child in the background (CLI 2.1.325: "Resuming agent ..."; the resumed run's end
-   is a later <task-notification> carrying that send's tool use id), so a child an earlier send resumed
-   counts as running again until a completion notification arrives after that send. Which sends ran and
-   which child each resumed is the journal's: record() writes it, sends() is its one reader.
+1. A send to anything but one of this session's own subagents (another session, `main`) is allowed:
+   the receiving session is a full session, and its own harness handles what arrives.
+2. A send to an own subagent (its agent id or `name`, by subagent_restart.own_children, the one
+   definition /restart's listing reads too) is a dispatch of that subagent's type with the message as its prompt: it passes the
+   dispatch gate (pretool-dispatch-gate.py) exactly as that dispatch would, whatever the child's
+   state (running, finished, cut). Its next stop is judged by the message's declaration
+   (obligation.latest_send). One exception: the recovery's own resume message
+   (subagent_restart.is_resume_message, text fixed by code) adds no work, so it passes on the
+   child's original dispatch, which that gate already admitted.
+3. What enforces the owner's /stop stays: in a turn the overnight wake opened after the owner's
+   /stop (overnight.wake_fired is false for it), no send is allowed.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 try:  # package import (hooks.lib.send_policy) or lib/ on sys.path
-    from . import command_span, subagent_restart as restart
-    from .interruption_signals import is_interrupt_text, is_quota_text
+    from . import command_span, overnight, subagent_restart as restart
 except ImportError:  # pragma: no cover - direct sys.path import
     import command_span  # type: ignore[no-redef]
+    import overnight  # type: ignore[no-redef]
     import subagent_restart as restart  # type: ignore[no-redef]
-    from interruption_signals import is_interrupt_text, is_quota_text  # type: ignore[no-redef]
 
-OBLIGATION_TOKEN = "<obligation"
-AGENT_TOOLS = ("Agent", "Task")
-
-
-def _text(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    return "\n".join(b.get("text") or "" for b in content if isinstance(b, dict) and b.get("type") == "text") \
-        if isinstance(content, list) else ""
+DISPATCH_GATE = Path(__file__).resolve().parents[1] / "pretool-dispatch-gate.py"
+GATE_TIMEOUT = 55  # seconds; within the launcher's 60 s for this hook
 
 
-def _cut(text: str) -> bool:
-    return is_quota_text(text) or is_interrupt_text(text)
-
-
-def children(transcript_path: Any, session_id: str = "") -> tuple[dict[str, dict], dict[str, str]]:
-    """({agent id: child}, {name: agent id}) of the session's Agent calls whose result named an
-    agent. A child: tool_use_id, name, command (the span its dispatch was issued in, or None),
-    obligation (its prompt carries a block), finished (bool) and state (why). With the session id, a
-    SendMessage the session's journal shows resumed a child marks it running from that call on, until
-    a later task-notification for it says how the resumed run ended."""
-    commands = command_span.harness_commands()
-    resumed = {str(e["tool_use_id"]): e for e in (sends(session_id) if session_id else [])
-               if isinstance(e.get("tool_use_id"), str) and e.get("success") is not False}
-    calls: dict[str, dict] = {}
+def children(transcript_path: Any) -> tuple[dict[str, dict], dict[str, str]]:
+    """({agent id: child}, {name: agent id}) of the session's own subagents, as
+    subagent_restart.own_children defines them (one definition for every reader). A child:
+    agent_id, tool_use_id, name, subagent_type, prompt (its dispatch's)."""
     kids: dict[str, dict] = {}
     names: dict[str, str] = {}
-    current = None
     try:
-        handle = open(transcript_path, encoding="utf-8", errors="replace")
-    except (OSError, TypeError, ValueError):
+        own = restart.own_children(Path(transcript_path))
+    except (restart.RestartError, OSError, TypeError, ValueError):
         return kids, names
-    with handle:
-        for line in handle:
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(record, dict) or record.get("isSidechain"):
-                continue
-            opener = command_span.span_opener(record, commands)
-            if opener:
-                current = opener[0]
-                continue
-            message = record.get("message")
-            content = message.get("content") if isinstance(message, dict) else None
-            blocks = content if isinstance(content, list) else []
-            if record.get("type") == "assistant":
-                for b in blocks:
-                    if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in AGENT_TOOLS \
-                            and isinstance(b.get("input"), dict):
-                        calls[str(b.get("id") or "")] = {"input": b["input"], "command": current}
-                    elif isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "SendMessage" \
-                            and str(b.get("id") or "") in resumed:
-                        sent = resumed[str(b["id"])]
-                        to, own = (x if isinstance(x, str) else "" for x in (sent.get("to"), sent.get("agent_id")))
-                        agent = own if own in kids else names.get(to, to)
-                        if agent in kids:
-                            kids[agent].update(finished=False, state=f"resumed by SendMessage {b['id']}, "
-                                               "no completion notification since")
-                continue
-            if record.get("type") != "user":
-                continue
-            for body in restart._iter_notification_blocks(_text(content)):
-                found = restart.TASK_NOTIFICATION_RE.search(body)
-                if found and found.group(1).strip() in kids:
-                    done = found.group(2).lower() == "completed" and not _cut(found.group(3))
-                    kids[found.group(1).strip()].update(
-                        finished=done, state=f"notification status {found.group(2).lower()}"
-                        + ("" if done or found.group(2).lower() != "completed" else " with a cut banner"))
-            for b in blocks:
-                call = calls.get(str(b.get("tool_use_id") or "")) if isinstance(b, dict) \
-                    and b.get("type") == "tool_result" else None
-                if call is None:
-                    continue
-                own = record.get("toolUseResult") if isinstance(record.get("toolUseResult"), dict) else {}
-                text = _text(b.get("content"))
-                found = restart.AGENT_ID_TEXT_RE.search(text)
-                agent = own.get("agentId") if isinstance(own.get("agentId"), str) else (found.group(1) if found else None)
-                if not agent:
-                    continue
-                status = own.get("status")
-                done = not b.get("is_error") and status == "completed" and not _cut(text)
-                state = "completed" if done else ("an error result" if b.get("is_error") else
-                                                  f"result status {status or 'unrecorded'}"
-                                                  + (" with a cut banner" if status == "completed" else ""))
-                inp = call["input"]
-                kids[agent] = {"agent_id": agent, "tool_use_id": b.get("tool_use_id"),
-                               "name": inp.get("name") if isinstance(inp.get("name"), str) else None,
-                               "command": call["command"], "finished": done, "state": state,
-                               "obligation": OBLIGATION_TOKEN in str(inp.get("prompt") or "")}
-                if kids[agent]["name"]:
-                    names[kids[agent]["name"]] = agent
+    for child in own:
+        kids[child["agent_id"]] = {key: child[key] for key in ("agent_id", "tool_use_id", "name", "subagent_type", "prompt")}
+        if child["name"]:
+            names[child["name"]] = child["agent_id"]
     return kids, names
 
 
@@ -142,46 +62,68 @@ def _session(payload: dict) -> str:
     return str(payload.get("session_id") or payload.get("sessionId") or os.environ.get("CLAUDE_SESSION_ID") or "")
 
 
-def _candidate(session_id: str, agent_id: str) -> bool:
+def _stopped_wake(transcript_path: Any) -> bool:
+    """The turn's prompt is the overnight wake's and the wake did not fire: the owner's /stop came first."""
+    last = None
     try:
-        state = restart._read_state(restart._safe_session_id(session_id))
-    except restart.RestartError:
+        handle = open(transcript_path, encoding="utf-8", errors="replace")
+    except (OSError, TypeError, ValueError):
         return False
-    return bool(state) and any(isinstance(c, dict) and c.get("agent_id") == agent_id
-                               for c in state.get("candidates") or [])
+    with handle:
+        for line in handle:
+            if '"user"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            content = (record.get("message") or {}).get("content") if isinstance(record, dict) else None
+            text = command_span.prompt_text(record)
+            if text is not None:
+                last = text
+            elif isinstance(content, str) and content.strip() == overnight.WAKE_PROMPT and not record.get("isSidechain"):
+                last = content
+    return isinstance(last, str) and last.strip() == overnight.WAKE_PROMPT \
+        and not overnight.wake_fired(last, transcript_path)
+
+
+def as_dispatch(payload: dict, child: dict) -> dict:
+    """The Agent payload a send to ``child`` is judged as: its type, the message as the prompt."""
+    params = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    message = params.get("message")
+    tool_input = {"subagent_type": child["subagent_type"], "description": params.get("summary") or "",
+                  "prompt": message if isinstance(message, str) else json.dumps(message),
+                  "run_in_background": False}
+    if child["name"]:
+        tool_input["name"] = child["name"]
+    return {**payload, "tool_name": "Agent", "tool_input": tool_input}
 
 
 def decide(payload: dict) -> tuple[bool, str]:
     """(allowed, why) for a main-agent SendMessage."""
-    restart_ok, restart_reason = restart.authorize_send_message(payload)
-    if restart_ok:
-        return True, restart_reason
+    transcript = payload.get("transcript_path")
+    if _stopped_wake(transcript):
+        return False, "this turn is the overnight wake after the owner's /stop: no send resumes the run"
     to = _target(payload)
-    sid = _session(payload)
-    restart_note = f"\nRestart authorization: {restart_reason}"
-    if isinstance(to, str) and _candidate(sid, to):
-        return False, "the target is a /restart candidate, so only the exact recovery message reaches it" + restart_note
-    if not isinstance(to, str) or not to or to == "main" or not restart.AGENT_RE.fullmatch(to):
-        return False, (f"to={to!r} is not one of this session's own subagents (main, other sessions and the "
-                       "'name [ref]' form are refused)" + restart_note)
-    kids, names = children(payload.get("transcript_path"), sid)
-    agent = to if to in kids else names.get(to)
+    kids, names = children(transcript)
+    key = to.split(" [", 1)[0] if isinstance(to, str) else ""
+    agent = key if key in kids else names.get(key)
     if agent is None:
-        return False, (f"to={to!r} is no agent id or name an Agent result in this session's transcript returned"
-                       + restart_note)
-    if agent != to and _candidate(sid, agent):
-        return False, "the target is a /restart candidate, so only the exact recovery message reaches it" + restart_note
+        return True, f"to={to!r} is not one of this session's own subagents: the receiving session decides"
     child = kids[agent]
-    if child["obligation"]:
-        return False, (f"{agent}'s dispatch carries an obligation block: work reaches a lane only through Agent "
-                       "and the dispatch gate" + restart_note)
-    if child["command"] in command_span.GATED_COMMANDS:
-        return False, (f"{agent} was dispatched inside /{child['command']}: steering a gated command's lane is "
-                       "refused" + restart_note)
-    if not child["finished"]:
-        return False, (f"{agent} has not finished ({child['state']}): a cut or running child resumes only "
-                       "through /restart" + restart_note)
-    return True, f"own finished subagent {agent}"
+    params = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    if restart.is_resume_message(_session(payload), child, params.get("message")):
+        return True, (f"own subagent {agent}: the recovery's resume message adds no work; the child goes on "
+                      "under its original dispatch, which the dispatch gate admitted when it ran")
+    try:
+        run = subprocess.run([sys.executable, str(DISPATCH_GATE)], input=json.dumps(as_dispatch(payload, child)),
+                             capture_output=True, text=True, timeout=GATE_TIMEOUT, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"the dispatch gate could not judge this send to {agent}: {exc}"
+    if run.returncode == 2:
+        return False, (f"a send to own subagent {agent} is a dispatch of {child['subagent_type']}, and the "
+                       f"dispatch gate refuses that dispatch:\n{run.stderr.strip()}")
+    return True, f"own subagent {agent}: admitted as a dispatch"
 
 
 def journal_path(session_id: str) -> Path:

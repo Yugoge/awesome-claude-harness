@@ -67,6 +67,14 @@ def prepare(sb: str, driver: str) -> None:
         fn(project, lambda *args: sandbox._git(sb, *args, cwd=project))
 
 
+def copy_out(sb: str, out_dir: str) -> None:
+    """The sandbox's out/ as the run's record. symlinks=True: a link in it (score-rebuild/home/.claude/hooks, scorelog.resweep)
+    names a path of the sandbox's own namespace; followed here, outside it, that path is the host's (the installed harness on a
+    machine that has one) or nothing (CI: copytree raises on the dangling link after the replay has passed, and the whole command
+    exits 1)."""
+    shutil.copytree(os.path.join(sb, "out"), out_dir, symlinks=True)
+
+
 def run_one(sb: str, tree: str, out_dir: str, *, driver: str, mode: str, settings: str, env: dict,
             kind: str, guard: bool, parallel: bool, keep_raw: bool, driver_args: dict | None = None) -> dict:
     """Reset the sandbox, run one replay, collect its outputs into out_dir."""
@@ -91,12 +99,12 @@ def run_one(sb: str, tree: str, out_dir: str, *, driver: str, mode: str, setting
     env_inner = {"PATH": lay.path, "HOME": lay.home,
                  "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": lay.sb}
     t0, ru0 = time.monotonic(), resource.getrusage(resource.RUSAGE_CHILDREN)
-    rc = sandbox.launch(sb, lay, argv, env_inner, guard=guard)
+    rc = sandbox.launch(sb, lay, argv, env_inner, guard=guard, full_tmp=(driver_args or {}).get("tmp") == "full")
     outer, ru1 = time.monotonic() - t0, resource.getrusage(resource.RUSAGE_CHILDREN)
     cpu = (ru1.ru_utime - ru0.ru_utime) + (ru1.ru_stime - ru0.ru_stime)  # the whole tree, strace included
     if os.path.exists(out_dir):
         shutil.rmtree(out_dir)
-    shutil.copytree(os.path.join(sb, "out"), out_dir)
+    copy_out(sb, out_dir)
     tdir = os.path.join(sb, "home", ".claude", "projects")
     if os.path.isdir(tdir):
         shutil.copytree(tdir, os.path.join(out_dir, "transcripts"))

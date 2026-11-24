@@ -12,7 +12,8 @@ registry an agent's own reads produce:
   2. agentType of the CLI's agent-<agent_id>.meta.json for the session, in
      every account root (an older CLI with no agent_type in the payload).
   3. payload.agent_id in /spec cp-state files, then in /dev agent-index.json
-     (older check-ins; resolve_dev_registry_entry also gives the cycle).
+     (older check-ins; resolve_dev_registry_entry also gives the cycle), then
+     in cp-state slots checked in more than a day ago (STALE-1 below).
   4. None — caller decides (unregistered subagent).
 A top-level payload.subagent_type is no role (only a dispatch's tool_input has one).
 
@@ -54,6 +55,15 @@ bogus entry can still cause misattribution for that same bounded window;
 fully closing that gap would require an explicit, ownership-validated
 dispatch-claim protocol (out of scope for this fix -- flagged as a
 follow-up).
+
+STALE-1 after the owner's ruling of 2026-11-20 (no window refuses or leaves
+out by age; it warns and the agent deals with it): a running slot checked in
+more than _MAX_ACTIVE_AGE_SECONDS ago is no longer dropped. It still yields to
+every fresher record (a fresh slot, then agent-index.json) and is the last
+step before None (_stale_role), with a warning naming the slot and its age; a
+resumed agent whose /spec slot is a day old keeps its role. The protection
+kept is the one age never was the reason for: stale slots of different roles
+for one id give no role (_stale_role's docstring).
 """
 
 from __future__ import annotations
@@ -61,6 +71,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -102,28 +113,33 @@ def _checked_in_age_seconds(payload: dict) -> Optional[float]:
     return (datetime.now(timezone.utc) - dt).total_seconds()
 
 
-def _is_stale(payload: dict, max_age_seconds: float = _MAX_ACTIVE_AGE_SECONDS) -> bool:
-    """True iff payload is too old (or suspiciously future-dated) to trust
-    as an active resolution hit.
-
-    Fail-safe direction: a missing/unparseable checked_in_at is treated as
-    stale (excluded from trust) rather than trusted indefinitely -- mirrors
-    the module's existing "unexpected -> None/non-authoritative" ethos.
-    """
+def _untrusted_time(payload: dict) -> bool:
+    """A check-in time that is missing, unparseable or in the future beyond
+    _CLOCK_SKEW_TOLERANCE_SECONDS: no age can be read from it at all, so the
+    slot is not trusted (fail-safe: unexpected -> non-authoritative)."""
     age = _checked_in_age_seconds(payload)
-    if age is None:
-        return True
-    if age < -_CLOCK_SKEW_TOLERANCE_SECONDS:
-        return True
-    return age > max_age_seconds
+    return age is None or age < -_CLOCK_SKEW_TOLERANCE_SECONDS
 
 
 def cp_state_running(payload: dict) -> bool:
     """The one rule on whether a cp-state slot is running: is_running=true AND
-    a fresh check-in (STALE-1). Role resolution below and
-    subagentstop-cp-enforce.py (a stopping agent's pending checkpoints) both
-    take it, so a slot left running by a crashed session counts for neither."""
-    return bool(payload.get("is_running")) and not _is_stale(payload)
+    a check-in time that can be read (_untrusted_time). Its age no longer
+    decides (the owner's ruling of 2026-11-20: no window refuses or leaves out
+    by age); stale_note names a slot past _MAX_ACTIVE_AGE_SECONDS. Role
+    resolution below and subagentstop-cp-enforce.py (a stopping agent's
+    pending checkpoints) both take it."""
+    return bool(payload.get("is_running")) and not _untrusted_time(payload)
+
+
+def stale_note(payload: dict, path: str = "") -> str:
+    """The warning for a running slot checked in more than _MAX_ACTIVE_AGE_SECONDS
+    ago, '' for a fresher one: it names the slot and its age."""
+    age = _checked_in_age_seconds(payload)
+    if age is None or age <= _MAX_ACTIVE_AGE_SECONDS:
+        return ""
+    return (f"warning: cp-state slot {path or payload.get('spec_id')} (agent_id {payload.get('agent_id')}, "
+            f"role {payload.get('agent_type')}) was checked in {age / 3600:.1f} h ago and never checked out; "
+            "it is honoured. If this agent is not that slot's, check it out with scripts/spec-check.py.")
 
 
 def _read_json(path: str) -> Optional[dict]:
@@ -211,16 +227,35 @@ def _scan_cp_state_files(agent_id: str, project_dir: str):
     """
     paths = _glob_cp_state(project_dir)
     matches = [d for d in (_read_match(p, agent_id) for p in paths) if d]
-    if not matches:
-        return None
     # STALE-1: is_running=true alone is not enough -- a dangling entry that
-    # was never checked out also has is_running=true forever. Require the
-    # match to also be fresh (recently checked in) before trusting it.
-    active = [m for m in matches if cp_state_running(m)]
+    # was never checked out also has is_running=true forever. Only a fresh
+    # match is authoritative here; a stale one is _resolve_by_id's last resort.
+    active = [m for m in matches if cp_state_running(m) and not stale_note(m)]
     if not active:
         return None
     picked = _pick_active(active)
     return _FAIL_CLOSED if picked is None else picked
+
+
+def _stale_role(agent_id: str, project_dir: str) -> Optional[str]:
+    """The role of this agent id's running cp-state slots checked in more than
+    _MAX_ACTIVE_AGE_SECONDS ago, with a warning on stderr naming each, when they
+    all name one role. Asked only where no fresher record names the id: before
+    the 2026-11-20 ruling the age dropped them and the caller had no role.
+
+    Entries are keyed by agent_id alone, the CLI's id of one agent (a resumed
+    agent keeps it), so such a slot is the caller's own registration; the one
+    way it can name another agent's role is an id carried by two agents, or by
+    one agent in several roles' slots, which shows as slots of different roles
+    (measured 2026-11-20 on the live tree: 3 of 179 ids, all CLI-shaped). That case keeps
+    the protection: no role, as for a fresh cross-role collision."""
+    hits = [(p, d) for p, d in ((p, _read_match(p, agent_id)) for p in _glob_cp_state(project_dir))
+            if d and cp_state_running(d) and stale_note(d)]
+    if not hits or len({d.get("agent_type") for _, d in hits}) > 1:
+        return None
+    for path, data in hits:
+        sys.stderr.write(f"agent_resolver: {stale_note(data, path)}\n")
+    return hits[0][1].get("agent_type")
 
 
 def _meta_agent_type(agent_id: str, payload: dict, project_dir: str) -> Optional[str]:
@@ -256,7 +291,7 @@ def _resolve_by_id(agent_id: str, payload: dict) -> Optional[str]:
     if isinstance(spec_hit, str):
         return spec_hit
     entry = resolve_dev_registry_entry(agent_id, project_dir)
-    return entry["agent_type"] if entry else None
+    return entry["agent_type"] if entry else _stale_role(agent_id, project_dir)
 
 
 def resolve_agent_type(payload: dict) -> Optional[str]:

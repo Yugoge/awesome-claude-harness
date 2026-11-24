@@ -37,6 +37,8 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO / "hooks" / "lib"))
 import capability_state as cs  # noqa: E402
+sys.path.insert(0, str(REPO / "hooks" / "tests"))
+import _private_ns  # noqa: E402
 
 GATE = REPO / "hooks" / "pretool-capability-gate.py"
 HANDSHAKE = REPO / "scripts" / "capability-handshake.py"
@@ -367,10 +369,9 @@ def test_symlinked_state_rejected(tmp_path: Path, statedir: Path, home: Path):
 
 
 def test_wrong_owner_rejected(statedir: Path, home: Path):
-    if os.geteuid() != 0:
-        pytest.skip("chown to another uid requires root")
     p = _publish(statedir, "s4", _passing_state(home, "s4"))
-    os.chown(p, 65534, 65534)
+    other = 65534 if os.geteuid() != 65534 else 65533  # an owner that is not the test's user
+    _private_ns.as_root("the wrong-owner case", ["chown", f"{other}:{other}", str(p)])  # root, else sudo
     assert cs.load_state(p)[1] == "state_wrong_owner"
 
 
@@ -1861,6 +1862,20 @@ def test_a2_a_fully_unwired_install_is_not_provable_from_the_harness_home(home: 
                        text=True, env=env, cwd=str(home), timeout=300, check=False)
     assert r.returncode == 4, r.stdout + r.stderr
     assert "not_wired" not in r.stdout
+
+
+def test_the_filesystem_root_is_never_the_project(monkeypatch):
+    """A stray /.claude/settings*.json (or a repository at /) on the machine is no session's project: from a
+    directory with no project above it the project stays unknown, so its verdict is NOT_PROVABLE_HERE, not a
+    not_wired FAIL read from the root's layers. The root's files are simulated; nothing at / is read or made."""
+    mod = _strict_mod()
+    real_is_file, real_exists = Path.is_file, Path.exists
+    root_files = {"/.claude/settings.json", "/.claude/settings.local.json", "/.git"}
+    monkeypatch.setattr(Path, "is_file", lambda p: str(p) in root_files or real_is_file(p))
+    monkeypatch.setattr(Path, "exists", lambda p: str(p) in root_files or real_exists(p))
+    start = Path("/nonexistent-capability-root-probe/a/b")
+    assert mod._project_root(start) is None
+    assert mod._project_root(start, exclude=(Path("/nonexistent-capability-root-probe"),)) is None
 
 
 def test_the_prescribed_in_session_call_passes_the_harness_background_hook(tmp_path: Path):

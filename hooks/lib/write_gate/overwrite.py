@@ -14,14 +14,12 @@ run alone. Exit 0 allows, exit 2 refuses with the reason on stderr.
 2. Every other check is for Write only.
 3. /do consent (lib.allowlist.has_do_consent: the main agent, the flag holding true)
    allows the Write.
-4. The main agent's /allow grant for Write: a grant that names this target allows it;
-   a valid same-session grant that names another target refuses an overwrite of an
-   existing file (CF-1) and leaves a new file's creation to step 6.
-5. No target: allow (a parse problem never blocks).
-6. The target is an existing file: refused, Edit it in place instead, unless
+4. No target: allow (a parse problem never blocks).
+5. The target is an existing file: refused, Edit it in place instead, unless
    overwrite_exempt() says the file is a scratch, temp or untracked generated output
-   (OB-L46, owner decision). The exemption also answers step 4's CF-1 refusal, so a
-   grant for another path never makes the rule stricter than no grant at all.
+   (OB-L46, owner decision).
+An /allow grant releases any refusal of this rule where the pre-tool verdicts meet
+(lib/hook_launch.release_refused); the rule reads none.
 
 The OB-L46 exemption, its protected set (harness state, another session's scratch,
 gate-read artifacts, configuration, hard-linked and tracked files) and the line between
@@ -72,30 +70,6 @@ def _consent(data) -> bool:
         return False
 
 
-def _sentinel(session_id: str, data_task_id: str, env_task_id: str, target: str) -> str:
-    """'match', 'valid_no_match' or 'none' (and 'none' when the lookup fails)."""
-    try:
-        sys.path.insert(0, _HOOKS_DIR)
-        from lib.allowlist import match_sentinel_grant_for_write, load_sentinel_grant_for_task
-        writer_key = env_task_id if env_task_id else session_id
-        seen, candidates = set(), []
-        for k in (writer_key, data_task_id, session_id):
-            if k and k not in seen:
-                seen.add(k)
-                candidates.append(k)
-        any_valid = False
-        for key in candidates:
-            g = load_sentinel_grant_for_task(key)
-            if g is None or g.get("session_id") != session_id:
-                continue
-            any_valid = True
-            if match_sentinel_grant_for_write(key, session_id, target) is not None:
-                return "match"
-        return "valid_no_match" if any_valid else "none"
-    except BaseException:
-        return "none"
-
-
 def overwrite_exempt(file_path: str, session_id: str) -> bool:
     """OB-L46: lib/write_gate/overwrite_scope.py decides; any failure to load it refuses."""
     try:
@@ -128,28 +102,9 @@ def main() -> int:
         return 0
 
     file_path = _field(data, "file_path")
-    task_id = _field(data, "task_id")
-    env_task_id = os.environ.get("CLAUDE_TASK_ID", "")
 
     if _consent(data):
         return 0
-    if not data.get("agent_id"):
-        sid = _shell_str(data.get("session_id", "") or os.environ.get("CLAUDE_SESSION_ID", "default")) or "default"
-        result = _sentinel(sid, task_id, env_task_id, file_path)
-        if result == "match":
-            return 0
-        if (result == "valid_no_match" and os.path.isfile(file_path)
-                and not overwrite_exempt(file_path, sid)):
-            _err("[Write Guard] BLOCKED: sentinel grant does not cover this target.",
-                 f"Target: {file_path}",
-                 "A valid sentinel grant exists for this task, but it does NOT name this file,",
-                 "so it confers no permission to overwrite it. The grant is scoped on purpose:",
-                 "an approval for one path is not an approval for every path.",
-                 "Two ways forward:",
-                 "  1. Re-issue the grant naming this exact path, if overwriting it is genuinely intended.",
-                 "  2. Modify the existing file in place (Edit) instead of replacing it wholesale.")
-            return 2
-
     if not file_path:
         return 0
     session_id = _shell_str(data.get("session_id", "") or os.environ.get("CLAUDE_SESSION_ID", ""))

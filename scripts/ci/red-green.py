@@ -19,6 +19,10 @@ of ``--body-file`` (a PR body).
 Output: a markdown summary on stdout (and in ``--summary`` when given), one row per test id. A collection
 error on red counts as red, and is reported apart from a failing assertion. Exit 0 when some id goes red
 then green, when the diff is exempt, or when a ``none`` trailer is present; 1 otherwise; 2 on a usage error.
+
+``--budget SECONDS`` bounds the run without changing its result: once some id is red then green (the exit
+status is then 0 whatever the rest does) no run goes past the budget, and the summary names every test file
+or id left unrun. Until then every target runs as without it.
 """
 from __future__ import annotations
 
@@ -30,7 +34,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
 
 DOC_SUFFIXES = (".md", ".rst", ".txt")
 TRAILER_RE = re.compile(r"^[ \t]*Red-test:[ \t]*(.+?)[ \t]*$", re.MULTILINE | re.IGNORECASE)
@@ -152,9 +160,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--summary", help="also write the markdown summary to this file")
     ap.add_argument("--python", default=sys.executable, help="the interpreter that runs pytest")
     ap.add_argument("--timeout", type=int, default=1800, help="seconds per pytest run (default 1800)")
+    ap.add_argument("--budget", type=int, default=0,
+                    help="seconds after which, once some id is red then green, the rest is left unrun (default: none)")
     args = ap.parse_args(argv)
 
-    repo = Path(git(Path(args.repo), "rev-parse", "--show-toplevel").strip())
+    top = locations.repo_top(args.repo)  # never the filesystem root
+    if top is None:
+        raise SystemExit(f"red-green: {args.repo} is not inside a git work tree whose top is below the filesystem root")
+    repo = Path(top)
     base = git(repo, "rev-parse", "--verify", f"{args.base}^{{commit}}").strip()
     head = git(repo, "rev-parse", "--verify", f"{args.head}^{{commit}}").strip()
     mb = git(repo, "merge-base", base, head).strip()
@@ -184,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rows: list[tuple[str, str, str, str]] = []
     collect_errors: list[str] = []
+    unrun: list[str] = []
     if exempt:
         status = "exempt: the diff changes only tests and docs"
     elif reasons:
@@ -202,9 +216,22 @@ def main(argv: list[str] | None = None) -> int:
                 dest.write_bytes(subprocess.run(["git", "-C", str(repo), "cat-file", "blob", f"{head}:{rel}"],
                                                 capture_output=True, check=True).stdout)
             checkout(repo, head, green_tree)
-            for target in targets:
-                red = run_target(red_tree, target, scratch, args.python, args.timeout)
-                green = run_target(green_tree, target, scratch, args.python, args.timeout)
+            started = time.monotonic()
+
+            def left() -> int:
+                """Seconds the next run may take: the budget's rest once the result is decided, else --timeout."""
+                if not args.budget or not any(row[3].startswith("red then green") for row in rows):
+                    return args.timeout
+                return min(args.timeout, int(args.budget - (time.monotonic() - started)))
+
+            for at, target in enumerate(targets):
+                runs = [run_target(tree, target, scratch, args.python, left())
+                        for tree in (red_tree, green_tree) if left() > 0]
+                # A run the budget stopped, or never let start, leaves its target unrun: no row is half a result.
+                if len(runs) < 2 or (left() <= 0 and any(r["rc"] == -1 for r in runs)):
+                    unrun = targets[at:]
+                    break
+                red, green = runs
                 for c in red["collect"]:
                     collect_errors.append(f"- `{c['nodeid']}`: {c['message']}")
                 for nodeid in sorted(set(red["tests"]) | set(green["tests"])):
@@ -228,6 +255,9 @@ def main(argv: list[str] | None = None) -> int:
         out += ["", f"{len(rows) - len(shown)} other test id(s) pass on red and on green."]
     if collect_errors:
         out += ["", "Collection errors on red (counted as red, apart from a failing assertion):"] + collect_errors
+    if unrun:
+        out += ["", f"Not run, the result being decided and the budget of {args.budget}s spent: "
+                + ", ".join(f"`{t}`" for t in unrun)]
     summary = "\n".join(out) + "\n"
     sys.stdout.write(summary)
     if args.summary:

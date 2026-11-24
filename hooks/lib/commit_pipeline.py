@@ -33,12 +33,14 @@ Evidence asymmetry, stated plainly because it bounds what this module
 proves. The two sides do not have equal strength, and the mint side is the
 weaker one BY CONSTRUCTION, not by oversight:
 
-  * The dispatch-snapshot manifest (`claude-commit-manifest-<sid>.json`) is
-    authored by the /commit orchestrator itself via Bash, because /commit
-    Step 5 mints BEFORE it dispatches anything (`commands/commit.md` Step 5
-    -> Step 7) -- so at mint time no dispatch has happened yet and no
-    hook-written witness of one can exist. The manifest is therefore
-    orchestrator-forgeable in principle. What `verify_pipeline_dispatch()`
+  * The dispatch-snapshot manifest (`claude-commit-manifest-<sid>-plan.json`)
+    is written by /commit Step 5's plan call (scripts/steps/commit-plan.py)
+    from the plan it computed; a session holding the older Step 5 text still
+    writes `claude-commit-manifest-<sid>.json` by hand, and that is read too.
+    /commit Step 5 mints BEFORE it dispatches anything (`commands/commit.md`
+    Step 5 -> Step 7) -- so at mint time no dispatch has happened yet and no
+    hook-written witness of one can exist. Both files lie in the agent-writable
+    state root, so a manifest is forgeable in principle. What `verify_pipeline_dispatch()`
     buys is that forging it is no longer cheap: the manifest must be
     mutually consistent with FOUR artifacts the bypass path does not have
     (a repository plan admitting this exact repo at its live branch/HEAD, a
@@ -165,8 +167,26 @@ def state_dir() -> str:
 
 
 def manifest_path(sid: str) -> str:
-    """Dispatch-snapshot manifest path for `sid` (/commit Step 5)."""
+    """Where a session holding the old /commit Step 5 text writes the manifest by hand (still read)."""
     return str(Path(state_dir()) / f"{MANIFEST_PREFIX}{sid}.json")
+
+
+def planned_manifest_path(sid: str) -> str:
+    """The manifest /commit Step 5's plan call (scripts/steps/commit-plan.py) writes for `sid`."""
+    return str(Path(state_dir()) / f"{MANIFEST_PREFIX}{sid}-plan.json")
+
+
+def write_planned_manifest(sid: str, body: dict) -> str:
+    """Write `body` to planned_manifest_path(sid) whole (a fresh file renamed over the name, so a
+    planted link or a reader mid-write never sees a partial manifest); returns the path."""
+    path = planned_manifest_path(sid)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    fresh = f"{path}.{secrets.token_hex(6)}.tmp"
+    fd = os.open(fresh, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(body, handle)
+    os.replace(fresh, path)
+    return path
 
 
 def attestation_path(sid: str, nonce: str) -> str:
@@ -273,6 +293,33 @@ def _within(ts: datetime | None, now: datetime, minutes: int) -> bool:
     return ts >= now - timedelta(minutes=minutes)
 
 
+def _recorded_write(path: str, sid: str) -> datetime | None:
+    """The timestamp the CLI wrote on the record of the last Write of `path` in session `sid`'s
+    transcript (lib/subagent_restart.config_projects), else None."""
+    try:
+        from subagent_restart import config_projects  # noqa: PLC0415 -- only the mint pays for it
+        transcripts = [t for root in config_projects() for t in root.glob(f"*/{sid}.jsonl")] if sid else []
+    except Exception:
+        return None
+    want, at = os.path.realpath(path), None
+    for transcript in transcripts:
+        try:
+            lines = transcript.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in (ln for ln in lines if '"Write"' in ln):
+            try:
+                record = json.loads(line)
+                blocks = record["message"]["content"]
+            except (ValueError, KeyError, TypeError):
+                continue
+            if any(isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "Write"
+                   and os.path.realpath(str((b.get("input") or {}).get("file_path") or "")) == want
+                   for b in blocks if isinstance(blocks, list)):
+                at = _parse_iso(record.get("timestamp")) or at
+    return at
+
+
 def _mtime_utc(path: str) -> datetime | None:
     try:
         return datetime.fromtimestamp(os.stat(path).st_mtime, timezone.utc)
@@ -348,8 +395,9 @@ def verify_pipeline_dispatch(sid: str, task_id: str, repo_root: str,
     does not possess. Read them as one conjunction:
 
       1-3. a live, well-formed manifest for THIS session and THIS task
-           (bounded by both `dispatched_at` and the file's own mtime, so
-           back-dating one field is not enough)
+           (bounded by the file's own mtime and, for one an agent wrote with
+           the Write tool, by the CLI's record of that Write; a typed
+           `dispatched_at` is not judged)
       4-5. a repository plan for the same task that ADMITS this exact repo
       6.   whose plan entry agrees with the repo's live branch and HEAD --
            the same triple the grant itself records and the guard re-checks
@@ -359,18 +407,27 @@ def verify_pipeline_dispatch(sid: str, task_id: str, repo_root: str,
       8.   and a close-report for the task (existence only -- see
            `_close_report_exists`)
 
-    Fails closed on every unreadable, malformed or mismatched input.
+    Fails closed on every unreadable, malformed or mismatched input. Two manifests are read: the one
+    the plan call wrote, then the one a session holding the old Step 5 text wrote by hand; the first
+    that passes every check is the evidence, else the plan call's reason (the hand one's when the
+    plan call wrote none).
     """
     now = now or datetime.now(timezone.utc)
-    evidence: dict = {}
+    results = [_verify_manifest(p, sid, task_id, repo_root, branch, expected_head, now)
+               for p in (planned_manifest_path(sid), manifest_path(sid))]
+    return next((r for r in results if r[0]), results[0] if os.path.lexists(planned_manifest_path(sid))
+                else results[1])
 
-    path = manifest_path(sid)
+
+def _verify_manifest(path, sid, task_id, repo_root, branch, expected_head, now):
+    """verify_pipeline_dispatch's checks on the one manifest at `path`."""
+    evidence: dict = {}
     manifest = safe_read_json(path)
     if not isinstance(manifest, dict):
         return False, (
             f"no readable /commit dispatch-snapshot manifest at {path} -- a grant may "
-            "only be minted from inside a real /commit pipeline run, which writes this "
-            "manifest (commands/commit.md Step 5) BEFORE it mints"
+            "only be minted from inside a real /commit pipeline run, whose plan call "
+            "(commands/commit.md Step 5, scripts/steps/commit-plan.py) writes the manifest BEFORE it mints"
         ), evidence
     evidence["manifest_path"] = path
     evidence["manifest_sha256"] = file_sha256(path)
@@ -387,19 +444,17 @@ def verify_pipeline_dispatch(sid: str, task_id: str, repo_root: str,
             f"request is for {task_id!r}"
         ), evidence
 
-    dispatched_at = _parse_iso(manifest.get("dispatched_at"))
-    if not _within(dispatched_at, now, MANIFEST_WINDOW_MINUTES):
-        return False, (
-            f"manifest {path} has dispatched_at={manifest.get('dispatched_at')!r}, which is "
-            f"not inside the {MANIFEST_WINDOW_MINUTES}-minute window ending now -- re-run "
-            "/commit rather than reusing a stale pipeline manifest"
-        ), evidence
-    if not _within(_mtime_utc(path), now, MANIFEST_WINDOW_MINUTES):
-        return False, (
-            f"manifest {path} has an mtime outside the {MANIFEST_WINDOW_MINUTES}-minute "
-            "window (its dispatched_at field alone is not proof of freshness)"
-        ), evidence
-    evidence["manifest_dispatched_at"] = manifest.get("dispatched_at")
+    # The manifest's time is the CLI's record of the Write that wrote it, else its mtime; a typed
+    # `dispatched_at` (the old text asked for one) is no evidence and is not judged.
+    written, mtime = _recorded_write(path, sid), _mtime_utc(path)
+    for at, what in ((written or mtime, "the CLI's record of the Write that wrote it"), (mtime, "its mtime")):
+        if not _within(at, now, MANIFEST_WINDOW_MINUTES):
+            return False, (
+                f"manifest {path}: {what} ({at and at.isoformat()}) is not inside the "
+                f"{MANIFEST_WINDOW_MINUTES}-minute window ending now -- re-run /commit rather "
+                "than reusing a stale pipeline manifest"
+            ), evidence
+    evidence["manifest_dispatched_at"] = (written or mtime).isoformat()
 
     # Accept BOTH spellings of this one key. `commands/commit.md` names the
     # manifest's own fields in lowercase (`session_id`, `task_id`,

@@ -5,10 +5,10 @@ armed the codex flag and whose ledger entry is absent. Which subagents are
 bound is no role list: it is the stopping agent's own dispatch prompt, which
 carries the line `codex_required: true` exactly where the command text asks
 the agent to consult codex (every BA / QA / dev dispatch under --codex, and
-any other dispatch whose template adds it, such as /dev-overnight's PM), or
-the dispatch template it was made from (hooks/lib/dispatch_template.py), which
-carries that line: in a --codex session a dispatch of that template without
-the line is the orchestrator's omission (P1b acceptance 5).
+any other dispatch whose template adds it, such as /dev-overnight's PM). That
+is the agents' own contract (agents/*.md "Codex:": without that line skip
+codex), so a dispatch without the line is not bound, even when the template it
+was made from shows the line (live 2026-11-21: 15 stops of 10 agents held so).
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -155,8 +156,17 @@ TEMPLATES_WITH_THE_LINE = [
 
 
 @pytest.mark.parametrize("command,role,profile", TEMPLATES_WITH_THE_LINE)
-def test_a_dispatch_omitting_the_line_its_template_carries_is_bound(tmp_path, command, role, profile):
+def test_a_dispatch_omitting_the_line_its_template_carries_is_not_bound(tmp_path, command, role, profile):
+    """The agent was told to skip codex, so its stop is not held (before: exit 2, CODEX_ENFORCE_BLOCKED)."""
     project, agent_id, transcript = _setup(tmp_path, role, _template_prompt(command, role, profile, line=False))
+    proc = _stop(tmp_path, project, agent_id, transcript)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == ""
+
+
+@pytest.mark.parametrize("command,role,profile", TEMPLATES_WITH_THE_LINE)
+def test_a_template_dispatch_carrying_the_line_is_held(tmp_path, command, role, profile):
+    project, agent_id, transcript = _setup(tmp_path, role, _template_prompt(command, role, profile, line=True))
     proc = _stop(tmp_path, project, agent_id, transcript)
     assert proc.returncode == 2, proc.stderr
     assert f"CODEX_ENFORCE_BLOCKED: agent {agent_id} (type={role})" in proc.stderr
@@ -184,16 +194,18 @@ def test_a_template_without_the_line_binds_nothing(tmp_path, command, role, prof
     assert proc.returncode == 0, proc.stderr
 
 
-def test_a_dispatch_carrying_no_block_is_read_in_its_command_span(tmp_path):
-    """No obligation names the command: the typed command whose span holds the
-    Agent call does (the agent meta names the call)."""
+def test_a_dispatch_carrying_no_block_is_judged_by_its_own_line_in_any_command_span(tmp_path):
+    """No obligation names the command and the typed command is /dev --codex:
+    the dispatch's own line still decides (before: the span's template bound it)."""
     prompt = _template_prompt("dev", "qa", "final_verification", line=False, block=False)
     project, agent_id, transcript = _setup(tmp_path, "qa", prompt)
     _with_parent(transcript, prompt, "qa", "/dev --codex harden add")
     proc = _stop(tmp_path, project, agent_id, transcript)
-    assert proc.returncode == 2, proc.stderr
-    _with_parent(transcript, prompt, "qa", "/do harden add")
-    assert _stop(tmp_path, project, agent_id, transcript).returncode == 0
+    assert proc.returncode == 0, proc.stderr
+    asked = _template_prompt("dev", "qa", "final_verification", line=True, block=False)
+    project, agent_id, transcript = _setup(tmp_path / "asked", "qa", asked)
+    _with_parent(transcript, asked, "qa", "/dev --codex harden add")
+    assert _stop(tmp_path / "asked", project, agent_id, transcript).returncode == 2
     graphify = "Use Agent tool with:\n- subagent_type: \"graphify\"\nGraphify enrichment: extract focused subgraph"
     project, agent_id, transcript = _setup(tmp_path / "graphify", "graphify", graphify)
     _with_parent(transcript, graphify, "graphify", "/dev --codex harden add")
@@ -232,8 +244,141 @@ def test_an_unresolved_close_obligation_is_judged_as_before(tmp_path, unresolved
     exempts nothing: its `codex_required: true` line binds it as before R11."""
     prompt = _asked_by("close", "final_verification", role="dev" if unresolved == "role_mismatch" else "qa")
     if unresolved == "invalid_obligation":
-        prompt = re.sub(r'"dispatched_at": "[^"]*", ', "", prompt)
+        prompt = re.sub(r'"profile": "[^"]*", ', "", prompt)  # a required field (dispatched_at is not)
     project, agent_id, transcript = _setup(tmp_path, "qa", prompt)
     proc = _stop(tmp_path, project, agent_id, transcript)
     assert proc.returncode == 2, proc.stderr
     assert f"CODEX_ENFORCE_BLOCKED: agent {agent_id} (type=qa)" in proc.stderr
+
+
+# --- codex out of quota (live 2026-11-20: 25 bound stops blocked while every codex call failed on the limit) ---
+RUN = REPO / "scripts" / "steps" / "codex-run.py"
+# codex-run.py's real output of such a call (neutral workdir, session id and prompt); RESET is the stated time
+LIMIT_OUTPUT = """Reading additional input from stdin...
+OpenAI Codex v0.167.0
+--------
+workdir: /work/project
+model: gpt-5.6-sol
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 00000000-0000-4000-8000-000000000000
+--------
+user
+Read-only review, do not modify any files. Answer accept or reject with reasons.
+deprecated: `[features].codex_hooks` is deprecated. Use `[features].hooks` instead.
+Enable it with `--enable hooks` or `[features].hooks` in config.toml. See https://developers.openai.com/codex/config-basic#feature-flags for details.
+ERROR: You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at RESET.
+ERROR: You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at RESET.
+"""
+# the older CLI wrapped the line once
+WRAPPED = ("ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage\n"
+           "to purchase more credits or try again at RESET.\n")
+# a real network failure, a crash of the call and the limit text only quoted in the prompt
+NETWORK = LIMIT_OUTPUT.split("ERROR:")[0] + (
+    "ERROR: Reconnecting... 2/2 (stream disconnected before completion: websocket closed by server before "
+    "response.completed)\n")
+QUOTED = LIMIT_OUTPUT.replace("Answer accept", LIMIT_OUTPUT.splitlines()[-1] + "\nAnswer accept").rsplit(
+    "ERROR:", 2)[0] + "ERROR: stream disconnected before completion\n"
+
+
+@pytest.fixture(autouse=True)
+def _state_dir(tmp_path, monkeypatch):
+    """Every stop here reads a throwaway state directory, never the machine's."""
+    monkeypatch.setenv("CLAUDE_STATE_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir()
+    return tmp_path / "state"
+
+
+def _reset(at: float) -> str:  # the CLI's own wording of a reset time, e.g. "Nov 23rd, 2026 11:32 AM"
+    t = datetime.fromtimestamp(at)
+    suffix = "th" if 10 < t.day % 100 < 14 else {1: "st", 2: "nd", 3: "rd"}.get(t.day % 10, "th")
+    return f"{t:%b} {t.day}{suffix}, {t.year} {t.hour % 12 or 12}:{t:%M %p}"
+
+
+def _codex_call(tmp_path: Path, output: str, code: int, *, executable=True):
+    """One foreground codex-run.py exec against a wrapper that prints `output` and exits `code`."""
+    wrapper = tmp_path / f"wrapper-{len(list(tmp_path.glob('wrapper-*')))}"
+    (tmp_path / "out.txt").write_text(output, encoding="utf-8")
+    wrapper.write_text(f"#!/bin/sh\ncat '{tmp_path / 'out.txt'}'\nexit {code}\n", encoding="utf-8")
+    wrapper.chmod(0o755 if executable else 0o644)
+    env = {**os.environ, "CODEX_ISO_BIN": str(wrapper), "CLAUDE_PROJECT_DIR": str(tmp_path),
+           "CODEX_OUT_TASK_ID": "T", "CODEX_OUT_ROLE": "dev", "PYTHONDONTWRITEBYTECODE": "1"}
+    return subprocess.run([sys.executable, str(RUN), "exec", "p"], capture_output=True, text=True, env=env,
+                          cwd=tmp_path, timeout=60)
+
+
+def _bound_stops(tmp_path: Path, *roles: str):
+    """Each role's bound stop in its own cycle; (returncode, ledger entry or None) per stop."""
+    out = []
+    for role in roles:
+        root = tmp_path / f"cycle-{role}"
+        root.mkdir()
+        project, agent_id, transcript = _setup(root, role, ASKED)
+        proc = _stop(root, project, agent_id, transcript)
+        entry = project / ".claude" / "dev-registry" / SESSION / "codex-ledger" / f"{agent_id}.json"
+        out.append((proc.returncode, json.loads(entry.read_text()) if entry.exists() else None))
+    return out
+
+
+@pytest.mark.parametrize("text", [LIMIT_OUTPUT, WRAPPED], ids=["current-cli", "wrapped-line"])
+def test_after_an_observed_usage_limit_failure_the_next_stops_pass(tmp_path, text):
+    reset = time.time() + 3 * 86400
+    assert _codex_call(tmp_path, text.replace("RESET", _reset(reset)), 1).returncode == 1
+    assert _bound_stops(tmp_path, "dev", "qa", "ba") == [(0, None)] * 3
+    assert abs(datetime.fromisoformat(_until(tmp_path)).timestamp() - reset) < 60
+
+
+def _until(tmp_path: Path) -> str:  # the reset time the observed failure stored in the throwaway state directory
+    return json.loads((tmp_path / "state" / "codex-unavailable.json").read_text(encoding="utf-8"))["until"]
+
+
+def test_a_stop_let_through_while_codex_is_unavailable_writes_no_ledger_file(tmp_path):
+    """The ledger has one writer, posttool-codex-skill-ledger.py; a repeated stop passes on the same knowledge."""
+    assert _codex_call(tmp_path, LIMIT_OUTPUT.replace("RESET", _reset(time.time() + 86400)), 1).returncode == 1
+    (tmp_path / "cycle").mkdir()
+    project, agent_id, transcript = _setup(tmp_path / "cycle", "dev", ASKED)
+    assert [_stop(tmp_path / "cycle", project, agent_id, transcript).returncode for _ in range(2)] == [0, 0]
+    assert not (project / ".claude" / "dev-registry" / SESSION / "codex-ledger").exists()
+
+
+def test_after_the_stated_reset_time_the_stop_is_blocked_again(tmp_path):
+    sys.path.insert(0, str(REPO / "hooks"))
+    from lib import codex_transcript  # noqa: PLC0415
+    past = time.time() - 3600
+    (tmp_path / "seen.txt").write_text(LIMIT_OUTPUT.replace("RESET", _reset(past + 120)), encoding="utf-8")
+    codex_transcript.observe(1, tmp_path / "seen.txt", now=past)  # observed an hour ago, reset 58 minutes ago
+    assert json.loads(Path(codex_transcript.unavailable_path()).read_text())["until"]
+    assert _bound_stops(tmp_path, "dev") == [(2, None)]
+
+
+def test_a_failure_without_a_readable_time_holds_for_the_default_span_only(tmp_path):
+    assert _codex_call(tmp_path, "ERROR: You've hit your usage limit.\n", 1).returncode == 1
+    assert _bound_stops(tmp_path, "dev") == [(0, None)]
+    assert abs(datetime.fromisoformat(_until(tmp_path)).timestamp() - time.time() - 5 * 3600) < 60
+
+
+@pytest.mark.parametrize("output,code,executable", [
+    (NETWORK, 1, True), (QUOTED, 1, True), (LIMIT_OUTPUT, 1, False),  # network; quoted only; no usable wrapper
+    ("error: unexpected argument '--bogus' found\n", 2, True),  # bad arguments
+    ("thread 'main' panicked at src/main.rs:1:1\n", 101, True)],  # a crash
+    ids=["network", "quoted-in-prompt", "no-wrapper", "bad-arguments", "crash"])
+def test_any_other_failure_changes_nothing(tmp_path, output, code, executable):
+    proc = _codex_call(tmp_path, output.replace("RESET", _reset(time.time() + 86400)), code, executable=executable)
+    assert proc.returncode != 0
+    assert not (tmp_path / "state" / "codex-unavailable.json").exists()
+    assert _bound_stops(tmp_path, "dev") == [(2, None)]
+
+
+def test_a_successful_consultation_restores_the_demand(tmp_path):
+    _codex_call(tmp_path, LIMIT_OUTPUT.replace("RESET", _reset(time.time() + 86400)), 1)
+    assert _bound_stops(tmp_path, "dev")[0][0] == 0
+    assert _codex_call(tmp_path, "codex\nACCEPT\n", 0).returncode == 0
+    assert _bound_stops(tmp_path, "qa") == [(2, None)]
+
+
+def test_a_usage_limit_text_a_successful_call_prints_arms_nothing(tmp_path):
+    _codex_call(tmp_path, LIMIT_OUTPUT.replace("RESET", _reset(time.time() + 86400)), 0)
+    assert _bound_stops(tmp_path, "dev") == [(2, None)]

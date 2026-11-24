@@ -34,6 +34,7 @@ from __future__ import annotations
 import importlib
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -93,6 +94,14 @@ class Main:
     def cut(self, ident: str) -> None:
         self.result(ident, "cut")
 
+    def refused(self, ident: str) -> None:
+        """The CLI's error result for a call a PreToolUse hook refused (CLI 2.1.322: permissionDecision reject by a
+        hook): the call never ran."""
+        self.cut(ident)
+        records = [json.loads(line) for line in self.tx.path.read_text().splitlines()]
+        records[-1]["permissionDecision"] = {"decision": "reject", "source": "hook", "reasonType": "hook"}
+        self.tx.path.write_text("".join(json.dumps(r) + "\n" for r in records))
+
     def resume(self, agent: str) -> str:
         ident = self.use("SendMessage", {"to": agent, "message": "Continue from where you were cut."})
         self.result(ident, "resumed", toolUseResult__resumedAgentId=agent, toolUseResult__revivedAgentId=agent)
@@ -138,6 +147,7 @@ def returned(m, role, doc, agent, reply):
 
 
 def background_running(m, role, doc, agent, reply):
+    m.tx.clock = datetime.now(timezone.utc) - timedelta(minutes=1)  # launched a minute ago: within its time limit
     call = m.dispatch(role, doc, background=True)
     m.launched(call, agent)
     m.say()
@@ -247,6 +257,9 @@ def test_commit_bulk_holds_its_stop_to_the_report_its_landing_analyst_stopped_wi
     stopped = _bulk(env, channel, _status(commit_status="failed", failure_code="grant_missing",
                                           failure_reason="no bulk sentinel"))
     code, text = sg.run(env)
+    if channel is background_running:  # a child of the span still runs: the stop is a wait (test_background_dispatch.py)
+        assert code == 0 and "waiting for" in text, text
+        return
     assert code == 2, text
     if stopped:
         assert "commit --bulk: changelog-analyst reports 'failed': grant_missing no bulk sentinel" in text, text
@@ -261,6 +274,9 @@ def test_commit_bulk_ends_once_its_landing_analyst_stopped_with_a_landing(env, c
     "commit --bulk: no changelog-analyst status block in this /commit" held the Stop."""
     stopped = _bulk(env, channel, _status(commit_status="committed"), planned=False)
     code, text = sg.run(env)
+    if channel is background_running:  # a child of the span still runs: the stop is a wait
+        assert code == 0 and "waiting for" in text, text
+        return
     assert (code, text) == (0, "") if stopped else (
         code == 2 and "commit --bulk: no changelog-analyst status block in this /commit" in text), text
 
@@ -449,3 +465,71 @@ def test_the_replays_resumed_agent_ends_as_the_cli_records_it(tmp_path, monkeypa
     returns = importlib.import_module("lib.agent_returns").Returns(span, session_id="no-restart-journal")
     dispatch = next(c for c in span.calls("Agent") if c.id == call)
     assert returns.line(dispatch) == end.line and returns.reply(dispatch) == "DONE"
+
+
+# ------------------------------------------------------------------ a dispatch a hook refused never ran
+# command_span.refused_calls: a call a PreToolUse hook refused declares nothing, is no producer's latest dispatch,
+# no verdict and no landing. Every reader of dispatches takes Span.dispatch_calls / dispatches, which leave it out.
+
+def test_ask_first_round_1_a_ba_dispatch_a_hook_refused_after_the_round_is_not_its_latest(project, tmp_path):
+    """BA wrote round 1 and returned; a second BA dispatch was refused by a hook. The round is due: ask it. On
+    a5aff80e4 the refused call was BA's latest dispatch, never returned, so the round was not yet due and the
+    refusal sent the agent to dispatch BA intake again."""
+    from hooks.lib import requirement_round as rr
+    m = _dev(tmp_path)
+    m.returned(m.dispatch("ba", rrt.obligation_doc("ba", [rrt.ROUND1])), "a0ba00000000000001", "Round 1 written.")
+    m.refused(m.dispatch("ba", rrt.obligation_doc("ba", [rrt.ROUND1])))
+    rrt.put(project, rrt.ROUND1, rrt.round_doc())
+    refusal = rr.ask_first(sg.command_span.active_span(m.tx.path), project, rrt.obligation_doc("ba", [rrt.CONTEXT]))
+    assert refusal == (f'ASK_FIRST: ask {rrt.ROUND1} with one AskUserQuestion, metadata.source '
+                       f'"requirement-round:{rrt.TASK}:r1", questions exactly as written; then dispatch.')
+
+
+def test_ask_first_round_2_a_ba_dispatch_a_hook_refused_after_the_round_is_not_its_latest(project, tmp_path):
+    """Round 1 asked; BA wrote round 2 and returned; a later BA dispatch was refused by a hook. Round 2 is still
+    owed. On a5aff80e4 the next dispatch went through (None) without the owner being asked round 2."""
+    from hooks.lib import requirement_round as rr
+    m = _dev(tmp_path)
+    first = rrt.round_doc()
+    rrt.put(project, rrt.ROUND1, first)
+    m.returned(m.dispatch("ba", rrt.obligation_doc("ba", [rrt.ROUND1])), "a0ba00000000000001", "Round 1 written.")
+    _ask(m, first)
+    m.returned(m.dispatch("ba", rrt.obligation_doc("ba", [rrt.ROUND2])), "a0ba00000000000002", "Round 2 written.")
+    m.refused(m.dispatch("ba", rrt.obligation_doc("ba", [rrt.ROUND2])))
+    rrt.put(project, rrt.ROUND2, rrt.round_doc(2, [rrt.q(1, "scope", "Which of the two screens comes first?")]))
+    refusal = rr.ask_first(sg.command_span.active_span(m.tx.path), project, rrt.obligation_doc("ba", [rrt.CONTEXT]))
+    assert refusal == (f'ASK_FIRST: ask {rrt.ROUND2} with one AskUserQuestion, metadata.source '
+                       f'"requirement-round:{rrt.TASK}:r2", questions exactly as written; then dispatch.')
+
+
+def test_close_rating_a_close_qa_a_hook_refused_after_the_landing_changes_nothing(env):
+    """Positive control for "nothing follows": the landed QA's rating is owed with or without a later refused
+    close-QA dispatch; a refused one alone owes none."""
+    close_rating = importlib.import_module("lib.close_rating")
+    m = Main(env.tx)
+    env.tx.command("close", FAMILY)
+    m.refused(m.dispatch("qa", _close_qa()))
+    assert not close_rating.rating_required(sg.command_span.active_span(env.tx.path), FAMILY)
+    m.returned(m.dispatch("qa", _close_qa()), "a0c105e0a0c105e0a", YES)
+    m.refused(m.dispatch("qa", _close_qa()))
+    assert close_rating.rating_required(sg.command_span.active_span(env.tx.path), FAMILY)
+
+
+def test_commit_bulk_a_landing_a_hook_refused_leaves_the_last_analyst_that_ran(env):
+    m = Main(env.tx)
+    env.tx.command("commit", "--bulk")
+    m.returned(m.dispatch("changelog-analyst", _analyst()), "a0land00000000001", _status(commit_status="committed"))
+    m.refused(m.dispatch("changelog-analyst", _analyst()))
+    assert sg.run(env) == (0, "")
+
+
+def test_dispatch_records_leave_out_a_dispatch_a_hook_refused(tmp_path):
+    """obligation.dispatch_obligations (declaring_dispatch's records: who owes a task's artifact, the gitignore
+    preflight's declared-artifact exemption, the chain resolver's unowed gap): a refused dispatch declares
+    nothing. On a5aff80e4 its record stood beside the one that ran."""
+    from hooks.lib import obligation
+    m = _dev(tmp_path)
+    ran = m.dispatch("ba", rrt.obligation_doc("ba", [rrt.ROUND1]))
+    m.returned(ran, "a0ba00000000000001", "Round 1 written.")
+    m.refused(m.dispatch("ba", rrt.obligation_doc("ba", [rrt.ROUND2])))
+    assert [r["tool_use_id"] for r in obligation.dispatch_obligations(m.tx.path)] == [ran]

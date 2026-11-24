@@ -40,6 +40,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / "hooks"
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 sys.path.insert(0, str(HOOKS / "lib"))
 
 import git_command_classifier  # noqa: E402
@@ -239,10 +240,13 @@ DATA_WORD_ALLOWED = [
 ]
 # `watch` runs its operand as a command, so `watch $X` runs run-time text as
 # code when run plainly too: (form, the hook that refuses it, the rule that hook
-# names). bash-safety's analyzer falls on a timeout to a degraded mode that
-# refuses any `$`, so the rule is read from runs that give the analyzer time.
+# names). Until 2026-11-19 bash-safety refused the plain form on silence
+# (UNRESOLVED dynamic_command_head:$X). By the owner's rule an unproven command
+# whose text holds no removal word runs and is handed to the record, on the
+# analyzer's verdict and on its timeout alike: the plain form has no refusing
+# hook (None), and the layer keeps the privilege guard's own refusal.
 WATCH_RULES = [
-    ('watch $X', SAFETY, "UNRESOLVED dynamic_command_head:$X"),
+    ('watch $X', None, None),
     ('bash -c "watch $X"', PRIVILEGE, "unresolved_shell_string"),
 ]
 ANALYZER_TIME = {"CLAUDE_HOOK_BOUNDARY_TIMEOUT": "60s"}
@@ -280,7 +284,7 @@ def _hook(sandbox, hook, command, subagent=False, env=None):
         payload.update(agent_id="agent-shell-c-test", agent_type="dev")
     argv = ["bash" if hook.endswith(".sh") else sys.executable, str(HOOKS / hook)]
     return subprocess.run(argv, input=json.dumps(payload), capture_output=True, text=True,
-                          env=dict(sandbox["env"], **(env or {})), cwd=sandbox["repo"], timeout=120)
+                          env=dict(sandbox["env"], **(env or {})), cwd=sandbox["repo"], timeout=HANG_GUARD)
 
 
 def _run(sandbox, hook, command, subagent=False):
@@ -313,7 +317,7 @@ def verdicts(sandbox):
 @pytest.fixture(scope="module")
 def refusals(sandbox):
     """(exit code, stderr) of the hook WATCH_RULES names for each form, the analyzer given time."""
-    runs = [(hook, cmd, actor) for cmd, hook, _rule in WATCH_RULES for actor in (False, True)]
+    runs = [(hook, cmd, actor) for cmd, hook, _rule in WATCH_RULES if hook for actor in (False, True)]
     with ThreadPoolExecutor(max_workers=4) as ex:
         procs = list(ex.map(lambda r: _hook(sandbox, *r, env=ANALYZER_TIME), runs))
     return {run: (proc.returncode, proc.stderr) for run, proc in zip(runs, procs)}
@@ -439,8 +443,8 @@ def test_a_here_document_a_shell_may_read_is_shell_text(command):
 @pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
 def test_a_layer_running_run_time_text_as_code_exits_2_and_never_below_its_plain_text(
         verdicts, layer, plain, subagent):
-    # The guard first: on a loaded host bash-safety's analyzer can time out and
-    # its degraded mode refuses any `$`, which says nothing about the classifier.
+    # The guard first: it is the classifier's reader. (bash-safety's verdict on
+    # an unproven command is the same with or without its analyzer.)
     assert verdicts[(PRIVILEGE, layer, subagent)] == 2, layer
     layer_code = max(verdicts[(hook, layer, subagent)] for hook in LAYER_HOOKS)
     plain_code = max(verdicts[(hook, plain, subagent)] for hook in LAYER_HOOKS)
@@ -452,9 +456,12 @@ def test_a_layer_running_run_time_text_as_code_exits_2_and_never_below_its_plain
 @pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
 def test_watch_of_run_time_text_exits_2_plainly_and_in_a_layer_on_the_rule_that_decides_it(
         verdicts, refusals, command, hook, rule, subagent):
+    if hook is None:  # the plain form: unproven, no removal word, so every layer hook lets it run
+        assert max(verdicts[(h, command, subagent)] for h in LAYER_HOOKS) == 0, command
+        return
     assert max(verdicts[(h, command, subagent)] for h in LAYER_HOOKS) == 2, command
     assert verdicts[(hook, command, subagent)] == 2, (command, hook)
-    # The deciding hook's own rule, never a degraded mode's blanket `$` refusal.
+    # The deciding hook's own rule.
     code, stderr = refusals[(hook, command, subagent)]
     assert code == 2, (command, hook, stderr)
     assert rule in stderr, (command, hook, stderr)
@@ -476,8 +483,8 @@ def test_a_layer_refuses_run_time_code_and_keeps_its_data_twin(refused, twin):
 @pytest.mark.parametrize("command", FAIL_CLOSED, ids=FAIL_CLOSED)
 @pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
 def test_a_fail_closed_layer_exits_2_over_the_guard_and_every_hook(verdicts, command, subagent):
-    # The guard first: on a loaded host bash-safety's analyzer can time out and
-    # its degraded mode refuses any `$`, which says nothing about the classifier.
+    # The guard first: it is the classifier's reader. (bash-safety's verdict on
+    # an unproven command is the same with or without its analyzer.)
     assert verdicts[(PRIVILEGE, command, subagent)] == 2, command
     assert max(verdicts[(hook, command, subagent)] for hook in LAYER_HOOKS) == 2, command
 
@@ -657,8 +664,8 @@ def review_verdicts(sandbox):
 @pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
 def test_a_review_fail_closed_layer_exits_2_over_the_guard_and_every_hook(
         review_verdicts, command, subagent):
-    # The guard first: on a loaded host bash-safety's analyzer can time out and
-    # its degraded mode refuses any `$`, which says nothing about the classifier.
+    # The guard first: it is the classifier's reader. (bash-safety's verdict on
+    # an unproven command is the same with or without its analyzer.)
     assert review_verdicts[(PRIVILEGE, command, subagent)] == 2, command
     assert max(review_verdicts[(hook, command, subagent)] for hook in LAYER_HOOKS) == 2, command
 

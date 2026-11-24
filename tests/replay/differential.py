@@ -25,7 +25,23 @@ The replay changes one input after an event only by appending to it: the CLI's
 transcripts, whose sizes invocations.jsonl records per event. A unit whose
 intact run on the final state does not give its recorded decision runs again,
 every run with those transcripts cut back to its event (one the replay wrote
-after it removed), and that measures it when it gives the recorded decision.
+after it removed) and Python's clock set back to the event's time (invocations.jsonl's
+"at"; tests/replay/clock: a grant's 60 s expiry then counts from the replay's event, not
+from how long the replay and the differential took), and, for a PreToolUse Write, without
+the file that Write itself created (the trace's first event on its target is its own create,
+relation-events.tsv: an overwrite rule would refuse a target the event never saw), and that
+measures it when it gives the recorded decision.
+What a unit changes follows from what the unit is, never from how names sort or from chance. An
+artifact pattern may cover one file per instance (the CLI's record of each subagent, one file per
+subagent, named by an id the replays draw at random). A hook run of a subagent (its payload carries
+an agent_id) that read that subagent's own file (the path names the id) measures that file: whether
+the run's verdict depends on the record of the agent it serves. A run with no instance of its own
+(the main agent's, or a subagent that read only other agents' files) measures every file of the
+pattern it read, each in a run of its own, since its verdict may depend on any one of them and a
+change of all at once would hide which. So two replays of one driver that differ only in the ids
+give the same units, runs and verdicts, and a run count that grows with the instances read, not
+with a draw. Which hook runs of a pattern are measured stays chronological: the first and the last
+(candidates()).
 A run's decision is (exit code, verdict, how) as hookrun.interpret reads a
 hook's output; for a Bash call, its exit code. Results go to
 <run>/differential.json, sorted by event and artifact.
@@ -34,6 +50,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -145,9 +162,20 @@ def _match_value(inv: dict) -> str:
     return str(p.get("tool_name") or p.get("agent_type") or p.get("source") or p.get("reason") or "")
 
 
+def _owns(raw: str, agent_id) -> bool:
+    """The raw path names the subagent `agent_id` as a whole token (the CLI's record of it,
+    `subagents/agent-<id>.meta.json`, or its transcript): that subagent's own instance."""
+    return isinstance(agent_id, str) and len(agent_id) > 2 and re.search(
+        r"(?<![0-9A-Za-z])" + re.escape(agent_id) + r"(?![0-9A-Za-z])", raw) is not None
+
+
 def candidates(run_dir: str) -> list[dict]:
-    """Units to re-run: per (reader, pattern, event, match value) the first and the last event
-    that read it, grouped by (origin, event)."""
+    """Units to re-run: per (reader, pattern, event, match value) the first and the last hook run
+    (event number) that read it, grouped by (origin, event). Which of the files the pattern covers
+    are changed follows from the unit, never from how their names sort: a hook run of a subagent (its
+    payload carries an agent_id) that read that subagent's own record changes that record only; any
+    other run (the main agent's, or a subagent that read only other agents' files) changes every file
+    of the pattern it read, each in a run of its own."""
     events = load_events(run_dir)
     invs = load_invocations(run_dir)
     written = written_patterns(events)
@@ -163,8 +191,13 @@ def candidates(run_dir: str) -> list[dict]:
         picks.setdefault(key, []).append(e)
     units: dict[tuple, dict] = {}
     for key in sorted(picks):
-        evs = sorted(picks[key], key=lambda e: (e["event"], e["raw"]))
-        for e in {id(x): x for x in (evs[0], evs[-1])}.values():
+        seqs = sorted({e["event"] for e in picks[key]})
+        chosen = []
+        for seq in dict.fromkeys((seqs[0], seqs[-1])):
+            at = [e for e in picks[key] if e["event"] == seq]
+            aid = invs[seq]["payload"].get("agent_id")
+            chosen += [e for e in at if _owns(e["raw"], aid)] or at
+        for e in chosen:
             origin = e["origin"] or e["comp"]
             inv = invs[e["event"]]
             hooks = [h for h in inv["hooks"] if norm_comp(hookrun.hook_name(h["command"])) == origin]
@@ -212,7 +245,9 @@ def execute(sb: str, run_dir: str, units: list[dict], schemas: dict | None = Non
     os.makedirs(work)
     shutil.rmtree(os.path.join(sb, "replay"), ignore_errors=True)  # the framework as it is now
     shutil.copytree(sandbox.HERE, os.path.join(sb, "replay"), ignore=sandbox.COPY_IGNORE)
-    for name in ("env.json", "bash-env.json", "invocations.jsonl"):
+    for name in ("env.json", "bash-env.json", "invocations.jsonl", "relation-events.tsv"):
+        if name == "relation-events.tsv" and not os.path.exists(os.path.join(run_dir, name)):
+            continue    # an untraced replay: no Write's own target is known
         shutil.copyfile(os.path.join(run_dir, name), os.path.join(work, name))
     with open(os.path.join(work, "units.json"), "w") as fh:
         json.dump({"units": units, "schemas": schemas or {}, "workers": workers,
@@ -232,6 +267,18 @@ def execute(sb: str, run_dir: str, units: list[dict], schemas: dict | None = Non
     with open(os.path.join(run_dir, "differential.json"), "w") as fh:
         json.dump(res, fh, indent=1, sort_keys=True)
     return res
+
+
+def run_inner(units_path: str) -> int:
+    """The inner side on a units.json, in the one way the replays enter a mount namespace: as root, directly
+    or through passwordless sudo (sandbox._priv), for the unshare each run makes needs root; returns its exit code.
+    For a test that builds a units.json and measures it without a replay (suite.preconditions() says whether
+    this host can)."""
+    pre, _ = sandbox._priv()
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    argv = pre + ["env", "-i", f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}", "PYTHONDONTWRITEBYTECODE=1",
+                  f"PYTHONPATH={repo}", sys.executable, "-m", f"{__package__}.differential", units_path]
+    return subprocess.run(argv, cwd=repo).returncode
 
 
 # ---------------------------------------------------------------- inner side (in the sandbox)
@@ -284,6 +331,23 @@ def _cut(inv: dict, roots: list) -> list:
     return out
 
 
+def _created_by(work: str) -> dict:
+    """Raw path -> the event whose create is the trace's first event on it (relation-events.tsv)."""
+    first: dict = {}
+    for e in sorted(load_events(work), key=lambda e: e["event"]):
+        first.setdefault(e["raw"], e["event"] if e["op"] == "create" else None)
+    return {p: ev for p, ev in first.items() if ev is not None}
+
+
+def _own_target(inv: dict, created: dict, roots: list) -> list:
+    """["-", PATH] for a PreToolUse Write whose target that Write itself created (absent at its event)."""
+    p = inv.get("payload") or {}
+    path = (p.get("tool_input") or {}).get("file_path") if p.get("tool_name") == "Write" else None
+    if inv.get("event") != "PreToolUse" or not isinstance(path, str) or created.get(path) != inv.get("seq"):
+        return []
+    return ["-", path] if any(path.startswith(r.rstrip("/") + "/") for r in roots) else []
+
+
 def _one(cfg: dict, n: int, unit: dict, mutation: dict | None, payload: str, env: dict, cut=()) -> dict:
     lay = cfg["layout"]
     roots = _roots(lay)
@@ -302,8 +366,11 @@ def _one(cfg: dict, n: int, unit: dict, mutation: dict | None, payload: str, env
                            timeout=max(5, int(unit.get("timeout") or hookrun.DEFAULT_TIMEOUT_S)) + 5,
                            errors="replace")
         rc, out, err = p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired:
-        rc, out, err = "timeout", "", "timeout"
+    except subprocess.TimeoutExpired as e:
+        # a cut run is no measurement (its verdict would depend on the machine's speed): the differential ends
+        raise RuntimeError(f"differential run cut by its time limit: {unit.get('origin')} {unit.get('event')} "
+                           f"seq {unit.get('seq')} variant {how} {path or '-'}: limit {e.timeout:g} s, "
+                           f"took {time.monotonic() - t0:.1f} s") from None
     return {"decision": _decision(unit["kind"], rc, out), "ms": round((time.monotonic() - t0) * 1000),
             "stderr": (err or "")[-300:]}
 
@@ -355,11 +422,12 @@ def _inner(units_path: str) -> int:
     results: dict[int, dict] = {}
     t0 = time.monotonic()
     cuts: dict[int, list] = {}
+    clocks: dict[int, dict] = {}  # the again pass: the clock set back to the unit's event (replay/clock)
 
     def run(n_job):
         n, job = n_job
         ui, m, pattern, payload, env = job
-        return job, _one(cfg, n, cfg["units"][ui], m, payload, env, cuts.get(ui, ()))
+        return job, _one(cfg, n, cfg["units"][ui], m, payload, {**env, **clocks.get(ui, {})}, cuts.get(ui, ()))
 
     workers = max(1, int(cfg.get("workers") or 1))
 
@@ -372,10 +440,18 @@ def _inner(units_path: str) -> int:
 
     done = execute(list(enumerate(jobs)))
     intact = {ui: r["decision"] for (ui, m, _pt, _p, _e), r in done if m is None}
+    created = _created_by(work)
     for ui, u in enumerate(cfg["units"]):
         if u.get("original") is not None and intact.get(ui) != u["original"]:
-            cuts[ui] = _cut(invs.get(u["seq"]) or {}, roots)
-    again = execute([(n, j) for n, j in enumerate(jobs) if cuts.get(j[0])])
+            inv = invs.get(u["seq"]) or {}
+            cuts[ui] = _cut(inv, roots) + _own_target(inv, created, roots)
+            at = (invs.get(u["seq"]) or {}).get("at")
+            if at is not None:
+                clock_dir = os.path.join(lay["sb"], "replay", "clock")
+                pp = (hook_env if u["kind"] == "hook" else bash_env).get("PYTHONPATH")
+                clocks[ui] = {"REPLAY_CLOCK_AT": repr(at),
+                              "PYTHONPATH": clock_dir + (os.pathsep + pp if pp else "")}
+    again = execute([(n, j) for n, j in enumerate(jobs) if cuts.get(j[0]) or j[0] in clocks])
     kept = {ui for (ui, m, _pt, _p, _e), r in again if m is None and r["decision"] == cfg["units"][ui]["original"]}
     done = [(j, r) for j, r in done if j[0] not in kept] + [(j, r) for j, r in again if j[0] in kept]
     for (ui, m, pattern, _p, _e), r in done:

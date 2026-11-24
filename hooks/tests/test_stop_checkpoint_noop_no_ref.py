@@ -54,6 +54,7 @@ def harness(request, tmp_path: Path) -> tuple[Path, dict, str]:
         "LANG": "C.UTF-8",
         "HOME": str(tmp_path / "user-home"),
         "CLAUDE_CONFIG_DIR": str(tmp_path / "config"),
+        "CHECKPOINT_LOG_DIR": str(tmp_path / "config" / "logs"),
         "CLAUDE_STATE_DIR": str(tmp_path / "state"),
         "TMPDIR": str(tmp_path / "tmp"),
         "PYTHONDONTWRITEBYTECODE": "1",

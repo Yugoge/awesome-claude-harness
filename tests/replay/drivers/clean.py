@@ -10,7 +10,7 @@ merge then has no style or prompt report: see "Text points"), and a tracked back
 (`.bak`), a byproduct the cleanliness-inspector's duplicate-scripts rule deletes. The owner types
 `/clean` (no `--codex`: every `codex_required` line is left out), passes the checklist the hook hands it
 (scripts/todo/clean.py) to its first TodoWrite and completes one checklist step per TodoWrite call; at
-Step 13 the owner picks the first cleanup option (execute all) in one AskUserQuestion, so the approvals
+Step 13 the owner picks the first cleanup option (execute all) in one AskUserQuestion (`clean-option:`), so the approvals
 are generated mechanically from every finding.
 
 What each step does is taken from the tree's commands/clean.md:
@@ -75,11 +75,8 @@ What each step does is taken from the tree's commands/clean.md:
   (no deviation passes it) is listed in `actions_refused` with the operation as run and the hook's first
   line, its files not staged, and never run again. Where the text's Step 16 names `actions_refused` (the
   hook-rejection rule; the base records a refusal as a failure), the orchestrator then Reads the
-  execution report and, when it lists refusals, asks one AskUserQuestion whose question names each
-  refused action and its exact operation: one the tool policy refused stated as the Workflow Overview's
-  rule says (withdrawn), with that rule's two options for it (the owner takes the recommended one), in a
-  question of its own beside the decision on the others, whose options are the owner decisions that rule
-  names for a hook that reads grants (the owner picks the first, leaving them undone); the outcomes go
+  execution report; nobody is asked: each refused action is withdrawn and recorded with the hook's output and
+  the `/allow` line the owner could type (one the tool policy refused: a follow-up for a /dev cycle); the outcomes go
   into Steps 17 and 18.
 * Step 17: the git calls the step names (one it names after "when the execution report names a
   `cleanup_commit`" only with one); Step 18: the completion report from the step's template, Written at
@@ -145,6 +142,7 @@ cleaner), `--codex` and a coverage miss at Steps 10 and 10A (a re-dispatch of th
 from __future__ import annotations
 
 import calendar
+import fnmatch
 import json
 import os
 import re
@@ -155,8 +153,33 @@ from .. import agents, cmdtext, hookrun
 from ..pipeline import Deviations, Orchestrator, utc_now
 from ..replay import Deviation, rule_files
 from ..sandbox import FIXED_DATE
+from .dev import Steps  # noqa: E402
+
+# /clean's step numbers by what each step IS, read from the command's own checklist (scripts/todo/clean.py, the list
+# the prompt hook hands the orchestrator and the Stop gate confirms): found by heading, and a step that calls a
+# subagent must still call that role. A renumbering needs no edit here; a gone or re-roled step fails the import.
+C = Steps(command="clean", what={
+    "init": ("Initialize workflow", None), "scan": ("Scan project structure", None),
+    "context": ("Build inspection context", None), "rules": ("Rule inspection and README updates", None),
+    "cleanliness": ("Invoke cleanliness inspector", "cleanliness-inspector"),
+    "style": ("Invoke style inspector", "style-inspector"), "plan": ("Plan style inspection", None),
+    "launch": ("Launch parallel style inspectors", None), "collect": ("Collect and merge results", None),
+    "coverage": ("Verify inspection coverage", None), "merge": ("Merge inspection reports", None),
+    "present": ("Present combined report", None), "approval": ("Collect user approval", None),
+    "verify": ("Verify cleanup completeness", None), "checkpoint": ("Create safety checkpoint", None),
+    "cleaner": ("Invoke cleaner with approvals", "cleaner"), "results": ("Verify cleanup results", None),
+    "report": ("Generate completion report", None)})
+for _name in C._what:  # every step resolved at load: a step gone or re-roled fails the import, naming it
+    getattr(C, _name)
 
 PIPELINE = "clean"
+def declares(block: dict) -> bool:
+    """Whether one of this driver's declared deviations is the one that passes `block`: its step label matches
+    the pair's glob, and the pair's hook and quote are the block's own."""
+    return any(fnmatch.fnmatchcase(block["step"], pat) and dev.hook.split("/")[-1] == block["hook"].split("/")[-1]
+               and dev.quote in block["text"] for pat, dev in DEVIATIONS.pairs)
+
+
 # The artifact check's cost of this driver (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at 1d42933
 # (153 + 156 CPU-s traced, 8 per replay, E1's fallback 151 runs at 0.213 CPU-s each), scaled by dev plain's
@@ -181,18 +204,19 @@ DEVIATIONS = Deviations([
     ("Step * Write *", Deviation(
         "hooks/pretool-orchestrator-gate.py", "Write used consecutively beyond limit",
         "the coordination documents the steps write")),
-    # DEVIATION: "BLOCKED: Cannot complete Step 5 ("Step 6: Invoke style inspector"). This step requires a
-    # subagent call (style-inspector) that has not been made."
+    # DEVIATION: "BLOCKED: Cannot complete "Step 6: Invoke style inspector" (subagent role style-inspector).
+    # This step requires a subagent call (style-inspector) made after the step went in_progress, ..." (an
+    # in-flight span's form since P5 (89c71a96b): "... (style-inspector) that has not been made.")
     # The checklist puts the style-inspector call at Step 6; the text makes it at Step 8 (Step 6 is the
     # heading of Steps 7-10).
-    ("TodoWrite Step 6 done, Step 7 in_progress", Deviation(
-        "hooks/pretool-todo-validate.py", "This step requires a subagent call (style-inspector) that has not been made",
-        "Step 6 completed as its text reads: its style-inspector dispatches are Step 8's")),
+    (f"TodoWrite Step {C.style} done, Step {C.plan} in_progress", Deviation(
+        "hooks/pretool-todo-validate.py", "This step requires a subagent call (style-inspector)",
+        f"Step {C.style} completed as its text reads: its style-inspector dispatches are Step {C.launch}'s")),
     # DEVIATION: "[BLOCK] Agent runs in the background by default and is forbidden for the orchestrator."
     # Step 8 launches each style-inspector "with `run_in_background: true`".
-    ("Step 8 Agent(*", Deviation(
+    (f"Step {C.launch} Agent(*", Deviation(
         "hooks/pretool-block-background-tasks.py", "Agent runs in the background by default and is forbidden",
-        "Step 8's dispatch as the text spells it (the replay's dispatch is synchronous)")),
+        f"Step {C.launch}'s dispatch as the text spells it (the replay's dispatch is synchronous)")),
     # DEVIATION: "BLOCKED: agent git commit - only the blessed /merge auto-bulk bridge or the /commit wrapper may
     # commit from an agent context."
     # The cleaner's commit, as agents/cleaner.md's Git Operations make it (P1b acceptance 9: refused on the
@@ -288,6 +312,10 @@ def _fault_arg(value: str):
     return role, kind
 
 
+# The prompt-inspector heading: "### Step 10A: Invoke Prompt Inspector (agents/ ..." in a base text, the
+# "#### Prompt Inspector (agents/ ..." sub-heading of Step 10 since integer steps (10A folded into 10).
+P_HEAD = "Prompt Inspector (agents/"
+
 class CleanRun:
     def __init__(self, rp, gaps: str = "bridged", fault: str = ""):
         if gaps not in ("bridged", "strict"):
@@ -376,25 +404,28 @@ class CleanRun:
         o = self.o
         o.slash("")
         o.todo_start()
-        script = self.code("Step 1", "Load TodoList checklist", contains="scripts/todo/")
-        self.bash(script, "Step 1 Bash checklist script", "Load the /clean checklist")
-        rid = self.code("Step 1", "Set up working directory", startswith="REQUEST_ID=")
-        d = self.code("Step 1", "Set up working directory", startswith="docs/clean")
+        # OLDER_TEXT: "Load TodoList checklist" -- a base text's Step 1 ran the checklist script; since pure-repeats
+        # the hook hands the list at the slash and the step names no script, so the run makes no such call.
+        if "Load TodoList checklist" in o.section(f"Step {C.init}"):
+            script = self.code(f"Step {C.init}", "Load TodoList checklist", contains="scripts/todo/")
+            self.bash(script, f"Step {C.init} Bash checklist script", "Load the /clean checklist")
+        rid = self.code(f"Step {C.init}", "Set up working directory", startswith="REQUEST_ID=")
+        d = self.code(f"Step {C.init}", "Set up working directory", startswith="docs/clean")
         c = self.bash(f"mkdir -p {shlex.quote(d)}\n{rid}\nTIMESTAMP=\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"",
-                      "Step 1 Bash request id", "Create docs/clean/ and the request id", capture=("REQUEST_ID", "TIMESTAMP"))
+                      f"Step {C.init} Bash request id", "Create docs/clean/ and the request id", capture=("REQUEST_ID", "TIMESTAMP"))
         if not c.ok or not o.values.get("REQUEST_ID"):
-            raise RuntimeError("Step 1: no REQUEST_ID")
+            raise RuntimeError(f"Step {C.init}: no REQUEST_ID")
         self.rid, self.ts = o.values["REQUEST_ID"], o.values["TIMESTAMP"]
         self.rp.task(self.rid)
 
     def step2(self) -> None:
-        cmd = self.code("Step 2", "scan-project.sh", contains="scan-project.sh")
-        c = self.bash(cmd, "Step 2 Bash scan-project", "Scan the project structure")
+        cmd = self.code(f"Step {C.scan}", "scan-project.sh", contains="scan-project.sh")
+        c = self.bash(cmd, f"Step {C.scan} Bash scan-project", "Scan the project structure")
         self.facts["scan"] = _json_out(c.response.get("stdout", "")) if c.ok else {}
 
     def step3(self) -> None:
         c = self.bash('git status --short\necho "---"\ngit branch --show-current\necho "---"\n'
-                      'git log --oneline -n 5\necho "---"\nls -R', "Step 3 Bash codebase state",
+                      'git log --oneline -n 5\necho "---"\nls -R', f"Step {C.context} Bash codebase state",
                       "Git status, branch, recent commits and the directory listing")
         parts = (c.response.get("stdout", "") if c.ok else "").split("---\n")
         parts += [""] * (4 - len(parts))
@@ -407,9 +438,9 @@ class CleanRun:
                   "current_branch": self.facts["branch"], "recent_commits": self.facts["commits"],
                   "directory_structure": self.facts["listing"], "total": counts.get("total", 0),
                   "docs": counts.get("docs", 0), "scripts": counts.get("scripts", 0), "tests": counts.get("tests", 0)}
-        tpl = json.loads(cmdtext.block(self.o.text, "Step 3", lang="json"))
-        self.context_rel = self.save_path("Step 3")
-        self.write(self.context_rel, json.dumps(self.filled(tpl, values), indent=2) + "\n", "Step 3 Write context")
+        tpl = json.loads(cmdtext.block(self.o.text, f"Step {C.context}", lang="json"))
+        self.context_rel = self.save_path(f"Step {C.context}")
+        self.write(self.context_rel, json.dumps(self.filled(tpl, values), indent=2) + "\n", f"Step {C.context} Write context")
 
     def filled(self, node, values: dict, key: str = ""):
         """A JSON template with each leaf whose key has a run value replaced by it."""
@@ -421,17 +452,17 @@ class CleanRun:
     # ------------------------------------------------------------ Step 4
     def step4(self) -> None:
         o = self.o
-        disc = self.code("Step 4", "Discover all folders", contains="discover-folders.sh")
-        c = self.bash(disc, "Step 4 Bash discover-folders", "Discover all folders")
+        disc = self.code(f"Step {C.rules}", "Discover all folders", contains="discover-folders.sh")
+        c = self.bash(disc, f"Step {C.rules} Bash discover-folders", "Discover all folders")
         out = c.response.get("stdout", "") if c.ok else ""
         folders = _json_out(out)
         if not isinstance(folders, list):
             folders = [l.strip() for l in out.split("\n") if l.strip()]
         self.facts["folders"] = folders
-        fresh_cmd = self.code("Step 4", "Run freshness check", contains="check-readme-freshness.sh")
-        fresh_rel = self.code("Step 4", "Run freshness check", startswith="docs/clean/")
-        self.bash(self.fill(f"{fresh_cmd} > {fresh_rel}"), "Step 4 Bash freshness", "README freshness check, saved")
-        self.read(self.fill(fresh_rel), "Step 4 Read freshness")
+        fresh_cmd = self.code(f"Step {C.rules}", "Run freshness check", contains="check-readme-freshness.sh")
+        fresh_rel = self.code(f"Step {C.rules}", "Run freshness check", startswith="docs/clean/")
+        self.bash(self.fill(f"{fresh_cmd} > {fresh_rel}"), f"Step {C.rules} Bash freshness", "README freshness check, saved")
+        self.read(self.fill(fresh_rel), f"Step {C.rules} Read freshness")
         try:
             fresh = self.load(self.fill(fresh_rel))
         except (OSError, ValueError):
@@ -439,9 +470,9 @@ class CleanRun:
         self.facts["freshness"] = fresh
         # Item 3: the rule-inspector context, in the rule-inspector's own Input Format plus the fields the
         # item lists.
-        item3 = self.item("Step 4", 3)
+        item3 = self.item(f"Step {C.rules}", 3)
         rule_rel = self.fill(re.search(r"`(docs/clean/rule-context-[^`]+)`", item3).group(1))
-        tpl = json.loads(cmdtext.block(self.o.tree.agent_text(self.role_in("Step 4")), "Input Format", lang="json"))
+        tpl = json.loads(cmdtext.block(self.o.tree.agent_text(self.role_in(f"Step {C.rules}")), "Input Format", lang="json"))
         ctx = self.filled(tpl, {"request_id": self.rid, "timestamp": self.ts, "project_root": self.project,
                                 "folders_to_analyze": folders, "discovered_folders": folders,
                                 "codebase_state": self.facts.get("git_status", "")})
@@ -450,20 +481,20 @@ class CleanRun:
         for code in re.findall(r"`(\w+):\s*(true|false)`", item3):
             ctx["parameters"][code[0]] = code[1] == "true"
         self.rule_rel = rule_rel
-        self.write(rule_rel, json.dumps(ctx, indent=2) + "\n", "Step 4 Write rule context")
-        inv = self.fill(self.code("Step 4", "Invoke:", contains="rule-inspect"))
-        c = self.bash(inv, "Step 4 Bash rule-inspect", "Rule inspection orchestration")
+        self.write(rule_rel, json.dumps(ctx, indent=2) + "\n", f"Step {C.rules} Write rule context")
+        inv = self.fill(self.code(f"Step {C.rules}", "Invoke:", contains="rule-inspect"))
+        c = self.bash(inv, f"Step {C.rules} Bash rule-inspect", "Rule inspection orchestration")
         nxt = (_json_out(c.response.get("stdout", "")) or {}) if c.ok else {}
-        role = self.role_in("Step 4")
-        if role in str(nxt.get("next_step", "")) or "Run %s" % role in o.section("Step 4"):
+        role = self.role_in(f"Step {C.rules}")
+        if role in str(nxt.get("next_step", "")) or "Run %s" % role in o.section(f"Step {C.rules}"):
             self.dispatch_rule_inspector(role, rule_rel)
         # Item 5: the context's existence; item 6: each stale folder's README mtime.
         self.o.s.tool("Glob", {"pattern": os.path.basename(rule_rel), "path": self.abs(os.path.dirname(rule_rel))},
-                      label="Step 4 Glob rule context", deviation=self.devs.at("Step 4 Glob rule context"))
+                      label=f"Step {C.rules} Glob rule context", deviation=self.devs.at(f"Step {C.rules} Glob rule context"))
         stale = [e.get("folder") for e in fresh if isinstance(e, dict) and e.get("action") not in (None, "FRESH")]
         if stale:
             paths = " ".join(shlex.quote(os.path.join(f, "README.md") if f != "." else "README.md") for f in stale)
-            self.bash(f"stat -c '%Y %n' {paths}", "Step 4 Bash README mtimes", "README mtimes of the stale folders")
+            self.bash(f"stat -c '%Y %n' {paths}", f"Step {C.rules} Bash README mtimes", "README mtimes of the stale folders")
 
     def dispatch_rule_inspector(self, role: str, rule_rel: str) -> None:
         o = self.o
@@ -476,19 +507,19 @@ class CleanRun:
         def work(sub, brief, player):
             ctx = json.loads(agents.peek(self.rp, sub.role, self.abs(rule_rel)))
             fresh = ctx.get("readme_freshness") or []
-            c = sub.bash(cmdtext.block(text, "Step 1: Discover Folders", lang="bash").replace(
-                '"$PROJECT_ROOT"', shlex.quote(self.project)), "Discover folders", label=f"{sub.role} Bash Step 1")
+            c = sub.bash(cmdtext.block(text, "Discover Folders", lang="bash").replace(
+                '"$PROJECT_ROOT"', shlex.quote(self.project)), "Discover folders", label=f"{sub.role} Bash Discover Folders")
             folders = _json_out(c.response.get("stdout", "")) if c.ok else None
             if not isinstance(folders, list):
                 folders = [l.strip() for l in (c.response.get("stdout", "") if c.ok else "").split("\n") if l.strip()]
             folders = [f.rstrip("/") for f in folders]
-            log = next(x for x in cmdtext.inline_codes(text, "Step 2: Analyze Each Folder", "Git history")
+            log = next(x for x in cmdtext.inline_codes(text, "Analyze Each Folder", "Git history")
                        if x.startswith("git log"))
             for f in folders:
                 sub.bash(log.replace('"$FOLDER"', shlex.quote(f)), f"Git history of {f}",
-                         label=f"{sub.role} Bash Step 2 {f}")
-            # Step 4: the folders its text names.
-            s4 = cmdtext.section(text, "Step 4: Generate INDEX.md")
+                         label=f"{sub.role} Bash Analyze Each Folder {f}")
+            # Generate INDEX.md: the folders its text names.
+            s4 = cmdtext.section(text, "Generate INDEX.md")
             if "ORCHESTRATOR_KEY_FOLDERS" in s4:
                 # the folders clean-inspect checks: the script the step names, read for its default list
                 orch = os.path.join(o.harness, re.search(r"`(?:~/\.claude|<HARNESS_ROOT>)/(scripts/[\w.-]+\.sh) clean-inspect`", s4).group(1))
@@ -500,8 +531,8 @@ class CleanRun:
             gen_index = cmdtext.block(s4, None, lang="bash")
             for f in index_dirs:
                 sub.bash(gen_index.replace('"$FOLDER_PATH"', shlex.quote(self.abs(f))), f"INDEX.md of {f}",
-                         label=f"{sub.role} Bash Step 4 {f}")
-            gen_readme = cmdtext.block(text, "Step 5: Generate README.md", lang="bash")
+                         label=f"{sub.role} Bash Generate INDEX.md {f}")
+            gen_readme = cmdtext.block(text, "Generate README.md", lang="bash")
             actions = {e.get("folder"): e.get("action") for e in fresh if isinstance(e, dict)}
             readme_dirs = [f for f in folders if actions.get(f, "CREATE_NEW") != "FRESH"]
             for f in readme_dirs:
@@ -509,7 +540,7 @@ class CleanRun:
                 cmd = (gen_readme.replace('"$FOLDER_PATH"', shlex.quote(self.abs(f)))
                        .replace('"$PURPOSE"', shlex.quote(purpose)).replace('"$ALLOWED_TYPES"', shlex.quote(types))
                        .replace('"$NAMING_CONVENTION"', shlex.quote(naming)))
-                sub.bash(cmd, f"README.md of {f}", label=f"{sub.role} Bash Step 5 {f}")
+                sub.bash(cmd, f"README.md of {f}", label=f"{sub.role} Bash Generate README.md {f}")
             output.update({"request_id": self.rid, "timestamp": utc_now(), "inspector": role,
                            "baseline_check": "not_provided",
                            "discoveries": [{"folder": f + "/", "purpose": self.folder_rules(f)[0],
@@ -519,7 +550,7 @@ class CleanRun:
                                        "index_files_generated": len(index_dirs),
                                        "readme_files_generated": len(readme_dirs)}})
         player = agents.Player(o.tree, prompt, agents.Act(work=work), role=role)
-        label = "Step 4 Agent(rule-inspector)"
+        label = f"Step {C.rules} Agent(rule-inspector)"
         o.s.dispatch(role, prompt, description="Folder rule discovery", body=player.body,
                      result=lambda sub: json.dumps(output, indent=2), label=label, deviation=self.devs.at(label))
 
@@ -536,14 +567,14 @@ class CleanRun:
     # ------------------------------------------------------------ Step 5
     def step5(self) -> None:
         o = self.o
-        for k, (name, b, para) in enumerate(o.step_blocks("Step 5")):
-            self.bash(self.fill(b.text), f"Step 5 Bash {name}", "Clean inspection orchestration")
-        role = self.checklist_role(5)
-        lines = self.prompt_block("Step 5", "Context file:")
-        report = self.fill(re.search(r"`(docs/clean/cleanliness-report-[^`]+)`", o.section("Step 5")).group(1))
+        for k, (name, b, para) in enumerate(o.step_blocks(f"Step {C.cleanliness}")):
+            self.bash(self.fill(b.text), f"Step {C.cleanliness} Bash {name}", "Clean inspection orchestration")
+        role = self.checklist_role(C.cleanliness)
+        lines = self.prompt_block(f"Step {C.cleanliness}", "Context file:")
+        report = self.fill(re.search(r"`(docs/clean/cleanliness-report-[^`]+)`", o.section(f"Step {C.cleanliness}")).group(1))
         prompt = o.instantiate("\n".join(lines + [f"Write your report to: {report}"]), None)
         self.cleanliness_rel = report
-        self.dispatch(role, prompt, self.cleanliness_work(role, report), "Step 5 Agent(cleanliness-inspector)",
+        self.dispatch(role, prompt, self.cleanliness_work(role, report), f"Step {C.cleanliness} Agent(cleanliness-inspector)",
                       report=report)
 
     def prompt_block(self, heading: str, anchor: str) -> list:
@@ -686,11 +717,11 @@ class CleanRun:
     # ------------------------------------------------------------ Steps 6-10A
     def step7(self) -> bool:
         o = self.o
-        planner = self.code("Step 7", "Run the planner script", contains="plan-style-inspection.sh")
-        self.plan_rel = self.fill(self.code("Step 7", "Run the planner script", startswith="docs/clean/style-plan"))
-        self.bash(f"{planner} > {shlex.quote(self.plan_rel)}", "Step 7 Bash plan-style-inspection",
+        planner = self.code(f"Step {C.plan}", "Run the planner script", contains="plan-style-inspection.sh")
+        self.plan_rel = self.fill(self.code(f"Step {C.plan}", "Run the planner script", startswith="docs/clean/style-plan"))
+        self.bash(f"{planner} > {shlex.quote(self.plan_rel)}", f"Step {C.plan} Bash plan-style-inspection",
                   "Plan the style inspection, saved")
-        self.read(self.plan_rel, "Step 7 Read style plan")
+        self.read(self.plan_rel, f"Step {C.plan} Read style plan")
         try:
             self.plan = self.load(self.plan_rel)
         except (OSError, ValueError):
@@ -701,14 +732,14 @@ class CleanRun:
 
     def step8(self) -> None:
         o = self.o
-        role = self.checklist_role(6) or self.role_in("Step 8")
-        bg = re.search(r"`run_in_background:\s*(true|false)`", o.section("Step 8"))
+        role = self.checklist_role(C.style) or self.role_in(f"Step {C.launch}")
+        bg = re.search(r"`run_in_background:\s*(true|false)`", o.section(f"Step {C.launch}"))
         extra = {"run_in_background": bg.group(1) == "true"} if bg else None
         self.partials = []
         for g in self.plan.get("groups") or []:
             n = g["group_id"]
             lines = []
-            for line in self.prompt_block("Step 8", "You are a style-inspector"):
+            for line in self.prompt_block(f"Step {C.launch}", "You are a style-inspector"):
                 line = line.replace("{GROUP_ID}", str(n)).replace("{N}", str(n))   # the base text spells it {N}
                 if re.match(r"\s*\d+\.\s+\{file_path_\d+\}", line):
                     if line.lstrip().startswith("1."):
@@ -720,7 +751,7 @@ class CleanRun:
             partial = re.search(r"Write your partial report to:\s*(\S+)", prompt).group(1)
             self.partials.append(partial)
             self.dispatch(role, prompt, self.style_work(role, n, g["files"], partial, prompt),
-                          f"Step 8 Agent({role}) group {n}", extra_input=extra,
+                          f"Step {C.launch} Agent({role}) group {n}", extra_input=extra,
                           description=f"Style inspection group {n}", report=partial)
         self.say(f"Launched {len(self.partials)} style-inspector agents in parallel")
 
@@ -763,14 +794,14 @@ class CleanRun:
     def step9(self) -> None:
         merged_v, audited = [], []
         for k, rel in enumerate(self.partials, 1):
-            self.read(rel, f"Step 9 Read partial {k}")
+            self.read(rel, f"Step {C.collect} Read partial {k}")
             try:
                 part = self.load(rel)
             except (OSError, ValueError):
                 continue
             merged_v += part.get("violations") or []
             audited += [f for f in part.get("files_audited") or [] if f not in audited]
-        m = re.search(r"Write the final merged report to\s+`([^`]+)`", self.o.section("Step 9"))
+        m = re.search(r"Write the final merged report to\s+`([^`]+)`", self.o.section(f"Step {C.collect}"))
         self.style_rel = self.fill(m.group(1))
         doc = {"request_id": self.rid, "timestamp": utc_now(), "inspector": "style-inspector",
                "violations": merged_v, "files_audited": audited,
@@ -779,23 +810,23 @@ class CleanRun:
                            "files_audited": len(audited), "files_total": self.plan.get("total_files", len(audited)),
                            "rounds_completed": 1}}
         self.audited = audited
-        self.write(self.style_rel, json.dumps(doc, indent=2) + "\n", "Step 9 Write style report")
+        self.write(self.style_rel, json.dumps(doc, indent=2) + "\n", f"Step {C.collect} Write style report")
 
     def step10(self) -> None:
-        self.read(self.plan_rel, "Step 10 Read style plan")
+        self.read(self.plan_rel, f"Step {C.coverage} Read style plan")
         want = [os.path.relpath(self.abs(p), self.project) for p in self.plan.get("all_files") or []]
         missed = [p for p in want if p not in getattr(self, "audited", [])]
         self.say("Coverage verification: " + ("every planned file audited" if not missed else f"missed {missed}"))
 
-    def step10a(self) -> None:
+    def step10a(self) -> None:  # the prompt-inspector dispatch (Step 10A of a base text, a sub-section of Step 10 since integer steps)
         o = self.o
-        role = self.role_in("Step 10A")
-        sec = o.section("Step 10A")
+        role = self.role_in(P_HEAD)
+        sec = o.section(P_HEAD)
         listed = {}
         for key in re.findall(r"`(\w+_files):\s*<every [^`>]+>`", sec):
             pat = re.search(r"`%s:\s*<every ([^`>]+)>`" % key, sec).group(1)
-            g = o.s.tool("Glob", {"pattern": pat, "path": self.project}, label=f"Step 10A Glob {key}",
-                         deviation=self.devs.at(f"Step 10A Glob {key}"))
+            g = o.s.tool("Glob", {"pattern": pat, "path": self.project}, label=f"Step {C.coverage}A Glob {key}",
+                         deviation=self.devs.at(f"Step {C.coverage}A Glob {key}"))
             listed[key] = [os.path.relpath(f, self.project) for f in (g.response.get("filenames") or [])] if g.ok else []
         report = self.fill(re.search(r"`(docs/clean/prompt-report-[^`]+)`", sec).group(1))
         ctx = self.fill(re.search(r"`(docs/clean/context-[^`]+)`", sec).group(1))
@@ -818,41 +849,41 @@ class CleanRun:
             self.reports[report] = json.dumps(doc, indent=2) + "\n"
             agents.put(sub, self.abs(report), self.reports[report], f"{sub.role} Write report")
             return {"status": "complete", "report": report, "findings": 0}
-        self.dispatch(role, prompt, work, f"Step 10A Agent({role})", report=report)
-        self.read(report, "Step 10A Read prompt report")
+        self.dispatch(role, prompt, work, f"Step {C.coverage}A Agent({role})", report=report)
+        self.read(report, f"Step {C.coverage}A Read prompt report")
 
     # ------------------------------------------------------------ Steps 11-15
     def step11(self) -> bool:
         o = self.o
-        call = self.fill(self.code("Step 11", "clean-merge-reports", contains="clean-merge-reports"))
+        call = self.fill(self.code(f"Step {C.merge}", "clean-merge-reports", contains="clean-merge-reports"))
         ctx_arg = call.split()[-1]
-        combined_rel = self.fill(re.search(r"`(docs/clean/combined-report-[^`]+)`", o.section("Step 11")).group(1))
+        combined_rel = self.fill(re.search(r"`(docs/clean/combined-report-[^`]+)`", o.section(f"Step {C.merge}")).group(1))
         self.combined_rel = combined_rel
         if not os.path.exists(self.abs(ctx_arg)) and self.gaps == "bridged":
             # C1: the context the merge reads, which no step creates: the context and the three reports
             # under the keys the helper reads.
-            self.bridge_context(ctx_arg, "Step 11 Bash context-with-reports")
-        c = self.bash(call, "Step 11 Bash clean-merge-reports", "Merge the inspection reports")
+            self.bridge_context(ctx_arg, f"Step {C.merge} Bash context-with-reports")
+        c = self.bash(call, f"Step {C.merge} Bash clean-merge-reports", "Merge the inspection reports")
         if not c.ok:
-            self.ended = "Step 11: the merge failed"
+            self.ended = f"Step {C.merge}: the merge failed"
             return False
         out = _json_out(c.response.get("stdout", "")) or {}
         produced = out.get("combined_report", "")
-        amend = o.has("Step 11", "MUST add the prompt report")
+        amend = o.has(f"Step {C.merge}", "MUST add the prompt report")
         if amend or (produced and os.path.abspath(produced) != self.abs(combined_rel)):
             if self.gaps != "bridged":
-                self.ended = "Step 11: the combined report is not where the later steps read it"
+                self.ended = f"Step {C.merge}: the combined report is not where the later steps read it"
                 return False
             # C2: the text's amendment (the prompt report added as top-level prompt_report and its findings
             # counted), written where Steps 12-16 read the combined report.
-            label = "Step 11 Bash amend combined report"
+            label = f"Step {C.merge} Bash amend combined report"
             jq = ("jq --slurpfile p " + shlex.quote(self.prompt_rel) +
                   " '. + {prompt_report: $p[0]} | .combined_summary.total_issues = "
                   "((.combined_summary.total_issues // 0) + ($p[0].findings // [] | length))' "
                   + shlex.quote(produced) + " > " + shlex.quote(combined_rel))
-            self.respelled("C2 combined-report path", "commands/clean.md Step 11 (:333-339 at 2acc29b)", label)
+            self.respelled("C2 combined-report path", f"commands/clean.md Step {C.merge} (:333-339 at 2acc29b)", label)
             if not self.bash(jq, label, "Add the prompt report to the combined JSON").ok:
-                self.ended = "Step 11: the combined report could not be amended"
+                self.ended = f"Step {C.merge}: the combined report could not be amended"
                 return False
         return True
 
@@ -865,10 +896,10 @@ class CleanRun:
                   label, "The context with the three inspection reports")
 
     def step12(self) -> None:
-        self.read(self.combined_rel, "Step 12 Read combined report")
+        self.read(self.combined_rel, f"Step {C.present} Read combined report")
         comb = self.load(self.combined_rel)
         self.combined = comb
-        md = cmdtext.block(self.o.text, "Step 12", lang="markdown")
+        md = cmdtext.block(self.o.text, f"Step {C.present}", lang="markdown")
         self.options = re.findall(r"^\d+\.\s+(.+)$", md.split("## Cleanup Options", 1)[-1], re.M)
         self.say(self.report_text(md, comb))
 
@@ -896,13 +927,16 @@ class CleanRun:
         opts = [{"label": t[:60], "description": t} for t in self.options] or [{"label": "Execute all", "description": ""}]
         tin = {"questions": [{"question": "Which cleanup option?", "header": "Cleanup", "options": opts,
                               "multiSelect": False}]}
-        call = o.s.tool("AskUserQuestion", tin, label="Step 13 AskUserQuestion",
-                        deviation=self.devs.at("Step 13 AskUserQuestion"))
+        src = re.search(r"`metadata\.source` is `(clean-option:)\{REQUEST_ID\}`", o.section(f"Step {C.approval}"))
+        if src:  # the one kept /clean question (hooks/lib/requirement_round.py KEPT)
+            tin["metadata"] = {"source": src.group(1) + self.rid}
+        call = o.s.tool("AskUserQuestion", tin, label=f"Step {C.approval} AskUserQuestion",
+                        deviation=self.devs.at(f"Step {C.approval} AskUserQuestion"))
         ans = (call.response.get("answers") or {}).get("Which cleanup option?", "")
         if not ans.startswith(opts[0]["label"][:20]):
-            self.ended = f"Step 13: the owner chose {ans!r}"
+            self.ended = f"Step {C.approval}: the owner chose {ans!r}"
             return False
-        self.read(self.combined_rel, "Step 13 Read combined report")
+        self.read(self.combined_rel, f"Step {C.approval} Read combined report")
         comb = self.load(self.combined_rel)
         approved = []
         for k, (src, i, f) in enumerate(self.findings(comb), 1):
@@ -917,18 +951,18 @@ class CleanRun:
             approved.append(entry)
         total = (comb.get("combined_summary") or comb.get("summary") or {}).get("total_issues", len(approved))
         if total != len(approved):
-            self.ended = f"Step 13: {len(approved)} approved actions for {total} findings"
+            self.ended = f"Step {C.approval}: {len(approved)} approved actions for {total} findings"
             return False
         doc = {"request_id": self.rid, "timestamp": utc_now(), "mode": "execute_all",
                "user_approvals": {"total_issues_in_report": total, "total_approved_actions": len(approved),
                                   "approved_actions": approved, "rejected_actions": []}}
-        self.approvals_rel = self.save_path("Step 13")
-        self.write(self.approvals_rel, json.dumps(doc, indent=2) + "\n", "Step 13 Write user approvals")
+        self.approvals_rel = self.save_path(f"Step {C.approval}")
+        self.write(self.approvals_rel, json.dumps(doc, indent=2) + "\n", f"Step {C.approval} Write user approvals")
         return True
 
     def step14(self) -> bool:
-        self.read(self.combined_rel, "Step 14 Read combined report")
-        self.read(self.approvals_rel, "Step 14 Read user approvals")
+        self.read(self.combined_rel, f"Step {C.verify} Read combined report")
+        self.read(self.approvals_rel, f"Step {C.verify} Read user approvals")
         comb, appr = self.load(self.combined_rel), self.load(self.approvals_rel)
         total = (comb.get("combined_summary") or comb.get("summary") or {}).get("total_issues")
         n = (appr.get("user_approvals") or {}).get("total_approved_actions")
@@ -940,91 +974,46 @@ class CleanRun:
 
     def step15(self) -> None:
         o = self.o
-        hook = self.code("Step 15", "checkpoint.sh", startswith="bash ")
-        self.bash(hook, "Step 15 Bash checkpoint", "Create the safety checkpoint")
+        hook = self.code(f"Step {C.checkpoint}", "checkpoint.sh", startswith="bash ")
+        self.bash(hook, f"Step {C.checkpoint} Bash checkpoint", "Create the safety checkpoint")
         # "read `refs/checkpoints/<branch>`": the branch Step 3 recorded
-        ref = self.code("Step 15", "checkpoint.sh", startswith="refs/checkpoints/").replace(
+        ref = self.code(f"Step {C.checkpoint}", "checkpoint.sh", startswith="refs/checkpoints/").replace(
             "<branch>", self.facts.get("branch") or "master")
-        c = self.bash(f"git rev-parse {shlex.quote(ref)}", "Step 15 Bash checkpoint ref", "Read the checkpoint ref")
+        c = self.bash(f"git rev-parse {shlex.quote(ref)}", f"Step {C.checkpoint} Bash checkpoint ref", "Read the checkpoint ref")
         self.checkpoint = c.response.get("stdout", "").strip() if c.ok else ""
         o.values["CHECKPOINT_COMMIT"] = self.checkpoint
-        rec = self.fill(self.code("Step 15", "checkpoint.sh", contains="record-checkpoint")).replace(
+        rec = self.fill(self.code(f"Step {C.checkpoint}", "checkpoint.sh", contains="record-checkpoint")).replace(
             "<checkpoint_commit>", self.checkpoint)
-        c = self.bash(rec, "Step 15 Bash record-checkpoint", "Record the checkpoint commit")
+        c = self.bash(rec, f"Step {C.checkpoint} Bash record-checkpoint", "Record the checkpoint commit")
         out = (_json_out(c.response.get("stdout", "")) or {}) if c.ok else {}
         self.checkpoint = out.get("checkpoint_commit") or self.checkpoint
 
     # ------------------------------------------------------------ Step 16: the cleaner
     def step16(self) -> None:
         o = self.o
-        block = next(b for _n, b, _p in o.step_blocks("Step 16") if "clean-merge-approvals" in b.text)
+        block = next(b for _n, b, _p in o.step_blocks(f"Step {C.cleaner}") if "clean-merge-approvals" in b.text)
         text = self.fill(block.text).replace("<checkpoint_commit>", self.checkpoint)
-        self.bash(text, "Step 16 Bash clean-merge-approvals", "Merge the approvals into the cleaner's context")
-        inv = cmdtext.block(o.text, "Step 16", anchor="Agent tool invocation:")
+        self.bash(text, f"Step {C.cleaner} Bash clean-merge-approvals", "Merge the approvals into the cleaner's context")
+        inv = cmdtext.block(o.text, f"Step {C.cleaner}", anchor="Agent tool invocation:")
         m = re.search(r'prompt:\s*"(.*)"\s*$', inv.rstrip("\n"), re.S)
         prompt = o.instantiate(self.fill(m.group(1)), None)
-        role = self.checklist_role(16) or self.role_in("Step 16")
+        role = self.checklist_role(C.cleaner) or self.role_in(f"Step {C.cleaner}")
         out_rel = re.search(r"Write results to\s+(\S+?\.json)", prompt).group(1)
-        self.dispatch(role, prompt, self.cleaner_work(role, prompt), f"Step 16 Agent({role})",
+        self.dispatch(role, prompt, self.cleaner_work(role, prompt), f"Step {C.cleaner} Agent({role})",
                       description="Execute approved cleanup actions", report=out_rel)
         self.refused_answers = []
-        if "actions_refused" not in o.section("Step 16"):
+        if "actions_refused" not in o.section(f"Step {C.cleaner}"):
             return   # the base text: a refused action is a failure the report records
-        # the hook-rejection rule (Workflow Overview): the execution report read, then one AskUserQuestion naming
-        # each refused action and its exact operation; one the tool policy refused is stated withdrawn, the owner's
-        # answer decides each other one, nothing is run again
-        self.read(out_rel, "Step 16 Read execution report")
+        # the hook-rejection rule (Workflow Overview): the execution report read; nobody is asked. Each refused
+        # action is withdrawn and recorded with the hook's output and, where its hook reads /allow grants, the /allow
+        # line the owner could type; one the tool policy refused is a follow-up for a /dev cycle.
+        self.read(out_rel, f"Step {C.cleaner} Read execution report")
         refused = (getattr(self, "cleaner_result", {}) or {}).get("actions_refused") or []
-        if not refused:
-            return
         rule = cmdtext.section(o.text, "Workflow Overview")
-        withdrawn = re.search(r"`hooks/pretool-tool-policy\.py` refused is not run again in this session \([^)]*\): "
-                              r"the question states its outcome, the action (withdrawn) and recorded with the hook's "
-                              r"output", rule)
-        grant = re.search(r"runs again only after (the owner's `/allow` grant for it) \(.*?\), (when the orchestrator "
-                          r"re-dispatches the same role)[^;]*; or the owner (leaves it undone)", rule)
-        choice = re.search(r'offers "([^"]+\(Recommended\))" or "([^"]+)"', rule[withdrawn.end():]) if withdrawn else None
-        named, policy, decide = [], [], []
-        for r in refused:
-            line = f"{r['action_id']} ({r.get('action')}): {r['operation']} was refused by {r.get('hook')}: " \
-                   f"{r.get('hook_output')}"
-            if _tool_policy_refused(r):
-                if not (withdrawn and choice):
-                    raise cmdtext.TextNotFound("Workflow Overview: no outcome for an operation the tool policy refused")
-                named.append(f"{line}; {withdrawn.group(1)} and recorded with the hook's output")
-                policy.append(r)
-            else:
-                if not grant:
-                    raise cmdtext.TextNotFound("Workflow Overview: no owner decision for a refused operation")
-                named.append(f"{line}; the owner decides it")
-                decide.append(r)
-
-        def ask(text, header, opts):
-            return {"question": text, "header": header, "multiSelect": False,
-                    "options": [{"label": t[:60], "description": t} for t in opts]}
-
-        questions = []
-        if decide:
-            # The owner leaves a refusal a grant could let through undone (the first option): the replay plays no
-            # /allow prompt and no re-dispatch.
-            questions.append(ask("Refused by a hook: " + " | ".join(named) + ". How do you decide the ones you decide?",
-                                 "Refused", [grant.group(3), f"{grant.group(1)}, {grant.group(2)}"]))
-        if policy:
-            # the tool policy's refusals: a question of their own beside a grant decision; the owner takes the
-            # recommended option
-            text = ("Refused by a hook: " + " | ".join(named) if not decide else
-                    "Withdrawn: " + ", ".join(r["action_id"] for r in policy)) + ". How do you record them?"
-            questions.append(ask(text, "Withdrawn", [choice.group(1), choice.group(2)]))
-        call = o.s.tool("AskUserQuestion", {"questions": questions},
-                        label="Step 16 AskUserQuestion refused operations",
-                        deviation=self.devs.at("Step 16 AskUserQuestion refused operations"))
-        answers = call.response.get("answers") or {}
-        answer = answers.get(questions[0]["question"], "") if decide else ""
-        record = answers.get(questions[-1]["question"], "") if policy else ""
-        outcome = withdrawn.group(1) if not policy or record == choice.group(1)[:60] else \
-            f"{withdrawn.group(1)}, recorded as {choice.group(2).split(' as ', 1)[-1]}"
-        held = {id(r) for r in policy}
-        self.refused_answers = [(r, outcome if id(r) in held else answer) for r in refused]
+        if refused and "Nobody asks the owner about it" not in rule:
+            raise cmdtext.TextNotFound("Workflow Overview: no report-only rule for a refused operation")
+        self.refused_answers = [(r, "withdrawn; a follow-up for a /dev cycle" if _tool_policy_refused(r) else
+                                 f"withdrawn; to have it done: /allow {r['operation']}") for r in refused]
 
     def cleaner_work(self, role: str, prompt: str):
         o = self.o
@@ -1229,12 +1218,12 @@ class CleanRun:
         r = getattr(self, "cleaner_result", {}) or {}
         commit = (r.get("git_status") or {}).get("cleanup_commit", "")
         # "when the execution report names a `cleanup_commit`, also ...": those calls only with one
-        item = next(it for it in re.split(r"\n(?=\s*(?:[-*]|\d+\.)\s)|\n\s*\n", self.o.section("Step 17"))
+        item = next(it for it in re.split(r"\n(?=\s*(?:[-*]|\d+\.)\s)|\n\s*\n", self.o.section(f"Step {C.results}"))
                     if "Review git changes" in it)
         always, _, if_commit = item.partition("when the execution report names a `cleanup_commit`")
         calls = re.findall(r"`(git [^`]+)`", always) + (re.findall(r"`(git [^`]+)`", if_commit) if commit else [])
         for k, c in enumerate(calls, 1):
-            self.bash(c, f"Step 17 Bash git {k}", "Review the cleanup's git changes")
+            self.bash(c, f"Step {C.results} Bash git {k}", "Review the cleanup's git changes")
         s = r.get("summary") or {}
         decided = "".join(f"\n- {a['action_id']}: {a['operation']} (refused by {a.get('hook')}): {ans}"
                           for a, ans in getattr(self, "refused_answers", []))
@@ -1244,7 +1233,7 @@ class CleanRun:
                  f"- Checkpoint commit: {self.checkpoint}\n- Cleanup commit: {commit or 'none'}")
 
     def step18(self) -> None:
-        tpl = cmdtext.block(self.o.text, "Step 18", lang="markdown")
+        tpl = cmdtext.block(self.o.text, f"Step {C.report}", lang="markdown")
         r = getattr(self, "cleaner_result", {}) or {}
         g = r.get("git_status") or {}
         text = self.fill(tpl).replace("clean-YYYYMMDD-HHMMSS", self.rid)
@@ -1256,13 +1245,13 @@ class CleanRun:
         text = text.replace("Checkpoint commit: <hash>", f"Checkpoint commit: {self.checkpoint}").replace(
             "Cleanup commit: <hash>", f"Cleanup commit: {g.get('cleanup_commit', '')}")
         decided = "\n".join(f"- {a['action_id']}: {a['operation']} ({a.get('hook')}: {a.get('hook_output')}); "
-                            + (ans if ans.startswith("withdrawn") else f"the owner: {ans}")
+                            + ans
                             for a, ans in getattr(self, "refused_answers", []))
         text = re.sub(r"<list of refused actions[^>]*>", lambda _m: decided or "none", text)
         text = re.sub(r"<the checkpoint, plus [^>]+>", "the checkpoint" + (" and the cleanup commit" if g.get(
             "cleanup_commit") else ""), text)
         text = re.sub(r"<list of [^>]+>", "(see the execution report)", text)
-        self.write(self.save_path("Step 18"), text, "Step 18 Write completion report")
+        self.write(self.save_path(f"Step {C.report}"), text, f"Step {C.report} Write completion report")
 
     # ------------------------------------------------------------ the run
     def stop(self) -> None:
@@ -1275,35 +1264,38 @@ class CleanRun:
                     f"{r.get('summary', {}).get('refused', 0)} refused by a hook and decided by the owner; "
                     + (f"cleanup commit {commit}. To publish to the remote: /push" if commit
                        else "no cleanup commit: nothing was committed"))
-        self.o.s.stop(text, label="Stop", deviation=self.devs.at("Stop"))
+        self.stop_ev = self.o.s.stop(text, label="Stop", deviation=self.devs.at("Stop"))
+        # The end as the run made it: the owner's choices were all carried to the completion report (no early
+        # stop) and a cleaner's result was gathered. An early stop records the command as not reached.
+        self.rp.terminal("clean", not self.ended and bool(getattr(self, "cleaner_result", None)), self.stop_ev)
 
     def run(self) -> None:
         self.step1()
-        self.to(2); self.step2()
-        self.to(3); self.step3()
-        self.to(4); self.step4()
-        self.to(5); self.step5()
-        self.to(6)   # Step 6's own text is the heading of Steps 7-10: no call of its own
-        self.to(7)
+        self.to(C.scan); self.step2()
+        self.to(C.context); self.step3()
+        self.to(C.rules); self.step4()
+        self.to(C.cleanliness); self.step5()
+        self.to(C.style)   # Step 6's own text is the heading of Steps 7-10: no call of its own
+        self.to(C.plan)
         if self.step7():
-            self.to(8); self.step8()
-            self.to(9); self.step9()
-            self.to(10); self.step10()
+            self.to(C.launch); self.step8()
+            self.to(C.collect); self.step9()
+            self.to(C.coverage); self.step10()
             self.step10a()   # no checklist item: made while Step 10 is in progress
-        self.to(11)
+        self.to(C.merge)
         if not self.step11():
             return self.stop()
-        self.to(12); self.step12()
-        self.to(13)
+        self.to(C.present); self.step12()
+        self.to(C.approval)
         if not self.step13():
             return self.stop()
-        self.to(14)
+        self.to(C.verify)
         if not self.step14():
             return self.stop()
-        self.to(15); self.step15()
-        self.to(16); self.step16()
-        self.to(17); self.step17()
-        self.to(18); self.step18()
+        self.to(C.checkpoint); self.step15()
+        self.to(C.cleaner); self.step16()
+        self.to(C.results); self.step17()
+        self.to(C.report); self.step18()
         self.o.advance()
         self.stop()
 
@@ -1326,4 +1318,7 @@ def run(rp) -> None:
     closedrv.fact(rp, "before /push", {"cleanup commit": (cr.cleaner_result.get("git_status") or {}).get(
         "cleanup_commit", "") if getattr(cr, "cleaner_result", None) else "",
         "toy": pushdrv.origin_state(rp), "left": pushdrv.leftovers(rp)})
-    pushdrv.PushRun(rp, cr.o.s, args="").run()
+    pr = pushdrv.PushRun(rp, cr.o.s, args="")
+    pr.run()
+    pushed = [f["value"] for f in pushdrv._facts(rp) if f.get("key") == "push"]
+    rp.terminal("push", bool(pushed) and bool(pushed[-1].get("pushed")), getattr(pr, "stop_ev", None))

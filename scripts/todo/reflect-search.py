@@ -24,7 +24,6 @@ def get_todos():
 
 
 if __name__ == "__main__":
-    # CLI: print todos as formatted list
     import json
     todos = get_todos()
     print(json.dumps(todos, indent=2, ensure_ascii=False))

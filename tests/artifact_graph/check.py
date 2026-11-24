@@ -57,7 +57,12 @@ Derivation rules, in the order row 19 states them:
     (it exists, is a file, may be opened) decides on its removal alone, since
     the content mutation leaves that answer as it was. Deciders of one
     artifact are one rule only when their deciding reads are the same code
-    site (the one function they all call). Over E2's budget the differential
+    site (the one function they all call). A measured change of a merged
+    gate's decision is the decision of those of its refusing rules whose own
+    deciding read on the artifact can refuse (exit 2, block, non-zero exit,
+    raise); a rule that only routes on it (moves on when it is missing) cannot
+    give that block and is no decider of it (all of them when none can).
+    Over E2's budget the differential
     runs only for the shipped readers outside the allowed positions (E1's
     fallback).
 (5) Position of a deciding read: from the hook's event and matcher
@@ -87,6 +92,13 @@ Derivation rules, in the order row 19 states them:
     gate or a use.
 (7) Lists that repeat a declaration: the static half's rule-(7) literals, and
     the tool-policy prefixes that name the file of an artifact derived here.
+(6') The register of accepted deciding reads (register.py, policies/artifact-check-accepted-reads.v1.json in
+    the tree) covers a rule (6) violation, 6-move or 6-recheck, and nothing else: an entry names the
+    artifact and the position (the hook event and the tool of the call), with a reason it must carry, and
+    covers, with the other entries on that artifact, every rule (6) line whose decisions were all taken at
+    positions those entries name (one entry per position). A covered violation is not reported; the check counts the covered ones
+    (counts()["register_covered"], the map's header and the log) and an entry that covers no current
+    violation is a violation itself (register-stale). Rules (1), (2), (4), (5), (7) and (8) have no register.
 (8) Every replay sets CLAUDE_STATE_DIR to a directory other than /tmp, and a
     file is read and written under one root (a reader under /tmp or TMPDIR of
     a file its writer puts under the state dir is a split).
@@ -227,6 +239,7 @@ class Map:
     static_records: int = 0
     extra: list = field(default_factory=list)       # violations not tied to one artifact
     pending: list = field(default_factory=list)     # violations of a rule not yet enforced (REPORTED_ONLY)
+    covered: list = field(default_factory=list)     # (violation, entry) the register of accepted reads covers
     measures: dict = field(default_factory=dict)
     ctx: object = None
 
@@ -281,11 +294,17 @@ def _regex(pattern: str) -> re.Pattern:
     value, as `session_id="$1"` given dev-<ts>) and <rand> (a temp-name generator's random part,
     which the runtime half writes <rand> inside its prefix and suffix) any text within a segment;
     <ts> a minted id that ends in a timestamp (dev-<ts>: rule (1) replaces only the timestamp);
-    other tokens themselves."""
+    other tokens themselves. One exception: a <*> that is a file's whole name before its extension
+    (`<dir>/<*>.json`: code that reads every such file of its directory) also matches a whole <rand>
+    name there (`<dir>/<rand>.json`): a file named by a minted id, as an agent's Write names the
+    merge-analyst grant by its request id; `tmp<rand>.json` or `<rand>-x.json` still does not."""
     out = []
     for m in re.finditer(r"<([a-z*]+)>|[^<]+|<", pattern):
         if m.group(1) is None:
             out.append(re.escape(m.group(0)))
+        elif m.group(1) == "*" and pattern[:m.start()].endswith("/") \
+                and re.fullmatch(r"\.[^/<]+", pattern[m.end():]):
+            out.append(r"(?:<rand>|(?:(?!<rand>).)*?)")   # a whole name, as an id names the file
         elif m.group(1) == "*":
             out.append(r"(?:(?!<rand>).)*?")      # no code names a temp-name generator's part
         elif m.group(1) in ("task", "sid", "lane"):
@@ -405,7 +424,9 @@ class _Ctx:
         rt = sorted(self.rt_keys)
         own: dict = {}
         staged = []
-        temps = _rename_sources(rels)
+        # a rename onto an unresolved name (an entry a listing gave) still folds a source of its own name
+        temps = _rename_sources(rels + [dict(r, path=r["partial"], **{"from": [s for s in r["from"] if not _holes_only(s)]})
+                                        for r in self.recs if r["kind"] == "unresolved" and r.get("from")])
         floating: set = set()
         # a project-dir resolver's last tiers are the harness home or HOME (the session ran
         # there): a site whose alternatives name the same path under the project (<proj>, or the
@@ -644,9 +665,22 @@ class _Ctx:
         ran there (tests/replay/sites.py narrows the same way); one that declares none runs on every
         call. On a `file` artifact (no code tests it to be a directory), a deciding read whose site
         reads the path by directory tests alone stands for nothing (_dir_test_only)."""
-        return [f for f in self.rule_files(gate, deciding=True)
-                if self._rule_runs_on(gate, f, tool)
-                and any(not (file and self._dir_test_only(d)) for d in self._deciding_on(f, key))]
+        cands = {f: [d for d in self._deciding_on(f, key) if not (file and self._dir_test_only(d))]
+                 for f in self.rule_files(gate, deciding=True) if self._rule_runs_on(gate, f, tool)}
+        cands = {f: ds for f, ds in cands.items() if ds}
+        # a deciding read whose path is holes alone (`<*>`: a path the call's own input names) stands for the
+        # change only when no rule's deciding read names the artifact itself
+        named = [f for f, ds in cands.items() if any(not _holes_only(d["path"]) for d in ds)]
+        return sorted(named or cands)
+
+    def _refusing_rules(self, rules: list[str], key: str, file: bool) -> list[str]:
+        """Of a merged gate's deciding rules on `key` (_gate_deciders), those a change of the gate's
+        decision can be the answer of: a rule with a deciding read on `key` that ends in a refusal
+        (_refuses). A rule whose every deciding read on it only routes (a `continue`, another branch)
+        never refuses on it, so the gate's block is another rule's. With none such, all of them."""
+        own = [f for f in rules if any(_refuses(d) for d in self._deciding_on(f, key)
+                                       if not (file and self._dir_test_only(d)))]
+        return own or rules
 
     def _dir_test_only(self, d: dict) -> bool:
         """A deciding read whose own read site reads its path by directory tests alone (_DIR_TEST:
@@ -1066,9 +1100,11 @@ class _Ctx:
                         elif rules:
                             # a merged gate's decision is its refusing rules': each rule file that
                             # decides on the artifact, with its own deciding reads (rule (4)), at the
-                            # gate's position as that file (its own artifact only if it wrote it)
+                            # gate's position as that file (its own artifact only if it wrote it);
+                            # of them, those whose own answer on it can be a refusal (_refuses)
                             deciders = [(f, self._position(a, u["event"], u.get("tool"), u.get("agent_type"), f,
-                                                           u["kind"]), f"{where} in {who}") for f in rules]
+                                                           u["kind"]), f"{where} in {who}")
+                                        for f in self._refusing_rules(rules, key, a.kind == "file" and key not in self.dirs)]
                         else:
                             deciders = [(who, self._position(a, u["event"], u.get("tool"), u.get("agent_type"),
                                                              u["origin"], u["kind"]), where)]
@@ -1775,6 +1811,12 @@ def _decides(reg: dict) -> bool:
     return reg.get("type") != "gate_rule" or reg.get("rule_kind") == "refuse"
 
 
+def _refuses(d: dict) -> bool:
+    """A static deciding read whose decision is a refusal: exit 2, a block, a non-zero exit, or a raise
+    (a rule's exception is the gate's to answer); `route` is not."""
+    return d["decision"] in ("exit2", "block", "raise") or d["decision"] == "exit" and d.get("code") not in (0, None)
+
+
 def _presence_only(vias) -> bool:
     """Every read of a deciding read's site is a presence test (_PRESENCE_TEST)."""
     return bool(vias) and all(_PRESENCE_TEST.search(v or "") for v in vias)
@@ -1913,6 +1955,11 @@ class Violation:
     deciders: list = field(default_factory=list)
     position: str = ""
     evidence: list = field(default_factory=list)
+    # rule (6)'s, for the register of accepted deciding reads (register.py): the reader, its mutation and the
+    # (event, tool) of every decision the violation reports
+    reader: str = ""
+    how: str = ""
+    at: tuple = ()
 
     def text(self) -> str:
         parts = [f"[{self.rule}] {self.artifact}: {self.message}"]
@@ -1928,6 +1975,11 @@ class Violation:
 
     def sort_key(self):
         return (self.rule, self.artifact, self.message, self.text())
+
+
+def _holes_only(pattern: str) -> bool:
+    """A path pattern with no literal part: `<*>`, `<proj>/<*>`, `<*>/<*>`."""
+    return not re.sub(r"<[^<>]*>|/", "", pattern)
 
 
 def _ev(rels, limit=4) -> list[str]:
@@ -2031,7 +2083,11 @@ def violations(m: Map, static_records: list | None = None) -> list[Violation]:
     uniq = {}
     for v in out:
         uniq.setdefault(v.text(), v)
-    return sorted(uniq.values(), key=Violation.sort_key)
+    # the register of accepted deciding reads (register.py): rule (6) alone, each entry with its reason
+    from . import register as R
+    entries, problems = R.load(m.tree)
+    left, m.covered = R.apply(list(uniq.values()), entries, problems, lambda r, a, msg: Violation(r, a, msg))
+    return sorted(left, key=Violation.sort_key)
 
 
 def _under(directory_pattern: str, key: str) -> bool:
@@ -2162,10 +2218,12 @@ def _rechecks(a: Artifact, key: str, writers_txt: list, ctx=None) -> list[Violat
         # (a static branch on a content read decides on any mutation, rule (4))
         rules = {r for (w, p, h), xs in groups.items() if w == who and p == position
                  and (h == how or "any" in (h, how)) for d in xs for r in _rules(d)}
+        at = tuple(sorted({(d.event, d.matcher) for d in ds}))
         if shipped:
             out.append(Violation("6-recheck", key, f"re-check by {who}: the producer side rejects mutation '{how}' "
                                  f"with the tree's switches", writers_txt, _dec(ds), position,
-                                 evidence=sites[:6] + _dec([x for x in side if x.settings in ("shipped", "static")], 4)))
+                                 evidence=sites[:6] + _dec([x for x in side if x.settings in ("shipped", "static")], 4),
+                                 reader=who, how=how, at=at))
         elif armed:
             continue    # E4: the fault's only stop while its gate is advisory (listed by the map)
         elif ctx is not None and ctx.code_produced(a):
@@ -2177,7 +2235,7 @@ def _rechecks(a: Artifact, key: str, writers_txt: list, ctx=None) -> list[Violat
         else:
             out.append(Violation("6-move", key, f"{who} decides outside the allowed positions and no gate rejects "
                                  f"mutation '{how}' even armed: a rule to move into the gate, or a use",
-                                 writers_txt, _dec(ds), position, evidence=sites[:6]))
+                                 writers_txt, _dec(ds), position, evidence=sites[:6], reader=who, how=how, at=at))
     return out
 
 
@@ -2209,8 +2267,10 @@ def map_text(m: Map, vs: list[Violation]) -> str:
     for v in vs:
         by_art.setdefault(v.artifact, []).append(v)
     lines = [f"# Artifact map of {os.path.basename(m.tree.rstrip('/')) or m.tree}",
-             f"# {len(m.artifacts)} artifacts; {len(vs)} violations; runs: "
-             + ", ".join(sorted(r.name for r in m.runs)), ""]
+             f"# {len(m.artifacts)} artifacts; {len(vs)} violations; {len(m.covered)} covered by the register of "
+             "accepted reads; runs: " + ", ".join(sorted(r.name for r in m.runs)), ""]
+    lines += [f"# covered (entry {e['index']}: {e['reason']}): [{v.rule}] {v.artifact}: {v.message}"
+              for v, e in m.covered] + ([""] if m.covered else [])
     for key in sorted(m.artifacts):
         a = m.artifacts[key]
         lines.append(f"## {key}" + (f"  [{a.kind}]" if a.kind != "file" else ""))
@@ -2287,6 +2347,7 @@ def counts(m: Map, vs: list[Violation]) -> dict:
     with_v = {v.artifact for v in vs}
     return {"artifacts": len(m.artifacts), "artifacts_by_kind": dict(sorted(kinds.items())),
             "violations": len(vs), "violations_by_rule": dict(sorted(by_rule.items())),
+            "register_covered": len(m.covered),
             "artifacts_with_violations_by_rule": {r: len({v.artifact for v in vs if v.rule == r})
                                                   for r in sorted(by_rule)},
             "artifacts_without_violation": sum(1 for k in m.artifacts if k not in with_v),
@@ -2488,6 +2549,8 @@ def run_check(tree: str, work: str, *, jobs: int = 4, budget_s: float = 1500.0, 
     m = derive(tree, static, runs)
     vs = violations(m, static.records)
     timing["derive_s"] = round(time.monotonic() - t0, 1)
+    log(f"violations: {len(vs)}; covered by the register of accepted reads ({len(m.covered)}): "
+        + ("; ".join(f"[{v.rule}] {v.artifact} by {v.reader} '{v.how}'" for v, _e in m.covered) or "none"))
     m.measures = dict(measures, e1=e1_recall(m, static.records))
     c = counts(m, vs)
     text = map_text(m, vs)

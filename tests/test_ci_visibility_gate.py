@@ -14,6 +14,7 @@ them, and a duplicate key fails: PyYAML keeps the last of two `if:` keys, GitHub
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -100,3 +101,51 @@ def test_release_stays_tag_triggered() -> None:
     assert set(on) == {"push"}, f"release.yml must run on tag pushes only, got {sorted(on)}"
     push = on["push"] or {}
     assert "v*" in (push.get("tags") or []) and "branches" not in push
+
+
+_PYTEST_CALL = re.compile(r"(?:-m\s+pytest|^\s*pytest)\b", re.MULTILINE)
+_STUCK_TEST_BOUND = re.compile(r"-o\s+faulthandler_timeout=[1-9][0-9]*\b")
+
+
+def _run_text(step: dict) -> str:
+    """A step's script without its comment lines."""
+    return "\n".join(line for line in str(step.get("run", "")).splitlines() if not line.lstrip().startswith("#"))
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
+def test_every_job_has_a_time_limit_and_every_test_run_a_stuck_test_bound(path: Path) -> None:
+    """A hung job must not run to the hosting service's six hours without saying where it stands.
+
+    Every job that runs steps carries its own timeout-minutes (a job that only calls a reusable
+    workflow, `uses:`, cannot: the called jobs carry theirs), and every step that runs the test
+    runner passes `-o faulthandler_timeout=<seconds>`, so that a test running longer than the bound
+    prints its name and stack into the log (the runner prints no test names in its quiet mode).
+    Read from the parsed files: no number and no job name is fixed here.
+    """
+    jobs = _load(path).get("jobs") or {}
+    no_limit = [jid for jid, job in jobs.items()
+                if "uses" not in job and not (isinstance(job.get("timeout-minutes"), int) and job["timeout-minutes"] > 0)]
+    unbounded = [f"{jid}: {step.get('name', '?')}" for jid, job in jobs.items() for step in job.get("steps") or []
+                 if len(_PYTEST_CALL.findall(_run_text(step))) > len(_STUCK_TEST_BOUND.findall(_run_text(step)))]
+    assert not no_limit, f"{path.name}: jobs without a timeout-minutes of their own: {no_limit}"
+    assert not unbounded, f"{path.name}: test-runner steps without -o faulthandler_timeout=<seconds>: {unbounded}"
+
+
+_WORKERS = re.compile(r"(?<!\S)(?:-n\s*\S|--numprocesses\b|--dist\b)")
+_NO_WORKER_RESTART = re.compile(r"--max-worker-restart=0\b")
+
+
+@pytest.mark.parametrize("path", WORKFLOWS, ids=lambda p: p.name)
+def test_every_test_run_with_workers_ends_when_a_worker_dies(path: Path) -> None:
+    """A worker that dies mid-run must fail the run on the spot and name its test.
+
+    With --dist loadfile and files still queued for it, xdist waits for the dead worker until the
+    job's time limit and prints nothing. Every step that runs the test runner with workers
+    (-n, --numprocesses, --dist) passes --max-worker-restart=0 once per runner call; the runner then
+    stops at the crash with "worker 'gwN' crashed while running '<test>'". Read from the parsed files.
+    """
+    jobs = _load(path).get("jobs") or {}
+    lacking = [f"{jid}: {step.get('name', '?')}" for jid, job in jobs.items() for step in job.get("steps") or []
+               if _PYTEST_CALL.search(_run_text(step)) and _WORKERS.search(_run_text(step))
+               and len(_PYTEST_CALL.findall(_run_text(step))) > len(_NO_WORKER_RESTART.findall(_run_text(step)))]
+    assert not lacking, f"{path.name}: test-runner steps with workers lacking --max-worker-restart=0: {lacking}"

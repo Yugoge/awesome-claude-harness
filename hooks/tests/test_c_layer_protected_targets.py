@@ -48,6 +48,7 @@ sys.path.insert(0, str(ROOT))
 from tests.replay import sites  # noqa: E402
 
 PRIVILEGE = "pretool-git-privilege-guard.py"
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 SAFETY = "pretool-bash-safety.sh"
 POLICY = "pretool-tool-policy.py"
 CONFIG_GUARD = "pretool-claude-config-guard.py"
@@ -115,26 +116,29 @@ def _pair(program, target, form, spell):
 # quoted text before it looks for a write, so a write inside a -c string named no target there: up
 # to T2-16 a layer exited 0 at tool-policy for every case below, where its top-level form exits 2.
 # tool-policy now reads each -c layer (lib/git_command_classifier's walk) as its command run plainly,
-# and the layer exits 2 as well (hooks/tests/test_tool_policy_c_layer_writes.py). Two of its
-# stages refuse the top-level form: the protected stage (P5 R2/R3, both actors) for the harness
+# and the layer exits 2 as well (hooks/tests/test_tool_policy_c_layer_writes.py). One of its
+# stages refuses the top-level form: the protected stage (P5 R2/R3, both actors) for the harness
 # home's protected files and the push-gate token, as cp, mv, tee, truncate and rm write or remove
-# them; and the dev role's rows (subagent), whose reader names what cp, mv and tee write, for the
-# shared protected prefixes and a path outside the allowed ones. Of the `$T` forms only tee's is
+# them. The dev role's rows refuse none of these targets (its allow list is '*', and none lies
+# under a shared protected prefix). Until the location answers were made one (hooks/lib/locations.py)
+# a dev subagent's cp, mv or tee into the product repository's .git/hooks/ or the home's
+# settings.json was refused here all the same, and held as 14 gaps: this sandbox lies under pytest's
+# temp directory, and the ban on arbitrary system temp writes took the scratch harness home, which
+# is the project of these calls, for arbitrary temp (hardcode audit 2026-11-19, finding 13). They
+# are no gap now, and the first test compares them at tool-policy as it does every other case.
+# Of the `$T` forms only tee's is
 # refused plainly: that reader follows `T=<target>; tee $T` to its target (TC-47). On master
 # a7d3a9fe each of these layer forms exits 0 at tool-policy too (master has no protected stage, and
 # its role rows read the same blanked text): pre-existing, the follow-up "tool-policy reads no write
 # inside a -c string" (T2-16).
 _POLICY_PROTECTED = {"home .git/hooks", "~/.claude/hooks", "config dir settings.machine.json", "push-gate token"}
 _POLICY_TOUCHED = {"cp", "mv", "tee", "truncate", "rm"}  # the protected stage's reader names their target
-_POLICY_WRITTEN = {"cp", "mv", "tee"}  # the role rows' reader names their target
 
 
 def _policy_refuses_plainly(program, target, form, actor):
     if form == "target $T" and program != "tee":
         return False
-    stage = program in _POLICY_TOUCHED and target in _POLICY_PROTECTED
-    rows = actor == "subagent" and program in _POLICY_WRITTEN
-    return stage or rows
+    return program in _POLICY_TOUCHED and target in _POLICY_PROTECTED
 
 
 KNOWN_GAPS = {(program, target, form, actor, POLICY)
@@ -201,7 +205,7 @@ def _hook(sandbox, hook, command, subagent, n):
         payload.update(agent_id="agent-c-layer-test", agent_type="dev")
     argv = ["bash" if hook.endswith(".sh") else sys.executable, str(sandbox["hooks_dir"] / hook)]
     proc = subprocess.run(argv, input=json.dumps(payload), capture_output=True, text=True,
-                          env=sandbox["env"], cwd=sandbox["repo"], timeout=300)
+                          env=sandbox["env"], cwd=sandbox["repo"], timeout=HANG_GUARD)
     return proc.returncode, proc.stderr if hook == SAFETY else ""
 
 

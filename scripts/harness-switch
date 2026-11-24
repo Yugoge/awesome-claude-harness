@@ -7,6 +7,9 @@
               produce (commands/harness.md says what else refuses an agent). A session that
               was started from inside another Claude Code session (a `claude` an agent's
               script launched) is not the owner's: off and on are refused there (nested_claude).
+              Any other prompt the hook hands over (session_notes): with --late (its process never
+              ran the harness's SessionStart hooks) the harness's session start, done late while
+              on; in both states, while its command output is on a memory-backed volume, one line.
     status    print the switch's state (read-only). Exit 0 on, 3 off, 4 partial.
 
 The harness home H is the directory above scripts/ (symlinks resolved): a git checkout of the
@@ -28,15 +31,18 @@ means one clone per account: a switch covers exactly the home it is typed in.
             and skills/ out of the working tree, so the next session loads none of them; git
             keeps them in the index, so a pull while off works and lands them hidden
 /harness on reverses it: show, settings (the saved bytes when nothing changed; else the new
-machine form with the owner's changes made while off), marker, state, cleanup.
+machine form with the owner's changes made while off), marker, state, cleanup, then a token in
+<H>/.harness-switch/late per running Claude Code process: its one late session start.
 
 A switch cut halfway leaves its journal: status names the step it reached, and the next
 /harness off or on first finishes the cut switch, then does what was asked. Two switches never
 run at once (an exclusive lock, released with its process). Stdlib only.
 """
+import contextlib
 import copy
 import datetime
 import fcntl
+import glob
 import hashlib
 import importlib.machinery
 import importlib.util
@@ -56,6 +62,7 @@ SAVED = os.path.join(SW, "settings.on.json")    # settings.json as it was before
 WRITTEN = os.path.join(SW, "settings.off.json")  # the off form off wrote
 SPARSE_SAVED = os.path.join(SW, "sparse.json")
 LOCK = os.path.join(SW, "lock")
+LATE = os.path.join(SW, "late")  # <pid>-<start>: an empty file per process at /harness on, its late start not run
 SETTINGS = os.path.join(HOME, "settings.json")
 OVERLAY = os.path.join(HOME, "settings.machine.json")
 
@@ -185,10 +192,19 @@ def settings_off(state, report):
         report.append("settings.json is missing or not a JSON object, so it was left as it is; fix it, "
                       "then /harness off again")
         return
-    out = rs.canon(rs.off_form(working, clean_form(rs)))
+    off = rs.off_form(working, clean_form(rs))
+    out = rs.canon(off)
     if out != data:
         rs._write_atomic(SETTINGS, out)
     write_atomic(WRITTEN, out)
+    for key in rs.OFF_KEEPS_ENV:  # the temp directories the off form keeps: no hook makes them while off
+        path = (off.get("env") or {}).get(key)
+        if isinstance(path, str) and os.path.isabs(path) and not os.path.isdir(path):
+            try:
+                os.makedirs(path)
+                os.chmod(path, 0o1777)
+            except OSError as exc:
+                report.append("env.%s names %s, which could not be created (%s)" % (key, path, exc))
     if is_checkout():
         rs.refresh_index(HOME)
     state.update(settings_blob=settings_blob(), overlay_sha=sha(read_bytes(OVERLAY)))
@@ -481,6 +497,7 @@ def run_on(journal, ctx, report):
         journal_step(journal, "state")
     for path in (SAVED, WRITTEN, SPARSE_SAVED):
         remove(path)
+    arm_late_starts(report)
     remove(JOURNAL)
 
 
@@ -571,21 +588,14 @@ def inconsistencies():
     return out
 
 
-def session_started(transcript_path):
-    """The time the session's first transcript record names, else None."""
-    try:
-        with open(transcript_path, encoding="utf-8") as fh:
-            for _, line in zip(range(50), fh):
-                stamp = json.loads(line).get("timestamp")
-                if stamp:
-                    return stamp.replace("+00:00", "Z")
-    except (OSError, ValueError, TypeError, AttributeError):
-        pass
-    return None
-
-
 def config_dir():
-    return os.path.realpath(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
+    """The configuration directory and the home of the settings.json its CLI loads (claude_home.config_home)."""
+    sys.path.insert(0, os.path.join(HOME, "hooks", "lib"))
+    try:
+        from locations import config_home
+    finally:
+        sys.path.pop(0)
+    return os.path.realpath(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")), str(config_home())
 
 
 def status_lines(ctx):
@@ -595,30 +605,33 @@ def status_lines(ctx):
     since = state.get("since") or "(no switch recorded)"
     lines = ["Harness: %s%s (switched %s)" % (label, " (hooks " + mode + ")" if problems else "", since),
              "Home: %s, a %s" % (HOME, "git checkout" if is_checkout() else "directory that is not a git checkout")]
-    cfg = config_dir()
+    cfg, loads = config_dir()
     lines.append("Config dir: " + ("the same directory (this account's)" if cfg == HOME else
+                                   "%s, whose settings.json is this home's: switched by this home" % cfg
+                                   if loads == HOME else
                                    "%s, not this home: that account is not switched by this home" % cfg))
-    started = session_started(ctx.get("transcript_path") or "")
-    if started is None and ctx.get("session_id") and ctx.get("session_id") == state.get("session_id"):
-        started = "0"  # the switching session started before its own switch
-    loaded = mode_at(state, started) if started else None
+    started = process_start(own_pid()) if ctx else None  # its process, not its transcript: a resume keeps that
+    loaded = mode_at(state, iso(started)) if started else None
     if loaded is not None and loaded != mode:
-        restart = ("yes: this session started while the harness was %s and keeps the settings, CLAUDE.md, "
-                   "commands and agents it loaded then; its hooks follow the switch at once" % loaded)
+        restart = ("yes: this session's process started while the harness was %s and keeps the settings, "
+                   "CLAUDE.md, commands and agents it loaded then; its hooks follow the switch at once. "
+                   "Restarting is: %s" % (loaded, RESTART % (ctx.get("session_id") or "<session>")))
     elif loaded is not None:
-        restart = "no: this session loaded the harness %s" % mode
+        restart = "no: this session's process loaded the harness %s" % mode
     elif state.get("since"):
-        restart = ("for every session started before %s, which keeps what it loaded (its hooks follow "
-                   "the switch at once)" % since)
+        restart = ("for every session whose process started before %s, which keeps what it loaded (its "
+                   "hooks follow the switch at once)" % since)
     else:
         restart = "no"
     lines.append("Restart needed: " + restart)
+    lines.extend(output_lines(ctx))
     if mode == "off":
         lines.append("In force: no harness hook runs; checkpoint snapshots, the git-fswatch sync, the "
                      "landing, automatic pushes and the keystone are inert; the /dev-overnight runs live "
                      "at the switch are over")
-        lines.append("Next session: settings.json without harness hooks, env vars or permission rules; "
-                     "no harness CLAUDE.md, commands (but /harness), agents or skills")
+        lines.append("Next session: settings.json without harness hooks, env vars (but %s, which keep "
+                     "command output and temp files on the disk) or permission rules; no harness CLAUDE.md, "
+                     "commands (but /harness), agents or skills" % " and ".join(render_settings().OFF_KEEPS_ENV))
     lines.append("Kept: MCP servers, plugins, login and credentials, session history, the owner's own "
                  "settings (cleanupPeriodDays and deniedMcpServers too)")
     lines.extend("Partial: " + p for p in problems)
@@ -632,10 +645,12 @@ _RUNTIMES = re.compile(r"(?:node(?:js)?[\d.]*|bun|deno)\Z")
 
 def looks_like_claude(exe, argv):
     """True when a process (its executable path and argument list) is a Claude Code session: the
-    native binary `claude`, the installer's versioned copy (.../claude/versions/<version>), or
-    node/bun running the npm package's `claude` script. A shell script named claude is not."""
-    exe = exe or ""
-    if os.path.basename(exe) == "claude" or "/claude/versions/" in exe:
+    native binary `claude` (`claude.exe` as the npm package installs it, bin/claude.exe on every
+    platform), the installer's versioned copy (.../claude/versions/<version>), or node/bun running
+    the npm package's `claude` script. /proc names a binary replaced by an upgrade while it runs
+    `<path> (deleted)`: the same program. A shell script named claude is not."""
+    exe = (exe or "").removesuffix(" (deleted)")
+    if os.path.basename(exe) in ("claude", "claude.exe") or "/claude/versions/" in exe:
         return True
     if _RUNTIMES.match(os.path.basename(exe)):
         script = next((a for a in argv[1:] if not a.startswith("-")), "")
@@ -696,6 +711,205 @@ def nested_claude(pid=None):
     return found[1] if len(found) > 1 else None
 
 
+# ------------------------------------------------------------ where a session's output lives
+
+# The CLI keeps each command's output in <CLAUDE_CODE_TMPDIR, else $TMPDIR, else /tmp>/claude-<uid>/
+# <project>/<session>/tasks, a place it fixes when its process starts: a process started without
+# the setting keeps it on a memory-backed /tmp until it ends, whatever the switch does later.
+TASKS = re.compile(r"/claude-\d+/[^/]+/[^/]+/tasks\Z")
+SID_ARG = re.compile(r"(?:--resume|--session-id|-r)[= ]([0-9A-Za-z_-]+)")
+RESTART = ("end this Claude Code process and resume the same session (claude --resume %s); the harness's "
+           "/restart does not do this: it resumes interrupted subagents and restarts no process")
+LATE_BUDGET = 50  # seconds of the switch hook's 60 (settings.json) the late session start may use
+
+
+def iso(epoch):
+    return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def own_pid():
+    """The session's Claude Code process: CLAUDE_PID, which the CLI gives its hooks, else the
+    nearest `claude` above this one."""
+    pid = os.environ.get("CLAUDE_PID", "")
+    found = claude_processes(os.getppid()) if not pid.isdigit() else [(int(pid), "")]
+    return found[0][0] if found else None
+
+
+def process_start(pid):
+    """When process `pid` started (epoch seconds, from /proc), else None."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            ticks = int(fh.read().rsplit(b")", 1)[1].split()[19])
+        with open("/proc/stat", "rb") as fh:
+            boot = next(int(line.split()[1]) for line in fh if line.startswith(b"btime "))
+        return boot + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, TypeError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def output_dirs(pid, sid):
+    """The tasks directories process `pid` has written command output to since it started: one it
+    holds open, and one of session `sid`'s whose newest entry is not older than the process (a
+    stale directory of an earlier process of the session is not). None: no start time."""
+    start = process_start(pid)
+    if start is None:
+        return None
+    found = set()
+    with contextlib.suppress(OSError):
+        for fd in os.scandir("/proc/%d/fd" % pid):
+            with contextlib.suppress(OSError):
+                if TASKS.search(os.readlink(fd.path)):
+                    found.add(os.readlink(fd.path))
+    roots = {os.environ.get("CLAUDE_CODE_TMPDIR"), os.environ.get("TMPDIR"), "/tmp"} - {None, ""}
+    for root in roots if sid else ():
+        for d in glob.glob(os.path.join(glob.escape(root), "claude-*", "*", glob.escape(sid), "tasks")):
+            with contextlib.suppress(OSError, ValueError):
+                if max(os.lstat(e.path).st_mtime for e in os.scandir(d)) >= start:
+                    found.add(os.path.realpath(d))
+    return sorted(found)
+
+
+def memory_backed(path):
+    """True when `path` is on a memory-backed volume, False on the disk, None: no mount table."""
+    lib = os.path.join(HOME, "scripts", "seal-attribution-journal.py")  # its mount_class: the one reading
+    spec = importlib.util.spec_from_file_location("_harness_switch_mounts", lib)
+    mounts = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mounts)
+        return not mounts.mount_class(path)["persistent"]
+    except OSError:
+        return None
+
+
+def exposed_dirs(pid, sid):
+    """Which of those are on a memory-backed volume ([] none); None: it cannot tell (no /proc or
+    mount table, a process it may not read, no command output since the process started)."""
+    dirs = output_dirs(pid, sid) if pid else None
+    known = [(d, memory_backed(d)) for d in dirs or ()]
+    return None if not known or None in dict(known).values() else [d for d, mem in known if mem]
+
+
+def running_claudes():
+    """(pid, argument list, working directory) of every Claude Code process /proc lists, else None."""
+    try:
+        pids = sorted(int(n) for n in os.listdir("/proc") if n.isdigit())
+    except OSError:
+        return None
+    out = []
+    for pid in pids:
+        proc = _process(pid)
+        if proc is not None and looks_like_claude(proc[1], proc[2]):
+            try:
+                out.append((pid, proc[2], os.readlink("/proc/%d/cwd" % pid)))
+            except OSError:
+                out.append((pid, proc[2], "(unreadable)"))
+    return out
+
+
+def output_lines(ctx):
+    """The report's lines on where every running Claude Code process keeps its command output."""
+    procs = running_claudes()
+    if procs is None:
+        return ["Command output: could not check where running sessions keep it (no /proc on this system)"]
+    me, exposed, unknown = own_pid(), [], []
+    for pid, argv, cwd in procs:
+        m = SID_ARG.search(" ".join(argv))
+        sid = ctx.get("session_id") if pid == me and ctx else m.group(1) if m else None
+        found = exposed_dirs(pid, sid)
+        if found is None:
+            unknown.append("%d (%s)" % (pid, cwd))
+        exposed.extend("  project %s, session %s, process %d: %s" % (cwd, os.path.basename(os.path.dirname(d)),
+                                                                  pid, d) for d in found or ())
+    lines = ["Command output on a memory-backed volume, so a restart is needed (when it fills, every "
+             "command of that session fails; /harness on cannot move it):"] + exposed + [
+             "  for each: " + RESTART % "<session>"] if exposed else []
+    if unknown:
+        lines.append("Command output not checked for %d Claude Code process(es) (no command output since "
+                     "they started, or not readable): %s" % (len(unknown), ", ".join(unknown)))
+    return lines or ["Command output: every running Claude Code process keeps it on the disk"]
+
+
+def late_token(pid):
+    """LATE's file for process `pid` (its pid and /proc start ticks, as the hook names it), else None."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as fh:
+            return os.path.join(LATE, "%d-%s" % (pid, fh.read().rsplit(b")", 1)[1].split()[19].decode()))
+    except (OSError, ValueError, IndexError, TypeError):
+        return None
+
+
+def arm_late_starts(report):
+    """At /harness on: a token for every running Claude Code process, the one late start each may
+    still get. The prompt that runs it first removes the token (an unlink needs no space), so no
+    later prompt reruns it, whatever its .owner says. A token not written means no late start."""
+    tokens = {late_token(p) for p in {p for p, _, _ in running_claudes() or ()} | {own_pid()} if p} - {None}
+    try:
+        with contextlib.suppress(FileNotFoundError):
+            for name in os.listdir(LATE):
+                os.unlink(os.path.join(LATE, name))
+        os.makedirs(LATE, exist_ok=True)
+        for token in tokens:
+            os.close(os.open(token, os.O_WRONLY | os.O_CREAT, 0o600))
+    except OSError as exc:
+        report.append("no late session start for a session whose process started while off (%s): its "
+                      "SessionStart hooks run when it restarts: %s" % (exc, RESTART % "<session>"))
+
+
+def late_setup(payload):
+    """Run the harness's SessionStart hooks, as settings.json registers them, for a session whose
+    process started while the harness was off and so never ran them; their context."""
+    rs = render_settings()
+    hooks = ((rs.parse(read_bytes(SETTINGS) or b"") or {}).get("hooks") or {}).get("SessionStart")
+    data = json.dumps(dict(payload, hook_event_name="SessionStart", source="resume"))
+    deadline = time.monotonic() + LATE_BUDGET
+    texts = ["SESSION START, DONE LATE: this session's process started while the harness was off, so the "
+             "harness's SessionStart hooks run now, at its first prompt after /harness on. Not done late: "
+             "the TMPDIR each command gets from the session-start env file (commands keep settings.json's "
+             "TMPDIR), and what the CLI fixed when the process started (where it keeps command output, the "
+             "settings env and tools, CLAUDE.md, commands and agents); for those, " + RESTART % payload.get(
+                 "session_id")]
+    for hook in [h for g in hooks or [] if isinstance(g, dict) for h in g.get("hooks") or []]:
+        if not (isinstance(hook, dict) and rs._harness_command(hook)) or rs._switch_command(hook):
+            continue
+        left = deadline - time.monotonic()
+        try:
+            proc = subprocess.run(hook["command"], shell=True, input=data, capture_output=True, text=True,
+                                  cwd=payload.get("cwd") or None, timeout=max(1, min(hook.get("timeout") or 60, left)))
+        except (OSError, subprocess.SubprocessError, TypeError):
+            continue
+        text = proc.stdout.strip()
+        with contextlib.suppress(ValueError, TypeError, KeyError, AttributeError):
+            text = json.loads(text)["hookSpecificOutput"]["additionalContext"]
+        texts.extend(t for t in (text, proc.stderr.strip() if proc.returncode else "") if t)
+    return texts
+
+
+def claim_late():
+    """True for the one prompt that removes this process's token: it runs the late start."""
+    try:
+        os.unlink(late_token(own_pid() or 0) or "")
+        return True
+    except OSError:
+        return False
+
+
+def session_notes(payload, late):
+    """A prompt that is not /harness: the late session start (`late`: the hook found that this
+    session's process never ran the harness's SessionStart hooks) while the harness is on, and in
+    either state the line saying that its command output is on a memory-backed volume."""
+    sid = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
+    context = late_setup(payload) if late and current_mode() == "on" and claim_late() else []
+    found = exposed_dirs(own_pid(), sid) if sid else None
+    shown = ("Restart needed: this session's command output is in %s, on a memory-backed volume, since "
+             "its process started; when that volume fills, every command fails: %s"
+             % (os.path.dirname(found[0]), RESTART % sid)) if found else None
+    if shown:
+        context.append(shown)
+    if context:
+        emit("\n".join(context), shown)
+    return 0
+
+
 # ------------------------------------------------------------------------------ entry points
 
 def parse_prompt(prompt):
@@ -714,7 +928,7 @@ def emit(context, shown=None, block=None):
     sys.stdout.write(json.dumps(out) + "\n")
 
 
-def cmd_hook():
+def cmd_hook(late=False):
     try:
         payload = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace") or "{}")
     except ValueError:
@@ -728,11 +942,12 @@ def cmd_hook():
         return 0
     args = parse_prompt(prompt)
     if args is None:
-        return 0
+        return session_notes(payload, late)
     ctx = {"session_id": payload.get("session_id"), "transcript_path": payload.get("transcript_path"),
            "cwd": payload.get("cwd") if isinstance(payload.get("cwd"), str) else None}
     verb = args.split()[0] if args else "status"
-    if verb not in ("off", "on", "status") or len(args.split()) > 1:
+    sys.path.insert(0, os.path.join(HOME, "hooks", "lib")); from harness_switch import VERBS; sys.path.pop(0)  # noqa: E702
+    if verb not in VERBS or len(args.split()) > 1:
         emit("HARNESS SWITCH: usage: /harness off | on | status (nothing changed). Tell the owner so.",
              "harness: usage: /harness off | on | status")
         return 0
@@ -758,7 +973,7 @@ def cmd_hook():
 
 def main(argv):
     if argv[:1] == ["hook"]:
-        return cmd_hook()
+        return cmd_hook(argv[1:] == ["--late"])
     if argv[:1] == ["status"]:
         lines, code = status_lines({})
         print("\n".join(lines))

@@ -1,189 +1,30 @@
 #!/usr/bin/env bash
-# Description: Agent orchestration coordinator for development and cleanup workflows
+# Description: Agent orchestration coordinator for the /clean workflow
 # Usage: orchestrator.sh <mode> <context-json-file> [args]
-# Modes: dev-workflow, qa-verify, iterate, clean-inspect, clean-execute, clean-merge-reports, record-checkpoint
-# Exit codes: 0=success, 1=failure, 2=iteration needed
+# Modes: clean-inspect, clean-merge-reports, record-checkpoint, rule-inspect (commands/clean.md)
+# Exit codes: 0=success, 1=failure
 
 set -euo pipefail
 
-MODE="${1:?Missing mode (dev-workflow|qa-verify|iterate|clean-inspect|clean-execute|clean-merge-reports|record-checkpoint|rule-inspect)}"
+MODE="${1:?Missing mode (clean-inspect|clean-merge-reports|record-checkpoint|rule-inspect)}"
 CONTEXT_FILE="${2:?Missing context JSON file}"
 
-# Validate context file exists
 if [[ ! -f "$CONTEXT_FILE" ]]; then
   echo "Error: Context file not found: $CONTEXT_FILE" >&2
   exit 1
 fi
 
-# Validate JSON syntax
 if ! jq empty "$CONTEXT_FILE" 2>/dev/null; then
   echo "Error: Invalid JSON in context file: $CONTEXT_FILE" >&2
   exit 1
 fi
 
-# Temporary files for agent communication
-DEV_OUTPUT="/tmp/dev-output-$(date +%s).json"
-QA_OUTPUT="/tmp/qa-output-$(date +%s).json"
-ITERATION_CONTEXT="/tmp/iteration-context-$(date +%s).json"
-
-cleanup() {
-  rm -f "$DEV_OUTPUT" "$QA_OUTPUT" "$ITERATION_CONTEXT" 2>/dev/null || true
-}
-trap cleanup EXIT
+# The printed output paths are in the session's own temp directory (hooks/session-scratch-init.sh), not system temp.
+SESSION_TMP="${TMPDIR:-/var/tmp/claude-scratch}/${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
 
 # Where one /clean request's files live (commands/clean.md: docs/clean/).
 clean_output_dir() {
   echo "${ORCHESTRATOR_CLEAN_OUTPUT_DIR:-$(jq -r '.orchestrator.analysis.clean_output_dir // "docs/clean"' "$CONTEXT_FILE")}"
-}
-
-# Mode: dev-workflow
-# Coordinates dev subagent execution
-dev_workflow() {
-  echo "=== Dev Workflow Orchestration ===" >&2
-  echo "Context: $CONTEXT_FILE" >&2
-
-  # Extract requirement for logging
-  REQUIREMENT=$(jq -r '.orchestrator.requirement // "unknown"' "$CONTEXT_FILE")
-  echo "Requirement: $REQUIREMENT" >&2
-
-  # Validate required fields in context
-  if ! jq -e '.orchestrator.analysis.root_cause' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: Missing root_cause in context" >&2
-    exit 1
-  fi
-
-  if ! jq -e '.orchestrator.analysis.success_criteria' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: Missing success_criteria in context" >&2
-    exit 1
-  fi
-
-  # Signal ready for dev subagent
-  echo "Dev subagent can now read context from: $CONTEXT_FILE" >&2
-  echo "Dev subagent should write output to: $DEV_OUTPUT" >&2
-
-  # Output paths for caller to use
-  jq -n \
-    --arg context "$CONTEXT_FILE" \
-    --arg output "$DEV_OUTPUT" \
-    '{
-      status: "ready",
-      context_file: $context,
-      expected_output: $output,
-      next_step: "invoke dev subagent with context"
-    }'
-
-  return 0
-}
-
-# Mode: qa-verify
-# Coordinates QA subagent verification
-qa_verify() {
-  echo "=== QA Verification Orchestration ===" >&2
-  echo "Context: $CONTEXT_FILE" >&2
-
-  # Validate dev output exists in context
-  if ! jq -e '.dev' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: Missing dev output in context for QA verification" >&2
-    exit 1
-  fi
-
-  # Validate success criteria present
-  if ! jq -e '.orchestrator.analysis.success_criteria' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: Missing success_criteria for QA verification" >&2
-    exit 1
-  fi
-
-  # Signal ready for QA subagent
-  echo "QA subagent can now read context from: $CONTEXT_FILE" >&2
-  echo "QA subagent should write output to: $QA_OUTPUT" >&2
-
-  # Output paths for caller to use
-  jq -n \
-    --arg context "$CONTEXT_FILE" \
-    --arg output "$QA_OUTPUT" \
-    '{
-      status: "ready",
-      context_file: $context,
-      expected_output: $output,
-      next_step: "invoke qa subagent with context"
-    }'
-
-  return 0
-}
-
-# Mode: iterate
-# Prepares context for next iteration based on QA feedback
-iterate() {
-  echo "=== Iteration Orchestration ===" >&2
-  echo "Context: $CONTEXT_FILE" >&2
-
-  # Validate QA output exists in context
-  if ! jq -e '.qa' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: Missing QA output in context for iteration" >&2
-    exit 1
-  fi
-
-  # Check if iteration actually needed
-  ITERATION_NEEDED=$(jq -r '.qa.iteration_needed // false' "$CONTEXT_FILE")
-  if [[ "$ITERATION_NEEDED" != "true" ]]; then
-    echo "No iteration needed (QA passed or no iteration flag)" >&2
-    jq -n '{status: "complete", iteration_needed: false}'
-    return 0
-  fi
-
-  # Extract refined context from QA output
-  if ! jq -e '.qa.refined_context' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: QA requested iteration but no refined_context provided" >&2
-    exit 1
-  fi
-
-  # Get current iteration number
-  CURRENT_ITERATION=$(jq -r '.orchestrator.iteration // 1' "$CONTEXT_FILE")
-  NEXT_ITERATION=$((CURRENT_ITERATION + 1))
-
-  # Max iterations safety check (override via env var or context file)
-  MAX_ITERATIONS="${ORCHESTRATOR_MAX_ITERATIONS:-$(jq -r '.orchestrator.max_iterations // 5' "$CONTEXT_FILE")}"
-  if [[ $NEXT_ITERATION -gt $MAX_ITERATIONS ]]; then
-    echo "Error: Maximum iterations ($MAX_ITERATIONS) exceeded" >&2
-    jq -n \
-      --arg reason "max iterations exceeded" \
-      --argjson max "$MAX_ITERATIONS" \
-      '{status: "failed", reason: $reason, max_iterations: $max}'
-    exit 1
-  fi
-
-  # Build new context for next iteration
-  jq \
-    --argjson iteration "$NEXT_ITERATION" \
-    '
-    .orchestrator.iteration = $iteration |
-    .orchestrator.analysis.additional_context = .qa.refined_context.additional_context |
-    .orchestrator.analysis.failed_criteria = .qa.refined_context.failed_criteria |
-    .orchestrator.analysis.recommended_approach = .qa.refined_context.recommended_approach |
-    .previous_attempts = [
-      (.previous_attempts // []),
-      {
-        iteration: ($iteration - 1),
-        dev: .dev,
-        qa: .qa,
-        timestamp: (now | strftime("%Y-%m-%dT%H:%M:%SZ"))
-      }
-    ] | flatten
-    ' "$CONTEXT_FILE" > "$ITERATION_CONTEXT"
-
-  echo "Iteration context prepared: $ITERATION_CONTEXT" >&2
-
-  jq -n \
-    --arg context "$ITERATION_CONTEXT" \
-    --argjson iteration "$NEXT_ITERATION" \
-    '{
-      status: "iteration_ready",
-      iteration: $iteration,
-      context_file: $context,
-      next_step: "invoke dev subagent with refined context"
-    }'
-
-  return 0
 }
 
 # Mode: clean-inspect
@@ -192,7 +33,6 @@ clean_inspect() {
   echo "=== Clean Inspection Orchestration ===" >&2
   echo "Context: $CONTEXT_FILE" >&2
 
-  # Extract project root
   PROJECT_ROOT=$(jq -r '.orchestrator.analysis.project_root // "."' "$CONTEXT_FILE")
   echo "Project: $PROJECT_ROOT" >&2
 
@@ -234,7 +74,6 @@ clean_inspect() {
     echo "✅ Rule initialization completed: $RULE_CONTEXT_FILE" >&2
   fi
 
-  # Validate required fields
   if ! jq -e '.orchestrator.requirement' "$CONTEXT_FILE" >/dev/null 2>&1; then
     echo "Error: Missing requirement in context" >&2
     exit 1
@@ -245,8 +84,8 @@ clean_inspect() {
   echo "Style inspector can now read context from: $CONTEXT_FILE" >&2
 
   # Output paths for caller
-  CLEANLINESS_OUTPUT="/tmp/cleanliness-output-$(date +%s).json"
-  STYLE_OUTPUT="/tmp/style-output-$(date +%s).json"
+  CLEANLINESS_OUTPUT="$SESSION_TMP/cleanliness-output-$(date +%s).json"
+  STYLE_OUTPUT="$SESSION_TMP/style-output-$(date +%s).json"
 
   jq -n \
     --arg context "$CONTEXT_FILE" \
@@ -338,40 +177,6 @@ clean_merge_reports() {
   return 0
 }
 
-# Mode: clean-execute
-# Coordinates cleaner subagent execution
-clean_execute() {
-  echo "=== Clean Execution Orchestration ===" >&2
-  echo "Context: $CONTEXT_FILE" >&2
-
-  # Validate required fields
-  if ! jq -e '.user_approvals' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Error: Missing user_approvals in context" >&2
-    exit 1
-  fi
-
-  if ! jq -e '.orchestrator.analysis.safety_checkpoint_created' "$CONTEXT_FILE" >/dev/null 2>&1; then
-    echo "Warning: Safety checkpoint not confirmed in context" >&2
-  fi
-
-  # Signal ready for cleaner subagent
-  echo "Cleaner can now read context from: $CONTEXT_FILE" >&2
-
-  CLEANER_OUTPUT="/tmp/cleaner-output-$(date +%s).json"
-
-  jq -n \
-    --arg context "$CONTEXT_FILE" \
-    --arg output "$CLEANER_OUTPUT" \
-    '{
-      status: "ready",
-      context_file: $context,
-      expected_output: $output,
-      next_step: "invoke cleaner subagent with approvals"
-    }'
-
-  return 0
-}
-
 # Mode: record-checkpoint
 # Prints the git checkpoint record the cleaner's context carries (commands/clean.md Step 16
 # merges it into context-with-approvals); it rewrites no file, the context it reads included.
@@ -379,7 +184,6 @@ record_checkpoint() {
   echo "=== Record Checkpoint Orchestration ===" >&2
   echo "Context: $CONTEXT_FILE" >&2
 
-  # Get checkpoint commit hash (3rd argument)
   CHECKPOINT_COMMIT="${3:-}"
   if [[ -z "$CHECKPOINT_COMMIT" ]]; then
     echo "Error: Missing checkpoint commit hash" >&2
@@ -405,11 +209,9 @@ rule_inspect() {
   echo "=== Rule Inspection Orchestration ===" >&2
   echo "Context: $CONTEXT_FILE" >&2
 
-  # Extract project root
   PROJECT_ROOT=$(jq -r '.orchestrator.analysis.project_root // "."' "$CONTEXT_FILE")
   echo "Project: $PROJECT_ROOT" >&2
 
-  # Validate required fields
   if ! jq -e '.orchestrator.requirement' "$CONTEXT_FILE" >/dev/null 2>&1; then
     echo "Error: Missing requirement in context" >&2
     exit 1
@@ -423,7 +225,7 @@ rule_inspect() {
   # Signal ready for rule-inspector subagent
   echo "Rule inspector can now read context from: $CONTEXT_FILE" >&2
 
-  RULE_OUTPUT="/tmp/rule-output-$(date +%s).json"
+  RULE_OUTPUT="$SESSION_TMP/rule-output-$(date +%s).json"
 
   jq -n \
     --arg context "$CONTEXT_FILE" \
@@ -438,25 +240,12 @@ rule_inspect() {
   return 0
 }
 
-# Main execution
 case "$MODE" in
-  dev-workflow)
-    dev_workflow
-    ;;
-  qa-verify)
-    qa_verify
-    ;;
-  iterate)
-    iterate
-    ;;
   clean-inspect)
     clean_inspect
     ;;
   clean-merge-reports)
     clean_merge_reports
-    ;;
-  clean-execute)
-    clean_execute
     ;;
   record-checkpoint)
     record_checkpoint "$@"
@@ -466,7 +255,7 @@ case "$MODE" in
     ;;
   *)
     echo "Error: Invalid mode: $MODE" >&2
-    echo "Valid modes: dev-workflow, qa-verify, iterate, clean-inspect, clean-merge-reports, clean-execute, record-checkpoint, rule-inspect" >&2
+    echo "Valid modes: clean-inspect, clean-merge-reports, record-checkpoint, rule-inspect" >&2
     exit 1
     ;;
 esac

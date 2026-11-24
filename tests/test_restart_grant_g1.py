@@ -1,10 +1,10 @@
-"""Lesson 16 end to end: without a valid /restart grant, G1 refuses the exact recovery message.
+"""Lesson 16 end to end: /restart lists and resumes; its grant is no permission for the send.
 
 prepare (scripts/restart-subagents.py, the command commands/restart.md runs) reads the grant as
 data only: with no grant, an expired one or one of another schema it still lists the candidates
-and says on stderr that every resume send will be refused until /restart mints one (exit 0). The
-one decision on the grant is G1's: the no-background rule (hooks/pretool-block-background-tasks.py,
-lib/subagent_restart.authorize_send_message) refuses the candidate's exact resume message. Each case
+and prints its notice on stderr (exit 0). The send is a dispatch to an own subagent
+(lib/send_policy, the owner's ruling of 2026-11-21): the no-background rule admits the
+candidate's resume message with or without a grant. Each case
 runs the hooks the way the CLI does, through the launchers settings.json registers
 (hooks/userprompt-launch.py for the owner's /restart, hooks/pretool-launch.py for SendMessage), under a
 throwaway HOME, config dir and state dirs; with the owner's /restart the same message reaches the same
@@ -127,7 +127,7 @@ def _other_schema(grant: dict) -> dict:
     (_expired, "restart grant expired"),
     (_other_schema, "restart grant schema mismatch"),
 ], ids=["no-grant", "expired-grant", "wrong-schema-grant"])
-def test_without_a_valid_grant_prepare_only_says_so_and_g1_refuses_the_exact_resume(session, spoil, reason):
+def test_without_a_valid_grant_prepare_only_says_so_and_the_resume_still_passes(session, spoil, reason):
     if spoil is not None:
         assert session.restart_prompt().returncode == 0
         path = session.grant_file()
@@ -140,9 +140,8 @@ def test_without_a_valid_grant_prepare_only_says_so_and_g1_refuses_the_exact_res
     cand = next(c for c in view["candidates"] if c["agent_id"] == CUT)
     assert cand["resume_message"] == session.lib(restart.build_resume_message, session.sid, CUT)
     g1 = session.send(CUT, cand["resume_message"])
-    assert g1.returncode == 2, g1.stderr
-    assert "SendMessage refused" in g1.stderr and reason in g1.stderr, g1.stderr
-    # prepare created no grant, and the refused send did not either
+    assert g1.returncode == 0 and "SendMessage refused" not in g1.stderr, g1.stderr
+    # prepare created no grant, and the send did not either
     assert (session.grant_file().exists()) is (spoil is not None)
 
 
@@ -153,6 +152,6 @@ def test_with_the_owners_restart_the_exact_resume_reaches_the_same_agent(session
     view = json.loads(p.stdout)
     assert "restart_grant" not in view
     [cand] = [c for c in view["candidates"] if c["agent_id"] == CUT]
-    assert session.send(CUT, "continue").returncode == 2      # only the exact recovery message
+    assert session.send(CUT, "continue").returncode == 0      # any send the dispatch gate admits
     g1 = session.send(CUT, cand["resume_message"])
     assert g1.returncode == 0, g1.stderr

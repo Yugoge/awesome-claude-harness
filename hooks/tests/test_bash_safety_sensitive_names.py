@@ -177,7 +177,7 @@ REGRESSIONS = [
     ("python3 -c 'print(open(\".env\").read())' > /tmp/x", READ),
     ("cat .env-prod > /tmp/x", READ),
     ("cp .env.example .env", WRITE),
-    ("grep -n password src/auth.py > /tmp/hits.txt", READ),  # an over-block the base had too; kept
+    ("grep -n password config/secrets.yaml > /tmp/hits.txt", READ),  # a file the search reads, not its pattern
 ]
 
 
@@ -185,6 +185,18 @@ REGRESSIONS = [
 def test_a_name_the_base_refused_by_substring_is_still_refused(sandbox, command, label):
     r = run(sandbox, command)
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# A word counts only where it can be the source of what the redirect keeps (the owner's ruling of 2026-11-19): a
+# search pattern and echo's own text are not files. Until then this was "an over-block the base had too; kept".
+@pytest.mark.parametrize("command", [
+    "grep -n password src/auth.py > /tmp/hits.txt",
+    'grep -rn -E "token|password|secret" src docs > /tmp/hits.txt',
+    'echo "rotate the password monthly" > /tmp/policy-note.txt',
+])
+def test_a_pattern_or_printed_text_is_no_secret_source(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
 
 
 # The exemptions lift the substring check only for a plain static name of these kinds.
@@ -230,7 +242,7 @@ NARROW_EXEMPTIONS = [
     ("echo x > secret.log", WRITE),
     ("echo x > secrets-report.yaml", WRITE),
     ("echo x > reporter-secret.txt", WRITE),
-    ("echo x > password_reporter.py", WRITE),
+    ("echo x > password_reporter.json", WRITE),
     ("echo x > .env.dist", WRITE),
     ("cat credentials.report > /tmp/x", READ),
     ("cat .env.dist > /tmp/x", READ),
@@ -517,7 +529,7 @@ def test_a_code_or_doc_operand_of_a_copy_or_sed_passes(sandbox, command):
 
 
 # The code/doc operand exemption never covers env, credential or key names, data files, a secret directory, a name
-# whose stem is the secret word, nor any redirection.
+# whose stem is the secret word, nor a command whose output goes to a file reading such a name.
 @pytest.mark.parametrize("command,label", [
     ("sed -i s/a/b/ .env", WRITE),
     ("sed -i s/a/b/ config/secrets.yaml", WRITE),
@@ -526,9 +538,146 @@ def test_a_code_or_doc_operand_of_a_copy_or_sed_passes(sandbox, command):
     ("cp passwords.txt /tmp/x", READ),
     ("cp db_password.txt /tmp/x", READ),
     ("cp ~/.ssh/id_rsa /tmp/x.md", READ),
-    ("echo x > docs/password-reset.md", WRITE),
     ("sed -i s/a/b/ src/password_reset.py > /tmp/log", READ),
 ])
 def test_the_code_or_doc_operand_exemption_stays_narrow(sandbox, command, label):
     r = run(sandbox, command)
     assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# The rule judges the act, not the name (live refusals of 2026-11-20). Writing a code or doc file whose name only
+# holds a secret word, by any writer, is no secret write; a proven reader whose only redirections go to /dev/null or
+# merge a stream opens no file, whatever it names.
+@pytest.mark.parametrize("command", [
+    "cat > /srv/work/scripts/release/check_secrets.py <<'EOF'\n#!/usr/bin/env python3\n"
+    '"""Static scan; the .env is never opened."""\nprint("ok")\nEOF',
+    "echo x | tee src/check_secrets.py",
+    "echo x > password_reporter.py",
+    "echo x > docs/password-reset.md",
+    "date -u +%FT%TZ; echo --- env file tracked?; git -C /srv/work ls-files .env .env.example | head; "
+    "ls -la /srv/work/.env 2>/dev/null | cut -c1-60",
+    "ls -la /srv/work/.env 2>/dev/null",
+    "git ls-files .env 2>&1 | head",
+])
+def test_a_secret_word_in_a_written_or_listed_name_is_no_secret_act(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+# What the rule exists for stays refused: a redirection into, appending to or out of an env, credential, key or
+# token file, or a read of one into a file; a code name whose stem is the secret word or under a secret directory.
+@pytest.mark.parametrize("command,label", [
+    ("cat > /srv/work/.env <<'EOF'\nA=1\nEOF", WRITE),
+    ("echo A=1 >> .env 2>/dev/null", WRITE),
+    ("echo x 2>&1 > ~/.ssh/id_ed25519", WRITE),
+    ("echo t > .secret_token 2>/dev/null", WRITE),
+    ("cat > secrets.py <<'EOF'\nKEY = 'x'\nEOF", WRITE),
+    ("cat > config/secrets/check.py <<'EOF'\nx = 1\nEOF", WRITE),
+    ("ls -la .env 2>/srv/work/err.txt", READ),
+    ("cat .env 2>/dev/null > /srv/work/copy.txt", READ),
+    ("sort < .env > /srv/work/sorted.txt 2>/dev/null", READ),
+])
+def test_a_secret_files_redirection_stays_refused_whatever_else_is_redirected(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# A live refusal, neutralised: an env file's name as grep's search pattern and as its --include glob, the search's
+# errors sent to /dev/null, names no file that is read or written.
+@pytest.mark.parametrize("command", [
+    'cd /srv/work; ls | head -40; echo "--- compose/docker files ---"; ls -la | grep -iE "compose|docker|\\.env" ; '
+    'ls backend | head -40; echo "--- SOME_SETTING anywhere (non-build) ---"; grep -rn "SOME_SETTING" --include=*.py '
+    '--include=*.yml --include=*.yaml --include=*.env --include=*.md --include=*.json . 2>/dev/null | '
+    'grep -v "/build/\\|node_modules\\|\\.git/" | cut -c1-260 | head -20',
+    "grep -rn SOME_SETTING --include=*.env . 2>/dev/null | head",
+    "ls | grep -e .env -e secret > list.txt",
+])
+def test_a_secret_files_name_as_search_text_is_no_access(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+# The same name read or written stays refused, also when a glob or a variable carries it.
+@pytest.mark.parametrize("command,label", [
+    ("grep -rn X --include=*.env . > out.txt", READ),
+    ("grep -rn X .env > out.txt", READ),
+    ("grep -f .env notes.txt > out.txt", READ),
+    ("cat *.env > copy.txt", READ),
+    ('cat "$HOME/.env" > copy.txt', READ),
+    ("echo A=1 > .env", WRITE),
+    ('echo A=1 > "$HOME/.env"', WRITE),
+    ("tee .env < notes.txt", WRITE),
+])
+def test_a_secret_file_searched_into_a_file_or_written_stays_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# A secret word as a pattern, a keyword or an exclusion opens no file of that name, also with the output in a file:
+# pytest's -k/-m expression, grep's --exclude glob, rg's `!` glob, find's name test when find runs and writes nothing.
+@pytest.mark.parametrize("command", [
+    "pytest -q tests/x.py -k secret > log.txt",
+    "python3 -m pytest tests/t.py -k 'secret or sensitive' -m password > log.txt 2>&1",
+    "pytest -ksecret > log.txt",
+    "grep -rn X --exclude=*.env . > out.txt",
+    "grep -rn X --exclude '*.env' --exclude-dir=secrets . > out.txt",
+    "rg -n X -g '!*.env' . > out.txt",
+    "rg -n X --glob='!*.env' -g!secret* . > out.txt",
+    "find . -name '*.env' > list.txt",
+    "find . -iname '*secret*' -type f > list.txt",
+])
+def test_a_secret_word_as_pattern_keyword_or_exclusion_is_no_access(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)
+
+
+# The file itself named next to such an argument, an include glob, or a find that reads what it matches stays refused.
+@pytest.mark.parametrize("command", [
+    "pytest -k x .env > log.txt",
+    "python3 -m pytest -k x tests/.env > log.txt",
+    "grep -rn X --exclude=*.env .env > out.txt",
+    "grep -e --exclude .env > out.txt",
+    "grep -rn X --exclude-from=.env . > out.txt",
+    "rg -n X -g '*.env' . > out.txt",
+    "rg -e -g .env > out.txt",
+    "find . -name '*.env' -exec cat {} + > out.txt",
+    "find .env -name x > list.txt",
+])
+def test_a_secret_file_beside_a_pattern_or_matched_for_reading_stays_refused(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and READ in r.stderr, (command, r.stderr)
+
+
+# A wildcard, brace or variable whose text does not spell the name but can expand to it: single-character and
+# bracket wildcards, brace forms, a name put together from pieces or from a variable the same command sets.
+@pytest.mark.parametrize("command,label", [
+    ("cat .en? > copy.txt", READ), ("cat .e?v > copy.txt", READ), ("cat .e[n]v > copy.txt", READ),
+    ("cat config/secre? > copy.txt", READ), ("cat pass[w]ord.txt > copy.txt", READ),
+    ("cat cred?ntials.json > copy.txt", READ), ("cat .EN? > copy.txt", READ), ("cat ~/.ssh/id_rs? > copy.txt", READ),
+    ("cat .e* > copy.txt", READ), ("cat .{env,x} > copy.txt", READ), ("cat {.e,x}nv > copy.txt", READ),
+    ("cat .e{n,m}v > copy.txt", READ), ("cat s{e,a}cret.txt > copy.txt", READ),
+    ("a=.e; b=nv; cat $a$b > copy.txt", READ), ("f=.env; cat \"$f\" > copy.txt", READ),
+    ("x=.en; cat ${x}v > copy.txt", READ), ("cat \"$HOME\"/.en? > copy.txt", READ), ("sort < .en? > sorted.txt", READ),
+    ("echo A=1 > .en?", WRITE), ("echo A=1 | tee .e[n]v", WRITE), ("tee .{env,bak} < notes.txt", WRITE),
+])
+def test_a_wildcard_or_assembled_name_that_can_match_a_secret_file_is_refused(sandbox, command, label):
+    r = run(sandbox, command)
+    assert r.returncode == 2 and label in r.stderr, (command, r.stderr)
+
+
+# What a wildcard cannot be shown to spell stays allowed: a `*` or an unknown variable supplies no letter of the name
+# (`*.txt` is not read as `.env.txt`), a pure-wildcard name, a leading `?` (it never matches a leading dot), a quoted
+# pattern (a literal name), and the commands this rule wrongly refused in the labelled record (neutralised).
+@pytest.mark.parametrize("command", [
+    "cat *.txt > all.txt", "cat logs/*.log > all.log", "cat *s.json > all.json", "cat *d.txt > x.txt",
+    "cat *.* > x.txt", "cat src/* > x.txt", "cat ?? > x.txt", "cat data_????.csv > x.txt", "cat ?env > x.txt",
+    "cat '.en?' > copy.txt", "cat \"$f\" > copy.txt", "cat ${x}nv > copy.txt", "f=notes.txt; cat \"$f\" > copy.txt",
+    "cat file.{txt,md} > all.txt", "for f in *.py; do cat $f; done > all.txt", "ls .en?",
+    "cd /srv/work/reports && docker exec api sh -c 'cd /app && grep -rn --include=*.py -i -E \"stale|expire\" app "
+    "| grep -v -i -E \"jwt|token|password|reset\"' > container_grep.txt; wc -l container_grep.txt",
+    "hostname -I 2>&1 | head -2; ss -ltn 2>/dev/null | awk '{print $4}' | head; "
+    "ls /srv/work/.env >/dev/null 2>&1 && echo env-exists",
+])
+def test_a_wildcard_that_cannot_be_shown_to_name_a_secret_file_passes(sandbox, command):
+    r = run(sandbox, command)
+    assert r.returncode == 0, (command, r.stderr)

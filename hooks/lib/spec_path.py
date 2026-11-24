@@ -16,12 +16,13 @@ target resolves against the cwd its tool_use record carries, as the CLI resolved
 """
 
 import os
-import re
 
-EDIT_TOOLS = ("Write", "Edit", "MultiEdit")
+EDIT_TOOLS = ("Write", "Edit", "MultiEdit")  # the tools that name their target in tool_input.file_path
 WRITER = "spec-write.py"
-_WRITER_LINE = re.compile(r"^spec-write: (?:create|append) (/\S+)$", re.M)
-_NOT_SPECS = ("INDEX.md", "README.md")
+try:  # lib.spec_path, or hooks/lib on the path
+    from .command_span import FOLDER_DOCUMENTS as _NOT_SPECS, SPEC_WRITER_LINE as _WRITER_LINE
+except ImportError:
+    from command_span import FOLDER_DOCUMENTS as _NOT_SPECS, SPEC_WRITER_LINE as _WRITER_LINE  # type: ignore[no-redef]
 
 
 def is_spec_file(path) -> bool:
@@ -71,7 +72,7 @@ def last_spec_write(transcript_path, cwd=""):
             if is_spec_file(target):
                 return target
         elif WRITER in str(call.input.get("command", "")):
-            for target in reversed(_WRITER_LINE.findall(span.result_text(call.id))):
+            for target in reversed([p.strip() for p in _WRITER_LINE.findall(span.result_text(call.id))]):
                 if is_spec_file(target):
                     return target
     return None

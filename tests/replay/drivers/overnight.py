@@ -93,9 +93,10 @@ Driver arguments (cli.py --arg K=V):
   tz=<zone>       variant plain in the IANA time zone <zone> (P2 A20: the launch and the time-lock in
                   every timezone): TZ=<zone> in every hook's and every Bash call's environment, the
                   session's whole length; the end time typed is the zone's local clock time (HH:MM) of
-                  launch plus twice the cycle's longest wall time, rounded up to the minute, the form a
-                  local zone changes. Injected, outside the compliant transcript: the main agent's Stop
-                  once the cycle's log is written (inside the window), and again after end_time before
+                  launch plus twice the cycle's longest wall time (at least 90 times the session's start,
+                  on a slow host), rounded up to the minute, the form a local zone changes. Injected,
+                  outside the compliant transcript: the main agent's Stop as soon as the launch is checked
+                  (inside the window, however long the cycle then takes), and again after end_time before
                   the summary is written. The checks (Night.timezone_checks, out/timezone.json) raise
                   when one fails: the record's end_time is that local time in UTC (checked before the
                   window is waited for), the Stop inside the window is held by the time-lock naming
@@ -203,12 +204,31 @@ from dataclasses import dataclass, field
 
 from .. import agents, cmdtext, hookrun, roles
 from ..pipeline import Deviations, Orchestrator, Respelling, utc_now
-from ..replay import Deviation, rule_files
+from ..replay import Deviation, clock_now, rule_files
 from ..wake import Cron
 from . import dev as devdrv
 from .close import fact
 
 PIPELINE = "dev-overnight"
+# /dev-overnight's step numbers by what each step IS: its heading in the command's canonical step list
+# (scripts/todo/dev-overnight.py) and the subagent role it must call (drivers/dev.py Steps). A renumbering needs
+# no edit here; a step gone, or one whose role changed, fails the replay that needs it, naming the step. The list
+# is the one of the harness home played when a step is asked for (live): a replay that starts on an older version
+# takes that version's numbers until the home lands, and a step the version has none of (`N.has`) is not played.
+N = devdrv.Steps(command="dev-overnight", live=True, what={
+    "wake": ("Schedule the wake", None), "state": (("Read state file", "Create worktree"), None), "pm_plan": ("PM Plan", "pm"),
+    "specialists": ("Run specialist subagents", None), "triage": ("PM Triage", "pm"),
+    "specs": ("Create overnight spec files", None), "pipelines": ("Create parallel pipelines", None),
+    "focus": ("Convert focus", None), "ba": ("Run BA subagents", "ba"), "ba_valid": ("Validate BA outputs", None),
+    "qa_ba": ("QA validates BA conclusions", "qa"), "loop": ("BA-QA iteration loop", None),  # graphify: Night.g_step (an older list calls it in its Step 11g)
+    "dev": ("Run Dev subagents", "dev"), "dev_valid": ("Validate Dev implementations", None),
+    "qa_env": ("Prepare QA environment", None), "qa": ("Run QA subagents", "qa"),
+    "qa_results": ("Process QA results", None), "iterate": ("Run iteration loops", None),
+    "perms": ("Update settings.json permissions", None), "log": ("Log cycle results", None),
+    "retro": ("PM Retrospective", "pm"), "summary": ("Generate summary report", None)})
+# The graphify precondition's heading: "### Step 11g: ..." in a base text, the "#### ..." sub-heading of Step 11 since
+# integer steps (11g folded into 11; the Step 11 heading names the precondition without "(shared").
+G_HEAD = "Graphify Dev-Dispatch Precondition (shared"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 # (qa-fail: measured beside plain on the P1b working tree at effa0ec, scaled by plain's 813; plain, one
@@ -230,25 +250,27 @@ WORK_BRANCH = "night-work"
 
 # Blocks the base tree's replay meets, each passed by a deviation at the step it occurs on: the
 # refused call is applied as if allowed, so every later step runs and is traced.
-DEVIATIONS = Deviations([
+def _declared() -> list:
+    """The declared deviations, their step numbers read when asked for, from the version played then."""
+    return [
     # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
     # pretool-bash-safety.sh refuses Step 1's SESSION BINDING + ONE-CALL INITIALIZATION block (the
     # apostrophes of its comments, "session's").
-    ("C* Step 1 Bash session binding + init", Deviation(
+    (f"C* Step {NK.state} Bash session binding + init", Deviation(
         "hooks/pretool-bash-safety.sh", "UNRESOLVED census_fatal:unbalanced:single_quote",
-        "Step 1's binding block as the text spells it")),
+        f"Step {NK.state}'s binding block as the text spells it")),
     # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_fatal:unbalanced:single_quote"
     # The same refusal of the base text's qa_mode flip before each QA dispatch (the apostrophe of its
     # comment, "hook's").
-    ("C* Step 1[05] Bash qa_mode *", Deviation(
+    *((f"C* Step {n} Bash qa_mode *", Deviation(  # before the BA-validation QA and the final QA
         "hooks/pretool-bash-safety.sh", "UNRESOLVED census_fatal:unbalanced:single_quote",
-        "the base text's qa_mode flip as it spells it")),
+        "the base text's qa_mode flip as it spells it")) for n in (NK.qa_ba, NK.qa)),
     # DEVIATION: "BLOCKED: removal-policy — UNRESOLVED census_obligation_undischarged:substitution@143"
     # The same hook refuses the base text's Step 15 qa_mode flip (its `|| { echo ... >&2; exit 1; }`
     # after the flip's line continuation).
-    ("C* Step 15 Bash qa_mode *", Deviation(
+    (f"C* Step {NK.qa} Bash qa_mode *", Deviation(
         "hooks/pretool-bash-safety.sh", "UNRESOLVED census_obligation_undischarged:substitution",
-        "the base text's Step 15 qa_mode flip as it spells it")),
+        f"the base text's Step {NK.qa} qa_mode flip as it spells it")),
     # DEVIATION: "CONTRACT BLOCK (pretool-subagent-enforce): ... diagnosis: Case C (incomplete contract)
     # ... action: do not retry by re-bookmarking; ... no required_calls entry for step '2'" The launcher's
     # seed contract (required_calls: []) switches the base tree's hook into enforce mode, so the
@@ -256,53 +278,42 @@ DEVIATIONS = Deviations([
     # PM TRIAGE) are refused (E13). The quote is that hook's own wording for a contract with no step;
     # this tree's hook derives Steps 2-4 from the canonical steps and words its refusals otherwise
     # ("re-marking the step"), so none of its refusals is passed here.
-    ("C1 Step [234] Agent(*", Deviation(
+    *((f"C1 Step {n} Agent(*", Deviation(  # PM PLAN, the specialists, PM TRIAGE
         "hooks/pretool-subagent-enforce.py", "do not retry by re-bookmarking",
-        "the Steps 2-4 dispatches the text makes before its contract exists")),
+        f"the Steps {NK.pm_plan}-{NK.triage} dispatches the text makes before its contract exists"))
+      for n in (NK.pm_plan, NK.specialists, NK.triage)),
     # DEVIATION: "CONTRACT BLOCK (pretool-subagent-enforce): step=17 ... errors: - no required_calls entry for
     # step '17'" The cycle contract has entries for the dispatches of Steps 2-4, 8, 10, 11g, 12, 15 and 20
     # only, so Step 17's iteration dispatches of dev and QA (the step in progress, as Step 11g's
     # precondition says to restore it) are refused (variant qa-fail).
-    ("C* Step 17 Agent(*", Deviation(
+    (f"C* Step {NK.iterate} Agent(*", Deviation(
         "hooks/pretool-subagent-enforce.py", "no required_calls entry for step '17'",
-        "Step 17's iteration dispatches, which the cycle contract names no entry for")),
+        f"Step {NK.iterate}'s iteration dispatches, which the cycle contract names no entry for")),
     # DEVIATION: "OVERNIGHT FILE CHECK BLOCK (contract): ... projection dev-report.v1: flat field
     # 'report_version' must be literal integer 1 ..." The Step 12 refusal below, again at Step 17's dev
     # re-dispatch, which Step 17 says takes Step 12's template (variant qa-fail).
-    ("C* Step 17 Agent(dev) *", Deviation(
+    (f"C* Step {NK.iterate} Agent(dev) *", Deviation(
         "hooks/posttool-overnight-file-check.py", "OVERNIGHT FILE CHECK BLOCK (contract)",
-        "the dev report Step 17's re-dispatch's obligation declares, collected")),
-    # DEVIATION: "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing. ... per-worker
-    # reports present: 0, 1 ..." The Step 15 refusal below, again at Step 17's QA dispatch, which Step 17
-    # says takes Step 15's template (variant qa-fail).
-    ("C* Step 17 Agent(qa) *", Deviation(
-        "hooks/pretool-aggregate-check.py", "canonical aggregate dev-report missing",
-        "Step 17's QA dispatch of an overnight pipeline")),
+        f"the dev report Step {NK.iterate}'s re-dispatch's obligation declares, collected")),
     # DEVIATION: "E2E_ENFORCE_BLOCKED: agent <agent> (type=qa) has no qa-report-*.json in <project>/docs/dev/
     # under session <sid>." The Step 15 refusal below, again at the stop of Step 17's QA, once the base
     # text's Step 17 qa_mode write has set final_verification (variant qa-fail).
-    ("C* Step 17 Agent(qa) *", Deviation(
+    (f"C* Step {NK.iterate} Agent(qa) *", Deviation(
         "hooks/subagentstop-e2e-enforce.py", "E2E_ENFORCE_BLOCKED",
-        "the stop of Step 17's QA, which wrote the report its obligation declares")),
+        f"the stop of Step {NK.iterate}'s QA, which wrote the report its obligation declares")),
     # DEVIATION: "OVERNIGHT FILE CHECK BLOCK (contract): ... projection dev-report.v1: flat field
     # 'report_version' must be literal integer 1 ..." posttool-overnight-file-check.py checks each
     # collected report against the contract entry's schema_name, which the base text's manifest
     # example names v1 while the dispatch's own obligation names v2 (E13).
-    ("C* Step 1[25] Agent(*", Deviation(
+    *((f"C* Step {n} Agent(*", Deviation(  # the dev dispatch and the final QA dispatch
         "hooks/posttool-overnight-file-check.py", "OVERNIGHT FILE CHECK BLOCK (contract)",
-        "the dev / QA report its obligation declares, collected")),
-    # DEVIATION: "BLOCKED Agent dispatch (qa): canonical aggregate dev-report missing. ... per-worker
-    # reports present: 0, 1 ..." pretool-aggregate-check.py reads the pipelines' dev reports
-    # (dev-report-<ts>-0/-1, one Step 6 timestamp) as a fan-out's lane reports and refuses QA.
-    ("C* Step 15 Agent(qa) *", Deviation(
-        "hooks/pretool-aggregate-check.py", "canonical aggregate dev-report missing",
-        "Step 15's QA dispatch of an overnight pipeline")),
+        "the dev / QA report its obligation declares, collected")) for n in (NK.dev, NK.qa)),
     # DEVIATION: "E2E_ENFORCE_BLOCKED: agent <agent> (type=qa) has no qa-report-*.json in
     # <project>/docs/dev/ under session <sid>." subagentstop-e2e-enforce.py, once the base text's Step 15
     # qa_mode flip has set final_verification, finds the QA report by a YYYYMMDD-HHMMSS timestamp in
     # the registry's session id; an overnight registry is named by the session's UUID, so the report
     # the QA's obligation declares (and it wrote) is never found and its stop is refused.
-    ("C* Step 15 Agent(qa) *", Deviation(
+    (f"C* Step {NK.qa} Agent(qa) *", Deviation(
         "hooks/subagentstop-e2e-enforce.py", "E2E_ENFORCE_BLOCKED",
         "the stop of a final-verification QA that wrote the report its obligation declares")),
     # DEVIATION: "OVERNIGHT WRITE-BOUNDARY FAIL-CLOSED: the per-command bwrap RO-bind boundary that
@@ -349,7 +360,29 @@ DEVIATIONS = Deviations([
     ("/stop Stop", Deviation(
         "hooks/stop-workflow-coordinator.py", "CLOSEOUT GATE",
         "the main agent's Stop after the owner's /stop")),
-])
+]
+
+
+class _LiveDeviations(Deviations):
+    """DEVIATIONS with its step numbers taken from the /dev-overnight list of the harness home played at the moment
+    the pairs are asked for (a replay may start on an older version): a step the version does not have makes its
+    entries inert (a label never carries `Step absent`)."""
+
+    def __init__(self, build):
+        self._build = build
+
+    @property
+    def pairs(self) -> list:
+        return self._build()
+
+
+class _Numbers:
+    def __getattr__(self, name: str) -> str:
+        return str(N.get(name, "absent"))
+
+
+NK = _Numbers()
+DEVIATIONS = _LiveDeviations(_declared)
 
 
 # Row 7 respellings of the base text's own calls whose failure in a product repository ends the
@@ -833,6 +866,13 @@ class Night:
             zoneinfo.ZoneInfo(self.tz)  # an unknown zone fails here, not as a UTC replay
             for env in (rp.env, rp.bash_env):
                 env["TZ"] = self.tz
+        # The variants with a window (unattended, one-pipeline, plain: its end is launch + 2 x cycles x
+        # CYCLE_WALL_S, or the tz= clock time) run on the modeled clock (Replay.model_clock), set before the
+        # session starts: a window's decisions never depend on how fast this host works; the session's idle
+        # to the window's end advances the model (advance_clock).
+        self.modeled = variant in ("unattended", "one-pipeline", "plain")
+        if self.modeled:
+            rp.model_clock()
         self.owner_setup()  # before the session starts (the Orchestrator starts it)
         started = time.monotonic()
         self.o = NightOrchestrator(rp, "dev-overnight", deviations=devs, respellings=devdrv.RESPELLINGS,
@@ -865,9 +905,10 @@ class Night:
         self.refused = ""               # the label of a refused dispatch (the cycle stopped there)
         # The window scales with this host's speed, read from the session's start (its SessionStart hooks):
         # a loaded host's replay reaches Step 13 about 45-60 times that later, so the decisions stay inside it.
-        started = time.monotonic() - started
+        started = self.start_s = time.monotonic() - started
+        # On the modeled clock the host's speed takes no part: the floor alone.
         self.window_min = int(rp.args["window"]) if rp.args.get("window") else max(
-            UNATTENDED_WINDOW_MIN, math.ceil(1.5 * started))
+            UNATTENDED_WINDOW_MIN, 0 if self.modeled else math.ceil(1.5 * started))
         self.decisions: list = []
         self.probes: list = []
         self.carried: list = []
@@ -884,6 +925,7 @@ class Night:
     def _rules(self):
         return [
             (r"^TS$", lambda m: self.ts),
+            (r"^RUN_STAMP$", lambda m: self.run_stamp()),
             (r"^ISO-8601", lambda m: utc_now()),
             (r"^(?:session_id|DEV_SESSION_ID)$", lambda m: self.sid),
             (r"^MAIN_ROOT$", lambda m: self.main_root),
@@ -906,7 +948,7 @@ class Night:
             (r"^the context file Dev will consume", lambda m: self.ctx_rel),
             (r"^resolved \$REQUIREMENT_DOC path$", lambda m: self.init.get("REQUIREMENT_DOC", "")),
             (r"^(?:start_time|end_time|isolation_kind)$", lambda m: str(self.state.get(m.group(0)))),
-            (r"^date$", lambda m: time.strftime("%Y-%m-%d", time.gmtime())),
+            (r"^date$", lambda m: time.strftime("%Y-%m-%d", time.gmtime(clock_now()))),
             # A prompt's prose naming a concept, not a slot: graphify's "`<task-id>`-derived default".
             (r"^task-id$", lambda m: "<task-id>"),
         ]
@@ -939,13 +981,20 @@ class Night:
 
     def minutes_left(self) -> int:
         end = self.end_epoch()
-        return max(0, int((end - time.time()) // 60)) if end else 0
+        return max(0, int((end - clock_now()) // 60)) if end else 0
 
     def in_window(self) -> bool:
-        return time.time() < self.end_epoch()
+        return clock_now() < self.end_epoch()
 
-    def stamp(self) -> str:
-        """A UTC second distinct from the previous dispatch's (its task id)."""
+    def run_stamp(self) -> str:
+        """RUN_STAMP: the launch's start_time as the /dev-overnight hook and Step 1's output print it."""
+        return re.sub(r"[-:Z]", "", str(self.state.get("start_time") or "")).replace("T", "-")
+
+    def stamp(self, slot: str) -> str:
+        """The dispatch's <TS>: <RUN_STAMP>-c<N>-<slot> where the text composes it so; in a text before that, a
+        UTC second distinct from the previous dispatch's (its task id)."""
+        if "<RUN_STAMP>" in self.o.text and self.run_stamp():
+            return f"{self.run_stamp()}-c{self.n}-{slot}"
         while True:
             ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
             if ts != getattr(self, "_last_ts", ""):
@@ -1033,6 +1082,17 @@ class Night:
         a, b = agents.edit_span(old, text)
         return self.o.s.edit(path, a, b, label=lab + " (Edit)", deviation=self.o.devs.at(lab + " (Edit)"))
 
+    def g_step(self) -> str:
+        """The list's step of the graphify precondition: 11g where the list still has it (a base text), else 11."""
+        o = self.o
+        if any(o.step_name(k) == "Step 11g" for k in range(len(o.todos or []))):
+            return "11g"
+        i = int(N.loop)  # a list that folded 11g into 11: the step must call graphify (N cannot say so for a base list)
+        calls = next((t.get("subagent_call") for t in o.todos if t["content"].startswith(f"Step {i}:")), None) or {}
+        if "graphify" not in {c.get("subagent_type") for c in (calls if isinstance(calls, list) else [calls])}:
+            raise LookupError(f"/dev-overnight's step {i} (BA-QA iteration loop) no longer calls graphify")
+        return str(i)
+
     def todo_to(self, n) -> None:
         while not self.o.at_step(n):
             i = self.o.current()
@@ -1074,7 +1134,8 @@ class Night:
         if self.windowed:
             end = f"{self.window_min}m"
         elif self.variant == "plain" and self.tz:  # the zone's local clock time, rounded up to the minute
-            target = math.ceil((time.time() + 2 * self.cycles * CYCLE_WALL_S) / 60) * 60
+            target = math.ceil((clock_now() + max(2 * self.cycles * CYCLE_WALL_S,
+                                                  0 if self.modeled else 90 * self.start_s)) / 60) * 60
             local = dt.datetime.fromtimestamp(target, zoneinfo.ZoneInfo(self.tz))
             end = local.strftime("%H:%M")
             self.tz_launch = {"zone": self.tz, "typed": end, "utc_offset": local.strftime("%z"),
@@ -1088,19 +1149,21 @@ class Night:
     def step0(self) -> None:
         """Step 0 where the text has it: the wake's one CronCreate, its input the section's JSON block."""
         o = self.o
+        if not N.has("wake"):
+            return  # a version whose list has no wake step: nothing is scheduled
         try:
-            spec = json.loads(cmdtext.block(o.text, "Step 0", lang="json"))
+            spec = json.loads(cmdtext.block(o.text, f"Step {N.wake}", lang="json"))
         except cmdtext.TextNotFound:
             return  # a text without the wake (your base's): nothing is scheduled
         if self.rp.args.get("wake") == "late":  # X6: the completion before the CronCreate, refused
-            refused = o.advance("C1 TodoWrite Step 0 done before the CronCreate")
+            refused = o.advance(f"C1 TodoWrite Step {N.wake} done before the CronCreate")
             if refused.blocked:
                 o.todos[0]["status"], o.todos[1]["status"] = "in_progress", "pending"
-        call = self.rp.cron.tool_create(o.s, spec, "C1 Step 0 CronCreate wake",
-                                        deviation=o.devs.at("C1 Step 0 CronCreate wake"))
+        call = self.rp.cron.tool_create(o.s, spec, f"C1 Step {N.wake} CronCreate wake",
+                                        deviation=o.devs.at(f"C1 Step {N.wake} CronCreate wake"))
         self.wake_job = call.response.get("id") if call.ok else None
         self.cycle = 1
-        self.todo_to(1)
+        self.todo_to(N.state)
 
     def delete_wake(self, s, label: str) -> None:
         if self.wake_job:
@@ -1117,32 +1180,32 @@ class Night:
         self.cycle = 1
         # "List `.claude/overnight-state-*.json` and read the file matching the current session."
         g = s.tool("Glob", {"pattern": ".claude/overnight-state-*.json", "path": self.project},
-                   label="C1 Step 1 Glob state records", deviation=o.devs.at("C1 Step 1 Glob state records"))
+                   label=f"C1 Step {N.state} Glob state records", deviation=o.devs.at(f"C1 Step {N.state} Glob state records"))
         mine = [f for f in (g.response.get("filenames") or []) if self.sid in os.path.basename(f)] if g.ok else []
         path = mine[0] if mine else self.state_file
-        self.read(path, "Step 1 Read state record")
+        self.read(path, f"Step {N.state} Read state record")
         self.state = self.load(path)
         # The SESSION BINDING + ONE-CALL INITIALIZATION block, one Bash call.
-        name, b, _ = o.step_blocks("Step 1")[0]
+        name, b, _ = o.step_blocks(f"Step {N.state}")[0]
         keep = [(r"^(?:unset|empty)$", lambda m: f"<{m.group(0)}>")]
-        call = o.run_text(b.text, "C1 Step 1 Bash session binding + init", "Step 1: session binding and one-call init",
+        call = o.run_text(b.text, f"C1 Step {N.state} Bash session binding + init", f"Step {N.state}: session binding and one-call init",
                           capture=("PROJECT_DIR", "STATE_FILE", "DEV_SESSION_ID", "REGISTRY_DIR"), extra_rules=keep)
         out = call.response.get("stdout", "") if call.ok else ""
         self.init = dict(re.findall(r"^([A-Z][A-Z_]+)=(.*)$", out, re.M))
         if "OVERNIGHT_INIT_OK" not in out:
-            s.say("Step 1: the initialization's last line is not OVERNIGHT_INIT_OK; continuing with the record's values.")
+            s.say(f"Step {N.state}: the initialization's last line is not OVERNIGHT_INIT_OK; continuing with the record's values.")
         if not self.init.get("REQUIREMENT_DOC"):
             self.init["REQUIREMENT_DOC"] = self.state.get("requirement_doc", "")
         # WORKING-ROOT GUARD: cd into worktree_path.
-        self.bash(f"cd {shlex.quote(self.worktree)} && pwd", "Enter the working root", "Step 1 Bash cd working root")
-        ann = o.block("Step 1", anchor="Overnight development session initialized")
+        self.bash(f"cd {shlex.quote(self.worktree)} && pwd", "Enter the working root", f"Step {N.state} Bash cd working root")
+        ann = o.block(f"Step {N.state}", anchor="Overnight development session initialized")
         s.say(o.bind(ann, [(r"^isolation_kind$", str(self.state.get("isolation_kind")))]))
 
     # ------------------------------------------------------------ Steps 2-4
     def step2(self) -> None:
         o = self.o
-        self.todo_to(2)
-        self.ts = self.stamp()
+        self.todo_to(N.pm_plan)
+        self.ts = self.stamp("plan")
         self.rp.task(self.ts)
         plan_rel = f"{self.sdir}/test-plan.json"
         n = self.cycle  # what PM learns from the session history it reads (the retro reports)
@@ -1178,9 +1241,9 @@ class Night:
         reads = ("CLAUDE.md", "README.md")
         globs = [("retro-report-cycle*.json", self.sdir)] if n > 1 else []
         act = agents.Act(work=report_work(content, reads, globs), summary="test plan written", status="completed")
-        self.dispatch(o.template("Step 2"), act, "Step 2 Agent(pm) PLAN", self.ts, atype="pm")
+        self.dispatch(o.template(f"Step {N.pm_plan}"), act, f"Step {N.pm_plan} Agent(pm) PLAN", self.ts, atype="pm")
         # After PM-Plan: the plan Read and the priority context built from it.
-        self.read(plan_rel, "Step 2 Read test plan")
+        self.read(plan_rel, f"Step {N.pm_plan} Read test plan")
         self.plan = self.load(plan_rel)
         tiers = self.plan.get("priority_tiers")
         if tiers:
@@ -1211,7 +1274,7 @@ class Night:
 
     def step3(self) -> None:
         o = self.o
-        self.todo_to(3)
+        self.todo_to(N.specialists)
         launch = self.specialists()
         o.s.say("specialists_assessed: " + json.dumps(self.assessed, indent=1, ensure_ascii=False))
         ann = cmdtext.block(o.section("Specialist Calling Rule"), None, anchor="Launching specialist subagents")
@@ -1223,7 +1286,7 @@ class Night:
         scs = self.cycle_scenarios[self.cycle]
         for role in launch:
             self.spec_name = role
-            self.ts = self.stamp()
+            self.ts = self.stamp(role)
             self.rp.task(self.ts)
             self.report_rel = o.bind(out_tpl)
             issues = [_issue(sc, k, role) for k, sc in enumerate(scs, 1)]
@@ -1239,7 +1302,7 @@ class Night:
             reads = [sc.rel for sc in scs] + ["tests/test_add.py"]
             act = agents.Act(work=report_work(doc, reads), summary=doc["summary"], status="completed")
             self.dispatch({"subagent_type": role, "description": f"{role} specialist scan",
-                           "prompt": "\n".join(lines)}, act, f"Step 3 Agent({role})", self.ts, atype=role)
+                           "prompt": "\n".join(lines)}, act, f"Step {N.specialists} Agent({role})", self.ts, atype=role)
         self.validate_reports(launch)
 
     def validate_reports(self, launch: list) -> None:
@@ -1247,19 +1310,19 @@ class Night:
         sec = o.section("Specialist Calling Rule")
         check = re.search(r"run `(~/\.claude/scripts/check-overnight-reports\.sh[^`]*)`", sec)
         if check:  # the base text: the report check script, then the sanity checks (each report Read)
-            c = self.bash(o.bind(check.group(1)), "Validate the specialist reports", "Step 3 Bash check-overnight-reports")
+            c = self.bash(o.bind(check.group(1)), "Validate the specialist reports", f"Step {N.specialists} Bash check-overnight-reports")
             bad = [l for l in (c.error if not c.ok else "").split("\n") if l.startswith("INVALID")]
             if bad:  # "Log which reports failed and why"; no specialist report is among them: proceed
                 o.s.say("check-overnight-reports: " + "; ".join(bad)[:600] + "\nNone of these is a report a "
                         "specialist of this cycle wrote; proceeding with the specialist reports.")
         if "Sanity checks on each report" in sec:
             for role in launch:
-                self.read(f"{self.sdir}/{role}-report.json", f"Step 3 Read {role} report")
+                self.read(f"{self.sdir}/{role}-report.json", f"Step {N.specialists} Read {role} report")
         # Core Flow Gate Check: the user report's core_flow_completed.
         rel = f"{self.sdir}/user-report.json"
         if self.assessed.get("user", "").startswith("RELEVANT"):
             if "Sanity checks on each report" not in sec:
-                self.read(rel, "Step 3 Read user report (core flow gate)")
+                self.read(rel, f"Step {N.specialists} Read user report (core flow gate)")
             rep = self.load(rel)
             lt = rep.get("live_testing") or {}
             self.user_gate = {"core_flow_completed": lt.get("core_flow_completed", rep.get("core_flow_completed")),
@@ -1269,27 +1332,27 @@ class Night:
 
     def cycle_number(self) -> None:
         o = self.o
-        sec = o.section("Step 4")
+        sec = o.section(f"Step {N.triage}")
         # `overnight.py cycle-index <STATE_FILE>`, or the `Cycle:` line overnight-status.sh prints for it
         m = re.search(r"`(~/\.claude/hooks/lib/overnight\.py cycle-index <STATE_FILE>)`", sec) or re.search(
             r"the `Cycle:` line of `(bash \"(?:\$\{CLAUDE_HOME:-\$HOME/\.claude\}|<HARNESS_ROOT>)/scripts/overnight-status\.sh\""
             r" <STATE_FILE>)`", sec)
         if m:
-            c = self.bash(o.bind(m.group(1)), "Read the cycle number", "Step 4 Bash cycle-index")
+            c = self.bash(o.bind(m.group(1)), "Read the cycle number", f"Step {N.triage} Bash cycle-index")
             out = c.response.get("stdout", "").strip() if c.ok else ""
             line = re.search(r"^\s*Cycle:\s*(\d+)\s*$", out, re.M)
             out = line.group(1) if line else out
             self.n = int(out) if out.isdigit() else self.cycle
         else:  # the base text: Cycle number <cycle_count + 1>, from the state record
-            self.read(self.state_file, "Step 4 Read state record (cycle_count)")
+            self.read(self.state_file, f"Step {N.triage} Read state record (cycle_count)")
             self.state = self.load(self.state_file)
             self.n = int(self.state.get("cycle_count") or 0) + 1
 
     def step4(self) -> None:
         o = self.o
-        self.todo_to(4)
+        self.todo_to(N.triage)
         self.cycle_number()
-        self.ts = self.stamp()
+        self.ts = self.stamp("triage")
         self.rp.task(self.ts)
         scs = self.cycle_scenarios[self.cycle]
         tri_rel = f"{self.sdir}/triage-report-cycle{self.n}.json"
@@ -1308,20 +1371,28 @@ class Night:
                else "the one finding flagged by every launched specialist"}
         reads = []
         act = agents.Act(work=report_work(doc, reads), summary="triage written", status="completed")
-        self.dispatch(o.template("Step 4"), act, "Step 4 Agent(pm) TRIAGE", self.ts, atype="pm")
-        self.read(tri_rel, "Step 4 Read triage report (pipeline_blocked)")
+        self.dispatch(o.template(f"Step {N.triage}"), act, f"Step {N.triage} Agent(pm) TRIAGE", self.ts, atype="pm")
+        self.read(tri_rel, f"Step {N.triage} Read triage report (pipeline_blocked)")
         self.triage = self.load(tri_rel)
         self.tri_rel = tri_rel
-        self.pts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        # The pipelines' stamp: a base text whose Step 6 call has the agent type `<timestamp>` gets the time the
+        # agent would type; today's text passes `-` and the builder reads the cycle contract's stamp (step6 below).
+        typed = "<timestamp>" in o.step_blocks(f"Step {N.pipelines}")[0][1].text
+        self.pts = time.strftime("%Y%m%d-%H%M%S", time.gmtime()) if typed else ""
         self.pipes = []
         fixes = [i for i in self.triage.get("pipeline_order") or []
                  if next(x for x in self.triage["issues"] if x["triage_index"] == i).get("pipeline_recommendation") == "fix"]
         for j, ti in enumerate(fixes):
-            sfx = f"{self.pts}-{j}"
-            self.rp.task(sfx)
-            self.pipes.append(Pipe(j, scs[ti], {"index": j, "timestamp_suffix": sfx, "iteration": 0,
+            sfx = f"{self.pts}-{j}" if typed else None
+            if typed:
+                self.rp.task(sfx)
+            self.pipes.append(Pipe(j, scs[ti], {"index": j, "iteration": 0,
                                                 "description": scs[ti].requirement, "location": scs[ti].rel,
-                                                "spec_path": f"{self.sdir}/spec-pipeline-{j}.md"}))
+                                                "spec_path": f"{self.sdir}/spec-pipeline-{j}.md",
+                                                **({"timestamp_suffix": sfx} if typed else {})}))
+        # OLDER_TEXT: "Cycle Contract Manifest" -- a base text's section (contract() reads it); today's text has none
+        # (its "Cycle Contract" is a hook's output the orchestrator never writes). Replayed on master's base
+        # text (2acc29b), which test_live_landing's master replays play.
         if self.o.has("Cycle Contract Manifest", "orchestrator writes the per-cycle contract manifest"):
             self.contract()
 
@@ -1352,16 +1423,16 @@ class Night:
         def mode(heading):  # the mode keyword the step's own template puts in its prompt, else null
             m = re.search(r"^\s*PM_MODE:\s*(\w+)", o.template(heading)["prompt"], re.M)
             return m.group(1) if m else None
-        calls = [entry("2", "pm", mode("Step 2"), f"{sdir}/test-plan.json", None)]
-        calls += [entry(f"3-{r}", r, None, f"{sdir}/{r}-report.json", None)
+        calls = [entry(str(N.pm_plan), "pm", mode(f"Step {N.pm_plan}"), f"{sdir}/test-plan.json", None)]
+        calls += [entry(f"{N.specialists}-{r}", r, None, f"{sdir}/{r}-report.json", None)
                   for r, v in self.assessed.items() if v.startswith("RELEVANT")]
-        calls.append(entry("4", "pm", mode("Step 4"), self.tri_rel, None))
+        calls.append(entry(str(N.triage), "pm", mode(f"Step {N.triage}"), self.tri_rel, None))
         # Step 10's dispatch (QA in BA-validation mode): its own obligation's artifact and schema; its
         # prompt carries no mode keyword.
-        qa10 = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 10"), None) if "Agent(" in b.text))
+        qa10 = agent_block(next(b.text for b in cmdtext.blocks(o.section(f"Step {N.qa_ba}"), None) if "Agent(" in b.text))
         m10 = re.search(r'artifacts=\[\{"kind":"json","path":"([^"]+)","schema":"([^"]+)"', qa10["prompt"])
         for p in self.pipes:
-            for step in ("8", "10", "12", "15"):
+            for step in (str(N.ba), str(N.qa_ba), str(N.dev), str(N.qa)):
                 if step in ex:
                     e = json.loads(fill_curly(json.dumps(ex[step]), p.rec, {}))
                 else:
@@ -1369,7 +1440,7 @@ class Night:
                 calls.append(e)
         if "11g" in ex:
             calls.append(json.loads(json.dumps(ex["11g"]).replace("<session_id>", self.sid).replace("<N>", str(self.n))))
-        calls.append(entry("20", "pm", mode("Step 20"), f"{sdir}/retro-report-cycle{self.n}.json", None))
+        calls.append(entry(str(N.retro), "pm", mode(f"Step {N.retro}"), f"{sdir}/retro-report-cycle{self.n}.json", None))
         doc = {"schema_version": 1, "spec_id": f"autonomous-{self.sid}", "session_id": self.sid, "cycle_id": self.n,
                "created_at": utc_now(), "monolith_sha256": None, "spec_mode": self.state.get("spec_mode"),
                "required_calls": calls,
@@ -1384,19 +1455,19 @@ class Night:
                                                               "budget": r.get("budget") or {}}
                                         for r in self.plan.get("recommended_specialists") or []}}
         body = json.dumps(doc, indent=2) + "\n"
-        self.write(primary, body, "Step 4 Write cycle contract")
+        self.write(primary, body, f"Step {N.triage} Write cycle contract")
         self.bash(f"ln -sfn {shlex.quote(link_target.replace(sdir + '/', ''))} {shlex.quote(link_path)}",
-                  "Link cycle-current.json to this cycle's contract", "Step 4 Bash cycle-current symlink")
-        self.write(mirror, body, "Step 4 Write contract mirror")
+                  "Link cycle-current.json to this cycle's contract", f"Step {N.triage} Bash cycle-current symlink")
+        self.write(mirror, body, f"Step {N.triage} Write contract mirror")
 
     # ------------------------------------------------------------ Steps 5-7
     def step5(self) -> None:
         o = self.o
-        self.todo_to(5)
-        sec = o.section("Step 5")
+        self.todo_to(N.specs)
+        sec = o.section(f"Step {N.specs}")
         tpl = re.search(r"Copy the template from `([^`]+)`", sec).group(1)
         tpl_path = tpl.replace("~", self.rp.layout.home, 1) if tpl.startswith("~/") else o.bind(tpl)
-        self.read(tpl_path, "Step 5 Read spec template")
+        self.read(tpl_path, f"Step {N.specs} Read spec template")
         text = agents.peek(self.rp, "main", tpl_path)
         sec5 = "Replace Section 5's `_Not yet populated._`" in sec
         # The text's form for the copies: one Bash call, a quoted heredoc per copy (the base text has
@@ -1414,18 +1485,18 @@ class Night:
                 head = o.bind(form.group(1).replace("<index>", str(p.index)))
                 heredocs.append(f"{head}\n{t.rstrip(chr(10))}\n{form.group(3)}")
             else:
-                self.write(p.rec["spec_path"], t, f"Step 5 Write spec-pipeline-{p.index}")
+                self.write(p.rec["spec_path"], t, f"Step {N.specs} Write spec-pipeline-{p.index}")
         if heredocs:
-            self.bash("\n".join(heredocs) + "\n", "Write the pipelines' spec copies", "Step 5 Bash spec copies")
+            self.bash("\n".join(heredocs) + "\n", "Write the pipelines' spec copies", f"Step {N.specs} Bash spec copies")
 
     def step6(self) -> None:
         o = self.o
-        self.todo_to(6)
-        name, b, _ = o.step_blocks("Step 6")[0]
+        self.todo_to(N.pipelines)
+        name, b, _ = o.step_blocks(f"Step {N.pipelines}")[0]
         rules = [(r"^triage-report$", self.tri_rel),
                  (r"^addressed-issues$", f"<(jq -c '.addressed_issues // []' {shlex.quote(self.state_file)})"),
                  (r"^timestamp$", self.pts)]
-        call = o.run_text(b.text, f"{self.L}Step 6 Bash {name}", "Create the pipeline definitions", extra_rules=rules)
+        call = o.run_text(b.text, f"{self.L}Step {N.pipelines} Bash {name}", "Create the pipeline definitions", extra_rules=rules)
         out = call.response.get("stdout", "") if call.ok else ""
         try:
             recs = json.loads(out)
@@ -1435,7 +1506,13 @@ class Night:
             rec = next((r for r in recs if r.get("index") == p.index), None)
             if rec:
                 p.rec = dict(rec)
-        ann = cmdtext.block(o.section("Step 6"), None, anchor="Proceeding to parallel BA phase")
+        if not self.pts:  # today's text: the ids are the builder's, from the cycle contract's stamp
+            missing = [p.index for p in self.pipes if not p.rec.get("timestamp_suffix")]
+            assert not missing, f"Step {N.pipelines}'s builder printed no record for pipelines {missing}: {call.response}"
+            self.pts = self.pipes[0].sfx.rsplit("-", 1)[0] if self.pipes else ""
+            for p in self.pipes:
+                self.rp.task(p.sfx)
+        ann = cmdtext.block(o.section(f"Step {N.pipelines}"), None, anchor="Proceeding to parallel BA phase")
         tier = {k: sum(1 for p in self.pipes if p.rec.get("tier", 1) == k) for k in (1, 2, 3)}
         out = []
         for l in ann.rstrip("\n").split("\n"):
@@ -1453,7 +1530,7 @@ class Night:
         o.s.say(text)
 
     def step7(self) -> None:
-        self.todo_to(7)
+        self.todo_to(N.focus)
         focus = self.state.get("focus")
         if focus:
             self.criteria = [
@@ -1466,16 +1543,16 @@ class Night:
     # ------------------------------------------------------------ Steps 8-11
     def step8(self) -> None:
         o = self.o
-        self.todo_to(8)
-        sec = o.section("Step 8")
-        hyd = o.step_blocks("Step 8")[0][1].text
+        self.todo_to(N.ba)
+        sec = o.section(f"Step {N.ba}")
+        hyd = o.step_blocks(f"Step {N.ba}")[0][1].text
         tpl = agent_block(next(b.text for b in cmdtext.blocks(sec, None) if "Agent(" in b.text))
         # The existing-specs pattern Four Contracts Awareness names (its legacy name left out).
         pattern = cmdtext.inline_codes(o.text, "Pre-BA: surface retry signals", "Existing BA specs")[0]
         for p in self.pipes:
             sc = p.sc
             # Existing BA specs "with keywords from the current issue": the pattern's files holding the keyword.
-            lab = f"{self.L}Step 8 Grep prior tickets {p.index}"
+            lab = f"{self.L}Step {N.ba} Grep prior tickets {p.index}"
             g = o.s.tool("Grep", {"pattern": re.escape(sc.keyword), "path": os.path.join(self.project, os.path.dirname(pattern)),
                                   "glob": os.path.basename(pattern), "output_mode": "files_with_matches"},
                          label=lab, deviation=o.devs.at(lab))
@@ -1483,17 +1560,17 @@ class Night:
                            if fnmatch.fnmatch(os.path.basename(f), os.path.basename(pattern))) if g.ok else []
             # Pre-BA retry signals: recent related commits (a command that runs git: the actor env first).
             c = self.bash(self.git(f"git log --oneline -n 30 --grep={shlex.quote(sc.keyword)}"),
-                          "Recent related commits", f"Step 8 Bash git log {p.index}")
+                          "Recent related commits", f"Step {N.ba} Bash git log {p.index}")
             commits = [l for l in c.response.get("stdout", "").split("\n") if l.strip()] if c.ok else []
             hyd_text = fill_curly(hyd, p.rec, {})
-            o.run_text(hyd_text, f"{self.L}Step 8 Bash graphify hydrator {p.index}", "Graphify pre-BA hydrator")
+            o.run_text(hyd_text, f"{self.L}Step {N.ba} Bash graphify hydrator {p.index}", "Graphify pre-BA hydrator")
             gdir = f".claude/dev-registry/{self.sid}-pipeline-{p.index}/graphify"
             gq = o.s.tool("Glob", {"pattern": "pre_query.json", "path": os.path.join(self.project, gdir)},
-                          label=f"{self.L}Step 8 Glob pre_query {p.index}",
-                          deviation=o.devs.at(f"{self.L}Step 8 Glob pre_query {p.index}"))
+                          label=f"{self.L}Step {N.ba} Glob pre_query {p.index}",
+                          deviation=o.devs.at(f"{self.L}Step {N.ba} Glob pre_query {p.index}"))
             extra_line = None
             if gq.ok and gq.response.get("filenames"):
-                self.read(f"{gdir}/pre_query.json", f"Step 8 Read pre_query {p.index}")
+                self.read(f"{gdir}/pre_query.json", f"Step {N.ba} Read pre_query {p.index}")
                 if self.load(f"{gdir}/pre_query.json").get("status") in ("ok", "degraded"):
                     extra_line = f"Pre-query context file: {gdir}/pre_query.json"
             fields = dict(tpl)
@@ -1507,9 +1584,9 @@ class Night:
                             pr, count=1, flags=re.M)
             fields["prompt"] = pr
             if self.meets_decisions(p):
-                self.ba_decided_by_experiment(fields, p, f"Step 8 Agent(ba) pipeline {p.index}")
+                self.ba_decided_by_experiment(fields, p, f"Step {N.ba} Agent(ba) pipeline {p.index}")
             else:
-                self.dispatch_ba(fields, p, f"Step 8 Agent(ba) pipeline {p.index}")
+                self.dispatch_ba(fields, p, f"Step {N.ba} Agent(ba) pipeline {p.index}")
 
     def dispatch_ba(self, fields, p: Pipe, label: str, question: dict | None = None, experiment: dict | None = None):
         """BA from the step's template; with `question`, BA writes that producer question instead of its
@@ -1596,7 +1673,7 @@ class Night:
         rel = d.player.question_written
         if not rel:
             raise RuntimeError(f"{label}: BA wrote no producer question")
-        q = self.questions[("ba", p.index)] = self.meet_question(rel, f"Step 8 pipeline {p.index}")
+        q = self.questions[("ba", p.index)] = self.meet_question(rel, f"Step {N.ba} pipeline {p.index}")
         line = self.experiment_line(q, EXPERIMENT)
         self.o.s.say(f"Pipeline {p.index}: BA asks: {q['need']} Nobody answers overnight (Hard Rule 5); an "
                      f"experiment settles it: {EXPERIMENT['measure']}. Re-dispatching BA with the decision.")
@@ -1605,11 +1682,11 @@ class Night:
         pr, n = re.subn(r"^(\s*)Previous answers:.*$", lambda m: f"{m.group(1)}Previous answers: {prev}\n{m.group(1)}{line}",
                         pr, count=1, flags=re.M)
         if not n:
-            raise cmdtext.TextNotFound("Step 8's BA template has no `Previous answers:` line")
+            raise cmdtext.TextNotFound(f"Step {N.ba}'s BA template has no `Previous answers:` line")
         d2 = self.dispatch_ba(dict(fields, prompt=pr), p, label + " (decision)", experiment=dict(EXPERIMENT, question=q))
         self.carried.append({"where": label + " (decision)", "line": line, "prompt": d2.player.b.prompt})
         self.own |= {self.L + label, self.L + label + " (decision)"}
-        self.probe_stop(f"{self.L}Step 8 (injected) Stop after a forged ESCALATION_ACK line")  # in the window
+        self.probe_stop(f"{self.L}Step {N.ba} (injected) Stop after a forged ESCALATION_ACK line")  # in the window
 
     def gate_line(self, p: Pipe) -> str:
         """The stand-in user gate at pipeline 0's dev dispatch, decided once (Clause B: as Hard Rule 5
@@ -1640,7 +1717,7 @@ class Night:
         context dev consumes), dev re-dispatched fresh from Step 12's template with the decision."""
         o = self.o
         rel = f"docs/dev/producer-question-{p.sfx}-dev.json"
-        q = self.questions[("dev", p.index)] = self.meet_question(rel, f"Step 13 pipeline {p.index}")
+        q = self.questions[("dev", p.index)] = self.meet_question(rel, f"Step {N.dev_valid} pipeline {p.index}")
         line = self.default_line(q["need"], q)
         self.record(p, q["need"], [x["label"] for x in q["options"]], "the question's default", q["default"])
         o.s.say(f"Pipeline {p.index}: dev asks: {q['need']} Nobody answers overnight (Hard Rule 5); no experiment "
@@ -1650,29 +1727,29 @@ class Night:
         run_rel = f".claude/dev-registry/{self.sid}-pipeline-{p.index}/graphify/graphify-run.json"
         status, same = None, False
         if os.path.isfile(os.path.join(self.project, run_rel)):
-            self.read(run_rel, f"Step 13 Read graphify-run {p.index} (fingerprint)")
+            self.read(run_rel, f"Step {N.dev_valid} Read graphify-run {p.index} (fingerprint)")
             rec = self.load(run_rel)
             status = rec.get("status")
             c = self.bash(f"sha256sum {shlex.quote(self.ctx_rel)}", "Fingerprint the context dev consumes",
-                          f"Step 13 Bash context fingerprint {p.index}")
+                          f"Step {N.dev_valid} Bash context fingerprint {p.index}")
             sha = (c.response.get("stdout", "").split() or [""])[0] if c.ok else ""
             same = (rec.get("context_sha256") == sha and rec.get("context_path") == self.ctx_rel
                     and int(rec.get("iteration") or 0) == int(p.rec.get("iteration") or 0))
         if not same:
-            o.set_in_progress("11g", f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index}, Step 13)")
-            self.dispatch(o.template("Step 11g"), agents.Act(summary="graphify enrichment"),
-                          f"Step 11g Agent(graphify) pipeline {p.index} (Step 13)", p.sfx, atype="graphify", pipe=p)
+            o.set_in_progress(self.g_step(), f"{self.L}TodoWrite Step {N.loop}g in_progress (pipeline {p.index}, Step {N.dev_valid})")
+            self.dispatch(o.template(G_HEAD), agents.Act(summary="graphify enrichment"),
+                          f"Step {N.loop}g Agent(graphify) pipeline {p.index} (Step {N.dev_valid})", p.sfx, atype="graphify", pipe=p)
             if os.path.isfile(os.path.join(self.project, run_rel)):
-                self.read(run_rel, f"Step 11g Read graphify-run {p.index} (Step 13)")
+                self.read(run_rel, f"Step {N.loop}g Read graphify-run {p.index} (Step {N.dev_valid})")
                 status = self.load(run_rel).get("status")
-            o.set_in_progress(13, f"{self.L}TodoWrite Step 13 in_progress (pipeline {p.index})")
-        d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 12"), None) if "Agent(" in b.text))
+            o.set_in_progress(N.dev_valid, f"{self.L}TodoWrite Step {N.dev_valid} in_progress (pipeline {p.index})")
+        d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section(f"Step {N.dev}"), None) if "Agent(" in b.text))
         add = [self.gate_line(p), line]
-        g_add = re.search(r"`(Graph context file: [^`]+)`", o.section("Step 11g"))
+        g_add = re.search(r"`(Graph context file: [^`]+)`", o.section(G_HEAD))
         if g_add and status in ("ok", "degraded"):
             add.append(fill_curly(g_add.group(1).replace("${DEV_SESSION_ID}", self.sid), p.rec, {}))
-        label = f"Step 13 Agent(dev) pipeline {p.index} (decision)"
-        self.pre_shell(d_tpl, p, f"Step 13 Bash pre-dispatch {p.index}")
+        label = f"Step {N.dev_valid} Agent(dev) pipeline {p.index} (decision)"
+        self.pre_shell(d_tpl, p, f"Step {N.dev_valid} Bash pre-dispatch {p.index}")
         d = self.dispatch_dev(devdrv.with_lines(dict(d_tpl), add), p, p.sc.old, p.sc.final, label, attempt=1)
         self.carried.append({"where": label, "line": line, "prompt": d.player.b.prompt})
         self.own.add(self.L + label)
@@ -1696,17 +1773,17 @@ class Night:
         text = f"The pipeline needs the owner; escalating.\nESCALATION_ACK {nonce}" if forged else \
             "The cycle's work is done; ending the session."
         self.o.s.say(text)
-        t0 = time.time()
+        t0 = clock_now()  # the session's clock: the modeled one on a windowed variant, as its hooks read it
         ev = self.o.s.fire("Stop", label, {"stop_hook_active": False, "last_assistant_message": text})
         self.probes.append({"kind": "Stop after a forged ESCALATION_ACK" if forged else "Stop", "label": label,
                             "who": "main", "in_window": self.in_window(), "blocks": _probe_blocks(ev),
-                            "t": [t0, time.time()]})
+                            "t": [t0, clock_now()]})
 
     def step9(self) -> None:
-        self.todo_to(9)
+        self.todo_to(N.ba_valid)
         for p in self.pipes:
             for rel in (f"docs/dev/ticket-{p.sfx}.md", f"docs/dev/context-{p.sfx}.json"):
-                self.read(rel, f"Step 9 Read {os.path.basename(rel).split('-')[0]} {p.index}")
+                self.read(rel, f"Step {N.ba_valid} Read {os.path.basename(rel).split('-')[0]} {p.index}")
             if ("ba", p.index) in self.questions:  # the decision BA recorded, copied as it was made
                 for rec in self.load(f"docs/dev/context-{p.sfx}.json").get("decisions_without_owner") or []:
                     self.record(p, rec["decision"], rec["options"],
@@ -1719,54 +1796,54 @@ class Night:
 
     def step10(self) -> None:
         o = self.o
-        self.todo_to(10)
-        tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 10"), None) if "Agent(" in b.text))
+        self.todo_to(N.qa_ba)
+        tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section(f"Step {N.qa_ba}"), None) if "Agent(" in b.text))
         for p in self.pipes:
-            self.pre_shell(tpl, p, f"Step 10 Bash qa_mode {p.index}")
+            self.pre_shell(tpl, p, f"Step {N.qa_ba} Bash qa_mode {p.index}")
             act = agents.Act(verdict="pass", summary="BA analysis checked")
-            self.dispatch(dict(tpl), act, f"Step 10 Agent(qa) ba_validation pipeline {p.index}", p.sfx, atype="qa", pipe=p)
+            self.dispatch(dict(tpl), act, f"Step {N.qa_ba} Agent(qa) ba_validation pipeline {p.index}", p.sfx, atype="qa", pipe=p)
         for p in self.pipes:  # Process QA results per pipeline
             rel = f"docs/dev/ba-qa-report-{p.sfx}.json"
-            self.read(rel, f"Step 10 Read ba-qa-report {p.index}")
+            self.read(rel, f"Step {N.qa_ba} Read ba-qa-report {p.index}")
             assert self.load(rel).get("verdict") == "pass"
 
     # ------------------------------------------------------------ Steps 11g-13
     def steps11g_12(self) -> None:
         o = self.o
-        self.todo_to(11)
-        g_tpl = o.template("Step 11g")
-        d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 12"), None) if "Agent(" in b.text))
+        self.todo_to(N.loop)
+        g_tpl = o.template(G_HEAD)
+        d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section(f"Step {N.dev}"), None) if "Agent(" in b.text))
         for k, p in enumerate(self.pipes):
             # Step 11g in progress before the graphify call (the next step in the list the first time).
             if k == 0:
-                self.todo_to("11g")
+                self.todo_to(self.g_step())
             else:
-                o.set_in_progress("11g", f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index})")
+                o.set_in_progress(self.g_step(), f"{self.L}TodoWrite Step {N.loop}g in_progress (pipeline {p.index})")
             self.ctx_rel = f"docs/dev/context-{p.sfx}.json"
-            self.dispatch(g_tpl, agents.Act(summary="graphify enrichment"), f"Step 11g Agent(graphify) pipeline {p.index}",
+            self.dispatch(g_tpl, agents.Act(summary="graphify enrichment"), f"Step {N.loop}g Agent(graphify) pipeline {p.index}",
                           p.sfx, atype="graphify", pipe=p)
             run_rel = f".claude/dev-registry/{self.sid}-pipeline-{p.index}/graphify/graphify-run.json"
             status = None
             if os.path.isfile(os.path.join(self.project, run_rel)):
-                self.read(run_rel, f"Step 11g Read graphify-run {p.index}")
+                self.read(run_rel, f"Step {N.loop}g Read graphify-run {p.index}")
                 status = self.load(run_rel).get("status")
             o.s.say(f"pipeline {p.index}: graphify status={status}")
-            o.set_in_progress(12, f"{self.L}TodoWrite Step 12 in_progress (pipeline {p.index})")
+            o.set_in_progress(N.dev, f"{self.L}TodoWrite Step {N.dev} in_progress (pipeline {p.index})")
             fields = dict(d_tpl)
-            add = re.search(r"`(Graph context file: [^`]+)`", o.section("Step 11g"))
+            add = re.search(r"`(Graph context file: [^`]+)`", o.section(G_HEAD))
             if add and status in ("ok", "degraded"):
                 fields = devdrv.with_lines(fields, [fill_curly(add.group(1).replace("${DEV_SESSION_ID}", self.sid), p.rec, {})])
-            self.pre_shell(d_tpl, p, f"Step 12 Bash pre-dispatch {p.index}")
+            self.pre_shell(d_tpl, p, f"Step {N.dev} Bash pre-dispatch {p.index}")
             sc = p.sc
             if self.meets_decisions(p):  # variant=unattended: the user gate, then dev's producer question
-                label = f"Step 12 Agent(dev) pipeline {p.index}"
+                label = f"Step {N.dev} Agent(dev) pipeline {p.index}"
                 line = self.gate_line(p)
                 d = self.dev_question_round(devdrv.with_lines(fields, [line]), p, label)
                 self.carried.append({"where": label, "line": line, "prompt": d.player.b.prompt})
                 self.own.add(self.L + label)
                 continue
             self.dispatch_dev(fields, p, sc.old, sc.partial if self.fails_first(p) else sc.final,
-                              f"Step 12 Agent(dev) pipeline {p.index}", attempt=1)
+                              f"Step {N.dev} Agent(dev) pipeline {p.index}", attempt=1)
 
     def fails_first(self, p: Pipe) -> bool:
         """Whether this pipeline's first QA fails (variant qa-fail: pipeline 0, in cycle 1)."""
@@ -1784,38 +1861,38 @@ class Night:
         return self.dispatch(fields, act, label, p.sfx, atype="dev", pipe=p)
 
     def step13(self) -> None:
-        self.todo_to(13)
+        self.todo_to(N.dev_valid)
         for p in self.pipes:
             if self.meets_decisions(p):  # dev wrote its producer question instead of its report
                 self.dev_decided_by_default(p)
-            self.read(f"docs/dev/dev-report-{p.sfx}.json", f"Step 13 Read dev-report {p.index}")
+            self.read(f"docs/dev/dev-report-{p.sfx}.json", f"Step {N.dev_valid} Read dev-report {p.index}")
 
     # ------------------------------------------------------------ Steps 14-18
     def step14(self) -> None:
         o = self.o
-        self.todo_to(14)
+        self.todo_to(N.qa_env)
         g = o.s.tool("Glob", {"pattern": "docker-compose.y*ml", "path": self.worktree},
-                     label=self.L + "Step 14 Glob docker-compose", deviation=o.devs.at(self.L + "Step 14 Glob docker-compose"))
+                     label=self.L + f"Step {N.qa_env} Glob docker-compose", deviation=o.devs.at(self.L + f"Step {N.qa_env} Glob docker-compose"))
         found = g.response.get("filenames") if g.ok else []
-        o.s.say("Step 14: " + ("docker-compose services found" if found else
+        o.s.say(f"Step {N.qa_env}: " + ("docker-compose services found" if found else
                                "no docker-compose.yml: no project services to rebuild"))
-        sec = o.section("Step 14")
+        sec = o.section(f"Step {N.qa_env}")
         m = re.search(r"Output: `([\w.-]+\.json)` with per-pipeline steps", sec)
         if m:  # the base text: the orchestrator writes the QA verification plans itself
             plans = {"docker": {"rebuilt": False, "reason": "no docker-compose.yml"},
                      "pipelines": {str(p.index): {"timestamp_suffix": p.sfx, "steps": [
                          {"action": f"python3 -c \"{p.sc.ac['check'].get('call', '')}\"", "assert": p.sc.ac["then"]}]}
                          for p in self.pipes}}
-            self.write(f"{self.sdir}/{m.group(1)}", json.dumps(plans, indent=2) + "\n", "Step 14 Write QA verification plans")
+            self.write(f"{self.sdir}/{m.group(1)}", json.dumps(plans, indent=2) + "\n", f"Step {N.qa_env} Write QA verification plans")
 
     def step15(self) -> None:
         o = self.o
-        self.todo_to(15)
-        tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 15"), None) if "Agent(" in b.text))
+        self.todo_to(N.qa)
+        tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section(f"Step {N.qa}"), None) if "Agent(" in b.text))
         for p in self.pipes:
-            self.pre_shell(tpl, p, f"Step 15 Bash qa_mode {p.index}")
+            self.pre_shell(tpl, p, f"Step {N.qa} Bash qa_mode {p.index}")
             self.dispatch_qa(dict(tpl), p, "fail" if self.fails_first(p) else "pass",
-                             f"Step 15 Agent(qa) pipeline {p.index}")
+                             f"Step {N.qa} Agent(qa) pipeline {p.index}")
 
     def dispatch_qa(self, fields: dict, p: Pipe, verdict: str, label: str):
         o, sc = self.o, p.sc
@@ -1842,24 +1919,24 @@ class Night:
         main agent write none."""
         o = self.o
         try:
-            tpl = o.block("Step 16", anchor="Development Completion Report")
+            tpl = o.block(f"Step {N.qa_results}", anchor="Development Completion Report")
         except cmdtext.TextNotFound:
             return
-        m = re.search(r"Write `([^`\s]*completion-[^`\s]*\.md)`", o.section("Step 16"))
+        m = re.search(r"Write `([^`\s]*completion-[^`\s]*\.md)`", o.section(f"Step {N.qa_results}"))
         if m is None:
-            raise cmdtext.TextNotFound("Step 16's completion report template names no path")
+            raise cmdtext.TextNotFound(f"Step {N.qa_results}'s completion report template names no path")
         self.write(fill_curly(o.bind(m.group(1)), p.rec, {}), fill_curly(o.bind(tpl), p.rec, {}), label)
 
     def step16(self) -> None:
-        self.todo_to(16)
+        self.todo_to(N.qa_results)
         self.failed = []
         for p in self.pipes:
             rel = f"docs/dev/qa-report-{p.sfx}.json"
-            self.read(rel, f"Step 16 Read qa-report {p.index}")
+            self.read(rel, f"Step {N.qa_results} Read qa-report {p.index}")
             if (self.load(rel).get("qa") or {}).get("status") != "pass":
                 self.failed.append(p)
             else:
-                self.completion(p, f"Step 16 Write completion report {p.index}")
+                self.completion(p, f"Step {N.qa_results} Write completion report {p.index}")
         passed = len(self.pipes) - len(self.failed)
         self.o.s.say(f"Pipelines passed: {passed} of {len(self.pipes)}\nPipelines needing iteration: "
                      f"{len(self.failed)}")
@@ -1869,13 +1946,13 @@ class Night:
             # The decision tree's marks, in the pipelines file Step 6 wrote (the file Step 17's
             # iteration plan selects the qa_failed pipelines from).
             self.mark({p.index: ({"phase": "qa_failed"} if p in self.failed else {"phase": "done", "status": "fixed"})
-                       for p in self.pipes}, "Step 16 Write pipelines.json (phases)")
+                       for p in self.pipes}, f"Step {N.qa_results} Write pipelines.json (phases)")
 
     # ------------------------------------------------------------ Step 17 (variant qa-fail)
     @property
     def pipes_rel(self) -> str:
         """The pipelines file Step 6's block writes (`... | tee <path>`)."""
-        name, b, _ = self.o.step_blocks("Step 6")[0]
+        name, b, _ = self.o.step_blocks(f"Step {N.pipelines}")[0]
         return self.o.bind(re.search(r"\btee\s+(\S+\.json)", b.text).group(1))
 
     def mark(self, changes: dict, label: str) -> None:
@@ -1899,84 +1976,84 @@ class Night:
         passes."""
         o = self.o
         once, per = [], []
-        for name, b, _ in o.step_blocks("Step 17"):
+        for name, b, _ in o.step_blocks(f"Step {N.iterate}"):
             (per if "<new-iter>" in b.text else once).append((name, b))
         plan_rel = None
         for name, b in once:
-            o.run_text(b.text, f"{self.L}Step 17 Bash {name}", "Build the iteration plan")
+            o.run_text(b.text, f"{self.L}Step {N.iterate} Bash {name}", "Build the iteration plan")
             m = re.search(r">\s*(\S+\.json)\s*$", o.bind(b.text).strip())
             plan_rel = m.group(1) if m else plan_rel
         if plan_rel is not None:  # the base text's iteration-plan block, then the plan Read
-            self.read(plan_rel, "Step 17 Read iteration plan")
+            self.read(plan_rel, f"Step {N.iterate} Read iteration plan")
             plan = self.load(plan_rel).get("iteration_plan") or []
         else:  # a Step 17 with no plan block re-dispatches each qa_failed pipeline's dev in turn
             plan = [{"index": p.index} for p in self.failed]
-        sec = o.section("Step 17")
-        g_tpl = o.template("Step 11g")
-        d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 12"), None) if "Agent(" in b.text))
-        q_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section("Step 15"), None) if "Agent(" in b.text))
+        sec = o.section(f"Step {N.iterate}")
+        g_tpl = o.template(G_HEAD)
+        d_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section(f"Step {N.dev}"), None) if "Agent(" in b.text))
+        q_tpl = agent_block(next(b.text for b in cmdtext.blocks(o.section(f"Step {N.qa}"), None) if "Agent(" in b.text))
         qa_mode = [c for c in re.findall(r"`([^`\n]+)`", sec) if "write-qa-mode.sh" in c]
         for entry in plan:
             p = next(x for x in self.pipes if x.index == entry["index"])
             while True:
                 it = int(p.rec.get("iteration") or entry.get("current_iteration") or 0) + 1
-                self.mark({p.index: {"iteration": it}}, f"Step 17 Write pipelines.json (iteration {it} of {p.index})")
+                self.mark({p.index: {"iteration": it}}, f"Step {N.iterate} Write pipelines.json (iteration {it} of {p.index})")
                 # The text's per-iteration blocks (the base's context refinement); a block that writes a
                 # context file gives the context dev consumes this iteration.
                 self.ctx_rel = f"docs/dev/context-{p.sfx}.json"
                 rules = [(r"^new-iter$", str(it)), (r"^timestamp_suffix$", p.sfx)]
                 for name, b in per:
-                    o.run_text(b.text, f"{self.L}Step 17 Bash {name} {p.index}", "Refine the context", extra_rules=rules)
+                    o.run_text(b.text, f"{self.L}Step {N.iterate} Bash {name} {p.index}", "Refine the context", extra_rules=rules)
                     m = re.search(r">\s*(\S*context\S*\.json)\s*$", o.bind(b.text, rules).strip())
                     if m:
                         self.ctx_rel = m.group(1)
                 # Step 11g's precondition at the new iteration, then Step 17 in progress again.
-                o.set_in_progress("11g", f"{self.L}TodoWrite Step 11g in_progress (pipeline {p.index} iteration {it})")
+                o.set_in_progress(self.g_step(), f"{self.L}TodoWrite Step {N.loop}g in_progress (pipeline {p.index} iteration {it})")
                 self.dispatch(g_tpl, agents.Act(summary="graphify enrichment"),
-                              f"Step 11g Agent(graphify) pipeline {p.index} iteration {it}", p.sfx, atype="graphify", pipe=p)
+                              f"Step {N.loop}g Agent(graphify) pipeline {p.index} iteration {it}", p.sfx, atype="graphify", pipe=p)
                 run_rel = f".claude/dev-registry/{self.sid}-pipeline-{p.index}/graphify/graphify-run.json"
                 status = None
                 if os.path.isfile(os.path.join(self.project, run_rel)):
-                    self.read(run_rel, f"Step 11g Read graphify-run {p.index} iteration {it}")
+                    self.read(run_rel, f"Step {N.loop}g Read graphify-run {p.index} iteration {it}")
                     status = self.load(run_rel).get("status")
                 o.s.say(f"pipeline {p.index} iteration {it}: graphify status={status}")
-                o.set_in_progress(17, f"{self.L}TodoWrite Step 17 in_progress (pipeline {p.index} iteration {it})")
+                o.set_in_progress(N.iterate, f"{self.L}TodoWrite Step {N.iterate} in_progress (pipeline {p.index} iteration {it})")
                 # Dev from Step 12's template: the lines Step 17 adds that it does not carry yet, the
                 # context it consumes this iteration.
                 fields = dict(d_tpl)
                 labels = {l.split(":", 1)[0].strip() for l in fields["prompt"].split("\n") if ":" in l}
                 add = [fill_curly(c, p.rec, {}) for c in re.findall(r"`([A-Z][\w ]* file:\s*[^`\s]+)`", sec)
                        if c.split(":", 1)[0].strip() not in labels]
-                g_add = re.search(r"`(Graph context file: [^`]+)`", o.section("Step 11g"))
+                g_add = re.search(r"`(Graph context file: [^`]+)`", o.section(G_HEAD))
                 if g_add and status in ("ok", "degraded"):
                     add.append(fill_curly(g_add.group(1).replace("${DEV_SESSION_ID}", self.sid), p.rec, {}))
                 ctx = self.ctx_rel if self.ctx_rel != f"docs/dev/context-{p.sfx}.json" else None
                 fields = devdrv.with_lines(fields, add, ctx)
                 self.dispatch_dev(fields, p, p.sc.partial, p.sc.final,
-                                  f"Step 17 Agent(dev) pipeline {p.index} iteration {it}", attempt=it + 1)
+                                  f"Step {N.iterate} Agent(dev) pipeline {p.index} iteration {it}", attempt=it + 1)
                 for k, code in enumerate(qa_mode, 1):  # the qa_mode write the text has before QA (the base's)
-                    o.run_text(code, f"{self.L}Step 17 Bash qa_mode {p.index} iteration {it}" + (f" #{k}" if k > 1 else ""),
+                    o.run_text(code, f"{self.L}Step {N.iterate} Bash qa_mode {p.index} iteration {it}" + (f" #{k}" if k > 1 else ""),
                                "Set qa_mode before the QA dispatch")
-                self.dispatch_qa(dict(q_tpl), p, "pass", f"Step 17 Agent(qa) pipeline {p.index} iteration {it}")
+                self.dispatch_qa(dict(q_tpl), p, "pass", f"Step {N.iterate} Agent(qa) pipeline {p.index} iteration {it}")
                 rel = f"docs/dev/qa-report-{p.sfx}.json"
-                self.read(rel, f"Step 17 Read qa-report {p.index} iteration {it}")
+                self.read(rel, f"Step {N.iterate} Read qa-report {p.index} iteration {it}")
                 if (self.load(rel).get("qa") or {}).get("status") == "pass":  # the only exit
                     self.mark({p.index: {"phase": "done", "status": "fixed"}},
-                              f"Step 17 Write pipelines.json (pipeline {p.index} fixed)")
-                    self.completion(p, f"Step 17 Write completion report {p.index}")
+                              f"Step {N.iterate} Write pipelines.json (pipeline {p.index} fixed)")
+                    self.completion(p, f"Step {N.iterate} Write completion report {p.index}")
                     break
         self.failed = []
 
     def step18(self) -> None:
         o = self.o
-        self.todo_to(17)
+        self.todo_to(N.iterate)
         if getattr(self, "failed", None):
             self.step17()
         else:
-            o.s.say("Step 17: every pipeline passed QA; no iteration.")
-        self.todo_to(18)
-        for name, b, _ in o.step_blocks("Step 18"):
-            o.run_text(b.text, f"{self.L}Step 18 Bash {name}", "Aggregate and apply the pipelines' permissions")
+            o.s.say(f"Step {N.iterate}: every pipeline passed QA; no iteration.")
+        self.todo_to(N.perms)
+        for name, b, _ in o.step_blocks(f"Step {N.perms}"):
+            o.run_text(b.text, f"{self.L}Step {N.perms} Bash {name}", "Aggregate and apply the pipelines' permissions")
 
     # ------------------------------------------------------------ Steps 19-21
     @staticmethod
@@ -1986,8 +2063,8 @@ class Night:
 
     def step19(self) -> None:
         o = self.o
-        self.todo_to(19)
-        sec = o.section("Step 19")
+        self.todo_to(N.log)
+        sec = o.section(f"Step {N.log}")
         log = re.search(r"running log\*\* at `([^`]+)`", sec).group(1)
         self.log_rel = o.bind(log)
         tpl = cmdtext.block(sec, None, lang="markdown")
@@ -2008,7 +2085,7 @@ class Night:
         made = [d for d in self.decision_rows() if d["cycle"] == self.cycle]
         m = re.search(r"^(\*\*Decisions made without the owner\*\*:) (.*?) \(one line per decision.*$", entry, re.M)
         if made and not m:
-            raise cmdtext.TextNotFound("Step 19's log template has no `Decisions made without the owner` line form")
+            raise cmdtext.TextNotFound(f"Step {N.log}'s log template has no `Decisions made without the owner` line form")
         if made:
             lines = [m.group(1)] + ["- " + self.o.bind(m.group(2), self.decision_rules(d)) for d in made]
             entry = entry[:m.start()] + "\n".join(lines) + entry[m.end():]
@@ -2016,13 +2093,11 @@ class Night:
             entry = re.sub(r"^\*\*Decisions made without the owner\*\*:.*$", "**Decisions made without the owner**: none",
                            entry, flags=re.M)
         entry = entry.replace("<timestamp>", utc_now())
-        self.log_append(entry, "Step 19 cycle log")
+        self.log_append(entry, f"Step {N.log} cycle log")
         if self.variant == "plain" and self.cycle >= self.cycles:
-            if self.tz:  # injected: the main agent's Stop inside the window, the time-lock's to hold
-                self.probe_stop(f"{self.L}Step 19 (injected) Stop inside the window", forged=False)
             self.idle_until_end()
         # TIME CHECK.
-        code = next(c for c in cmdtext.inline_codes(o.text, "Step 19", "TIME CHECK")
+        code = next(c for c in cmdtext.inline_codes(o.text, f"Step {N.log}", "TIME CHECK")
                     if c.startswith(("~/.claude/scripts/overnight-status.sh",
                                      'bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/overnight-status.sh"',
                                      'bash "<HARNESS_ROOT>/scripts/overnight-status.sh"')))
@@ -2030,32 +2105,34 @@ class Night:
         if cmd.strip() == "~/.claude/scripts/overnight-status.sh" and "against the state file" in sec:
             cmd += " " + shlex.quote(self.state_file)
         self.reached_19_in_window = self.in_window()
-        if self.windowed:  # a real cycle outlasts this window: its end comes before the TIME CHECK
+        if self.windowed and self.modeled:  # a real cycle outlasts this window: the model passes its end
+            self.rp.advance_clock(self.end_epoch() + 1.5)
+        elif self.windowed:  # a real cycle outlasts this window: its end comes before the TIME CHECK
             while time.time() <= self.end_epoch() + 1:
                 time.sleep(min(5.0, max(0.2, self.end_epoch() + 1.5 - time.time())))
-        tc = self.bash(cmd, "TIME CHECK", "Step 19 Bash TIME CHECK")
+        tc = self.bash(cmd, "TIME CHECK", f"Step {N.log} Bash TIME CHECK")
         self.expired = not tc.ok
         o.s.say(tc.response.get("stdout", "").strip() if tc.ok else f"TIME CHECK: {tc.error[:300]}")
         # Per-cycle commit, where the text has one (the base's; a text without it keeps the cycle's
         # work in refs/checkpoints/<branch> until the owner's post-loop flow). A command that runs
         # git: the actor env first.
-        try:
-            codes = cmdtext.inline_codes(o.text, "Step 19", "chore(overnight)")
+        try:  # OLDER_TEXT: "chore(overnight)" -- the base's per-cycle commit; today's text has none
+            codes = cmdtext.inline_codes(o.text, f"Step {N.log}", "chore(overnight)")
         except cmdtext.TextNotFound:
             codes = []
         commit = next((c for c in codes if "commit.sh" in c and "chore(overnight)" in c), None)
         if commit is None:
             return
-        cc = self.bash(self.git(o.bind(commit)), "End-of-cycle commit", "Step 19 Bash end-of-cycle commit")
+        cc = self.bash(self.git(o.bind(commit)), "End-of-cycle commit", f"Step {N.log} Bash end-of-cycle commit")
         if not cc.ok:  # "append the failure to the cycle log and continue"
             self.log_append(f"**End-of-cycle commit**: failed ({cc.error.splitlines()[0][:200]}); "
-                            "refs/checkpoints/* snapshots remain.", "Step 19 cycle log (commit failure)")
+                            "refs/checkpoints/* snapshots remain.", f"Step {N.log} cycle log (commit failure)")
 
     def log_append(self, entry: str, label: str) -> None:
         """An entry appended to the cycle log, in the form Step 19's text gives (one Bash call with a
         quoted heredoc; the base text's: the log Read and edited in place, or written when new)."""
         o = self.o
-        form = re.search(r"`(cat >> (\S+) <<'(\w+)')`", o.section("Step 19"))
+        form = re.search(r"`(cat >> (\S+) <<'(\w+)')`", o.section(f"Step {N.log}"))
         if form:
             self.bash(f"{o.bind(form.group(1))}\n\n{entry.strip(chr(10))}\n{form.group(3)}\n",
                       "Append to the cycle log", f"{label} Bash append")
@@ -2069,15 +2146,18 @@ class Night:
         """Variant plain: the cycle's work is done inside the window; the session's time passes on
         the real clock until end_time (a longer cycle's own time), so the TIME CHECK that follows
         finds the window closed and the cycle is the session's last."""
+        if self.modeled:  # the model passes the window's end at once (Replay.advance_clock)
+            self.rp.advance_clock(_epoch(self.state["end_time"]) + 1)
+            return
         left = _epoch(self.state["end_time"]) - time.time()
         if left > 0:
             time.sleep(left + 1)
 
     def step20(self) -> None:
         o = self.o
-        self.todo_to(20)
+        self.todo_to(N.retro)
         self.final_cycle = bool(getattr(self, "expired", False))
-        self.ts = self.stamp()
+        self.ts = self.stamp("retro")
         self.rp.task(self.ts)
         retro_rel = f"{self.sdir}/retro-report-cycle{self.n}.json"
         doc = {"retro_id": f"rr-{self.ts}", "session_id": self.sid, "cycle_number": self.n, "timestamp": utc_now(),
@@ -2100,13 +2180,13 @@ class Night:
         globs = [(f"qa-report-{self.pts}-*.json", "docs/dev"), (f"dev-report-{self.pts}-*.json", "docs/dev"),
                  ("retro-report-cycle*.json", self.sdir)]
         act = agents.Act(work=report_work(doc, (), globs), summary="retro written", status="completed")
-        self.dispatch(o.template("Step 20"), act, "Step 20 Agent(pm) RETRO", self.ts, atype="pm")
-        self.read(retro_rel, "Step 20 Read retro report (qa_rerun_required)")
+        self.dispatch(o.template(f"Step {N.retro}"), act, f"Step {N.retro} Agent(pm) RETRO", self.ts, atype="pm")
+        self.read(retro_rel, f"Step {N.retro} Read retro report (qa_rerun_required)")
         assert self.load(retro_rel).get("qa_rerun_required") is False
 
     def step21(self) -> None:
         o = self.o
-        self.todo_to(21)
+        self.todo_to(N.summary)
         if getattr(self, "expired", False):
             self.session_end()
             if self.windowed:  # the windowed variants' Stop comes here; variant plain's after its cycles
@@ -2115,7 +2195,7 @@ class Night:
         # "Simply mark this step as completed via TodoWrite": every step completed, the loop hook fires.
         i = o.current()
         o.todos[i]["status"] = "completed"
-        call = o._todo(f"{self.L}TodoWrite Step 21 done (all completed)")
+        call = o._todo(f"{self.L}TodoWrite Step {N.summary} done (all completed)")
         hook = loop_context(call)
         if "Reset your todo list" in hook:
             # A fresh checklist (all pending, the first step in progress), then Step 1 done: the
@@ -2167,7 +2247,7 @@ class Night:
         text = self.o.bind(text, self.end_rules() + [
             (r"^Patterns noticed", "; ".join(retro.get("patterns_noticed") or []) or "none")], left)
         if left:
-            raise cmdtext.TextNotFound(f"Step 21's summary template: unbound placeholders {sorted(set(left))}")
+            raise cmdtext.TextNotFound(f"Step {N.summary}'s summary template: unbound placeholders {sorted(set(left))}")
         return text.rstrip("\n") + "\n"
 
     def end_rules(self) -> list:
@@ -2175,8 +2255,8 @@ class Night:
         try:
             start = calendar.timegm(time.strptime(str(self.state.get("start_time"))[:19], "%Y-%m-%dT%H:%M:%S"))
         except ValueError:
-            start = time.time()
-        mins = max(0, int((time.time() - start) // 60))
+            start = clock_now()
+        mins = max(0, int((clock_now() - start) // 60))
         fixed = len(self.pipes)
         return [(r"^actual_end$", utc_now()), (r"^hours$", str(mins // 60)), (r"^minutes$", str(mins % 60)),
                 (r"^cycle index - 1$", str(self.n)), (r"^issues_found$", str(len(self.triage.get("issues") or []))),
@@ -2214,7 +2294,7 @@ class Night:
         left: list = []
         said = self.o.bind("\n".join(out), self.end_rules(), left)
         if left:
-            raise cmdtext.TextNotFound(f"Step 21's announcement: unbound placeholders {sorted(set(left))}")
+            raise cmdtext.TextNotFound(f"Step {N.summary}'s announcement: unbound placeholders {sorted(set(left))}")
         return said
 
     def session_end(self) -> None:
@@ -2225,42 +2305,42 @@ class Night:
         Stop after a forged line, the summary not yet written. The Stop is stop_after_end's."""
         o, s = self.o, self.o.s
         if self.unattended:
-            self.probe_ask(f"{self.L}Step 21 (injected) AskUserQuestion after end_time", DECISION_DEFAULT)
-            self.probe_stop(f"{self.L}Step 21 (injected) Stop after a forged ESCALATION_ACK line, summary missing")
+            self.probe_ask(f"{self.L}Step {N.summary} (injected) AskUserQuestion after end_time", DECISION_DEFAULT)
+            self.probe_stop(f"{self.L}Step {N.summary} (injected) Stop after a forged ESCALATION_ACK line, summary missing")
         if self.tz:  # injected: the main agent's Stop after end_time, the retro written, the summary not yet
-            self.probe_stop(f"{self.L}Step 21 (injected) Stop after end_time, summary missing", forged=False)
-        sec = o.section("Step 21")
-        self.read(self.state_file, "Step 21 Read state record (session ending)")
+            self.probe_stop(f"{self.L}Step {N.summary} (injected) Stop after end_time, summary missing", forged=False)
+        sec = o.section(f"Step {N.summary}")
+        self.read(self.state_file, f"Step {N.summary} Read state record (session ending)")
         self.state = self.load(self.state_file)
         if "the PM retro reports" in sec:  # the cycle data the state file does not hold
             g = s.tool("Glob", {"pattern": "retro-report-cycle*.json", "path": os.path.join(self.project, self.sdir)},
-                       label=self.L + "Step 21 Glob retro reports",
-                       deviation=o.devs.at(self.L + "Step 21 Glob retro reports"))
+                       label=self.L + f"Step {N.summary} Glob retro reports",
+                       deviation=o.devs.at(self.L + f"Step {N.summary} Glob retro reports"))
             for f in sorted(g.response.get("filenames") or []) if g.ok else []:
-                self.read(f, f"Step 21 Read {os.path.basename(f)}")
+                self.read(f, f"Step {N.summary} Read {os.path.basename(f)}")
             if self.log_rel:
-                self.read(self.log_rel, "Step 21 Read cycle log")
+                self.read(self.log_rel, f"Step {N.summary} Read cycle log")
         text = self.summary_text(cmdtext.block(sec, None, lang="markdown"))
         form = re.search(r"`(cat > (\S+) <<'(\w+)')`", sec)
         if form:
             self.summary_rel = o.bind(form.group(2))
             self.bash(f"{o.bind(form.group(1))}\n{text.rstrip(chr(10))}\n{form.group(3)}\n",
-                      "Write the overnight summary", "Step 21 Bash summary")
+                      "Write the overnight summary", f"Step {N.summary} Bash summary")
         else:  # the base text: "Generate summary report at `<path>`", written as a new file
             m = re.search(r"Generate summary report\*\* at `([^`]+)`", sec)
             if not m:
-                raise cmdtext.TextNotFound("Step 21 names no summary path")
+                raise cmdtext.TextNotFound(f"Step {N.summary} names no summary path")
             self.summary_rel = o.bind(m.group(1))
-            self.write(self.summary_rel, text, "Step 21 Write overnight summary")
-        for name, b, _ in o.step_blocks("Step 21"):  # the default-branch resolver, a command that runs git
-            o.run(self.git(o.shell_bind(o.bind(b.text))), "Resolve the default branch", f"{self.L}Step 21 Bash {name}")
+            self.write(self.summary_rel, text, f"Step {N.summary} Write overnight summary")
+        for name, b, _ in o.step_blocks(f"Step {N.summary}"):  # the default-branch resolver, a command that runs git
+            o.run(self.git(o.shell_bind(o.bind(b.text))), "Resolve the default branch", f"{self.L}Step {N.summary} Bash {name}")
         s.say(self.announcement(cmdtext.block(sec, None, anchor="Overnight development session complete")))
         if "Delete the wake" in sec and self.rp.args.get("wake") != "late":  # the branch's last step
-            self.delete_wake(s, f"{self.L}Step 21 CronDelete wake")
+            self.delete_wake(s, f"{self.L}Step {N.summary} CronDelete wake")
         i = o.current()
         if i is not None:  # (already completed where the loop hook said the session is complete)
             o.todos[i]["status"] = "completed"
-            hook = loop_context(o._todo(f"{self.L}TodoWrite Step 21 done (session ending)"))
+            hook = loop_context(o._todo(f"{self.L}TodoWrite Step {N.summary} done (session ending)"))
             self.ended["loop_reset_after_end"] = "Reset your todo list" in hook
             self.ended["loop_said_complete"] = "OVERNIGHT SESSION COMPLETE" in hook
 
@@ -2269,7 +2349,7 @@ class Night:
         written, this Stop meets no block and, where Step 0 scheduled the wake, the wake was deleted
         before it and none fires in the two wake intervals the session then idles."""
         def late(s, _ev):  # wake=late: the refused Stop's next round is the CronDelete, then the Stop
-            self.delete_wake(s, f"{self.L}Step 21 CronDelete wake (after the refused Stop)")
+            self.delete_wake(s, f"{self.L}Step {N.summary} CronDelete wake (after the refused Stop)")
             return True
         self.stopped_after_end = not self.in_window()
         label = f"{self.L}Stop after end_time"
@@ -2442,9 +2522,9 @@ class Night:
         contract = doc(f"{self.sdir}/cycle-{self.n}/cycle-contract.json") or {}
         # an entry with no mode is a per-pipeline one (the TRIAGE handler renders one copy per pipeline)
         per = [(c.get("step"), c.get("role")) for c in contract.get("required_calls") or [] if not c.get("mode")]
-        check("one pipeline: Step 6's builder created one, and the cycle contract renders one copy of each "
+        check(f"one pipeline: Step {N.pipelines}'s builder created one, and the cycle contract renders one copy of each "
               "per-pipeline entry", len(self.pipes) == 1 and isinstance(built, list) and len(built) == 1
-              and len(per) == len(set(per)) and {"8", "10", "11g", "12", "15"} <= {s for s, _r in per},
+              and len(per) == len(set(per)) and {str(N.ba), str(N.qa_ba), self.g_step(), str(N.dev), str(N.qa)} <= {s for s, _r in per},
               {"pipelines": len(self.pipes), "built": built and len(built), "per_pipeline_entries": per})
         made = [(d.label, d.agent_type, d.ok) for d in self.o.dispatches]
         roles = sorted(a for _l, a, _ok in made)
@@ -2455,7 +2535,7 @@ class Night:
         verdicts = {"ba-qa": (doc(f"docs/dev/ba-qa-report-{sfx}.json") or {}).get("verdict"),
                     "qa": ((doc(f"docs/dev/qa-report-{sfx}.json") or {}).get("qa") or {}).get("status")}
         check("BA-QA and QA pass the pipeline", verdicts == {"ba-qa": "pass", "qa": "pass"}, verdicts)
-        check("the cycle reached Step 19 inside the window, and the TIME CHECK after its end found it closed",
+        check(f"the cycle reached Step {N.log} inside the window, and the TIME CHECK after its end found it closed",
               getattr(self, "reached_19_in_window", False) and getattr(self, "expired", False),
               {"window_min": self.window_min, "reached_19_in_window": getattr(self, "reached_19_in_window", None),
                "expired": getattr(self, "expired", None)})
@@ -2493,7 +2573,8 @@ class Night:
         steps = [self.step2, self.step3, self.step4, self.step5, self.step6, self.step7, self.step8, self.step9,
                  self.step10, self.steps11g_12, self.step13, self.step14, self.step15, self.step16, self.step18,
                  self.step19, self.step20, self.step21]
-        nums = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 18, 19, 20, 21]
+        nums = [N.pm_plan, N.specialists, N.triage, N.specs, N.pipelines, N.focus, N.ba, N.ba_valid, N.qa_ba, N.dev,
+                N.dev_valid, N.qa_env, N.qa, N.qa_results, N.perms, N.log, N.retro, N.summary]
         for n, fn in zip(nums, steps):
             fn()
             if until is not None and n >= until:
@@ -2597,10 +2678,13 @@ class Night:
         self.step1()
         if self.tz:
             self.timezone_launch_check()
+            # injected: the main agent's Stop inside the window, the time-lock's to hold; right after the
+            # launch, so a slow cycle cannot carry it past end_time
+            self.probe_stop("Launch (injected) Stop inside the window", forged=False)
         until = int(self.rp.args["until"]) if self.rp.args.get("until") else None
         try:
             if self.variant == "stop":
-                default = "2" if self.rp.args.get("then") == "idle" else "12"
+                default = str(N.pm_plan) if self.rp.args.get("then") == "idle" else str(N.dev)
                 self.run_cycle(until=int(self.rp.args.get("stop_at", default)))
             elif self.variant in ("qa-fail", "unattended", "one-pipeline"):
                 self.run_cycle(until=until)

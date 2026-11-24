@@ -16,7 +16,7 @@ Track the steps with TodoWrite: mark a step `in_progress` before any dispatch un
 
 The orchestrator does no analysis, context building or implementation: BA asks the owner first (the requirement round, Step 4), then analyses (all clarification goes through BA) into a Markdown spec plus a JSON context under `docs/dev/`, dev implements, QA verifies. A BA or dev question artifact is relayed to the owner with one AskUserQuestion (Step 5), only for a real, specific decision that the request, the code or a sensible default cannot settle; a question never stops or ends the cycle.
 
-**Hook rejection (a process step, never a terminal):** neither the orchestrator nor any subagent retries, disguises or circumvents a hook-rejected operation (no other tool, wrapper or script for it). The subagent reports the rejected command and the hook's output (in its report, or in its producer question artifact when the operation needs the owner's decision). When the operation is needed, the orchestrator asks the owner one specific AskUserQuestion inside the turn that names the operation and the exact command: that is the pause, and it releases no gate. The answer authorizes no retry. An operation refused by a hook that reads `/allow` grants (`hooks/pretool-git-privilege-guard.py`, `hooks/pretool-block-branch-pr-worktree.py`) runs again only after the owner's `/allow` grant for it, typed as their own prompt (an AskUserQuestion answer writes no grant), which lets it through once; one refused by a hook that reads none (`hooks/pretool-tool-policy.py`) is not run again in this session: it is withdrawn. The orchestrator then re-dispatches that lane's role (same subagent_type, task_id, lane and obligation template, a fresh dispatched_at) with the outcome: it runs the granted command once, or, when the owner declines or the operation is withdrawn, goes on without it, which Subagent Hook Discipline #4 allows only while every acceptance criterion stays achievable without it (the question names any criterion that needs the operation, and the owner's answer decides that criterion, not the operation). A decline never ends the cycle: it continues to completion.
+**Hook rejection (a process step, never a terminal):** neither the orchestrator nor any subagent retries, disguises or circumvents a hook-rejected operation (no other tool, wrapper or script for it), and nobody asks the owner about it (Subagent Hook Discipline). The subagent goes on with the rest of its work and reports the rejected command and the hook's output in its report, as refused; a producer question asks only what the owner wants, never about a refusal. When the subagent ended on it, the orchestrator re-dispatches that lane's role (same subagent_type, task_id, lane and obligation template) with the refusal named, and it goes on without the operation, which Subagent Hook Discipline #4 allows while every acceptance criterion stays achievable without it; a criterion that needs the operation is reported as not met, naming the refusal. An operation refused by a hook that reads `/allow` grants (`hooks/pretool-git-privilege-guard.py`, `hooks/pretool-block-branch-pr-worktree.py`) runs again only on the owner's own `/allow` grant for it, typed as the owner's own prompt when the owner chooses, which lets it through once; no agent asks for one. One refused by a hook that reads none (`hooks/pretool-tool-policy.py`) is not run again in this session: it is withdrawn. A refusal never ends the cycle: it continues to completion. When the pending step itself cannot go on because a hook refused that step's own dispatch or call (its role's dispatch, or for a step with no subagent, its call), end the turn with one line `REFUSED: Step <n>: <the refused call> - refused by <the hook>: <the rule it applies, in plain words>. Next: <who must do what, and what then happens>` followed by the hook's output (the owner reads this line: it says what was refused, by which rule, and what happens next, without the hook's output): the Stop gate (`stop-command-gate.py`, `step_refused_end`) lets the turn end exactly then, and not on a line that lacks the `refused by` or the `Next:` part, reading the refusal from the transcript, and the step stays open; the owner's next prompt resumes it. `/redev` and `/dev-command` follow this text.
 
 ## Requirement Decomposition & Fan-Out
 
@@ -26,7 +26,7 @@ A single `/dev` cycle may carry more than one requirement. The orchestrator fans
 
 **Decompose.** Split `$ARGUMENTS` into `requirements[] = [{requirement_id, text}]`, one per separately requested, independently verifiable OUTCOME (N of them); shared constraints, exclusions and implementation steps attach to the lanes as context and do not become lanes. The coverage map ties every requested outcome to exactly one `requirement_id`, none omitted or duplicated. Each lane gets a short stable suffix (`-a`/`-b`/`-c` or `-r01`/`-r02`, the `dev-report-<task-id>-<worker>.json` worker convention).
 
-**Fan out.** The requirement round (Steps 4-4b) runs once for the cycle; Steps 4c, 7, 10 and 13 (BA, QA validates BA, dev, QA) dispatch exactly one subagent per lane in one parallel batch, bound to `lane.text` / `requirement_id` and writing lane-suffixed artifacts (the Step 10 test-writer runs per applicable lane only), then wait at a stage barrier. Steps 6 and 12 (validation) run for every lane; Steps 8 and 16 (iteration) retry only the affected or failed lanes. Clarification and retry outcomes are lane-local: a clarifying or failing lane never blocks or re-runs its siblings, and with N > 1 there is no whole-cycle singular dispatch. Step 11 is ONE parent-level join after the barrier, not a per-lane dispatch. Every lane's artifacts carry its lane suffix under ONE parent `DEV_SESSION_ID`, and the cycle emits ONE parent completion report, never a new cycle or session per lane; the parent passes only when every lane's QA passes. Steps 14 and 15 share Bash calls across lanes:
+**Fan out.** The requirement round (Step 4, up to its BA analysis) runs once for the cycle; Step 4's BA analysis and Steps 7, 10 and 13 (BA, QA validates BA, dev, QA) dispatch exactly one subagent per lane in one parallel batch, bound to `lane.text` / `requirement_id` and writing lane-suffixed artifacts (the Step 10 test-writer runs per applicable lane only), then wait at a stage barrier. Steps 6 and 12 (validation) run for every lane; Steps 8 and 16 (iteration) retry only the affected or failed lanes. Clarification and retry outcomes are lane-local: a clarifying or failing lane never blocks or re-runs its siblings, and with N > 1 there is no whole-cycle singular dispatch. Step 11 is ONE parent-level join after the barrier, not a per-lane dispatch. Every lane's artifacts carry its lane suffix under ONE parent `DEV_SESSION_ID`, and the cycle emits ONE parent completion report, never a new cycle or session per lane; the parent passes only when every lane's QA passes. Steps 14 and 15 share Bash calls across lanes:
 
 - **Step 15 (Permissions)** — ONE Bash call for every lane that reaches it, its lanes' commands one per line, so a failed command does not stop the next: the permission merge of every passing lane. A call per lane (N+1 in a row through Step 17's completion check) would exceed the Bash budget and lose the completion check.
 
@@ -42,7 +42,7 @@ A single `/dev` cycle may carry more than one requirement. The orchestrator fans
 
 ### Step 1: Parse Development Requirement
 
-An empty `$ARGUMENTS` is asked for with one AskUserQuestion (the pause; the cycle stays open).
+An empty `$ARGUMENTS` ends the command with one line `NO_TARGET: /dev was given no requirement; /dev <what to build or fix> starts a cycle`. Nobody is asked; the Stop gate (`no_target_end`) lets a run that dispatched nothing end on it.
 
 **`--codex`.** If `$ARGUMENTS` contains the literal token `--codex`, strip it and set `codex_required = true`, else `false`. When true, every BA, QA and dev dispatch carries the literal line `codex_required: true` (it activates the subagent's codex consultation, `templates/prompt-includes/codex-consultation.md`); when false, omit it. `codex_consult` is the subagent's output: pre-filling it in a prompt silently suppresses the consultation, so never do.
 
@@ -51,7 +51,7 @@ An empty `$ARGUMENTS` is asked for with one AskUserQuestion (the pause; the cycl
 **Views.** With `spec_path` set, run the spec resolver once; it alone derives the artifact id, views folder, split marker and cp-state folder (a hand-derived name silently drops a de-prefixed spec to monolith mode):
 
 ```bash
-[ -z "$spec_path" ] || python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}"
+[ -z "$spec_path" ] || python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-spec-artifacts.py" --spec-path "$spec_path" --project-dir "${CLAUDE_PROJECT_DIR:-$PWD}"
 ```
 
 Its stdout JSON carries `artifact_id` (`SPEC_ID` below), `views_available`, `manifest_path`, `split_marker`, `views_dir` and `cp_dir`; keep them in your notes (a Bash call carries no variable to the next). A non-zero exit is an invalid, mismatched, ambiguous or stale split: have `/spec` re-finalized, never fall back to the monolith; `views_available=false` with exit 0 is a legacy spec (monolith `spec_path`, no checkpoint enforcement). When `views_available` is true, pass `view_paths.ba`, `.qa`, `.dev` (from `manifest_path`) beside, never in place of, `spec_path`; BEFORE composing any dispatch read `<views_dir>/orchestrator.md` and the spec's Section 5 (User's Acceptance Criterion) and quote Section 5 verbatim into every dispatch prompt.
@@ -132,11 +132,13 @@ Before dispatching dev (Step 6), verify in the BA JSON context: `evidence.measur
 
 ### Step 4: The Requirement Round (D28, D29, D32)
 
-**Obligation blocks.** Every dispatch carries an `<obligation v="1">` block the orchestrator instantiates from the dispatch's own values (`task_id`, `lane`, `lane_set`, `role`, `pipeline`, `profile`, `dispatched_at` as ISO-8601 UTC ending in Z captured right before the Agent call, `artifacts[]`), never hand-invented; every `kind: "json"` entry names its `schema` (`schemas/registry.json`; grammar in `docs/reference/close-commit-zero-failure-mechanism-20260928.md` §1.2). Step 4c's template shows the worked example; the others declare theirs in one `embed ... here with` sentence.
+**Obligation blocks.** Every dispatch carries an `<obligation v="1">` block the orchestrator instantiates from the dispatch's own values (`task_id`, `lane`, `lane_set`, `role`, `pipeline`, `profile`, `artifacts[]`; no `dispatched_at`: the harness takes a dispatch's time from the dispatch itself), never hand-invented; every `kind: "json"` entry names its `schema` (`schemas/registry.json`; grammar in `docs/reference/close-commit-zero-failure-mechanism-20260928.md` §1.2). The BA analysis's template (Step 4) shows the worked example; the others declare theirs in one `embed ... here with` sentence.
 
-Before any analysis for dev, the owner is asked about the requirement: its intent, scope, edge cases and acceptance. BA (or panel QA, for a panel's round 1) writes the questions; the orchestrator asks them verbatim (Step 4b); the PostToolUse AskUserQuestion hook writes the owner's answers. Until round 1 is asked, the dispatch gate refuses every dispatch but round 1's own producers (`ASK_FIRST`), and later any dispatch while a written round is not asked. The round runs once for the cycle, under `TASK_ID` (`<timestamp>` below), before the lanes' analyses (Step 4c runs per lane). Nothing is asked in plain text: a turn that ends with a question in text is a Stop gap.
+Before any analysis for dev, the owner is asked about the requirement: its intent, scope, edge cases and acceptance. BA (or panel QA, for a panel's round 1) writes the questions; the orchestrator asks them verbatim (the ask, below); the PostToolUse AskUserQuestion hook writes the owner's answers. Until round 1 is asked, the dispatch gate refuses every dispatch but round 1's own producers (`ASK_FIRST`), and later any dispatch while a written round is not asked. The round runs once for the cycle, under `TASK_ID` (`<timestamp>` below), before the lanes' analyses (the BA analysis runs per lane). Nothing is asked in plain text: a turn that ends with a question in text is a Stop gap.
 
-**Without a spec: the BA panel.** Dispatch three BAs in ONE response (three Agent calls, each `run_in_background: false`), angles A (root cause first, traced to the code), B (the smallest change that meets the requirement) and C (the owner's intent, the product view). They are independent: none is given another's report. Then Step 4a.
+**The step's calls.** The checklist item of Step 4 states every call of the round, each with its own role and its prompt's `Mode:` line (`scripts/todo/dev.py` `ROUND_CALLS`, which /dev-command shares): BA intake, the three panel BAs and panel QA (role `qa`), which a round may skip, and the BA analysis, which it may not. Step 4 cannot be marked completed until a BA call with `Mode: analysis` came back after the step went in progress (`hooks/pretool-todo-validate.py`, Gate 4): the panel's or the intake's BA calls never stand in for it.
+
+**Without a spec: the BA panel.** Dispatch three BAs in ONE response (three Agent calls, each `run_in_background: false`), angles A (root cause first, traced to the code), B (the smallest change that meets the requirement) and C (the owner's intent, the product view). They are independent: none is given another's report. Then panel QA.
 
 ```
 Use Agent tool with:
@@ -147,7 +149,7 @@ Use Agent tool with:
   FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/ba.json before any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
 
-  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular", task_id/dispatched_at bound to this dispatch (see Step 4), artifacts=[{"kind":"markdown","path":"docs/dev/ba-panel-<timestamp>-<angle>.md","identity_anchor":"<timestamp>","terminal_line_regex":"^BA PANEL [ABC]: DONE$"}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular", task_id bound to this dispatch (see Step 4), artifacts=[{"kind":"markdown","path":"docs/dev/ba-panel-<timestamp>-<angle>.md","identity_anchor":"<timestamp>","terminal_line_regex":"^BA PANEL [ABC]: DONE$"}].
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
@@ -168,7 +170,7 @@ Use Agent tool with:
   "
 ```
 
-**With a spec: one BA, intake.** It checks that the spec still matches the code and asks only what the spec left open (at least one question). Then Step 4b.
+**With a spec: one BA, intake.** It checks that the spec still matches the code and asks only what the spec left open (at least one question). Then the ask.
 
 ```
 Use Agent tool with:
@@ -181,7 +183,7 @@ Use Agent tool with:
 
   SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-ba.json for your checkpoints.
 
-  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular", task_id/dispatched_at bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/requirement-round-<timestamp>-r1.json","schema":"requirement-round.v1","identity":{"task_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular", task_id bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/requirement-round-<timestamp>-r1.json","schema":"requirement-round.v1","identity":{"task_id":"<timestamp>"}}].
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
@@ -196,7 +198,7 @@ Use Agent tool with:
   "
 ```
 
-### Step 4a: Panel QA Writes Round 1 (without a spec)
+#### Panel QA Writes Round 1 (without a spec)
 
 One QA dispatch reads the three panel reports, checks each cited piece of evidence, marks every root cause verified, unsupported or refuted, lists the agreements, and turns each disagreement into a decision point with its options, recommended first (`agents/qa.md` "Panel QA mode"). An unsupported or refuted root cause never becomes an option.
 
@@ -209,7 +211,7 @@ Use Agent tool with:
   FIRST ACTION: Read <PROJECT_ROOT>/.claude/dev-registry/<DEV_SESSION_ID>/qa.json before any other tool call.
   User requirement document: docs/dev/user-requirement-<DEV_SESSION_ID>.md
 
-  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="ba_validation", task_id/dispatched_at bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/ba-panel-<timestamp>-r1.json","schema":"requirement-round.v1","identity":{"task_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="ba_validation", task_id bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/ba-panel-<timestamp>-r1.json","schema":"requirement-round.v1","identity":{"task_id":"<timestamp>"}}].
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
@@ -220,13 +222,13 @@ Use Agent tool with:
   "
 ```
 
-### Step 4b: Ask Each Round with AskUserQuestion
+#### Ask Each Round with AskUserQuestion
 
-For each round file, in round order (`docs/dev/ba-panel-<TASK_ID>-r1.json` or `docs/dev/requirement-round-<TASK_ID>-r1.json`, then `docs/dev/requirement-round-<TASK_ID>-r<n>.json`), call ONE AskUserQuestion whose `questions` are the file's questions verbatim with `id`, `dimension`, `assume`, `spec_ref` and each option's `ba` removed, and whose `metadata.source` is `requirement-round:<TASK_ID>:r<n>`. Never paraphrase, reorder or add a question: an altered question is not the round, writes no answer file and leaves the round unasked. Skip, no answer or AFK is fine: the round counts as asked, and BA settles each unanswered question by its `assume`. Asking pauses only; the cycle goes on to Step 4c.
+For each round file, in round order (`docs/dev/ba-panel-<TASK_ID>-r1.json` or `docs/dev/requirement-round-<TASK_ID>-r1.json`, then `docs/dev/requirement-round-<TASK_ID>-r<n>.json`), call ONE AskUserQuestion whose `questions` are the file's questions verbatim with `id`, `dimension`, `assume`, `spec_ref` and each option's `ba` removed, and whose `metadata.source` is `requirement-round:<TASK_ID>:r<n>`. Never paraphrase, reorder or add a question: an altered question is not the round, writes no answer file and leaves the round unasked. Skip, no answer or AFK is fine: the round counts as asked, and BA settles each unanswered question by its `assume`. Asking pauses only; the cycle goes on to the BA analysis.
 
-### Step 4c: BA Analysis (the final BA context)
+#### BA Analysis (the final BA context)
 
-The final BA context has one producer. Its dispatch lists the cycle's round files (`docs/dev/ba-panel-<TASK_ID>-r1.json` or `docs/dev/requirement-round-<TASK_ID>-r1.json`, then `docs/dev/requirement-round-<TASK_ID>-r<n>.json`) and the answer files the hook wrote (`docs/dev/requirement-answers-<TASK_ID>-r<n>.json`). With a panel: the BA whose option the owner chose (the chosen option's `ba` in the panel round, read beside the answer file); when the BAs agreed or the owner chose none, the BA whose root cause panel QA verified (A, then B, then C, when more than one). With a spec: one BA. Dispatch it in analysis mode; with lanes, one per lane, each reading the cycle's rounds. While a point still needs the owner, it writes the next round instead of its artifacts: ask it (Step 4b) and dispatch it again; rounds have no cap.
+The final BA context has one producer. Its dispatch lists the cycle's round files (`docs/dev/ba-panel-<TASK_ID>-r1.json` or `docs/dev/requirement-round-<TASK_ID>-r1.json`, then `docs/dev/requirement-round-<TASK_ID>-r<n>.json`) and the answer files the hook wrote (`docs/dev/requirement-answers-<TASK_ID>-r<n>.json`). With a panel: the BA whose option the owner chose (the chosen option's `ba` in the panel round, read beside the answer file); when the BAs agreed or the owner chose none, the BA whose root cause panel QA verified (A, then B, then C, when more than one). With a spec: one BA. Dispatch it in analysis mode; with lanes, one per lane, each reading the cycle's rounds. While a point still needs the owner, it writes the next round instead of its artifacts: ask it (the ask, above) and dispatch it again; rounds have no cap.
 
 ```
 Use Task tool with:
@@ -248,7 +250,6 @@ Use Task tool with:
     "role": "ba",
     "pipeline": "dev",
     "profile": "singular",
-    "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this Agent call>",
     "artifacts": [
       {"kind": "json", "path": "docs/dev/context-<timestamp>.json", "schema": "context.v1",
        "identity": {"task_id": "<timestamp>", "request_id": "<timestamp>"}},
@@ -296,7 +297,7 @@ Use Task tool with:
 When BA needs clarification (`needs_clarification`) it writes its question artifact `docs/dev/producer-question-<timestamp>-ba.json` (schema producer-question.v1: one decision, 2-4 `options` of `{label, description}`, a `default` that is one of the labels, `why`) instead of its report, and ends.
 
 1. Relay it with ONE AskUserQuestion: the artifact's options become the dialog's options, its default the recommended option, and `metadata.source` is `producer-question:<timestamp>:ba`. The hook writes the owner's answer to `docs/dev/producer-answer-<timestamp>-ba-<q8>.json` (q8: the first 8 hex digits of the question file's sha256); until it is asked, the dispatch gate refuses any other dispatch (`ASK_FIRST`). A question left unanswered (the dialog skipped or closed with no answer, the call denied, or no AskUserQuestion offered in this session, where the call is made all the same and its error result counts as asked) writes no answer file, never stalls the cycle and is not asked again: take the artifact's `default` as an assumption, say so in one line, and re-dispatch with `Previous answers: none`. The producer records it as an assumption: BA in its spec and the `assumptions` list it returns, dev in `implementation_notes` of its dev report.
-2. Re-dispatch BA fresh and synchronously with the answer: same subagent_type, task_id, lane, pipeline, profile and obligation template, a fresh dispatched_at, the answer in the template's `Clarification round:` and `Previous answers:` lines:
+2. Re-dispatch BA fresh and synchronously with the answer: same subagent_type, task_id, lane, pipeline, profile and obligation template, the answer in the template's `Clarification round:` and `Previous answers:` lines:
 
 ```
 Use Task tool with:
@@ -308,7 +309,7 @@ Use Task tool with:
 
   SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-ba.json for your checkpoints.
 
-  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1","identity":{"task_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1","identity":{"task_id":"<timestamp>"}}].
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
@@ -353,7 +354,7 @@ Use Agent tool with:
 
   SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-qa.json for your checkpoints.
 
-  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="ba_validation", task_id/dispatched_at bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1","identity":{"task_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="ba_validation", task_id bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/ba-qa-report-<timestamp>.json","schema":"ba-qa-report.v1","identity":{"task_id":"<timestamp>"}}].
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
@@ -385,7 +386,7 @@ Use Agent tool with:
 
 Verdict `pass`: BA's conclusions are validated, go to Step 9. Verdict `fail`: go to Step 8.
 
-**Extra independent QA round (D32).** While the opener's hook line names `ba` after `Low record:`, each lane's BA-validation QA runs twice: after the first pass, dispatch this QA once more for the lane (this template, a fresh `dispatched_at`, file paths only, nothing of the first round in the prompt) before Step 9; a fail of either goes to Step 8, and after BA returns both rounds run again. The Stop gate holds the second round.
+**Extra independent QA round (D32).** While the opener's hook line names `ba` after `Low record:`, each lane's BA-validation QA runs twice: after the first pass, dispatch this QA once more for the lane (this template, file paths only, nothing of the first round in the prompt) before Step 9; a fail of either goes to Step 8, and after BA returns both rounds run again. The Stop gate holds the second round.
 
 ### Step 8: BA-QA Iteration Loop (if QA rejects BA)
 
@@ -402,7 +403,7 @@ Use Agent tool with:
 
   SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-ba.json for your checkpoints.
 
-  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1","identity":{"task_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="ba", pipeline="dev", profile="singular"/"fanout-lane", task_id bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/context-<timestamp>.json","schema":"context.v1","identity":{"task_id":"<timestamp>"}},{"kind":"markdown","path":"docs/dev/ticket-<timestamp>.md","identity_anchor":"<timestamp>"},{"kind":"json","path":"docs/dev/acceptance-criteria-<timestamp>.json","schema":"acceptance-criteria.v1","identity":{"task_id":"<timestamp>"}}].
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
@@ -460,7 +461,7 @@ Use Task tool with:
 
   You are the test-writer subagent. Follow agents/test-writer.md instructions precisely.
 
-  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="test-writer", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/test-writer-report-<task_id>.json","schema":"test-writer-report.v1","identity":{"task_id":"<task_id>"}},{"kind":"json","path":"tests/generated/<task_id>/manifest.json","schema":"test-writer-manifest.v1","identity":{"task_id":"<task_id>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="test-writer", pipeline="dev", profile="singular"/"fanout-lane", task_id bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/test-writer-report-<task_id>.json","schema":"test-writer-report.v1","identity":{"task_id":"<task_id>"}},{"kind":"json","path":"tests/generated/<task_id>/manifest.json","schema":"test-writer-manifest.v1","identity":{"task_id":"<task_id>"}}].
 
   Inputs:
     task_id: <task_id>
@@ -474,13 +475,13 @@ Use Task tool with:
   "
 ```
 
-After the test-writer subagent completes, verify on disk that both `tests/generated/<task_id>/manifest.json` and `docs/dev/test-writer-report-<task_id>.json` exist; if either is missing, dispatch the test-writer again (this template, a fresh dispatched_at) until both do; never go on to dev after a silently skipped test-writer.
+After the test-writer subagent completes, verify on disk that both `tests/generated/<task_id>/manifest.json` and `docs/dev/test-writer-report-<task_id>.json` exist; if either is missing, dispatch the test-writer again (this template) until both do; never go on to dev after a silently skipped test-writer.
 
 Before the dev dispatch, once per stage, capture the baseline dev's report is measured against (`agents/dev.md` gives its point-in-time semantics); the value goes into the dev dispatch, `baseline_head_sha` as the empty string (never omitted) in a repository with no commits yet:
 
 ```bash
-baseline_head_sha=$(git -C "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" rev-parse HEAD 2>/dev/null || echo "")
-baseline_dirty_snapshot=$(git -C "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" status --porcelain 2>/dev/null || echo "")
+baseline_head_sha=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse HEAD 2>/dev/null || echo "")
+baseline_dirty_snapshot=$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" status --porcelain 2>/dev/null || echo "")
 ```
 
 Dispatch dev with file paths only:
@@ -497,7 +498,7 @@ Use Task tool with:
 
   You are the dev subagent. Follow agents/dev.md instructions precisely.
 
-  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev", profile="singular"/"fanout-lane", task_id/dispatched_at bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="dev", pipeline="dev", profile="singular"/"fanout-lane", task_id bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/dev-report-<timestamp>.json","schema":"dev-report.v2","identity":{"task_id":"<timestamp>"}}].
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
@@ -519,9 +520,9 @@ Use Task tool with:
 
 This applies only when N > 1 dev subagents ran in Step 10; a single-dev cycle has nothing to aggregate (the lone dev writes `dev-report-<task-id>.json` itself): mark this todo step completed.
 
-The canonical `docs/dev/dev-report-<task-id>.json` has one producer, `hooks/posttool-lane-completeness-watch.py`: when the lane report that completes its own `lane_set` lands, it runs the harness's `scripts/aggregate-dev-report.py`, whose code is the construction rule. The orchestrator writes no aggregate and runs no aggregator; it marks this step completed once every lane's dev has returned.
+The canonical `docs/dev/dev-report-<task-id>.json` has one writer, the harness's `scripts/aggregate-dev-report.py`, whose code is the construction rule: a dev lane's stop, the QA dispatch's check and the Stop gate each rebuild a canonical older than any lane report (however that report was written) before it is read, and judge no canonical their rebuild leaves stale. The orchestrator writes no aggregate and runs no aggregator; it marks this step completed once every lane's dev has returned.
 
-G3 (`hooks/pretool-aggregate-check.py`) refuses the Step 13 QA dispatch while every lane has reported and the canonical is missing; reach the producer through the lanes by dispatching one lane's dev again (its declaring dispatch: same subagent_type, task_id, lane and obligation template, a fresh `dispatched_at`), whose update of its own report runs the hook.
+G3 (`hooks/pretool-aggregate-check.py`) refuses the Step 13 QA dispatch while every lane has reported and the canonical is missing; reach the producer through the lanes by dispatching one lane's dev again (its declaring dispatch: same subagent_type, task_id, lane and obligation template), whose update of its own report runs the hook.
 
 ### Step 12: Validate Dev Implementation
 
@@ -529,7 +530,7 @@ Read dev implementation report: `docs/dev/dev-report-<timestamp>.json`
 
 Check that its status is "completed", all tasks are documented, scripts created have usage examples, the git rationale references the root cause, and the files reported exist.
 
-If dev wrote its question artifact (`docs/dev/producer-question-<timestamp>-dev.json`) instead of its report, relay it as in Step 5 (an unanswered question takes its `default` there) and re-dispatch dev fresh with the answer: Step 10's template, a fresh dispatched_at, and right after its `Context file:` line Step 5's two lines `Clarification round: <N>` and `Previous answers: <the producer answer file the hook wrote, or none when the owner gave no answer>` (the hook's `docs/dev/producer-answer-<timestamp>-dev-<q8>.json` for this question, its `metadata.source` `producer-question:<timestamp>:dev`; N the count of this lane's dev questions so far). If a check finds a gap, re-dispatch dev the same way with the gap named, until the checks pass. When dev completed, go to Step 13.
+If dev wrote its question artifact (`docs/dev/producer-question-<timestamp>-dev.json`) instead of its report, relay it as in Step 5 (an unanswered question takes its `default` there) and re-dispatch dev fresh with the answer: Step 10's template, and right after its `Context file:` line Step 5's two lines `Clarification round: <N>` and `Previous answers: <the producer answer file the hook wrote, or none when the owner gave no answer>` (the hook's `docs/dev/producer-answer-<timestamp>-dev-<q8>.json` for this question, its `metadata.source` `producer-question:<timestamp>:dev`; N the count of this lane's dev questions so far). If a check finds a gap, re-dispatch dev the same way with the gap named, until the checks pass. When dev completed, go to Step 13.
 
 ### Step 13: Delegate to QA Subagent
 
@@ -545,7 +546,7 @@ Use Task tool with:
 
   SECOND ACTION (only if SPEC_ID is non-empty and your cp-state file exists): Read <PROJECT_ROOT>/.claude/specs/<SPEC_ID>/cp-state-qa.json for your checkpoints.
 
-  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="final_verification", task_id/dispatched_at bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}}].
+  Obligation block: embed `<obligation v="1">{...}</obligation>` here with role="qa", pipeline="dev", profile="final_verification", task_id bound to this dispatch (see Step 4), artifacts=[{"kind":"json","path":"docs/dev/qa-report-<timestamp>.json","schema":"qa-report.v2","identity":{"task_id":"<timestamp>","request_id":"<timestamp>"}}].
 
   <If codex_required = true, include the literal next line; otherwise omit it>
   codex_required: true
@@ -571,7 +572,7 @@ Read QA report: `docs/dev/qa-report-<timestamp>.json`
 - `qa.status == "pass"`: go to Step 15.
 - `qa.status` is `warning` or `fail`: go to Step 16.
 
-**Extra independent QA round (D32).** The opener's hook line ends with `Low record: ...` when a role's record is low. While it names `dev`, each lane's QA runs twice: after the first pass, dispatch this step's QA once more for the lane, with Step 13's template, a fresh `dispatched_at` and file paths only, so that nothing of the first round (its report, findings or verdict) is in the prompt; Step 15 follows the second pass. A fail of either goes to Step 16, and after the lane's dev returns both rounds run again. While it names `qa`, QA's own round holds a Codex debate whether or not `--codex` was given: its start-of-dispatch text says so and the dispatch is unchanged. The Stop gate keeps the command open until the second round has run (`owes one more independent`).
+**Extra independent QA round (D32).** The opener's hook line ends with `Low record: ...` when a role's record is low. While it names `dev`, each lane's QA runs twice: after the first pass, dispatch this step's QA once more for the lane, with Step 13's template and file paths only, so that nothing of the first round (its report, findings or verdict) is in the prompt; Step 15 follows the second pass. A fail of either goes to Step 16, and after the lane's dev returns both rounds run again. While it names `qa`, QA's own round holds a Codex debate whether or not `--codex` was given: its start-of-dispatch text says so and the dispatch is unchanged. The Stop gate keeps the command open until the second round has run (`owes one more independent`).
 
 ### Step 15: Update Settings.json Permissions
 
@@ -585,7 +586,7 @@ The applier merges each validated entry into `.permissions.<section>` (`allow`, 
 
 ### Step 16: Iteration Loop (QA warning or fail)
 
-On a QA warning or fail, re-dispatch this lane's dev with the QA report path, the same task_id, lane and obligation template, and a fresh dispatched_at; once it returns, Steps 12-14 run again for this lane, and the loop repeats until QA passes (then Step 15). Dispatch line: `QA report file: docs/dev/qa-report-<timestamp>.json`.
+On a QA warning or fail, re-dispatch this lane's dev with the QA report path, the same task_id, lane and obligation template; once it returns, Steps 12-14 run again for this lane, and the loop repeats until QA passes (then Step 15). Dispatch line: `QA report file: docs/dev/qa-report-<timestamp>.json`.
 
 The Stop gate keeps the command open until the disposition is chain_pass, which needs the QA report's `qa.status` to be `pass` (`INVALID_QA_STATUS` until then). There is no other exit.
 
@@ -634,7 +635,7 @@ Before `/dev` or `/redev` is complete, run the shared read-only resolver from th
 
 ```bash
 ARTIFACT_CHAIN="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/resolve-dev-artifact-chain.py" \
-  --task-id "<TASK_ID>" --project-dir "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}")" || exit 2
+  --task-id "<TASK_ID>" --project-dir "${CLAUDE_PROJECT_DIR:-$PWD}")" || exit 2
 ```
 
 The fixed entrypoint contract is

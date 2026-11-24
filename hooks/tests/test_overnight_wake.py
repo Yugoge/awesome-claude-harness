@@ -10,7 +10,8 @@ CLAUDE_CONFIG_DIR, CLAUDE_STATE_DIR and CLAUDE_PROJECT_DIR are tmp_path's own.
 * userprompt-restart-authorize.py issues the /restart capability to the wake's text only inside an open
   /dev-overnight span, never after the owner's /stop, and to every prompt starting with /restart as before
   (X8: the hook cannot tell a scheduled prompt from a typed one); the owner's /stop revokes a capability
-  an earlier wake minted (the exact recovery SendMessage is refused after it) and leaves the owner's own;
+  an earlier wake minted and leaves the owner's own (the grant is no permission: a send in the next wake's
+  turn is what /stop refuses);
 * prompt-workflow.py hands over commands/restart.md's recovery for the wake inside that span only; a
   human /restart or a plain prompt while a gated command's checklist is open gets the same carry-on
   line (carry on from the step in progress; ask only with AskUserQuestion, nobody inside the overnight);
@@ -38,6 +39,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / "hooks"
 sys.path.insert(0, str(ROOT))
+from hooks.lib.harness_state_dir import state_root  # noqa: E402
+
+
+def _restart_state(home) -> Path:
+    """/restart's journal for a hook run with this HOME: the harness state root's restart-state/."""
+    return Path(state_root(home=str(home)), "restart-state")
 from hooks.lib import overnight, todo_canonical  # noqa: E402
 
 WAKE = overnight.WAKE_PROMPT
@@ -178,7 +185,7 @@ def test_wake_after_the_owners_stop_gets_nothing(night):
     night.typed("/stop")
     p = night.hook("userprompt-restart-authorize.py", "UserPromptSubmit", prompt=WAKE)
     assert p.returncode == 0 and not p.stdout.strip()
-    assert not list((night.home / ".claude" / "restart-state").glob("grants/*"))
+    assert not list(_restart_state(night.home).glob("grants/*"))
 
 
 def test_wake_outside_a_dev_overnight_span_gets_nothing(tmp_path):
@@ -210,6 +217,7 @@ def _cut_candidate(s, monkeypatch):
         {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "partial"}]}}) + "\n")
     from hooks.lib import subagent_restart as restart
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(s.home / ".claude"))
+    monkeypatch.setenv("HOME", str(s.home))  # the hooks' HOME: the state root the restart state is under
     for name in ("CLAUDE_RESTART_GRANT_DIR", "CLAUDE_RESTART_STATE_DIR"):
         monkeypatch.delenv(name, raising=False)
     view = restart.prepare_state(s.sid)
@@ -235,11 +243,14 @@ def test_the_owners_stop_revokes_the_grant_an_earlier_wake_minted(night, monkeyp
     cand = _cut_candidate(night, monkeypatch)
     assert _resume(night, cand).returncode == 0  # inside the open span the wake's grant works
     assert _stop(night).returncode == 0
+    assert not list(_restart_state(night.home).glob("grants/claude-restart-grant-*"))
+    # the grant is no permission (send_policy): what /stop still refuses is a send in the next wake's turn
+    night.typed(WAKE)
     refused = _resume(night, cand)
-    assert refused.returncode == 2 and "no valid /restart capability" in refused.stderr, refused.stderr
-    assert not list((night.home / ".claude" / "restart-state").glob("grants/claude-restart-grant-*"))
+    assert refused.returncode == 2 and "overnight wake after the owner's /stop" in refused.stderr, refused.stderr
     # the owner's own /restart after /stop issues a fresh grant, and the exact message passes again
     assert _issued(night.hook("userprompt-restart-authorize.py", "UserPromptSubmit", prompt="/restart"))
+    night.typed("/restart")
     assert _resume(night, cand).returncode == 0
 
 
@@ -254,6 +265,9 @@ def test_the_owners_stop_leaves_the_owners_own_restart_grant(night, monkeypatch)
 def test_prompt_workflow_hands_over_restart_md_for_the_wake_in_its_span(night):
     p = night.hook("prompt-workflow.py", "UserPromptSubmit", prompt=WAKE)
     assert p.returncode == 0 and "OVERNIGHT WAKE" in p.stdout and "restart.md now and run its Mandatory procedure" in p.stdout
+    # restart.md steps 4 and 6: the hooks finalize the recovery; the agent runs no status or finalize
+    assert "the harness finalizes the recovery itself" in p.stdout and "finalize)" not in p.stdout, p.stdout
+    assert "nothing was cut: finalize" not in p.stdout, p.stdout
     night.typed("/stop")
     p = night.hook("prompt-workflow.py", "UserPromptSubmit", prompt=WAKE)
     assert "OVERNIGHT WAKE" not in p.stdout and "Mandatory procedure" not in p.stdout
@@ -262,7 +276,7 @@ def test_prompt_workflow_hands_over_restart_md_for_the_wake_in_its_span(night):
 # ---------------------------------------------------------------- a human /restart or a plain prompt in an open span
 
 CARRY_ON = ("CARRY ON: carry on with /dev Step 8; this turn cannot end until its checklist is complete; "
-            "pause only with AskUserQuestion; /stop is the exit.")
+            "a refusal is reported, never asked about; /stop is the exit.")
 
 
 def _usage_limit(s):
@@ -272,11 +286,14 @@ def _usage_limit(s):
                {"type": "text", "text": "You've hit your weekly limit · resets 2pm (UTC)"}]}})
 
 
-def _cut_dev(tmp_path, done=10):
-    """A /dev a usage limit cut at Step 8 (the BA-QA iteration, its 11th step) with its checklist open."""
+def _cut_dev(tmp_path, done=None):
+    """A /dev a usage limit cut at Step 8 (the BA-QA iteration) with its checklist open."""
     s = Session(tmp_path)
     s.typed("/dev fix the widget")
-    s.use("TodoWrite", {"todos": _frontier(todo_canonical.run_todo_script("dev", "fix the widget"), done)})
+    todos = todo_canonical.run_todo_script("dev", "fix the widget")
+    if done is None:
+        done = next(i for i, t in enumerate(todos) if t["content"].startswith("Step 8:"))
+    s.use("TodoWrite", {"todos": _frontier(todos, done)})
     _usage_limit(s)
     return s
 
@@ -486,7 +503,7 @@ def test_overnight_write_boundary_runs_the_restart_helper_with_only_its_journal_
     grant_dir) bound writable beyond the worktree. Anything chained to it gets no journal."""
     main = tmp_path / "main"
     _in_place(main)
-    state = os.path.realpath(Path(os.environ["CLAUDE_CONFIG_DIR"]) / "restart-state")
+    state = os.path.realpath(_restart_state(os.environ["HOME"]))
     binds = _rw_binds(_guard(main, f"{HELPER} {sub}"))
     assert binds in (set(), {str(main), state, state + "/grants"}), binds
     assert _rw_binds(_guard(main, f"{HELPER} {sub} && touch {tmp_path / 'outside'}")) <= {str(main)}
@@ -503,11 +520,11 @@ def test_a_modified_restart_helper_runs_inside_the_boundary():
         _in_place(main)
         (home / ".claude" / "venv" / "bin").mkdir(parents=True)
         (home / ".claude" / "scripts").mkdir()
-        (home / ".claude" / "restart-state" / "grants").mkdir(parents=True)  # where /restart's grant is
+        (_restart_state(home) / "grants").mkdir(parents=True)  # where /restart's grant is
         os.symlink(os.path.realpath(sys.executable), home / ".claude" / "venv" / "bin" / "python")
         (home / ".claude" / "scripts" / "restart-subagents.py").write_text(
             "import os, sys\n"
-            "for path in (os.environ['CLAUDE_CONFIG_DIR'] + '/restart-state/journal', sys.argv[0] + '.changed'):\n"
+            f"for path in ({str(_restart_state(home) / 'journal')!r}, sys.argv[0] + '.changed'):\n"
             "    try:\n        open(path, 'w').write('written')\n"
             "    except OSError as e:\n        print(e)\n")
         env = {"HOME": str(home), "CLAUDE_CONFIG_DIR": str(home / ".claude")}
@@ -516,7 +533,7 @@ def test_a_modified_restart_helper_runs_inside_the_boundary():
             ran = subprocess.run(["bash", "-c", json.loads(proc.stdout)["hookSpecificOutput"]["updatedInput"][
                 "command"]], capture_output=True, text=True, env=dict(os.environ, **env), cwd=main, timeout=60)
             assert "Read-only file system" in ran.stdout, (ran.stdout, ran.stderr)
-            assert (home / ".claude" / "restart-state" / "journal").read_text() == "written"
+            assert (_restart_state(home) / "journal").read_text() == "written"
         assert not (home / ".claude" / "scripts" / "restart-subagents.py.changed").exists()
     finally:
         assert base.name.startswith("restart-helper-boundary-")
@@ -533,3 +550,10 @@ def test_the_command_texts_carry_the_wake_and_its_deletions():
     assert spec["prompt"] == WAKE and spec["recurring"] is True
     assert "CronDelete" in cmdtext.section(night, "Step 21") and "Delete the wake" in night
     assert "CronDelete" in cmdtext.section((ROOT / "commands" / "stop.md").read_text(), "Implementation")
+
+
+def test_the_wake_prepares_no_recovery_set_its_procedure_runs_prepare(night):
+    # A typed /restart's issuer prepares the set; the wake's recovery runs the helper itself.
+    p = night.hook("userprompt-restart-authorize.py", "UserPromptSubmit", prompt=WAKE)
+    assert _issued(p) and "RECOVERY SET" not in p.stdout
+    assert not list(_restart_state(night.home).glob("*.json"))

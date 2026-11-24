@@ -227,30 +227,9 @@ class D4_DigestBindingIsExact(_RouteCase):
         self.assertFalse(self.honored(err))
 
 
-class D5_OrderingRegression(_RouteCase):
-    """The residual check must stay AHEAD of the allowlist.
-
-    `git status & $GIT push --force origin master` has head token `git
-    status`, which a structural sentinel grant names, while carrying an
-    unresolvable `$GIT push --force`.  If the allowlist ran first, authority
-    earned for `git status` could be spent on a force-push through an unknown
-    binary.
-    """
-
-    def test_grant_for_a_benign_head_cannot_launder_a_residual(self):
-        def _always_allow(command, data):
-            return True
-
-        saved = guard._check_git_allowlist
-        guard._check_git_allowlist = _always_allow
-        try:
-            blocked, err = _evaluate(CMD_LAUNDER)
-        finally:
-            guard._check_git_allowlist = saved
-        self.assertTrue(
-            blocked,
-            "a matching allowlist grant must NOT clear a residual refusal")
-        self.assertIn("could not be statically classified", err)
+# D5 (the residual check ran ahead of the guard's own allowlist) is retired:
+# the guard reads no /allow grant any more; the owner's /allow releases the
+# next refused call in the launcher, a residual refusal included.
 
 
 class D6_NotAGeneralBypass(_RouteCase):

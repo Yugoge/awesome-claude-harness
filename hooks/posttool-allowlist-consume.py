@@ -1,37 +1,17 @@
 #!/usr/bin/env python3
 """
-PostToolUse Hook: /allow grant consumption.
+PostToolUse Hook (and PostToolUseFailure, Bash): the commit-event finalization
+and the merge-analyst grant check.
 
-Deletes an /allow grant file once a call the grant matches has ended,
-whatever the result. PreToolUse hooks only read grants; this hook is the
-consume point. Applies to any matching PostToolUse event (subagent or
-main-agent). Subagent write-grant firewall remains in
-`hooks/userprompt-consent-allowlist.sh` Step 0.
-
-PostToolUse fires only when all PreToolUse hooks exit 0 (tool was allowed).
-If any PreToolUse hook exits 2, PostToolUse never fires — the grant persists
-for a retry until it expires.
-
-PostToolUse additionally fires only for tool calls that RETURNED. A Bash
-command whose non-benign exit code makes the tool throw fires the separate
-PostToolUseFailure event (payload: tool_name/tool_input/tool_use_id/error/
-is_interrupt — no tool_response), so this hook is registered under BOTH
-events in settings.json (audit R2-1): the failure event is what removes a
-failed commit's event pointer and consumes sentinels on failed commands.
-
-What it unlinks at <state dir>/claude-grants/<task_id>.json, the one /allow
-grant file:
-  - Bash: a grant whose entry matches the command, once the call has ended
-    (success, PostToolUseFailure, an interrupted or error response, a non-zero
-    exit code); a background launch receipt has not ended and consumes nothing.
-  - Write: a grant whose entry matches the target.
-  - Any other tool, and Bash: a grant naming the tool itself (`/allow Agent`).
-  - Bash and Write: a grant file the reader rejects (malformed, expired),
-    whatever the call.
-
-Exit 0 (fail-open), silently when no grant matches. One exception: a Write of
-a merge-analyst grant that hooks/lib/merge_grant.py rejects is removed and exits
-2, which returns the fault to the merge-analyst.
+It once also spent /allow grants; a grant is now spent where it releases a
+refusal, in the pre-tool launcher (lib/hook_launch.release_refused), and this
+hook reads none.
+  - Bash `git commit`: the commit journal entry from the pointer the privilege
+    guard wrote for this tool_use_id (_finalize_commit_event).
+  - Write of a merge-analyst grant that hooks/lib/merge_grant.py rejects: the
+    file is removed and the hook exits 2, which returns the fault to the
+    merge-analyst.
+Exit 0 (fail-open) otherwise.
 """
 import os, sys  # noqa: E401 -- the harness switch (hooks/lib/harness_switch.py): no harness hook runs while /harness off holds
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
@@ -115,19 +95,10 @@ def _finalize_commit_event(event_key: str, raw_event_id: str,
             pass
     commit_journal.unlink_verified(pointer_path, pointer_ident)
 
-sys.path.insert(0, str(Path(__file__).parent))
-from lib.allowlist import (  # noqa: E402
-    consume_sentinel_grant_on_terminal_result,
-    match_sentinel_grant_for_tool,
-    match_sentinel_grant_for_write,
-)
-
-
 def _classify_terminal_result(data: dict) -> str:
-    """Classify the posttool terminal-result for sentinel consumption.
+    """Classify the posttool terminal-result for the commit-event finalization.
 
-    Every TERMINAL outcome (success, failure, non_zero exit) lets main()
-    unlink a matched grant. "unknown_terminal" is the one NONTERMINAL label
+    "unknown_terminal" is the one NONTERMINAL label
     (audit F2): a background-launch receipt means the command is still
     running, so nothing is consumed, restored, or deleted for it — the state
     survives for the terminal event or the age-bounded sweeps.
@@ -151,8 +122,7 @@ def _classify_terminal_result(data: dict) -> str:
     and the failure event is recognized by its hook_event_name. The
     is_error / exit_code branches are kept for SDK-style payloads.
 
-    Returns one of: "success", "failure", "non_zero", "unknown_terminal";
-    main() itself labels a grant file the reader rejects "malformed".
+    Returns one of: "success", "failure", "non_zero", "unknown_terminal".
     """
     if data.get("hook_event_name") == "PostToolUseFailure":
         # The tool threw (Bash: non-benign non-zero exit or pre-spawn
@@ -193,146 +163,18 @@ def main() -> None:
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
     except Exception:
-        # Malformed posttool input — still reap the sentinel for the
-        # comment_only / malformed terminal case. Mirror writer priority:
-        # CLAUDE_TASK_ID > CLAUDE_SESSION_ID (session_id fallback).
-        _env_tid = os.environ.get("CLAUDE_TASK_ID", "")
-        _env_sid = os.environ.get("CLAUDE_SESSION_ID", "default")
-        task_id = _env_tid if _env_tid else _env_sid
-        if task_id:
-            consume_sentinel_grant_on_terminal_result(task_id, "malformed")
         sys.exit(0)
-
     tool_name = data.get("tool_name", "")
     session_id = data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID", "default")
-
-    if tool_name == "Bash":
-        command = (data.get("tool_input") or {}).get("command", "")
-    else:
-        command = ""
-
-    # A grant that names the tool itself (`/allow Agent`, `/allow Bash`) is spent
-    # by the call it let through, as the command and Write matchers below spend
-    # theirs. A non-Bash PostToolUse fires only for a call that returned; a Bash
-    # background receipt is not terminal yet (audit F2) and keeps the grant.
-    if tool_name != "Write" and match_sentinel_grant_for_tool(session_id, tool_name) is not None:
-        named_result = _classify_terminal_result(data) if tool_name == "Bash" else "success"
-        if named_result != "unknown_terminal":
-            consume_sentinel_grant_on_terminal_result(
-                os.environ.get("CLAUDE_TASK_ID") or session_id, named_result)
-
-    # Sentinel-grant consumption for a Bash call.
-    #
-    # Scoping: the sentinel grants bash-command
-    # authorization. PostToolUse fires for EVERY tool (matcher "*"), so an
-    # unrelated Read/Grep/Glob call after `/allow` could otherwise unlink the
-    # sentinel before the intended Bash call. We restrict sentinel consumption
-    # to Bash terminal results AND only when the sentinel actually matched
-    # this command structurally (`match_sentinel_grant_for_bash_command`).
-    # The terminal cases (success/failure/non_zero/malformed) are all hit
-    # only when Bash itself fires; non-Bash tool events skip this path (the
-    # named-tool grant above and the Write branch below are theirs).
-    env_task_id = os.environ.get("CLAUDE_TASK_ID", "")
-    task_id = env_task_id if env_task_id else session_id
-    if task_id and tool_name == "Bash":
-        try:
-            from lib.allowlist import (  # noqa: E402
-                match_sentinel_grant_for_bash_command,
-                load_sentinel_grant_for_task,
-                _enumerate_sentinel_grant_files,
-            )
-        except Exception:
-            match_sentinel_grant_for_bash_command = None
-            load_sentinel_grant_for_task = None
-            _enumerate_sentinel_grant_files = None
-        terminal_result = _classify_terminal_result(data)
-        should_consume = False
-        if match_sentinel_grant_for_bash_command is not None:
-            try:
-                m = match_sentinel_grant_for_bash_command(task_id, command)
-                if m is not None:
-                    should_consume = True
-            except Exception:
-                should_consume = True
-                terminal_result = "malformed"
-        # Malformed-grant terminal case: a sentinel file exists for this task
-        # but load_sentinel_grant_for_task returned None (parse failure or
-        # expired). The AC2 contract requires unlink on malformed.
-        if (not should_consume) and load_sentinel_grant_for_task is not None \
-                and _enumerate_sentinel_grant_files is not None:
-            try:
-                if _enumerate_sentinel_grant_files(task_id) and load_sentinel_grant_for_task(task_id) is None:
-                    should_consume = True
-                    terminal_result = "malformed"
-            except Exception:
-                pass
-        # Nonterminal background receipt (audit F2): the command is still
-        # running, so a structurally matched sentinel must SURVIVE for the
-        # real terminal event — consume nothing, unlink nothing. The two
-        # malformed overrides above are unaffected: "malformed" is itself a
-        # terminal-consumption case and has already replaced the label.
-        if terminal_result == "unknown_terminal":
-            should_consume = False
-        if should_consume:
-            consume_sentinel_grant_on_terminal_result(task_id, terminal_result)
+    command = (data.get("tool_input") or {}).get("command", "") if tool_name == "Bash" else ""
     # Commit-event finalization: the guard spent the grant at PreToolUse and left
     # this event's pointer; the journal entry is appended from it here.
     if tool_name == "Bash" and command and _GIT_COMMIT_CMD_RE.search(command):
         _finalize_commit_event(commit_journal.event_key(data),
                                commit_journal.raw_tool_use_id(data),
                                session_id, _classify_terminal_result(data))
-
     elif tool_name == "Write":
-        # Sentinel-grant consume for Write-overwrite grants (task 20260522-080646-B).
-        # Uses tool_input.file_path (not command — Write has no command field).
-        #
-        # 3-candidate task_id lookup (iter3 B1 fix): mirrors pretool write-guard.sh
-        # candidate list so we find the sentinel regardless of whether userprompt-
-        # consent-allowlist.sh keyed it by CLAUDE_TASK_ID or by session_id.
-        # Candidate order must match writer: [CLAUDE_TASK_ID or session_id, data.task_id, session_id].
-        env_task_id = os.environ.get("CLAUDE_TASK_ID", "")
-        writer_primary = env_task_id if env_task_id else session_id
-        data_task_id = data.get("task_id") or ""
-        seen: set = set()
-        candidates = []
-        for c in [writer_primary, data_task_id, session_id]:
-            if c and c not in seen:
-                seen.add(c)
-                candidates.append(c)
         file_path = (data.get("tool_input") or {}).get("file_path", "")
-        terminal_result = _classify_terminal_result(data)
-        should_consume = False
-        consumed_task_id = ""
-        for candidate in candidates:
-            try:
-                m = match_sentinel_grant_for_write(candidate, session_id, file_path)
-                if m is not None:
-                    should_consume = True
-                    consumed_task_id = candidate
-                    break
-            except Exception:
-                should_consume = True
-                consumed_task_id = candidate
-                terminal_result = "malformed"
-                break
-        # Malformed-grant fallback: sentinel exists for some candidate but
-        # load/match failed (expired, parse error).
-        if not should_consume:
-            try:
-                from lib.allowlist import (  # noqa: E402
-                    load_sentinel_grant_for_task,
-                    _enumerate_sentinel_grant_files,
-                )
-                for candidate in candidates:
-                    if _enumerate_sentinel_grant_files(candidate) and load_sentinel_grant_for_task(candidate) is None:
-                        should_consume = True
-                        consumed_task_id = candidate
-                        terminal_result = "malformed"
-                        break
-            except Exception:
-                pass
-        if should_consume:
-            consume_sentinel_grant_on_terminal_result(consumed_task_id or session_id, terminal_result)
         # The merge-analyst grant is checked on its producer's own Write
         # (experiment E11); /merge reads it verbatim. A faulty grant is removed
         # here, as /merge Step 3 removed it before, so no faulty grant reaches

@@ -17,6 +17,7 @@ import re
 
 DEFAULT_TIMEOUT = 60
 COMMAND = 'python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/%s"'
+SHELL_COMMAND = 'bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/%s"'  # a launcher's shell rule (hooks/pretool-launch.py)
 _HOOK = re.compile(r"""/(hooks/[^"'\s]+\.py)""")
 
 
@@ -30,17 +31,58 @@ def rules(root: str, hook: str):
         return None
     if not any(isinstance(n, ast.ImportFrom) and n.module == "lib.hook_launch" for n in ast.walk(tree)):
         return None
+    names = _imported(tree, os.path.join(root, os.path.dirname(hook), "lib"))
     for st in tree.body:
         if isinstance(st, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "RULES" for t in st.targets):
             out = []
             for call in st.value.elts:
-                args = [ast.literal_eval(a) for a in call.args]
-                kw = {k.arg: ast.literal_eval(k.value) for k in call.keywords}
+                args = [_value(a, names) for a in call.args]
+                kw = {k.arg: _value(k.value, names) for k in call.keywords}
                 tools = kw.get("tools", args[2] if len(args) > 2 else None)
                 timeout = kw.get("timeout", args[3] if len(args) > 3 else DEFAULT_TIMEOUT)
                 out.append((args[1], tuple(tools) if tools is not None else None, timeout))
             return out
     return None
+
+
+def _imported(tree, lib: str) -> dict:
+    """{name: value} of the literal module-level constants a launcher imports by
+    ``from lib.<module> import NAME`` (a tool list kept in one library), read statically."""
+    out = {}
+    for st in tree.body:
+        if not (isinstance(st, ast.ImportFrom) and (st.module or "").startswith("lib.")):
+            continue
+        try:
+            with open(os.path.join(lib, st.module[4:].replace(".", os.sep) + ".py")) as fh:
+                body = ast.parse(fh.read()).body
+        except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
+            continue
+        wanted = {a.name: a.asname or a.name for a in st.names}
+        for node in body:
+            target = node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1 else \
+                node.target if isinstance(node, ast.AnnAssign) and node.value is not None else None
+            if isinstance(target, ast.Name) and target.id in wanted:
+                try:
+                    out[wanted[target.id]] = ast.literal_eval(node.value)
+                except ValueError:
+                    pass
+    return out
+
+
+def _value(node, names: dict):
+    """A Rule argument's value: a literal, an imported constant (``names``), or a tuple of
+    both (``('AskUserQuestion', *DISPATCH_TOOLS)``)."""
+    if isinstance(node, ast.Name) and node.id in names:
+        return names[node.id]
+    if isinstance(node, ast.Tuple):
+        out = []
+        for elt in node.elts:
+            if isinstance(elt, ast.Starred):
+                out.extend(_value(elt.value, names))
+            else:
+                out.append(_value(elt, names))
+        return tuple(out)
+    return ast.literal_eval(node)
 
 
 def spellings(root: str, hook: str) -> dict:
@@ -85,7 +127,7 @@ def expand(settings: dict, root: str) -> dict:
                     kept = []
                 for path, tools, timeout in rules(root, launcher):
                     spelled = spellings(root, launcher).get(path)
-                    hook = {"type": "command", "command": COMMAND % path}
+                    hook = {"type": "command", "command": (SHELL_COMMAND if path.endswith(".sh") else COMMAND) % path}
                     if timeout != DEFAULT_TIMEOUT:
                         hook["timeout"] = timeout
                     group = {"hooks": [hook]}

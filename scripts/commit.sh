@@ -38,9 +38,11 @@
 set -euo pipefail
 
 MESSAGE="${1:?Usage: commit.sh <commit-message> [repo-root]}"
-REPO_ROOT="${2:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib" && pwd)/claude_home.sh"  # claude_repo_top: the filesystem root is no repository top
+REPO_ROOT="${2:-$(claude_repo_top . || pwd)}"
 
-if [[ -z "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+# A directory in no repository, or whose repository's top is the filesystem root, has nothing to commit.
+if ! claude_repo_top "$REPO_ROOT" >/dev/null || [[ -z "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
   echo "commit.sh: nothing to commit in $REPO_ROOT."
   exit 0
 fi

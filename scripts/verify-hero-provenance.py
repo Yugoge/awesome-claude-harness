@@ -42,20 +42,14 @@ MANIFEST = REPO_ROOT / ".github/assets/guard-hero.json"
 SVG = REPO_ROOT / ".github/assets/guard-hero.svg"
 NORMALIZER = REPO_ROOT / "tools/demo/normalize-capture.py"
 RESERVED_TASK_ID = "readme-hero-demo-reserved"
-sys.path.insert(0, str(REPO_ROOT / "hooks" / "lib"))
-from harness_state_dir import harness_state_dir  # noqa: E402
-
-# The consumer's marker ends with the grant's real path, under the run's hook state root.
-RE_MARKER_PATH = re.compile(r"\[ALLOW-SENTINEL\] grant CONSUMED for task_id="
-                            + re.escape(RESERVED_TASK_ID) + r"\b.*\bpath=(\S+)")
-
 # Security-relevant classes. (a) fixed hook-emitted strings, anchored to committed source.
 HOOK_ANCHORS = {
     "refusal": "BLOCKED:",
     "rule+reason": "agents are not authorized to push to remote from an agent context",
     "remedy-1": "For automated push, use the /push slash command",
     "remedy-2": "For human-driven push, exit the agent context",
-    "consumption-marker": "[ALLOW-SENTINEL] grant CONSUMED for task_id=",
+    "release-marker": "[allow] RELEASED by the owner's /allow grant (",
+    "grant-spent": "The grant is spent: the next refused call is refused.",
 }
 
 # One mutation per named category; each must make the normalized diff NON-empty.
@@ -63,7 +57,7 @@ NORMALIZER_MUTATIONS = {
     "rule name": ("BLOCKED: agent git push", "BLOCKED: agent git pull"),
     "reason": ("are not authorized to push", "are authorized to push"),
     "remedy": ("use the /push slash command", "use the /shove slash command"),
-    "consumption marker": ("grant CONSUMED", "grant RETAINED"),
+    "release marker": ("The grant is spent", "The grant is kept"),
 }
 
 fails: list[str] = []
@@ -106,21 +100,6 @@ def deltas(ts: list[float]) -> list[float]:
     return [round(b - a, 3) for a, b in zip(ts, ts[1:])]
 
 
-def align_state_root(fresh_text: str, committed_text: str) -> str:
-    """Map the fresh run's grant path onto the committed capture's, and nothing else.
-
-    The committed capture was recorded under one hook state root (/tmp, the default);
-    a rerun under an absolute CLAUDE_STATE_DIR consumes the grant under that root, and
-    the consumer's marker names it. Only the exact path this run's resolver gives
-    (hooks/lib/harness_state_dir.py) is mapped: a marker naming any other path is left
-    as it is, so the byte-diff still fails on it."""
-    fresh_grant = f"{harness_state_dir()}/claude-grants/{RESERVED_TASK_ID}.json"
-    m = RE_MARKER_PATH.search(committed_text)
-    if m is None or m.group(1) == fresh_grant:
-        return fresh_text
-    return fresh_text.replace(f"path={fresh_grant}", f"path={m.group(1)}")
-
-
 def check_rerun() -> None:
     """AC13: regenerate and diff, plus raw timing on raw values."""
     with tempfile.TemporaryDirectory() as td:
@@ -136,25 +115,36 @@ def check_rerun() -> None:
         fresh_text = fresh.read_text(encoding="utf-8")
         committed_text = CAPTURE.read_text(encoding="utf-8")
 
-        if norm_text(align_state_root(fresh_text, committed_text)) != norm_text(committed_text):
+        if norm_text(fresh_text) != norm_text(committed_text):
             fail("normalized byte-diff between the fresh run and the committed "
                  "capture is NON-empty")
 
-        ft, ct = timestamps(fresh_text), timestamps(committed_text)
-        if len(ft) != len(ct):
-            fail(f"event count differs: fresh={len(ft)} committed={len(ct)}")
-            return
-        fdur, cdur = ft[-1] - ft[0], ct[-1] - ct[0]
-        if not (10.0 <= fdur <= 15.0):
-            fail(f"fresh raw duration {fdur:.3f}s outside [10,15]")
-        if abs(fdur - cdur) > 2.0:
-            fail(f"fresh raw duration {fdur:.3f}s disagrees with committed "
-                 f"{cdur:.3f}s by more than 2.0s")
-        for i, (a, b) in enumerate(zip(deltas(ct), deltas(ft))):
-            tol = max(0.5, abs(a) * 0.25)
-            if abs(a - b) > tol:
-                fail(f"inter-arrival delta {i} differs: committed={a}s fresh={b}s "
-                     f"tolerance=±{tol:.3f}s")
+        for msg in timing_failures(fresh_text, committed_text):
+            fail(msg)
+
+
+def timing_failures(fresh_text: str, committed_text: str) -> list[str]:
+    """Raw timing. The window [10,15] is a property of the committed recording, checked on
+    that fixed file. The fresh run is held to lower bounds only: a slower or busier host
+    only stretches it, so an upper bound on it measured the host, not the capture. Per
+    interval the fresh run may not be shorter than the committed one claims (beyond its
+    tolerance): an inflated committed timestamp, or a pause the demo no longer makes, fails.
+    No longer checked: a committed interval SHORTER than a real run's."""
+    ft, ct = timestamps(fresh_text), timestamps(committed_text)
+    if len(ft) != len(ct):
+        return [f"event count differs: fresh={len(ft)} committed={len(ct)}"]
+    out = []
+    fdur, cdur = ft[-1] - ft[0], ct[-1] - ct[0]
+    if not (10.0 <= cdur <= 15.0):
+        out.append(f"committed raw duration {cdur:.3f}s outside [10,15]")
+    if fdur < cdur - 2.0:
+        out.append(f"fresh raw duration {fdur:.3f}s is shorter than committed {cdur:.3f}s by more than 2.0s")
+    for i, (a, b) in enumerate(zip(deltas(ct), deltas(ft))):
+        tol = max(0.5, abs(a) * 0.25)
+        if b < a - tol:
+            out.append(f"inter-arrival delta {i} shorter than committed: committed={a}s fresh={b}s "
+                       f"tolerance={tol:.3f}s")
+    return out
 
 
 def check_normalizer_is_not_lossy() -> None:
@@ -270,7 +260,7 @@ def check_manifest_bijection() -> None:
         if forbidden in demo:
             fail(f"demo invokes the forbidden global-glob path {forbidden!r}")
     if "claude-grants" in demo and "unlink" in demo:
-        fail("demo appears to delete a grant; only the real consumer may do that")
+        fail("demo appears to delete a grant; only the real launcher may spend it")
 
 
 def check_tamper_table() -> None:

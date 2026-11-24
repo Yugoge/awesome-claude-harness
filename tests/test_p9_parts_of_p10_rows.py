@@ -10,8 +10,8 @@
   obligation block clean.md gives it writes its declared path; the same role's undeclared
   docs/dev/<role>- report is refused. The blocks are read from commands/clean.md at run time.
 - R17 (settings.json): no permission entry names a file that is gone, so none names a file P9
-  deleted (hooks/doc_sync/claude.py; scripts/iterate-failed-pipelines.py came back as train 2's
-  compatibility script); each Skill deny names a command, a skill or the documented built-in
+  deleted (hooks/doc_sync/claude.py; scripts/iterate-failed-pipelines.py, which came back as train 2's
+  compatibility script and went again); each Skill deny names a command, a skill or the documented built-in
   code-review (P9 A13).
 """
 from __future__ import annotations

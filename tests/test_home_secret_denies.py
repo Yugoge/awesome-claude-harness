@@ -1,4 +1,4 @@
-"""S5 (under-defence): settings.json's secret-file denies also reach the home directory, by `~/` rules.
+"""S5 (under-defence): the deny list's secret-file entries also reach the home directory, by `~/` rules.
 
 OB-L19's Read/Edit secret denies are written `**/<name>`, `<name>` or a relative path, and the CLI
 anchors all three at the CURRENT directory ("`path` or `./path` = relative to current directory";
@@ -20,6 +20,9 @@ and Edit alike, before OB-L19's ordered negation tail:
 * STORES: the standard home credential stores, by exact path; under `~/.ssh` only private keys
   (`id_<type>`, `*.key`, `*.pem`), never `*.pub`, `config` or `known_hosts`; `~/.config/gh/hosts.yml`
   (the token) but not `config.yml`.
+
+The entries were settings.json's permissions.deny; they now live in policies/cli-deny.v1.json, decided by the
+pre-tool rule hooks/pretool-deny-list.py (hooks/lib/deny_list.py) as the CLI matched them.
 
 Measured on Claude Code 2.1.326 (Linux), offline, with OB-L19's rig (a throwaway HOME whose user settings
 hold only the `permissions` block under test, `claude -p` pointed through ANTHROPIC_BASE_URL at a local
@@ -332,7 +335,13 @@ def bash_target(cmd: str) -> tuple[str, str]:
 
 
 def _deny() -> list[str]:
-    return json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]["deny"]
+    """settings.json's own entries and the hook rule's (policies/cli-deny.v1.json)."""
+    return (json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]["deny"]
+            + json.loads((REPO / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"])
+
+
+def _perms() -> dict:
+    return dict(json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"], deny=_deny())
 
 
 def _l19(deny: list[str]) -> list[str]:
@@ -455,7 +464,7 @@ def test_no_allow_or_ask_rule_names_a_home_secret():
     none names a secret name refused here (REFUSED_NAMES) unless it repeats this lane's deny entry word for word:
     OB-L08's `Edit(~/.pgpass)` is the deny `Edit(~/.pgpass)`, checked first, so the ask never decides
     (test_every_home_secret_deny_wins_over_any_ask)."""
-    perms = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+    perms = _perms()
     assert _home_entries(perms, "allow") == ["Read(~/**)"], _home_entries(perms, "allow")
     named = [e for e in _home_entries(perms, "ask") if e[e.index("(") + 3:-1] in REFUSED_NAMES]
     unshadowed = [e for e in named if e not in perms["deny"]]
@@ -475,7 +484,7 @@ def test_every_home_secret_deny_wins_over_any_ask():
     SECRET_FILES path) stays refused, from a project and from HOME, whatever `~/` ask also reaches it. OB-L08's asks
     reach many of them (`~/.?????` covers `~/.netrc`, `~/.config` covers `~/.config/gh/hosts.yml`, `~/.pgpass` names
     `~/.pgpass`); without this lane's denies those asks would decide, and a write of `~/.pgpass` would prompt."""
-    perms = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+    perms = _perms()
     deny, asks = perms["deny"], _home_entries(perms, "ask")
     targets = sorted({x for p in HOME_PATTERNS for x in _exemplars(p[2:])} | set(SECRET_FILES))
     for rel in targets:

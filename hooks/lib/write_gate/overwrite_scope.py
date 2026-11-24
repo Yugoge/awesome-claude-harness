@@ -24,7 +24,9 @@ without following links; the parent's realpath plus the entry; and the full real
     script refers to, falls inside it: hooks/tests/test_write_gate_overwrite_exempt.py
     scans for them, so a new declared artifact cannot fall outside the set silently;
   * a `.claude` or `.git` component (case folded) outside a project's `.claude/scratch/`
-    directory, and the harness home (lib/claude_home.py), its own .claude/scratch/ included;
+    directory: below the top of the file's own work tree, so a project kept below some
+    `.claude` directory is judged like any other (outside every work tree, anywhere in the
+    path); and the harness home (lib/claude_home.py), its own .claude/scratch/ included;
   * a file with more than one hard link (a link in temp to a tracked file would otherwise
     pass as a temp file);
   * a file ANY enclosing work tree tracks, in its index or its HEAD (literal pathspec), and
@@ -66,7 +68,6 @@ under <project>/.claude/worktrees/ stays refused by the .claude rule.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -134,7 +135,11 @@ def is_gate_read_artifact(path: str) -> bool:
     return False
 
 
-def _has_protected_component(path: str) -> bool:
+def _has_protected_component(path: str, top) -> bool:
+    """A `.claude` or `.git` component of the file's own project (the components below its work
+    tree's top), wherever that project lies; outside every work tree, any component."""
+    if top not in (None, _NO_REPO):
+        path = os.path.relpath(path, top)
     return any(c.casefold() in _PROTECTED_COMPONENTS for c in path.split(os.sep))
 
 
@@ -150,6 +155,13 @@ def _views(file_path: str) -> tuple:
 def _scratch_roots(hts) -> tuple:
     roots = [os.environ.get("TMPDIR") or "", "/var/tmp/claude-scratch"]
     roots += [os.path.join(r, "claude-scratch") for r in hts.name_roots()]
+    try:
+        if _LIB not in sys.path:
+            sys.path.insert(0, _LIB)
+        from locations import session_scratch_root
+        roots.append(session_scratch_root())  # a TMPDIR that is one session's own directory names its parent
+    except Exception:
+        pass
     out = []
     for r in roots:
         if r and os.path.isabs(r):
@@ -160,19 +172,31 @@ def _scratch_roots(hts) -> tuple:
 
 
 def _owner_sid(d: str):
-    """The sid of `d`/.owner, None when there is no readable record."""
-    try:
-        with open(os.path.join(d, ".owner"), encoding="utf-8") as fh:
-            rec = json.load(fh)
-    except Exception:
-        return None
-    return rec.get("sid") if isinstance(rec, dict) else None
+    """The sid of `d`/.owner, None when there is no readable record (scratch_owner.owner_record, the one reader)."""
+    rec = _scratch_owner().owner_record(d)
+    return rec.get("sid") if rec is not None else None
+
+
+_SCRATCH_OWNER = []
+
+
+def _scratch_owner():
+    """hooks/lib/scratch_owner.py by its path (this module is loaded as a package member or flat), loaded once."""
+    if not _SCRATCH_OWNER:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_overwrite_scope_scratch_owner",
+            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scratch_owner.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _SCRATCH_OWNER.append(module)
+    return _SCRATCH_OWNER[0]
 
 
 def _own_scratch(real: str, session_id: str, hts) -> bool:
     """`real` is below <root>/<session_id>/ for a session scratch root, with an .owner
     record naming this session (lib/scratch_owner.py)."""
-    if not session_id or os.sep in session_id or session_id in (".", ".."):
+    if not _scratch_owner().is_safe_session_dir_name(session_id):
         return False
     for root in _scratch_roots(hts):
         d = os.path.join(root, session_id)
@@ -467,11 +491,13 @@ def overwrite_exempt(file_path: str, session_id: str) -> bool:
         if any(is_gate_read_artifact(v) for v in views):
             return False
         project_scratch = _in_project_scratch(real)
-        if not project_scratch and (_has_protected_component(real) or _in_harness_home(real)):
+        if not project_scratch and _in_harness_home(real):
             return False
         if os.stat(real).st_nlink > 1:
             return False
         top, tracked = _work_tree(real)
+        if not project_scratch and _has_protected_component(real, top):
+            return False
         if tracked is not False:
             return False
         if own or agent_scratch or project_scratch:

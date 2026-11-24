@@ -17,7 +17,7 @@ after BA-QA validation, before DEV. Operations:
      deterministic subgraph is kept (AC3)
   6. Write its own outputs only, under .claude/dev-registry/<task-id>/graphify/:
      the run record graphify-run.json on every path (status and the context
-     fingerprint /dev-overnight Step 11g compares), and focused-subgraph.json,
+     fingerprint /dev-overnight Step 11 compares), and focused-subgraph.json,
      the graph context dev's and QA's dispatches name, when status is ok or
      degraded. The context file is read, never written. Sensitive paths are
      scrubbed on read + on CLI stdout (AC15)
@@ -54,9 +54,7 @@ from typing import Sequence
 ORIENTATION_MODE = "source_depender_target_dependency"
 # Coupling relations that constitute real blast radius (used for BOTH reverse-dependent
 # selection by target==seed AND forward-dependency context by source==seed).
-REVERSE_DEPENDENT_RELATIONS = frozenset(
-    {"imports", "imports_from", "calls", "inherits", "uses", "re_exports"}
-)
+# (graphify_lib.COUPLING_RELATIONS, imported below as REVERSE_DEPENDENT_RELATIONS)
 # `contains` is file->symbol containment: NOT coupling, anchor-only.
 CONTAINS_RELATIONS = frozenset({"contains"})
 MAX_NODES = 100
@@ -80,11 +78,12 @@ from graphify_lib import (
     is_graphify_enabled, load_graph, resolve_paths_to_node_ids, run_graphify_cmd,
     scrub_sensitive, should_exclude_path, write_json_locked, write_validated, read_json_safe,
 )
+from graphify_lib import COUPLING_RELATIONS as REVERSE_DEPENDENT_RELATIONS  # noqa: E402
 
 
 def _context_fingerprint(context_file: str | None, pipeline_index: int | None,
                          iteration: int | None) -> dict:
-    """The four fields /dev-overnight Step 11g compares before it dispatches
+    """The four fields /dev-overnight Step 11 compares before it dispatches
     enrichment again: the pipeline index and iteration its dispatch passes, and
     the path and SHA-256 of the context file given here (null when absent)."""
     sha = None

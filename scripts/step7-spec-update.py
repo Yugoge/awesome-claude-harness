@@ -6,7 +6,7 @@ This script implements the Step 8 algorithm specified verbatim in commands/commi
 section "### Step 8: Spec-update dispatch (post-commit, advisory)".
 
 It is the executable embodiment of the algorithm that the /commit orchestrator runs
-in stages (1) context.spec_path -> (2) close-report continuation line -> (3) mtime+marker
+in stages (1) context.spec_path -> (2) close-report continuation line -> (3) marker
 glob -> (4) advisory outcome. The orchestrator may either follow the commit.md
 prose directly OR invoke this harness; both paths satisfy the AC-05 contract because
 they execute identical decision logic.
@@ -53,7 +53,6 @@ import os
 import pathlib
 import re
 import sys
-import time
 
 CONTINUATION_RE = re.compile(
     r"^[-*+]?\s*Continuation spec(\s*\([^)]*\))?\s*:\s*`?(docs/dev/specs/spec-[^\s`]+\.md)`?\s*$"
@@ -124,11 +123,7 @@ def _stage2_close_report_continuation(task_id: str, dev_docs_root: pathlib.Path)
     return sp if sp.is_file() else None
 
 
-def _stage3_mtime_glob(task_id: str, dev_docs_root: pathlib.Path):
-    cr = dev_docs_root / f"close-report-{task_id}.md"
-    cr_mtime = cr.stat().st_mtime
-    lo = cr_mtime - 24 * 3600
-    hi = cr_mtime + 3600
+def _stage3_marker_glob(task_id: str, dev_docs_root: pathlib.Path):
     specs_dir = dev_docs_root / "specs"
     if not specs_dir.is_dir():
         return []
@@ -138,9 +133,6 @@ def _stage3_mtime_glob(task_id: str, dev_docs_root: pathlib.Path):
         if not p.is_file():
             continue
         if not SPEC_BASENAME_RE.match(p.name):
-            continue
-        m = p.stat().st_mtime
-        if not (lo <= m <= hi):
             continue
         try:
             content = p.read_text(encoding="utf-8", errors="replace")
@@ -191,7 +183,6 @@ def main() -> int:
         print(f"Step 8 skipped: changelog status={args.changelog_status}")
         return 0
 
-    # Stage (1) context.spec_path
     sp1 = _stage1_context_spec_path(task_id, dev_docs_root)
     if sp1 is not None:
         _emit(
@@ -201,7 +192,6 @@ def main() -> int:
         print(f"Stage 1 dispatch: {sp1}")
         return 0
 
-    # Stage (2) close-report continuation line
     sp2 = _stage2_close_report_continuation(task_id, dev_docs_root)
     if sp2 is not None:
         print(
@@ -215,8 +205,7 @@ def main() -> int:
         print(f"Stage 2 dispatch: {sp2}")
         return 0
 
-    # Stage (3) mtime + literal-task-id glob
-    candidates = _stage3_mtime_glob(task_id, dev_docs_root)
+    candidates = _stage3_marker_glob(task_id, dev_docs_root)
 
     # Stage (4) outcome (advisory: printed, nothing dispatched)
     if not candidates:

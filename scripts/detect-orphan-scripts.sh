@@ -5,14 +5,11 @@
 
 set -euo pipefail
 
-# Parameters
 PROJECT_ROOT="${1:-.}"
 HARNESS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"  # install location, resolved before the cd below
 
-# Navigate to project root
 cd "$PROJECT_ROOT"
 
-# Get .claude directory (check both local and global)
 CLAUDE_DIR="${PROJECT_ROOT}/.claude"
 GLOBAL_CLAUDE_DIR="$HARNESS_HOME"
 
@@ -32,13 +29,11 @@ done
 # Patterns indicating one-time fix scripts
 ONE_TIME_PATTERNS=("-fix" "-v2" "-patch" "-migration" "-cleanup" "-repair" "-reextract" "-batch")
 
-# Initialize JSON output
 orphan_scripts=""
 total_count=0
 one_time_fix_count=0
 general_orphan_count=0
 
-# Function to check if script is referenced
 check_script_references() {
     local script_file="$1"
     local script_name
@@ -47,28 +42,24 @@ check_script_references() {
 
     local referenced=false
 
-    # Check in .claude/commands/*.md (local)
     if [[ -d "${CLAUDE_DIR}/commands" ]]; then
         if grep -rq "$script_name" "${CLAUDE_DIR}/commands/" 2>/dev/null; then
             referenced=true
         fi
     fi
 
-    # Check in .claude/commands/*.md (global)
     if [[ -d "${GLOBAL_CLAUDE_DIR}/commands" ]]; then
         if grep -rq "$script_name" "${GLOBAL_CLAUDE_DIR}/commands/" 2>/dev/null; then
             referenced=true
         fi
     fi
 
-    # Check in .claude/agents/*.md (local)
     if [[ -d "${CLAUDE_DIR}/agents" ]]; then
         if grep -rq "$script_name" "${CLAUDE_DIR}/agents/" 2>/dev/null; then
             referenced=true
         fi
     fi
 
-    # Check in .claude/agents/*.md (global)
     if [[ -d "${GLOBAL_CLAUDE_DIR}/agents" ]]; then
         if grep -rq "$script_name" "${GLOBAL_CLAUDE_DIR}/agents/" 2>/dev/null; then
             referenced=true
@@ -84,7 +75,6 @@ check_script_references() {
         fi
     fi
 
-    # Check in .claude/scripts (global)
     if [[ -d "${GLOBAL_CLAUDE_DIR}/scripts" ]]; then
         local global_script_refs
         global_script_refs=$(grep -r "$script_name" "${GLOBAL_CLAUDE_DIR}/scripts/" --include="*.sh" --include="*.py" 2>/dev/null | grep -v "^${script_file}:" || true)
@@ -93,7 +83,6 @@ check_script_references() {
         fi
     fi
 
-    # Check in .claude/settings.json (local and global)
     for settings_file in ${SETTINGS_FILES[@]+"${SETTINGS_FILES[@]}"}; do
         if grep -q "$script_name" "$settings_file" 2>/dev/null; then
             referenced=true
@@ -166,7 +155,6 @@ check_script_references() {
     echo "$referenced"
 }
 
-# Function to check if script is one-time fix
 is_one_time_fix() {
     local script_name="$1"
 
@@ -195,7 +183,6 @@ has_report() {
     echo "false"
 }
 
-# Function to get last modified time
 get_last_modified() {
     local file="$1"
     local current_time
@@ -206,7 +193,6 @@ get_last_modified() {
     echo "${days_ago} days ago"
 }
 
-# Function to get commit count
 get_commit_count() {
     local file="$1"
     local count
@@ -229,7 +215,6 @@ ORPHAN_ONE_TIME_DAYS_THRESHOLD="${ORPHAN_ONE_TIME_DAYS_THRESHOLD:-30}"
 ORPHAN_MAJOR_COMMIT_THRESHOLD="${ORPHAN_MAJOR_COMMIT_THRESHOLD:-2}"
 ORPHAN_MAJOR_DAYS_THRESHOLD="${ORPHAN_MAJOR_DAYS_THRESHOLD:-60}"
 
-# Function to determine severity
 get_severity() {
     local is_one_time="$1"
     local commit_count="$2"
@@ -247,12 +232,10 @@ get_severity() {
     fi
 }
 
-# Scan scripts in local scripts/ directory
 if [[ -d "scripts" ]]; then
     while IFS= read -r -d '' script_file; do
         script_name=$(basename "$script_file")
 
-        # Check if referenced
         is_referenced=$(check_script_references "$script_file")
 
         if [[ "$is_referenced" == "false" ]]; then
@@ -262,7 +245,6 @@ if [[ -d "scripts" ]]; then
             commit_count=$(get_commit_count "$script_file")
             severity=$(get_severity "$is_one_time" "$commit_count" "$last_modified")
 
-            # Build JSON object
             if [[ -n "$orphan_scripts" ]]; then
                 orphan_scripts="${orphan_scripts},"
             fi
@@ -288,19 +270,16 @@ if [[ -d "scripts" ]]; then
     done < <(find scripts/ -type f \( -name "*.sh" -o -name "*.py" \) -print0 2>/dev/null)
 fi
 
-# Scan scripts in global ~/.claude/scripts/ directory
 if [[ -d "${GLOBAL_CLAUDE_DIR}/scripts" ]]; then
     while IFS= read -r -d '' script_file; do
         script_name=$(basename "$script_file")
 
-        # Skip INDEX.md and README.md
         [[ "$script_name" == "INDEX.md" ]] && continue
         [[ "$script_name" == "README.md" ]] && continue
 
         # Skip todo scripts (they are managed separately)
         [[ "$script_file" == *"/todo/"* ]] && continue
 
-        # Check if referenced
         is_referenced=$(check_script_references "$script_file")
 
         if [[ "$is_referenced" == "false" ]]; then
@@ -310,7 +289,6 @@ if [[ -d "${GLOBAL_CLAUDE_DIR}/scripts" ]]; then
             commit_count=$(get_commit_count "$script_file")
             severity=$(get_severity "$is_one_time" "$commit_count" "$last_modified")
 
-            # Build JSON object
             if [[ -n "$orphan_scripts" ]]; then
                 orphan_scripts="${orphan_scripts},"
             fi
@@ -336,7 +314,6 @@ if [[ -d "${GLOBAL_CLAUDE_DIR}/scripts" ]]; then
     done < <(find "${GLOBAL_CLAUDE_DIR}/scripts/" -type f \( -name "*.sh" -o -name "*.py" \) -not -path "*/todo/*" -print0 2>/dev/null)
 fi
 
-# Output JSON
 cat <<EOF
 {
   "orphan_scripts": [${orphan_scripts}

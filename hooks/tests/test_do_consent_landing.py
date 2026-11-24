@@ -266,44 +266,10 @@ def test_do_consent_still_refuses_commit_push_and_a_protected_move(product):
     _blocked_naming(product.bash(GUARD, "git reset --hard HEAD~1"), "/merge")
 
 
-def test_a_grant_gives_the_same_exit_with_and_without_do(product):
-    _in_state(product, "protected")
-    now = int(time.time())
-    grants = product.state / "claude-grants"
-    grants.mkdir()
-    for prompt in ("/do push the branch", "next turn"):
-        product.prompt(prompt)
-        assert product.flag().exists() == prompt.startswith("/do")
-        for target, command in (("commit", "git commit -m wip"), ("merge", "git merge feat"),
-                                ("reset", "git reset --hard HEAD~1"),
-                                ("push", "git push origin master")):
-            (grants / f"{SID}.json").write_text(json.dumps({
-                "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
-                "allowed_operations": [{"op": "git", "target": target}]}))
-            assert product.bash(GUARD, command).returncode == 0, (prompt, command)
-        (grants / f"{SID}.json").unlink()
-        assert product.bash(GUARD, "git push origin master").returncode == 2, prompt
-
-
-def test_valid_grants_are_unchanged_under_do(product):
-    now = int(time.time())
-    grants = product.state / "claude-grants"
-    grants.mkdir()
-    (grants / f"{SID}.json").write_text(json.dumps({
-        "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
-        "allowed_operations": [{"op": "git", "target": "commit"}]}))
-    assert product.bash(GUARD, "git commit -m wip").returncode == 0
-    (grants / f"{SID}.json").write_text(json.dumps({
-        "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
-        "allowed_operations": [{"op": "git", "target": "branch"}]}))
-    assert product.bash(GUARD, "git branch -f master feat").returncode == 0
-    command = "git push origin master"
-    (grants / f"{SID}.json").write_text(json.dumps({
-        "task_id": SID, "session_id": SID, "created_at": now, "expires_at": now + 300,
-        "allowed_operations": [{"op": "git", "target": "push"}]}))
-    assert product.bash(GUARD, command).returncode == 0
-    (grants / f"{SID}.json").unlink()
-    _blocked_naming(product.bash(GUARD, command), "/push")
+# Retired: test_a_grant_gives_the_same_exit_with_and_without_do and
+# test_valid_grants_are_unchanged_under_do. The guard reads no per-rule /allow grant any more;
+# the owner's /allow releases a refused call in the launcher, with or without /do
+# (test_allow_releases_anything.py). The refusals without a grant are pinned above.
 
 
 def test_only_the_reader_the_writer_and_the_clearer_name_the_flag():

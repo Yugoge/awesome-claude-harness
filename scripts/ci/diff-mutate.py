@@ -33,6 +33,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
+
 TARGET_ROOTS = ("hooks", "scripts")
 TEST_ROOTS = ("hooks/tests", "tests")
 # What the unit step of baseline.yml leaves out: the replay suites, run by their own sharded jobs. A mutant
@@ -226,8 +229,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list", action="store_true", help="print the selected mutants and run nothing")
     ap.add_argument("paths", nargs="*", help="limit the mutated files to these paths (still only hooks/ and scripts/)")
     args = ap.parse_args(argv)
+    top = locations.repo_top(os.getcwd())  # a writer: it mutates files below the top, and never below the root
+    if top is None:
+        print("diff-mutate: not inside a git work tree whose top is below the filesystem root: no file is mutated",
+              file=sys.stderr)
+        return 2
     try:
-        os.chdir(git("rev-parse", "--show-toplevel").strip())
+        os.chdir(top)
         targets, own_tests = changed_lines(args.base, args.paths), changed_tests(args.base)
     except subprocess.CalledProcessError as exc:
         print(f"diff-mutate: git failed: {exc.stderr.strip()}", file=sys.stderr)

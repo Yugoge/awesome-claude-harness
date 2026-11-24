@@ -10,7 +10,6 @@
     "role",
     "pipeline",
     "profile",
-    "dispatched_at",
     "artifacts"
   ],
   "properties": {

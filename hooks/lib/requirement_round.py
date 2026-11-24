@@ -6,6 +6,7 @@ G2 (``check_round``, ``stand_in``, ``check_analysis``) and the Stop gate (``ends
 ``line_questions``) decide by live here."""
 from __future__ import annotations
 
+import glob
 import hashlib
 import importlib
 import json
@@ -17,6 +18,7 @@ from pathlib import Path
 SCHEMA = Path(__file__).resolve().parents[2] / "schemas" / "requirement-round.v1.json"
 # command_span.COMMANDS_DIR's own expression: a path the artifact check resolves to the harness's commands/
 COMMANDS_DIR = Path(__file__).resolve().parent.parent.parent / "commands"
+QUESTION_MARKS = ("?", "？")  # a sentence that ends in either asks a question (ASCII or full-width)
 SOURCE_RE = re.compile(r"^(requirement-round|producer-question):([A-Za-z0-9][A-Za-z0-9_-]{2,80}):(r[1-9][0-9]*|[a-z][a-z0-9-]*)$")
 ROUND = "docs/dev/requirement-round-{task}-r{n}.json"
 PANEL = "docs/dev/ba-panel-{task}-r1.json"
@@ -77,7 +79,7 @@ def ask_view(doc: dict) -> list:
 def question_file(project, task: str, n: int) -> Path | None:
     """Round n's question file: BA's requirement-round file, else for round 1 a BA panel's file; None when absent."""
     for rel in (ROUND.format(task=task, n=n),) + ((PANEL.format(task=task),) if n == 1 else ()):
-        if (Path(project) / rel).is_file():
+        if os.path.isfile(Path(project) / rel):  # an unreadable folder: absent, never an error
             return Path(project) / rel
     return None
 
@@ -136,8 +138,8 @@ def ba_round_paths(task_id) -> list:
     return own + ([ROUND.format(task=task, n=n + 1)] if found else [])
 
 
-# What names the round in a command's text or its checklist (commands/dev.md Step 4b's source, dev-command.md's and
-# spec.md's round files; scripts/todo's Step 4b and Step 3a).
+# What names the round in a command's text or its checklist (commands/dev.md Step 4's source, dev-command.md's and
+# spec.md's round files; scripts/todo's /dev Step 4 and /spec Step 3, and a list written before as Step 4b).
 ROUND_MARKERS = ("requirement-round", "Ask each round with AskUserQuestion", "Requirement round")
 
 
@@ -313,7 +315,8 @@ def _question_files(project, task: str) -> list:
     family = _lib("obligation").task_family
     out = [(p, f"requirement-round:{task}:r{n}", p, "qa" if p.name.startswith("ba-panel-") else "ba")
            for n, p in rounds(project, task)]
-    for p in sorted((Path(project) / "docs/dev").glob("producer-question-*-*.json")):
+    folder = Path(project) / "docs/dev"  # glob finds none in an unreadable folder, as in an absent one
+    for p in sorted(folder / name for name in glob.glob("producer-question-*-*.json", root_dir=folder)):
         owner, _, role = p.name[len("producer-question-"):-len(".json")].rpartition("-")
         if family(owner) == family(task):
             out.append((p, f"producer-question:{owner}:{role}", None, role))
@@ -332,7 +335,7 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
     declared = {a.get("path") for a in ob.get("artifacts") or [] if isinstance(a, dict)}
     obligation = _lib("obligation")
     latest = {}  # (role, task) -> (call, obligation) of that producer's latest dispatch in the span
-    for call in span.calls("Agent", "Task"):
+    for call in span.dispatch_calls():
         found = obligation.parse_obligation(call.input.get("prompt")) if call.id != current else None
         doc = getattr(found, "obligation", None)
         if isinstance(doc, dict):
@@ -363,10 +366,73 @@ def ask_first(span, project, ob: dict | None, current: str | None = None) -> str
     return None
 
 
+# The owner is asked what he wants, never whether something is allowed, how to get past a refusal or whether to
+# go on. The kinds kept, each in the step that owns it (question_refusal); every other AskUserQuestion is refused
+# at the tool (hooks/pretool-tool-policy.py). Each value opens with the kind's metadata.source form.
+KEPT = {
+    "requirement-round": '"requirement-round:<task>:r<n>" in /spec Step 3 or /dev Step 4, its round file\'s '
+                         "questions as written",
+    # A choice of the owner's met in any other step of a /dev cycle takes this route (the 2026-11-22 refusal).
+    "producer-question": '"producer-question:<task>:<role>" in any step once docs/dev/producer-question-<task>-<role>'
+                         ".json exists (for a choice met elsewhere, dispatch that task's ba or dev producer with the "
+                         "choice: it writes that file in place of its report; then relay it)",
+    "close-rating": '"close-rating:<task>" in /close Step 4, after a landed close QA of the task',
+    # The owner stating and confirming what he wants (/spec Steps 1, 2 and 4); not a permission or a way past a refusal.
+    "spec-question": '"spec-question:<label>" in /spec, while it is the current command',
+    # Which cleanup plan he wants (/clean Step 13); the per-action approvals are not kept.
+    "clean-option": '"clean-option:<request id>" in /clean Step 13, once docs/clean/combined-report-<request id>.json '
+                    "exists",
+}
+REFUSED = ('Ask the owner only what he wants, marked by the AskUserQuestion input\'s metadata: {"source": '
+           '"<kind>:..."} as one of these kinds, in its step: ' + "; ".join('"source": ' + v for v in KEPT.values())
+           + ". Nobody is asked whether something is allowed, how to get past a refusal or whether to go on. Go on "
+           "with the work a rule allows. An operation a hook refused is not retried, disguised or worked around: "
+           "put it in your report as refused, with the hook's own output.")
+
+
+_LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}")
+CLEAN_REPORT = "docs/clean/combined-report-{request}.json"  # commands/clean.md Step 11's combined report
+
+
+def question_refusal(payload: dict) -> str | None:
+    """None when the AskUserQuestion call is a kept kind (KEPT) made by the main agent in the step that owns it:
+    a round whose file exists with these questions exactly (as handle records it), a producer question whose file
+    exists, a close rating in a /close span holding a landed close QA of the task, a spec question in a /spec span,
+    a cleanup option in a /clean span whose request's combined report exists. Else the refusal's text."""
+    tin = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    meta = tin.get("metadata") if isinstance(tin.get("metadata"), dict) else {}
+    source = meta.get("source") if isinstance(meta.get("source"), str) else ""
+    kind = source.partition(":")[0]
+    if payload.get("agent_id"):
+        return f"a subagent asks nobody. {REFUSED}"
+    if kind not in KEPT:
+        return f"metadata.source {source or 'none'!r} is no kind kept. {REFUSED}"
+    project = Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd())
+    match = SOURCE_RE.fullmatch(source)
+    if kind == "close-rating":
+        task = _lib("close_rating").source_task(tin)
+        span = _lib("command_span").active_span(payload.get("transcript_path") or "")
+        ok = bool(task) and span is not None and _lib("close_rating").rating_required(span, task)
+    elif kind in ("spec-question", "clean-option"):
+        span = _lib("command_span").active_span(payload.get("transcript_path") or "")
+        rest = source.partition(":")[2]
+        ok = span is not None and span.command == kind.partition("-")[0] and bool(_LABEL.fullmatch(rest)) and (
+            kind == "spec-question" or os.path.isfile(project / CLEAN_REPORT.format(request=rest)))
+    elif match and kind == "requirement-round" and match.group(3).startswith("r"):
+        qfile = question_file(project, task_of(match.group(2)) or "", int(match.group(3)[1:]))
+        doc = _load(qfile) if qfile else None
+        ok = doc is not None and canonical(tin.get("questions")) == canonical(ask_view(doc))
+    elif match and kind == "producer-question" and not match.group(3).startswith("r"):
+        ok = os.path.isfile(project / QUESTION.format(task=task_of(match.group(2)), role=match.group(3)))
+    else:
+        ok = False
+    return None if ok else f"{source!r} is asked outside the step that owns it ({KEPT[kind]}). {REFUSED}"
+
+
 def ends_with_question(text) -> bool:
     """R7: the last non-empty line of the turn's last main-agent text ends with "?" or a full-width one."""
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
-    return bool(lines) and lines[-1].endswith(("?", "？"))
+    return bool(lines) and lines[-1].endswith(QUESTION_MARKS)
 
 
 # The first word of a clause that asks: a label before ": " that starts with one asks a question of its own.
@@ -385,7 +451,7 @@ def line_questions(text) -> list | None:
     found = []
     for sentence in _SENTENCE_END.split(lines[-1]) if lines else ():
         sentence = sentence.strip()
-        if not sentence.endswith(("?", "？")):
+        if not sentence.endswith(QUESTION_MARKS):
             continue
         if not re.search(r"\w", sentence):
             return None

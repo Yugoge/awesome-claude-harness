@@ -33,6 +33,8 @@ Rules enforced:
      the command, and no reader of the span takes it for the checklist
      (lib.todo_canonical.checklist_lists). A list that reuses a step's text
      is checked as the rules above check it
+  9. Over a held list whose text is neither the canonical list's nor the first list's, the canonical
+     list with every status as held is admitted once (canonical_rewrite); refusals name it
 Past a command's first list, lists of one length pair by content, never index.
 
 Exit codes:
@@ -58,11 +60,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.todo_canonical import (by_content, checklist, initial_status_violations, is_foreign, run_todo_script,
                                 validate_against_canonical)
-
-
-def _check_field_changed(old_val, new_val):
-    """Return True if a field value changed."""
-    return old_val != new_val
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 
 
 def _format_step_hint(index, content):
@@ -74,10 +72,10 @@ def check_immutability(last, new, violations):
     """Content and activeForm are immutable after init."""
     for i, (o, n) in enumerate(zip(last, new)):
         old_c, new_c = o.get('content', ''), n.get('content', '')
-        if _check_field_changed(old_c, new_c):
+        if old_c != new_c:
             violations.append(f'Step {i} content modified: "{old_c}" -> "{new_c}"')
         old_a, new_a = o.get('activeForm', ''), n.get('activeForm', '')
-        if _check_field_changed(old_a, new_a):
+        if old_a != new_a:
             violations.append(f'Step {i} activeForm modified: "{old_a}" -> "{new_a}"')
 
 
@@ -119,33 +117,13 @@ def check_single_in_progress(new, violations):
         )
 
 
-def _find_incomplete_predecessor(new, idx):
-    """Find first non-completed step before idx, or None."""
-    for prev in range(idx):
-        if new[prev].get('status') != 'completed':
-            return prev
-    return None
-
-
-def _check_one_ordering(idx, new, violations):
-    """Check ordering constraint for a single newly-started step."""
-    prev = _find_incomplete_predecessor(new, idx)
-    if prev is not None:
-        violations.append(
-            f'Step {idx} ("{new[idx]["content"]}"): '
-            f'cannot start before Step {prev} '
-            f'("{new[prev]["content"]}") is completed'
-        )
-
-
 def check_ordering(last, new, violations):
     """Rule 4: can't start step N before earlier steps complete."""
-    started = [
-        i for i, (p, c) in enumerate(zip(last, new))
-        if p.get('status') == 'pending' and c.get('status') == 'in_progress'
-    ]
-    for idx in started:
-        _check_one_ordering(idx, new, violations)
+    for idx, (p, c) in enumerate(zip(last, new)):
+        prev = next((k for k in range(idx) if new[k].get('status') != 'completed'), None)
+        if (p.get('status'), c.get('status')) == ('pending', 'in_progress') and prev is not None:
+            violations.append(f'Step {idx} ("{new[idx]["content"]}"): cannot start before Step {prev} '
+                              f'("{new[prev]["content"]}") is completed')
 
 
 def _activate_next_pending(todos, start_idx=0):
@@ -192,11 +170,31 @@ def _find_in_progress_hint(last):
     return ''
 
 
-def emit_block(cmd, violations, last):
-    """Print block message to stderr and exit 2."""
+def canonical_rewrite(state):
+    """Rule 9: the one rewrite admitted over a held list whose text is neither the canonical list's nor the span's
+    first list's (older hooks let a rewording through; the Stop gate's todo half confirms neither): the canonical
+    content and activeForm, each step's status as held by step number. None for any other held list."""
+    texts = lambda todos: [t.get('content') for t in todos or ()]  # noqa: E731
+    if not state.todos or len(state.canonical) != len(state.todos) or texts(state.todos) in (
+            texts(state.canonical), texts(next((t for _c, t in state.lists()), None))):
+        return None
+    return [{'content': c.get('content'), 'activeForm': c.get('activeForm'), 'status': t.get('status')}
+            for c, t in zip(state.canonical, state.todos)]
+
+
+def _rewrite_hint(state):
+    """The refusal's line naming rule 9's rewrite, when the held list admits one; else ''."""
+    redo = canonical_rewrite(state) if state else None
+    return ('\nThe held list is neither the canonical list nor the first one, so the Stop gate never confirms it. '
+            f'Rewrite it once to the canonical list, every status as held:\n{json.dumps(redo, ensure_ascii=False)}\n'
+            ) if redo else ''
+
+
+def emit_block(cmd, violations, last, state=None):
+    """Print block message to stderr and exit 2; past a held list rule 9 admits a rewrite over, name that one."""
     hint = _find_in_progress_hint(last)
     correct = build_correct_call(last)
-    json_hint = f'\nCall TodoWrite with:\n{correct}\n' if correct else ''
+    json_hint = (f'\nCall TodoWrite with:\n{correct}\n' if correct else '') + _rewrite_hint(state)
     numbered = '\n'.join(f'  [{j+1}] {v}' for j, v in enumerate(violations))
     sys.stderr.write(
         f'\nBLOCKED TodoWrite for /{cmd} (STEP SEQUENCE VIOLATION):\n' + numbered
@@ -218,10 +216,10 @@ def _build_canonical_hint(cmd, prompt=''):
             + json.dumps(canonical, ensure_ascii=False, indent=2) + '\n')
 
 
-def emit_block_canonical(cmd, violations, prompt=''):
+def emit_block_canonical(cmd, violations, prompt='', state=None):
     """Print block message for canonical validation failures."""
     numbered = '\n'.join(f'  [{j+1}] {v}' for j, v in enumerate(violations))
-    hint = _build_canonical_hint(cmd, prompt)
+    hint = _build_canonical_hint(cmd, prompt) + _rewrite_hint(state)
     sys.stderr.write(
         f'\nBLOCKED TodoWrite (canonical validation):\n' + numbered
         + '\n\nContent/activeForm must match the canonical definition '
@@ -231,11 +229,11 @@ def emit_block_canonical(cmd, violations, prompt=''):
     sys.exit(2)
 
 
-def validate_against_canonical_if_needed(cmd, new_todos, prompt=''):
+def validate_against_canonical_if_needed(cmd, new_todos, prompt='', state=None):
     """Validate new_todos against canonical script if available."""
     violations = validate_against_canonical(cmd, new_todos, prompt)
     if violations:
-        emit_block_canonical(cmd, violations, prompt)
+        emit_block_canonical(cmd, violations, prompt, state)
         return False
     return True
 
@@ -251,18 +249,15 @@ def _resumed(state, sid):
     """(offset, call) of each Agent call of the span that never came back but
     whose agent the /restart recovery resumed (the span's SendMessage to it,
     placed there; offset: that resume's result), saw come back (its journal
-    record) and finalized (an ok finalize call of restart.md's helper after it
-    in the span): that call is its step's dispatch, with no replacement call
-    (commands/restart.md, Lesson 16). The journal is the session's own
-    restart state, so a call with no session id (a payload naming none)
-    reads none and has no resumed call."""
-    from lib.subagent_restart import completed_resumes, is_helper_invocation
+    record, which the hooks finalize when the last response is in): that call
+    is its step's dispatch, with no replacement call (commands/restart.md,
+    Lesson 16). The journal is the session's own restart state, so a call with
+    no session id (a payload naming none) reads none and has no resumed call."""
+    from lib.subagent_restart import completed_resumes
     journal = completed_resumes(sid) if sid else {}
-    cut = {c.id: c for c in state.span.uses('Agent', 'Task') if not c.ok} if journal else {}
-    done = [b.result_at for b in state.span.uses('Bash') if b.ok and str(b.input.get('command')).split()[2:3]
-            == ['finalize'] and is_helper_invocation({'tool_name': 'Bash', 'tool_input': b.input})] if cut else []
+    cut = {c.id: c for c in state.span.uses(*DISPATCH_TOOLS) if not c.ok} if journal else {}
     return [(m.result_at, cut[journal[str(m.input.get('to'))]]) for m in state.span.uses('SendMessage')
-            if cut and m.ok and journal.get(str(m.input.get('to'))) in cut and any(t > m.result_at for t in done)]
+            if cut and m.ok and journal.get(str(m.input.get('to'))) in cut]
 
 
 def _started_at(state, content):
@@ -282,20 +277,43 @@ def _started_at(state, content):
 def _returned_calls(state, sid):
     """(offset of its result, call) of each Agent call of the span that came
     back, and of each one session ``sid``'s /restart resumed (_resumed)."""
-    return [(c.result_at, c) for c in state.span.uses('Agent', 'Task') if c.ok] + _resumed(state, sid)
+    return [(c.result_at, c) for c in state.span.uses(*DISPATCH_TOOLS) if c.ok] + _resumed(state, sid)
 
 
 def _call_type(call):
     return str(call.input.get('subagent_type') or '').strip().lower()
 
 
+def _required_calls(step):
+    """The calls a canonical step requires: its subagent_call's entries but those marked optional (a list
+    states every call of a step, as /dev's requirement round does: scripts/todo/dev.py ROUND_CALLS)."""
+    call = step.get('subagent_call') if isinstance(step, dict) else None
+    return [e for e in (call if isinstance(call, list) else [call])
+            if isinstance(e, dict) and e.get('subagent_type') and not e.get('optional')]
+
+
+def _call_mode(call):
+    """The ``Mode: <word>`` line of a dispatch prompt, lower-cased ('' when it has none)."""
+    found = re.search(r'^\s*Mode:\s*(\S+)', str(call.input.get('prompt') or ''), re.M | re.I)
+    return found.group(1).lower() if found else ''
+
+
 def _dispatched(state, content, step, calls):
-    """Gate 4's fact: an ok Agent call of the step's subagent type, or one
-    /restart resumed (``calls``: _returned_calls of the session), came back
-    after the TodoWrite that set the step in_progress. Offsets of results
-    order them, as the record does."""
-    start, types = _started_at(state, content), _subagent_types(step)
-    return start is not None and any(at is not None and at > start and _call_type(c) in types for at, c in calls)
+    """Gate 4's fact: for each call the step requires, its own ok Agent call (or one /restart resumed:
+    ``calls``, _returned_calls of the session) of that subagent type, and of that prompt mode when the
+    entry names one, came back after the TodoWrite that set the step in_progress; no call counts for two
+    entries. Offsets of results order them, as the record does."""
+    start = _started_at(state, content)
+    if start is None:
+        return False
+    left = [c for at, c in calls if at is not None and at > start]
+    for entry in _required_calls(step):
+        kind, mode = str(entry['subagent_type']).strip().lower(), str(entry.get('prompt_mode') or '').lower()
+        match = next((c for c in left if _call_type(c) == kind and (not mode or _call_mode(c) == mode)), None)
+        if match is None:
+            return False
+        left.remove(match)
+    return True
 
 
 def _strip_frontmatter(text):
@@ -385,10 +403,10 @@ def _find_completing_subagent_step(state, last, new_todos, sid):
 
 
 def _format_subagent_names(subagent_call):
-    """Format subagent type names from subagent_call metadata."""
-    if isinstance(subagent_call, list):
-        return ', '.join(s.get('subagent_type', '?') for s in subagent_call)
-    return subagent_call.get('subagent_type', '?')
+    """Format the required calls' subagent types (with their prompt mode) from subagent_call metadata."""
+    entries = _required_calls({'subagent_call': subagent_call})
+    return ', '.join(e['subagent_type'] + (f' with "Mode: {e["prompt_mode"]}"' if e.get('prompt_mode') else '')
+                     for e in entries) or '?'
 
 
 def _unreturned(state, types):
@@ -397,7 +415,7 @@ def _unreturned(state, types):
     from lib.obligation import extract_obligation_block
     return [f'call {c.id}, declared artifacts: ' + (', '.join(re.findall(r'"path":\s*"([^"]+)"', getattr(
         extract_obligation_block(str(c.input.get('prompt') or '')), 'body', ''))) or 'none')
-        for c in state.span.uses('Agent', 'Task')
+        for c in state.span.uses(*DISPATCH_TOOLS)
         if not c.ok and str(c.input.get('subagent_type') or '').strip().lower() in types]
 
 
@@ -408,7 +426,7 @@ def check_subagent_completion_guard(state, last, new_todos, cmd, sid):
     idx, step_todo, step, flight = _find_completing_subagent_step(state, last, new_todos, sid)
     if step is not None:
         agents = _format_subagent_names(step.get('subagent_call'))
-        cut = _unreturned(state, _subagent_types(step))
+        cut = _unreturned(state, {str(e['subagent_type']).strip().lower() for e in _required_calls(step)})
         why = (f'Its {agents} call has not come back ({"; ".join(cut)}). A subagent cut by an '
                'interrupted session or a usage limit is resumed and finalized by the owner\'s /restart '
                '(commands/restart.md), never replaced by a new call.\n\n' if cut else
@@ -467,7 +485,7 @@ def main():
             and is_foreign(new_todos, state.canonical, last, next((t for _c, t in state.lists()), None))):
         sys.exit(0)
     if last is None or len(last) != len(new_todos):
-        validate_against_canonical_if_needed(cmd, new_todos, state.arguments)
+        validate_against_canonical_if_needed(cmd, new_todos, state.arguments, state)
         if last is None and initial_status_violations(new_todos):
             emit_block(cmd, initial_status_violations(new_todos), state.canonical)
         sys.exit(0)
@@ -476,12 +494,14 @@ def main():
     # compares against, P1c row 17): a step moved or reworded is refused here, before the step
     # rules, which a reordered list would otherwise satisfy step by step.
     if [t.get('content') for t in new_todos] != [t.get('content') for t in last]:
+        if new_todos == canonical_rewrite(state):  # rule 9
+            sys.exit(0)
         emit_block(cmd, ['Todo steps must keep the text and the order of the list the session holds; '
-                         're-send that list and change only statuses'], last)
+                         're-send that list and change only statuses'], last, state)
     paired = by_content(last, new_todos)
     violations = validate(paired, new_todos)
     if violations:
-        emit_block(cmd, violations, last)
+        emit_block(cmd, violations, last, state)
     check_wake_step(state, paired, new_todos)
     check_subagent_completion_guard(state, paired, new_todos, cmd, str(data.get('session_id') or ''))
     sys.exit(0)

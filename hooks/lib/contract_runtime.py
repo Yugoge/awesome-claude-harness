@@ -2,8 +2,7 @@
 
 This module is the single shared engine consumed by every contract-aware
 hook (pretool-subagent-enforce, posttool-subagent-track,
-posttool-overnight-file-check) plus check-overnight-reports.py and
-lib/closeout.py.
+posttool-overnight-file-check) plus check-overnight-reports.py.
 
 Public surface:
     session_record(session_id, payload=None) -> dict | None   # the session's state record
@@ -189,6 +188,10 @@ def exploration_calls(steps: list[tuple[str, dict]], text: Optional[str] = None)
 # (17) its dev, then its QA.
 _REDISPATCHES = {'9': ('8',), '11': ('8',), '13': ('12',), '17': ('12', '15')}
 
+# A step an older text of /dev-overnight numbered with a letter, folded since into
+# the step above it: a session in flight still holds the old label in its list.
+FOLDED_STEPS = {'11g': '11'}
+
 
 def post_triage_steps(steps: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
     """The dispatches after PM TRIAGE, which its contract renders, in step order:
@@ -198,7 +201,7 @@ def post_triage_steps(steps: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
         return []
     call_of = dict(steps)
     return [(label, each) for label, call in steps[last + 1:]
-            for each in ([call] if call else [call_of.get(s) for s in _REDISPATCHES.get(label, ())])
+            for each in [call] + [call_of.get(s) for s in _REDISPATCHES.get(label, ())]
             if each]
 
 
@@ -924,18 +927,18 @@ def validate_artifact_for_obligation(path, schema_id: str) -> dict:
     reason}`` shape as :func:`validate_report_artifact`.
     """
     p = Path(path)
-    if not p.exists():
+    read = overnight.read_declared_json(p)
+    if read.status == 'absent':
         return _gate_result(
             'fail', schema_id, [f'expected artifact missing: {p}'],
             'obligation-named artifact absent (missing is blocking under obligation authority)',
         )
-    try:
-        record = json.loads(p.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError) as exc:
+    if read.status != 'ok':
         return _gate_result(
-            'fail', schema_id, [f'unparseable JSON: {exc}'],
+            'fail', schema_id, [f'unparseable JSON: {read.error}'],
             'obligation-named artifact is not valid JSON',
         )
+    record = read.value
     result = validate(_normalize_version_for_obligation(record, schema_id), schema_id)
     skip_reason = _skip_reason_if_unvalidatable(result)
     if skip_reason is not None:

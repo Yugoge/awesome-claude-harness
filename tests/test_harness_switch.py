@@ -13,6 +13,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import resource
 import shlex
 import shutil
 import subprocess
@@ -56,11 +57,11 @@ class Home:
     def settings(self) -> bytes:
         return (self.path / "settings.json").read_bytes()
 
-    def prompt(self, text, session="S1", **extra):
+    def prompt(self, text, session="S1", env=None, **extra):
         payload = {"hook_event_name": "UserPromptSubmit", "prompt": text, "session_id": session,
                    "transcript_path": str(self.transcript), "cwd": str(self.path), **extra}
-        proc = run(["bash", str(self.path / "hooks" / "userprompt-harness-switch.sh")], self.path, self.env,
-                   json.dumps(payload))
+        proc = run(["bash", str(self.path / "hooks" / "userprompt-harness-switch.sh")], self.path,
+                   dict(self.env, **(env or {})), json.dumps(payload))
         return json.loads(proc.stdout) if proc.stdout.strip() else None
 
     def switch(self, verb, env=None, under=0, claude=None):
@@ -94,10 +95,16 @@ def home(tmp_path):
         dst = h / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / rel, dst)
+    # The session S1 runs in a Claude Code process, CLAUDE_PID (this test's own: it started before
+    # any switch), whose hooks keep their temp files in TMPDIR.
     env = dict(os.environ, **GIT_ENV, HOME=str(tmp_path), CLAUDE_CONFIG_DIR=str(h), CLAUDE_HOME=str(h),
-               CLAUDE_STATE_DIR=str(tmp_path / "state"), CLAUDE_PROJECT_DIR=str(h))
+               CLAUDE_STATE_DIR=str(tmp_path / "state"), CLAUDE_PROJECT_DIR=str(h),
+               CLAUDE_PID=str(os.getpid()), TMPDIR=str(tmp_path / "tmp"))
     env.pop("HARNESS_SWITCH_STOP_AFTER", None)
+    env.pop("CLAUDE_CODE_TMPDIR", None)
+    env.pop("CLAUDE_CODE_SESSION_ID", None)  # the session is the payload's, never the session running pytest
     (tmp_path / "state").mkdir()
+    (tmp_path / "tmp").mkdir()
     home = Home(h, env)
     home.git("init", "-q", "-b", "master")
     home.git("config", "filter.claude-settings.clean", "python3 scripts/install/render-settings clean")
@@ -106,7 +113,7 @@ def home(tmp_path):
     home.git("add", "-A")
     home.git("commit", "-qm", "harness")
     (h / "settings.machine.json").write_text(json.dumps({
-        "modules": {}, "env": {"CLAUDE_HOME": str(h), "OWNER_OWN_VAR": "1"},
+        "modules": {}, "env": {"CLAUDE_HOME": str(h), "OWNER_OWN_VAR": "1", **scratch_env(tmp_path)},
         "permissions": {"allow": ["Bash(owner-own-tool:*)"]},
         "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [OWNER_HOOK]}]}}, indent=2))
     run([PY, "scripts/install/render-settings", "render"], h, env)
@@ -121,7 +128,14 @@ def home(tmp_path):
     (h / "commands" / "owner-own.md").write_text("---\ndescription: mine\n---\nmine\n")
     home.transcript.write_text(json.dumps({"type": "user", "timestamp": "2000-01-01T00:00:00Z"}) + "\n")
     assert home.git("status", "--porcelain").stdout.strip() == "?? commands/owner-own.md"
+    assert home.hook("hooks/session-scratch-init.sh", {"hook_event_name": "SessionStart"}).returncode == 0
     return home
+
+
+def scratch_env(tmp_path):
+    """The machine's values of the two settings that keep the CLI's command output and the commands'
+    temp files on the disk (render-settings OFF_KEEPS_ENV): a directory that does not exist yet."""
+    return {"CLAUDE_CODE_TMPDIR": str(tmp_path / "scratch-root"), "TMPDIR": str(tmp_path / "scratch-root")}
 
 
 def refresh_stat(home):
@@ -184,10 +198,17 @@ def test_next_session_loads_no_harness_settings_prompts_or_agents(home):
     commands = [c for _, c in registered(home.settings())]
     assert commands == ['bash "${CLAUDE_HOME:-$HOME/.claude}/hooks/userprompt-harness-switch.sh"', OWNER_HOOK["command"]]
     shipped = json.loads(home.git("show", "HEAD:settings.json").stdout)
-    assert not set(s.get("env", {})) & set(shipped["env"])
-    assert s["env"] == {"CLAUDE_HOME": str(home.path), "OWNER_OWN_VAR": "1"}
+    # Of the env the harness ships, only the two settings that keep the CLI's command output and
+    # the commands' temp files on the disk, with the machine's values; the directory they name exists.
+    assert set(s["env"]) & set(shipped["env"]) == {"CLAUDE_CODE_TMPDIR", "TMPDIR"}
+    assert s["env"] == {"CLAUDE_HOME": str(home.path), "OWNER_OWN_VAR": "1", **scratch_env(home.path.parent)}
+    assert (home.path.parent / "scratch-root").stat().st_mode & 0o7777 == 0o1777
+    # The deny list keeps the switch's own two rules only, in the shipped order (the shipped list holds just
+    # these two since the rest moved into policies/cli-deny.v1.json; the off form keeps their order).
+    switch_rules = {"Edit(**/.harness-switch/**)", "Skill(harness)"}
     assert s["permissions"] == {"allow": ["Bash(owner-own-tool:*)"],
-                                "deny": ["Edit(**/.harness-switch/**)", "Skill(harness)"]}
+                                "deny": [e for e in shipped["permissions"]["deny"] if e in switch_rules]}
+    assert set(s["permissions"]["deny"]) == switch_rules
     assert s["model"] == "opus" and s["cleanupPeriodDays"] == 365 and "deniedMcpServers" in s
     assert "includeCoAuthoredBy" not in s
     h = home.path
@@ -786,34 +807,96 @@ def rule_budget(name: str) -> float:
     return float(run([PY, "-c", code, str(ROOT / "hooks"), name], ROOT).stdout)
 
 
-def timed_gate(home, proj, command, actor="main"):
-    start = time.monotonic()
-    proc = gate(home, proj, "Bash", {"command": command}, actor)
-    return proc, time.monotonic() - start
+def timed_gate(home, proj, command, actor="main", scale=None):
+    """The gate's result and the CPU seconds its run used (the process and its children): what the run costs, apart
+    from how busy the runner is. Wall time under xdist was 10.49 s on the slowest CI runner for a run of 3 s here
+    (2026-11-20). ``scale``: the gate runs with every rule's budget times ``scale`` (SCALED_GATE)."""
+    def used():
+        r = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return r.ru_utime + r.ru_stime
+    start = used()
+    if scale is None:
+        proc = gate(home, proj, "Bash", {"command": command}, actor)
+    else:
+        payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(proj), "session_id": "S1"}
+        if actor == "subagent":
+            payload["agent_id"] = "sub-1"
+        (home.path / "scaled-gate.py").write_text(SCALED_GATE % scale)
+        proc = home.hook("scaled-gate.py", payload)
+    return proc, used() - start
+
+
+# The write gate with a clock as fast as the runner that measured its budgets: each rule's wall budget (seconds of that
+# runner, test_write_gate.py::test_budgets_cover_the_measured_times) times this runner's slowness. A rule that
+# outgrows its budget still overruns here by the same factor; a slow or busy runner alone no longer does.
+SCALED_GATE = '''import dataclasses, os, runpy, sys
+gate = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hooks", "pretool-write-gate.py")
+sys.path.insert(0, os.path.dirname(gate))
+import lib.write_gate as write_gate
+write_gate.RULES = tuple(dataclasses.replace(r, budget=r.budget * %r) for r in write_gate.RULES)
+sys.argv = [gate]
+runpy.run_path(gate, run_name="__main__")
+'''
+# Wall seconds of an unpadded ordinary write through the gate on the runner the budgets were measured on (one CPU,
+# 2026-11-22: 0.21-0.34 CPU s).
+BUDGET_RUNNER_WALL = 0.35
+
+
+@pytest.fixture(scope="module")
+def slowness(guard_home, tmp_path_factory):
+    """How much slower than BUDGET_RUNNER_WALL this runner is now (never below 1): the least of three unpadded runs."""
+    p = tmp_path_factory.mktemp("slowness") / "proj"
+    (p / ".claude").mkdir(parents=True)
+    (p / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    walls = []
+    for _ in range(3):
+        start = time.monotonic()
+        proc, _ = timed_gate(guard_home, p, "echo '{\"env\": {}}' > notes.txt", scale=1.0)
+        walls.append(time.monotonic() - start)
+        assert proc.returncode == 0, proc.stderr
+    return max(1.0, min(walls) / BUDGET_RUNNER_WALL)
+
+
+# How many unpadded gate runs the gate's work beside the rule may cost for a padded command: the other rules and
+# Python's start, measured against this runner's own unpadded run, so a slower CPU raises both alike. Here
+# (2026-11-22, one CPU) an unpadded ordinary write took 0.21-0.34 CPU s and a 5000-padded one 3.0-3.3 CPU s.
+GATE_RUNS = 20
+
+
+@pytest.fixture(scope="module")
+def unpadded_cpu(guard_home, tmp_path_factory):
+    """CPU seconds of an unpadded ordinary write through the same gate, in this run: the least of three."""
+    p = tmp_path_factory.mktemp("unpadded") / "proj"
+    (p / ".claude").mkdir(parents=True)
+    (p / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
+    runs = [timed_gate(guard_home, p, "echo '{\"env\": {}}' > notes.txt") for _ in range(3)]
+    assert all(proc.returncode == 0 for proc, _ in runs), [proc.stderr for proc, _ in runs]
+    return min(took for _, took in runs)
 
 
 @pytest.mark.parametrize("pads", [300, 1000, 5000])
 @pytest.mark.parametrize("actor", ["main", "subagent"])
-def test_a_padded_settings_write_is_refused_within_the_budget(guard_home, proj, pads, actor):
+def test_a_padded_settings_write_is_refused_within_the_budget(guard_home, proj, pads, actor, unpadded_cpu, slowness):
     (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
-    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + ENV_WRITE, actor)
+    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + ENV_WRITE, actor, scale=slowness)
     assert proc.returncode == 2 and "harness-switch: this Bash command" in proc.stderr, proc.stderr
     assert "Claude Code settings file" in proc.stderr and "budget" not in proc.stderr, proc.stderr  # its own refusal
     # The gate enforces the rule budget itself (no "budget" line above); the whole gate process also
-    # starts Python and runs the other rules, which a shared CI runner slows (5.08 s on 3.11, 2026-11-18).
-    assert took < rule_budget("harness-switch") + 5.0, took  # the whole gate, the rule's run inside it
+    # starts Python and runs the other rules: its CPU seconds are held to GATE_RUNS unpadded runs of this runner.
+    assert took < rule_budget("harness-switch") + GATE_RUNS * unpadded_cpu, (took, unpadded_cpu)
 
 
 @pytest.mark.parametrize("pads", [300, 1000, 5000])
 @pytest.mark.parametrize("target", ["notes.txt", "config/settings.json"])
-def test_a_padded_ordinary_write_is_still_allowed(guard_home, proj, pads, target):
+def test_a_padded_ordinary_write_is_still_allowed(guard_home, proj, pads, target, unpadded_cpu, slowness):
     (proj / ".claude" / "settings.local.json").write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
     (proj / "config").mkdir()
-    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + "echo '{\"env\": {}}' > " + target)
+    proc, took = timed_gate(guard_home, proj, "cd . && " * pads + "echo '{\"env\": {}}' > " + target,
+                            scale=slowness)
     assert proc.returncode == 0 and "harness-switch" not in proc.stderr and "budget" not in proc.stderr, proc.stderr
     # The gate enforces the rule budget itself (no "budget" line above); the whole gate process also
-    # starts Python and runs the other rules, which a shared CI runner slows (5.08 s on 3.11, 2026-11-18).
-    assert took < rule_budget("harness-switch") + 5.0, took
+    # starts Python and runs the other rules: its CPU seconds are held to GATE_RUNS unpadded runs of this runner.
+    assert took < rule_budget("harness-switch") + GATE_RUNS * unpadded_cpu, (took, unpadded_cpu)
 
 
 @pytest.mark.parametrize("command", [
@@ -907,13 +990,26 @@ def allow(home, proj, text, session):
     assert (Path(home.env["CLAUDE_STATE_DIR"]) / "claude-grants" / ("%s.json" % session)).is_file()
 
 
-def spent(home, proj, tool, tool_input, session, actor="main"):
-    """The call ran: the registered PostToolUse consumer spends the grant it used."""
-    payload = {"hook_event_name": "PostToolUse", "tool_name": tool, "tool_input": tool_input, "session_id": session,
-               "cwd": str(proj), "tool_response": {"stdout": "", "stderr": "", "interrupted": False}}
+def launched(home, proj, tool, tool_input, actor, session, n):
+    """The call as the CLI makes it: through the registered pre-tool launcher, where the switch guard is a rule
+    and where an /allow grant is released (lib/hook_launch.release_refused); the guard itself reads no grant."""
+    payload = {"tool_name": tool, "tool_input": tool_input, "cwd": str(proj), "session_id": session,
+               "tool_use_id": "toolu_%s_%d" % (session, n)}
     if actor == "subagent":
-        payload["agent_id"] = "sub-1"
-    run([PY, str(home.path / "hooks" / "posttool-allowlist-consume.py")], proj, home.env, json.dumps(payload))
+        payload.update(agent_id="sub-1", agent_type="dev")
+    return home.hook("hooks/pretool-launch.py", payload)
+
+
+def refused_by_the_switch(proc):
+    return proc.returncode == 2 and "harness-switch:" in proc.stderr and "Claude Code settings file" in proc.stderr
+
+
+def released(proc):
+    return proc.returncode == 0 and "harness-switch:" not in proc.stderr and "[allow] RELEASED" in proc.stdout
+
+
+def grant_left(home, session):
+    return (Path(home.env["CLAUDE_STATE_DIR"]) / "claude-grants" / ("%s.json" % session)).is_file()
 
 
 @pytest.mark.parametrize("actor", ["main", "subagent"])
@@ -922,18 +1018,20 @@ def test_an_allow_grant_naming_the_command_lets_one_bash_write_through(guard_hom
     target.write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
     command = "sed -i s/on/off/ .claude/settings.local.json"
     session = "grant-bash-" + actor
-    assert gate(guard_home, proj, "Bash", {"command": command}, actor, session).returncode == 2
+    assert refused_by_the_switch(launched(guard_home, proj, "Bash", {"command": command}, actor, session, 1))
     allow(guard_home, proj, command, session)
-    other = gate(guard_home, proj, "Bash", {"command": "rm .claude/settings.local.json"}, actor, session)
-    assert other.returncode == 2  # the grant names one command, not this one
-    proc = gate(guard_home, proj, "Bash", {"command": command}, actor, session)
-    assert proc.returncode == 0 and "harness-switch:" not in proc.stderr, proc.stderr  # a Bash grant reaches a subagent
-    spent(guard_home, proj, "Bash", {"command": command}, session, actor)
-    assert gate(guard_home, proj, "Bash", {"command": command}, actor, session).returncode == 2
+    other = launched(guard_home, proj, "Bash", {"command": "rm .claude/settings.local.json"}, actor, session, 2)
+    assert refused_by_the_switch(other) and grant_left(guard_home, session)  # the grant names one command, not this one
+    proc = launched(guard_home, proj, "Bash", {"command": command}, actor, session, 3)
+    assert released(proc), (proc.returncode, proc.stdout, proc.stderr)  # a subagent's refused call is released too
+    assert not grant_left(guard_home, session)  # spent by the release itself
+    again = launched(guard_home, proj, "Bash", {"command": command}, actor, session, 4)
+    assert refused_by_the_switch(again), again.stderr  # once: the switch keys are the owner's again
 
 
+@pytest.mark.parametrize("first", ["main", "subagent"])
 @pytest.mark.parametrize("tool, grant", [("Write", "Write {T}"), ("Write", "Write"), ("Edit", "Edit"), ("MultiEdit", "MultiEdit")])
-def test_an_allow_grant_lets_one_main_agent_write_through_and_never_a_subagents(guard_home, proj, tool, grant):
+def test_an_allow_grant_lets_one_write_through_whoever_makes_it(guard_home, proj, tool, grant, first):
     target = proj / ".claude" / "settings.json"
     if tool == "Write":
         tool_input = {"file_path": str(target), "content": '{"env": {"CLAUDE_COMMAND_GATE": "off"}}'}
@@ -941,14 +1039,34 @@ def test_an_allow_grant_lets_one_main_agent_write_through_and_never_a_subagents(
         target.write_text('{"env": {"CLAUDE_COMMAND_GATE": "on"}}')
         edit = {"old_string": '"on"', "new_string": '"off"'}
         tool_input = dict(edit, file_path=str(target)) if tool == "Edit" else {"file_path": str(target), "edits": [edit]}
-    session = "grant-%s-%s" % (tool, grant.split()[-1] == "{T}")
+    other_tool = "NotebookEdit" if tool == "Write" else "Write"
+    session = "grant-%s-%s-%s" % (tool, grant.split()[-1] == "{T}", first)
+    second = "main" if first == "subagent" else "subagent"
     allow(guard_home, proj, grant.replace("{T}", str(target)), session)
-    sub = gate(guard_home, proj, tool, tool_input, "subagent", session)
-    assert sub.returncode == 2 and "Claude Code settings file" in sub.stderr  # a Write or tool grant is the main agent's
-    proc = gate(guard_home, proj, tool, tool_input, "main", session)
-    assert proc.returncode == 0 and "harness-switch:" not in proc.stderr, proc.stderr
-    spent(guard_home, proj, tool, tool_input, session)
-    assert gate(guard_home, proj, tool, tool_input, "main", session).returncode == 2
+    if grant == tool:  # a grant naming a tool releases no refused call of another tool
+        nb = launched(guard_home, proj, other_tool, {"file_path": str(target), "content": "{}", "new_source": "{}",
+                                                     "notebook_path": str(target)}, first, session, 1)
+        assert nb.returncode == 2 and "[allow] RELEASED" not in nb.stdout and grant_left(guard_home, session), nb.stderr
+    proc = launched(guard_home, proj, tool, tool_input, first, session, 2)
+    assert released(proc), (proc.returncode, proc.stdout, proc.stderr)
+    assert not grant_left(guard_home, session)
+    for n, actor in enumerate((second, first), 3):  # one call of the session, whoever: then refused for both again
+        assert refused_by_the_switch(launched(guard_home, proj, tool, tool_input, actor, session, n)), actor
+
+
+def test_an_agents_own_allow_prompt_makes_no_grant(guard_home, proj):
+    """Only the owner's typed prompt grants: a prompt payload of a subagent writes nothing, so its refused
+    settings write stays refused."""
+    session = "grant-by-agent"
+    target = proj / ".claude" / "settings.local.json"
+    payload = {"hook_event_name": "UserPromptSubmit", "prompt": "/allow", "session_id": session, "cwd": str(proj),
+               "transcript_path": str(guard_home.transcript), "agent_id": "sub-1"}
+    run(["bash", str(guard_home.path / "hooks" / "userprompt-consent-allowlist.sh")], proj,
+        dict(guard_home.env, CLAUDE_PROJECT_DIR=str(proj)), json.dumps(payload))
+    assert not grant_left(guard_home, session)
+    proc = launched(guard_home, proj, "Write", {"file_path": str(target),
+                                                "content": '{"env": {"CLAUDE_COMMAND_GATE": "off"}}'}, "subagent", session, 1)
+    assert refused_by_the_switch(proc), proc.stderr
 
 
 def test_an_allow_grant_does_not_open_disable_all_hooks(guard_home, proj):

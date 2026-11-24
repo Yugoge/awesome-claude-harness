@@ -7,7 +7,9 @@ text of a readable literal script file, and the guard judges them:
 
   - inline code (python/python3 -c, node -e, perl -e, ruby -e): the token `git`
     then a guarded subcommand, quotes and list punctuation between them. It is
-    lexical and conservative: `python3 -c 'print("git push")'` is refused too.
+    lexical and conservative for perl, ruby and node. Python is read as code
+    (the removal analyzer's reading): only what it starts counts, so
+    `python3 -c 'print("git push")'` passes (it was refused until 2026-11-20).
   - a script file (`bash`, `sh`, `source`, `.`, `./x.sh`) that exists and is
     readable relative to the payload's cwd, read as shell text.
 
@@ -49,7 +51,6 @@ MUST_REFUSE = [
     "python3 -c 'import os; os.system(\"git push\")'",
     "python3 -c \"import subprocess; subprocess.run('git push', shell=True)\"",
     "python3 -c 'import subprocess; subprocess.run([\"git\", \"-C\", \"x\", \"commit\", \"-m\", \"m\"])'",
-    "python3 -c 'print(\"git push\")'",  # conservative: lexical
     "node -e 'require(\"child_process\").execSync(\"git push origin master\")'",
     "node -e 'require(\"child_process\").execFileSync(\"git\", [\"merge\", \"feature\"])'",
     "node --eval='require(\"child_process\").execSync(\"git rebase main\")'",
@@ -77,6 +78,7 @@ MUST_REFUSE = [
 
 MUST_PASS = [
     "python3 -c 'print(1)'",
+    "python3 -c 'print(\"git push\")'",  # Python is read as code: a string it prints starts nothing
     "python3 -c 'import subprocess; subprocess.run([\"git\",\"status\"])'",
     "node -e 'console.log(1)'",
     "ruby -e 'system(\"git branch -a\")'",
@@ -110,7 +112,7 @@ def _sandbox(tmp_path):
     return repo, env
 
 
-def _run(command, cwd, env, subagent):
+def _run(command, cwd, env, subagent, hook_cwd=None):
     payload = {"session_id": "hidden-git-0001", "tool_name": "Bash",
                "tool_input": {"command": command}, "cwd": str(cwd),
                "hook_event_name": "PreToolUse", "transcript_path": "",
@@ -118,7 +120,7 @@ def _run(command, cwd, env, subagent):
     if subagent:
         payload.update(agent_id="agent-hidden-git", agent_type="general-purpose")
     return subprocess.run([sys.executable, "-B", str(GUARD)], input=json.dumps(payload),
-                          text=True, capture_output=True, cwd=str(cwd), env=env, timeout=120)
+                          text=True, capture_output=True, cwd=str(hook_cwd or cwd), env=env, timeout=120)
 
 
 @pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
@@ -147,6 +149,35 @@ def test_the_harness_wrappers_are_not_read(tmp_path, subagent):
                     'bash "%s" feature' % (HOOKS / "merge.sh")):
         proc = _run(command, ROOT, env, subagent)
         assert proc.returncode == 0, (command, proc.stderr)
+
+
+@pytest.mark.parametrize("subagent", [False, True], ids=["main", "subagent"])
+def test_a_script_is_read_in_the_calls_directory_not_the_hooks(tmp_path, subagent):
+    # The call runs in the repository, whose push.sh pushes; the hook process runs in another directory,
+    # whose push.sh is harmless, or which has none. The script named relative is read where the call runs.
+    repo, env = _sandbox(tmp_path)
+    harmless, empty = tmp_path / "harmless", tmp_path / "empty"
+    for d in (harmless, empty):
+        d.mkdir()
+    (harmless / "push.sh").write_text(SCRIPTS["scripts/harmless.sh"])
+    (harmless / "push.sh").chmod(0o755)
+    for hook_dir in (repo, harmless, empty):
+        for command in ("bash push.sh", "./push.sh", "source push.sh", "bash %s" % (repo / "push.sh")):
+            proc = _run(command, repo, env, subagent, hook_cwd=hook_dir)
+            assert proc.returncode == 2 and "BLOCKED" in proc.stderr, (hook_dir, command, proc.stderr)
+    # and the other way round: the call runs where push.sh is harmless, the hook where it pushes
+    for command in ("bash push.sh", "./push.sh", "bash %s" % (harmless / "push.sh")):
+        proc = _run(command, harmless, env, subagent, hook_cwd=repo)
+        assert proc.returncode == 0, (command, proc.stderr)
+    # A cd in the command moves where the script is read: to the literal directory it names; a cd the guard
+    # cannot follow leaves the relative script unproven, refused, never read as empty.
+    (harmless / "sub").mkdir()
+    (harmless / "sub" / "push.sh").write_text(SCRIPTS["push.sh"])
+    for command, rc in (("cd sub && bash push.sh", 2), ("cd sub; ./push.sh", 2), ("(cd sub) && bash push.sh", 0),
+                        ('cd "$D" && bash push.sh', 2), ('cd "$D" && bash %s' % (harmless / "push.sh"), 0)):
+        for hook_dir in (harmless, empty):
+            proc = _run(command, harmless, env, subagent, hook_cwd=hook_dir)
+            assert proc.returncode == rc, (hook_dir, command, proc.stderr)
 
 
 def test_hidden_git_texts_reads_code_and_scripts(tmp_path):

@@ -59,10 +59,8 @@ for folder in "${FOLDERS[@]}"; do
     LINE_COUNT=0
   fi
 
-  # Get file counts in folder
   FILE_COUNT=$(find "$FOLDER_PATH" -maxdepth "$MAX_DEPTH" -type f ! -path "*/.git/*" ! -path "*/venv/*" ! -path "*/__pycache__/*" 2>/dev/null | wc -l)
 
-  # Get subfolder count
   SUBFOLDER_COUNT=$(find "$FOLDER_PATH" -mindepth 1 -maxdepth 1 -type d ! -name ".git" ! -name "venv" ! -name "__pycache__" 2>/dev/null | wc -l)
 
   $FIRST || echo ","

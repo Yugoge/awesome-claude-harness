@@ -27,13 +27,14 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 HOOK = REPO / "hooks" / "pretool-bash-safety.sh"
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 sys.path.insert(0, str(REPO / "hooks"))
 from lib.runtime_guard.config import REQUIRED_KEYS  # noqa: E402
 
 KNOBS = (
     "CLAUDE_DEV_CONTAINERS", "CLAUDE_DEV_SYSTEMD", "CLAUDE_DAEMON_RESTART_GRANT_HELPER",
     "CLAUDE_PROTECTED_DAEMON_PREFIX", "CLAUDE_PROTECTED_DAEMON_TARGETS",
-    "CLAUDE_PROTECTED_PROCESS_FAMILY", "CLAUDE_HARD_BANNED_SCRIPTS", "CLAUDE_HOME",
+    "CLAUDE_HARD_BANNED_SCRIPTS", "CLAUDE_HOME",
     "CLAUDE_TASK_ID", "CLAUDE_COMMAND_GATE",
 )
 
@@ -50,7 +51,7 @@ def env(tmp_path):
         "HOME": str(tmp_path / "home"),
         "CLAUDE_CONFIG_DIR": str(tmp_path / "config"),
         "CLAUDE_STATE_DIR": str(tmp_path / "state"),
-        "CLAUDE_DAEMON_RESTART_GRANT_DIR": str(tmp_path / "grants"),
+        "CLAUDE_DAEMON_RESTART_SENTINEL_DIR": str(tmp_path / "grants"),
         "CLAUDE_PROTECTED_RUNTIME_FILE": str(runtime),
         "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
     })
@@ -61,7 +62,7 @@ def hook(env, command, **extra):
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command},
                           "session_id": "hard-ban-noexec-test"})
     return subprocess.run(["bash", str(HOOK)], input=payload, text=True, capture_output=True,
-                          env={**env, **extra}, timeout=120)
+                          env={**env, **extra}, timeout=HANG_GUARD)
 
 
 @pytest.mark.parametrize("command", (
@@ -201,4 +202,15 @@ def test_hard_ban_rule_itself_refuses_quote_split_forms(command, monkeypatch, ca
 def test_explicit_value_keeps_match_anywhere(env):
     """A set CLAUDE_HARD_BANNED_SCRIPTS keeps its match-anywhere meaning: the noexec reading is the default's."""
     r = hook(env, "bash -n scripts/demo-recovery.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery")
+    assert r.returncode == 2 and "hard-banned script 'demo-recovery'" in r.stderr
+
+
+@pytest.mark.parametrize("program", ["/usr/bin/cat", "/usr//bin/cat", "/usr/bin/../bin/cat", "cat"])
+def test_a_read_is_a_read_however_the_program_directory_is_spelled(env, program):
+    """g-loctriage U39: the same program, named through another spelling of its directory, gets the same verdict;
+    running the script stays refused in every spelling."""
+    r = hook(env, f"{program} demo-recovery.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery")
+    assert r.returncode == 0 and "hard-banned script" not in r.stderr, r.stderr
+    shell = program.replace("cat", "bash")
+    r = hook(env, f"{shell} demo-recovery.sh", CLAUDE_HARD_BANNED_SCRIPTS="demo-recovery")
     assert r.returncode == 2 and "hard-banned script 'demo-recovery'" in r.stderr

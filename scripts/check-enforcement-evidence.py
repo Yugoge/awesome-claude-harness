@@ -69,13 +69,15 @@ runs in CI does not.
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
 
 # ---------------------------------------------------------------------------
 # THE SINGLE DECLARED SOURCE.
@@ -156,7 +158,6 @@ AUTHORED_ROW_FIELDS = ["row_id", "mode/precondition", "behavior", "exercise_stat
 
 # Values recorded at the revision named below. Any drift from them is a FAILURE, not an update:
 # the published claim must break loudly rather than silently describe a boundary that moved.
-RECORDED_AT = "4c33f2f5"
 
 # Re-recorded 2026-09-03: _command_token_index() was taught the shell reserved
 # words, leading redirections and wrapper option flags it never handled, so the
@@ -175,7 +176,7 @@ RECORDED_REDIRECTION_OPS = ["2>/dev/null", ">", ">>", "<", "2>&1", "&>", "1>"]
 # adding '/' to the class would change the residual class, so the published table must fail.
 RECORDED_PY_ANCHOR = "(?:^|[\\s;&|()`])git"
 
-# Gate-architecture census, counted at RECORDED_AT.
+# Gate-architecture census, counted at 4c33f2f5.
 #   A = classifier-primary with a MUTUALLY EXCLUSIVE regex fallback guarded by
 #       [ "$CLASSIFIER_STATUS" != "ok" ]. This is the shape where a successful-but-empty parse
 #       suppresses the backstop.
@@ -1333,12 +1334,7 @@ def main(argv=None):
     if args.root:
         root = Path(args.root)
     else:
-        try:
-            root = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                                       capture_output=True, text=True, timeout=30,
-                                       check=True).stdout.strip())
-        except Exception:  # noqa: BLE001
-            root = Path.cwd()
+        root = Path(locations.repo_top(os.getcwd()) or Path.cwd())  # never the filesystem root
     # Resolved once and written back, so companion-document existence resolves against the
     # SAME root a negative fixture was built in.
     args.root = str(root)

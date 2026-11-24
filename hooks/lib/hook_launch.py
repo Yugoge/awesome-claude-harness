@@ -47,8 +47,11 @@ answered for by the watchdog the same way (``emergency``).
 
 The answer (``combine``) is what the CLI makes of the hooks' answers together:
 - a refusal (exit 2, a ``deny``, or a ``block`` decision) from any hook: exit 2, the
-  refusals' reasons in rule order on stderr;
-- ``continue: false`` from any hook: that JSON, stopping the turn;
+  refusals' reasons in rule order on stderr, then what the other hooks printed for the model
+  and the user (``additionalContext``, ``systemMessage``, plain context), each text once;
+- ``continue: false`` from any hook: that JSON, stopping the turn, the other hooks'
+  texts added to its ``systemMessage``. A hook that records it warned and then stays silent
+  (pretool-worktree-guard.sh, doc_sync/notice.py) is right only if its warning was delivered;
 - else one hook's output alone is passed on as it is; several are merged into one
   JSON object: the strongest permission decision (defer > ask > allow), the first
   ``updatedInput``, every ``additionalContext`` (and, on the events whose plain
@@ -84,17 +87,9 @@ HOOKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_TIMEOUT = 60.0          # the CLI's default hook timeout, seconds
 RECORD_ENV = "CLAUDE_HOOK_LAUNCH_RECORD_FD"
 MARK_ENV = "CLAUDE_HOOK_LAUNCH_MARKS"  # a traced replay's marker directory (tests/replay/trace.py)
-TOOL_EVENTS = frozenset({"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"})
+from lib.hook_launch_fallback import TOOL_EVENTS  # noqa: E402 -- the stdlib-only fallback holds the one list
 PLAIN_CONTEXT_EVENTS = frozenset({"UserPromptSubmit", "SessionStart"})
 TIMEOUT = "timeout"             # a hook's status when it ran past its timeout
-# Standard-library modules imported once before the forks, so each fork does not import them again:
-# pkgutil is the runner's own (runpy.run_path imports it for every file); pathlib (most hooks, through
-# their libraries), datetime and shlex are what the hooks import most. Their import runs only their own
-# definitions (no file, environment, working directory, signal or other module of the process changes),
-# and the one-after-another run already gave every hook after the first that imports one the module
-# loaded, so a fork that finds one loaded decides and prints as the hook did alone. Never a harness
-# module (hooks/, scripts/): a hook's library must load in the hook's own fork.
-WARM = ("pkgutil", "pathlib", "datetime", "shlex")
 
 
 @dataclass(frozen=True)
@@ -159,6 +154,15 @@ def selected(rules, event: str, raw: bytes) -> list:
 
 # ------------------------------------------------------------------ combining
 
+def _said(event: str, r, out) -> tuple[list, list]:
+    """What one hook's printed answer tells: (its contexts for the model, its messages for the user)."""
+    if out is None:
+        return ([r.stdout.strip()] if event in PLAIN_CONTEXT_EVENTS else []), []
+    hso = out.get("hookSpecificOutput") if isinstance(out.get("hookSpecificOutput"), dict) else {}
+    ctx = hso.get("additionalContext") if hso.get("hookEventName") in (None, event) else None
+    return ([str(ctx)] if ctx else []), ([str(out["systemMessage"])] if out.get("systemMessage") else [])
+
+
 def combine(event: str, results) -> tuple[int, str, str]:
     """(exit status, stdout, stderr) the hooks' results give together, as the CLI reads them."""
     refusals, errors, stops, answers = [], [], [], []
@@ -183,10 +187,16 @@ def combine(event: str, results) -> tuple[int, str, str]:
                 refusals.append(str(out.get("reason") or r.stderr))
                 continue
         answers.append((r, out))
+    # The other hooks' warnings go out with a stop or a refusal too: a hook that records it warned (and then stays
+    # silent) is right only if what it printed was delivered.
+    said = [t for r, out in answers if r.stdout.strip() for part in _said(event, r, out) for t in part]
+    said = [t for i, t in enumerate(said) if t not in said[:i]]
     if stops:  # continue: false ends the turn, whatever else the hooks decided
-        return 0, json.dumps(stops[0]) + "\n", ""
+        stop = stops[0] if not said else {**stops[0], "systemMessage": "\n".join(
+            [str(stops[0]["systemMessage"])] * bool(stops[0].get("systemMessage")) + said)}
+        return 0, json.dumps(stop) + "\n", ""
     if refusals:
-        return 2, "", "".join(t if t.endswith("\n") else t + "\n" for t in refusals if t)
+        return 2, "", "".join(t if t.endswith("\n") else t + "\n" for t in refusals + said if t)
     printed = [(r, out) for r, out in answers if r.stdout.strip()]
     err_text = "".join(e if e.endswith("\n") else e + "\n" for e in errors if e)
     quiet = "".join(r.stderr for r, _ in answers)  # an exit-0 hook's stderr reaches no one
@@ -198,9 +208,10 @@ def combine(event: str, results) -> tuple[int, str, str]:
     spec: dict = {}
     contexts, messages, decisions = [], [], {}
     for r, out in printed:
+        ctx, msg = _said(event, r, out)
+        contexts += ctx
+        messages += msg
         if out is None:
-            if event in PLAIN_CONTEXT_EVENTS:
-                contexts.append(r.stdout.strip())
             continue
         hso = out.get("hookSpecificOutput") if isinstance(out.get("hookSpecificOutput"), dict) else {}
         if hso.get("hookEventName") not in (None, event):
@@ -212,10 +223,6 @@ def combine(event: str, results) -> tuple[int, str, str]:
             decisions.setdefault("allow", []).append(str(out.get("reason") or ""))
         if isinstance(hso.get("updatedInput"), dict) and "updatedInput" not in spec:
             spec["updatedInput"] = hso["updatedInput"]
-        if hso.get("additionalContext"):
-            contexts.append(str(hso["additionalContext"]))
-        if out.get("systemMessage"):
-            messages.append(str(out["systemMessage"]))
         if out.get("suppressOutput"):
             merged["suppressOutput"] = True
     for d in ("defer", "ask", "allow"):
@@ -242,7 +249,7 @@ def run_process(rule: Rule, raw: bytes, timeout: float | None = None) -> Result:
     """The hook as its own process, as the CLI ran it."""
     t0 = time.monotonic()
     try:
-        p = subprocess.run([sys.executable, rule.file], input=raw, capture_output=True,
+        p = subprocess.run(["bash" if rule.path.endswith(".sh") else sys.executable, rule.file], input=raw, capture_output=True,
                            timeout=timeout if timeout is not None else rule.timeout)
         return Result(rule, p.returncode, p.stdout.decode("utf-8", "replace"),
                       p.stderr.decode("utf-8", "replace"), time.monotonic() - t0, "process")
@@ -309,7 +316,7 @@ class Dispatch:
             from lib import rule_fork
             if not rule_fork.can_fork():
                 return False
-            for name in WARM:
+            for name in rule_fork.WARM:
                 __import__(name)
             index = {r.name: i for i, r in enumerate(self.rules)}
             jobs = [rule_fork.Job(r.file, self.raw, r.timeout,
@@ -350,6 +357,10 @@ class Dispatch:
         self.results = done
         code, out, err = combine(self.event, done)
         self.record()
+        released = release_refused(self.event, done, self.raw, code, out, err)
+        if released[0] == code:
+            refused(self.event, done, self.raw, code)
+        code, out, err = released
         _write(self.real[0], out)
         _write(self.real[1], err)
         from lib.rule_runner import _REAL_OS_EXIT
@@ -388,6 +399,94 @@ def _write(fd, text: str) -> None:
         data = data[n:]
 
 
+def refused(event: str, results, raw: bytes, code) -> None:
+    """A report to the refusal record (lib/refusal_record.py) when the answer is a refusal: each refusing hook
+    with its own reason, as ``combine`` reads that hook alone. Nothing here changes the answer."""
+    if code != 2:
+        return
+    try:
+        from . import refusal_record
+        rules = [(r.rule.file, alone[2]) for r in results for alone in [combine(event, [r])] if alone[0] == 2]
+        refusal_record.report(raw, rules, os.path.join(HOOKS, os.path.basename(sys.argv[0])))
+    except Exception:
+        pass
+
+
+def release_refused(event: str, results, raw: bytes, code, out: str, err: str):
+    """The one place an /allow grant lets a refusal through: a PreToolUse answer that refuses (``code``
+    2), whichever rules refused, goes to lib/allowlist.release; when the session's grant fits the call
+    it is spent and the answer is the other rules' answer with a notice for the owner (systemMessage)
+    and the agent (additionalContext), and the refusal record holds the call as released. Any other
+    answer (another event, no refusal, no grant, a fault) is returned as it came."""
+    if event != "PreToolUse" or code != 2:
+        return code, out, err
+    try:
+        from . import allowlist
+        payload = json.loads(raw)
+        grant = allowlist.release(payload)
+        if grant is None:
+            return code, out, err
+        refusing = [(r, alone[2]) for r in results for alone in [combine(event, [r])] if alone[0] == 2]
+        c2, o2, e2 = combine(event, [r for r in results if not any(r is x for x, _ in refusing)])
+        merged = _json(o2) or {}
+        said = next((ln.strip() for _, t in refusing for ln in t.splitlines() if ln.strip()), "")
+        notice = (f"[allow] RELEASED by the owner's /allow grant ({allowlist.describe(grant['scope'])}): the "
+                  f"{payload.get('tool_name')} call refused by {', '.join(r.rule.path for r, _ in refusing)}"
+                  f"{' (' + said[:200] + ')' if said else ''}. The grant is spent: the next refused call is refused."
+                  f"{snapshot_before_clean(payload)}")
+        hso = merged.get("hookSpecificOutput") if isinstance(merged.get("hookSpecificOutput"), dict) else {}
+        hso = {**hso, "hookEventName": event,
+               "additionalContext": "\n".join(t for t in (hso.get("additionalContext"), notice) if t)}
+        merged["hookSpecificOutput"] = hso
+        merged["systemMessage"] = "\n".join(t for t in (merged.get("systemMessage"), e2.rstrip("\n") if c2 == 1 else "",
+                                                       notice) if t)
+        try:
+            from . import refusal_record
+            refusal_record.report(raw, [(r.rule.file, t) for r, t in refusing],
+                                  os.path.join(HOOKS, os.path.basename(sys.argv[0])), kind=refusal_record.RELEASED)
+        except Exception:
+            pass
+        return 0, json.dumps(merged) + "\n", e2 if c2 != 1 else ""
+    except Exception:  # noqa: BLE001 - a fault releases nothing
+        return code, out, err
+
+
+def snapshot_before_clean(payload) -> str:
+    """The pre-clean snapshot /do's release takes (hooks/pretool-bash-safety.sh _preclean_snapshot_guard), taken
+    for a released call too: a command lib/git_clean_guard reads as a destructive `git clean` of the call's working
+    directory gets lib/checkpoint-core.sh write_checkpoint there before it runs. Returns the notice's sentence on it
+    ("" for no clean). A snapshot that cannot be taken does not take the release back: the sentence says why."""
+    from . import allowlist
+    ti = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    command = ti.get("command")
+    if payload.get("tool_name") not in allowlist.COMMAND_TOOLS or not isinstance(command, str):
+        return ""
+    try:
+        from . import git_clean_guard
+        verdict, reason = git_clean_guard.decide(command)
+    except Exception as exc:  # noqa: BLE001 - unclassifiable: no snapshot, said
+        verdict, reason = "DENY", f"the pre-clean guard could not classify the command ({type(exc).__name__})"
+    if verdict == "NONE":
+        return ""
+    if verdict != "SNAPSHOT":
+        return f" No pre-clean snapshot was taken: {reason}."
+    cwd = payload.get("cwd")
+    script = ('. "$1" || exit 90; mkdir -p "$CHECKPOINT_LOG_DIR" 2>/dev/null; write_checkpoint "" "$2"; rc=$?; '
+              '[ -z "$checkpoint_left_out" ] || rc="3 (it left out $checkpoint_left_out)"; printf "%s\\n%s\\n" "$rc" '
+              '"$checkpoint_ref"')
+    try:
+        p = subprocess.run(["bash", "-c", script, "snapshot", os.path.join(HOOKS, "lib", "checkpoint-core.sh"),
+                            f"pre-clean WIP snapshot before granted: {command}"], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, cwd=cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None)
+        rc, ref = (p.stdout.split("\n") + ["", ""])[:2]
+    except (OSError, ValueError) as exc:
+        rc, ref, p = f"none: {exc}", "", None
+    if rc == "0" and ref:
+        return f" Untracked work was snapshotted to {ref} before the clean; recover with 'git show {ref}:<path>'."
+    return (f" The pre-clean snapshot FAILED (write_checkpoint rc={rc or (p and p.returncode)}; see the checkpoint log): "
+            "untracked work the clean removes may be unrecoverable.")
+
+
 def record_fd():
     """The descriptor the replay runner asked the results on, taken out of the environment."""
     value = os.environ.pop(RECORD_ENV, "")
@@ -415,6 +514,11 @@ def main(event: str, rules, raw: bytes | None = None) -> int:
         from lib import hook_launch_fallback
         code, out, err = hook_launch_fallback.minimal(d.results)
     d.record()
+    released = release_refused(event, d.results, raw, code, out, err)
+    if released[0] != code:
+        code, out, err = released
+    else:
+        refused(event, d.results, raw, code)
     _write(1, out)
     _write(2, err)
     return code

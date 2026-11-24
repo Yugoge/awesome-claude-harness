@@ -31,10 +31,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.harness_state_dir import harness_state_dir  # noqa: E402
+from lib.harness_vocabulary import RUN_CODE_TOOLS  # noqa: E402
 
-RUN_CODE_TOOLS = frozenset(
-    {"mcp__playwright__browser_run_code", "mcp__paseo__browser_run_code"}
-)
 
 
 def _cancel_watchdog(pid_file: str):
@@ -75,7 +73,7 @@ def main():
     if data.get("tool_name") not in RUN_CODE_TOOLS:
         sys.exit(0)
 
-    session_id = os.environ.get("CLAUDE_SESSION_ID", "default")
+    session_id = str(data.get("session_id") or "default").replace("/", "_")  # the CLI never exports CLAUDE_SESSION_ID
     pid_file = f"{harness_state_dir()}/.runcode-watchdog-{session_id}.pid"
 
     if os.path.exists(pid_file):

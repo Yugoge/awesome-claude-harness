@@ -76,7 +76,7 @@ import re
 from .. import agents, cmdtext, roles
 from ..pipeline import DROP, DROP_NEXT, Deviations, Orchestrator, Respelling, utc_now
 from . import _round
-from .dev import with_lines
+from .dev import S, Steps, with_lines
 
 PIPELINE = "dev-command"
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
@@ -89,9 +89,21 @@ REQUIREMENT = ("add a project slash command named test (.claude/commands/test.md
                "package tests with python3 -m pytest -q tests/ and reports the result")
 KEYWORD = "test"  # the retry-signal keyword the orchestrator takes from the request
 
-# The step map of commands/dev-command.md: this file's step -> the /dev step it follows.
-DEV_STEP = {**{n: n for n in range(1, 11)}, 11: 12, 12: 13, 13: 14, 14: 15, 15: 16, 16: 17,
-            "4a": "4a", "4b": "4b", "4c": "4c"}
+# /dev-command's steps by what each is, from its own canonical list (scripts/todo/dev-command.py): the same headings
+# and roles as /dev's but the canonical aggregate (drivers/dev.py Steps; a step gone or a role changed raises).
+DC = Steps(command="dev-command", what={k: v for k, v in Steps.WHAT.items() if k != "aggregate"})
+# The step map of commands/dev-command.md: this file's step -> the /dev step it follows (the same heading).
+DEV_STEP = {**{getattr(DC, k): getattr(S, k) for k in DC._what}, "4a": "4a", "4b": "4b", "4c": "4c"}
+# The parts of the requirement round: Steps 4a-4c in a text before the integer step numbers, sub-headings of
+# Step 4 since (the same names in commands/dev.md and this file).
+ROUND_PART = {"4a": "Panel QA Writes Round 1", "4b": "Ask Each Round with AskUserQuestion", "4c": "BA Analysis"}
+
+
+def heading(text: str, step) -> str:
+    """The heading of Step <step> in `text`: a round part's sub-heading where the text has no lettered step."""
+    if step in ROUND_PART and not re.search(rf"^#+\s+Step {step}\b", text, re.M):
+        return ROUND_PART[step]
+    return f"Step {step}"
 # The lines of /dev's templates that commands/dev-command.md says to leave out (no test-writer or baseline here).
 OMITTED = (r"^\s*baseline_(?:head_sha|dirty_snapshot):",
            r"^\s*Generated tests \(when test-writer ran\)", r"^\s*Per-task active test manifest")
@@ -99,7 +111,7 @@ OMITTED = (r"^\s*baseline_(?:head_sha|dirty_snapshot):",
 PROJECT_ROOT_PREFIX = 'CLAUDE_PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" '
 RESPELLINGS = [
     Respelling("R1 resolver", r"(?<![\w/~.-])python3 scripts/resolve-dev-artifact-chain\.py",
-               "python3 ~/.claude/scripts/resolve-dev-artifact-chain.py", "commands/dev-command.md Step 16"),
+               "python3 ~/.claude/scripts/resolve-dev-artifact-chain.py", f"commands/dev-command.md Step {DC.report}"),
     Respelling("R2 qa_mode flip", r"(?<!\" )(?<![\w=])bash ~/\.claude/scripts/write-qa-mode\.sh",
                PROJECT_ROOT_PREFIX + "bash ~/.claude/scripts/write-qa-mode.sh",
                "commands/dev-command.md Steps 7, 12"),
@@ -180,7 +192,7 @@ class DevCommandCycle:
             (r"^DEV_SESSION_ID$", lambda m: self.reg),
             (r"^(?:timestamp|task_id|task-id|TASK_ID)$", lambda m: self.tid),
             (r"^(?:YYYYMMDD-HHMMSS|same timestamp)$", lambda m: self.digits),
-            (r"^(?:requirement from Step 1|original requirement|requirement)$", REQUIREMENT),
+            (rf"^(?:requirement from Step {DC.parse}|original requirement|requirement)$", REQUIREMENT),
             (r"^spec_path or null$", lambda m: self.spec_path or "null"),
             (r"any file paths mentioned by user", CMD_REL),
             (r"^accumulated hints$", CMD_REL),
@@ -208,9 +220,26 @@ class DevCommandCycle:
         while not self.o.at_step(n):
             self.o.advance()
 
+    def round_step(self, step):
+        """The checklist item of Step <step>: a round part's is Step 4 where the text has no lettered step."""
+        return DC.round if heading(self.o.text, step) != f"Step {step}" else step
+
+    # The round's dispatches by what each call is (scripts/todo/dev.py ROUND_CALLS): its role and its prompt's Mode line.
+    ROUND_CALL = {"4": ("ba", "panel"), "4a": ("qa", "panel"), "4c": ("ba", "analysis")}
+
     def step_role(self, step):
+        """The subagent_type of the call the checklist item of Step <step> states for this dispatch: of the round
+        step's list of calls, the entry of this part's role and mode (LookupError when the list states none)."""
+        part = self.ROUND_CALL.get(str(step))
+        step = self.round_step(step)
         todo = next(t for t in self.o.todos if re.match(rf"Step {step}:", t["content"]))
-        return (todo.get("subagent_call") or {}).get("subagent_type")
+        call = todo.get("subagent_call") or {}
+        if not isinstance(call, list):
+            return call.get("subagent_type")
+        found = next((c for c in call if part and (c.get("subagent_type"), c.get("prompt_mode")) == part), None)
+        if found is None:
+            raise LookupError(f"/dev-command's Step {step} states no call {part}: {call}")
+        return found["subagent_type"]
 
     def sect(self, step: int, anchor: str) -> str:
         """Step <step>'s section: this file's, or the mapped /dev step's when the file leaves the anchor to /dev."""
@@ -220,9 +249,9 @@ class DevCommandCycle:
     def tpl(self, step, anchor: str | None = None, index: int = 0) -> dict:
         """Step <step>'s dispatch template as the file words it: /dev's template of the mapped step, with this
         step's obligation block in place of its own and without the lines the file leaves out."""
-        fields = self.ref.template(f"Step {DEV_STEP[step]}", anchor=anchor)
+        fields = self.ref.template(heading(self.ref.text, DEV_STEP[step]), anchor=anchor)
         # only the obligation sentence: the fence's codex lines are /dev's own, already in the template taken above
-        mine = [l.strip() for b in cmdtext.blocks(self.o.section(f"Step {step}")) for l in b.text.splitlines()
+        mine = [l.strip() for b in cmdtext.blocks(self.o.section(heading(self.o.text, step))) for l in b.text.splitlines()
                 if "embed `<obligation" in l][index]
         lines = fields["prompt"].split("\n")
         at = next(i for i, l in enumerate(lines) if l.strip().startswith("Obligation block"))
@@ -273,7 +302,7 @@ class DevCommandCycle:
         o.slash(REQUIREMENT)
         if ctx:
             self.lose_hook_output(ctx, bm, before)
-        sec = self.ref.section("Step 1")  # /dev's: this file repeats neither the hook lines nor the Spec line
+        sec = self.ref.section(f"Step {S.parse}")  # /dev's: this file repeats neither the hook lines nor the Spec line
         # The names the item tells the main agent to read, and the hook lines the step quotes for them.
         item = next(c for c in re.split(r"\n\s*\n", sec) if re.search(r"Read `[A-Z_]+`.*from the hook output", c))
         names = re.findall(r"`([A-Z_]+)`", item.split("from the hook output")[0])
@@ -282,7 +311,7 @@ class DevCommandCycle:
         for n in names:
             line = next((l for l in lines if re.sub(r"\W+", "_", l.split(":")[0]).lower().startswith(n.lower())), None)
             if line is None:
-                raise cmdtext.TextNotFound(f"Step 1 quotes no hook line for {n}")
+                raise cmdtext.TextNotFound(f"Step {DC.parse} quotes no hook line for {n}")
             got[n] = o.hook_line(line)
         self.reg = got["DEV_SESSION_ID"]
         self.digits = re.sub(r"^[A-Za-z-]*?(?=\d{8}-\d{6})", "", self.reg)
@@ -324,7 +353,7 @@ class DevCommandCycle:
         if self.patterns_read:
             return
         o = self.o
-        try:
+        try:  # OLDER_TEXT: "Command Development Best Practices" -- an older text's section; absent today (except below)
             practices = o.section("Command Development Best Practices")
         except cmdtext.TextNotFound:  # the text names no patterns document (a dangling one was removed)
             practices = ""
@@ -351,12 +380,12 @@ class DevCommandCycle:
                     with open(bm, "w", encoding="utf-8") as fh:
                         fh.write(before)
         o.hook_out = ""  # no longer in the main agent's context
-        sec = o.section("Step 1")
+        sec = o.section(f"Step {DC.parse}")
         # The start function's call, by its path or through the CLAUDE_HOME channel (`prompt-workflow.py" start`).
-        found = [(b, para) for _n, b, para in o.step_blocks("Step 1")
+        found = [(b, para) for _n, b, para in o.step_blocks(f"Step {DC.parse}")
                  if re.search(r'prompt-workflow\.py"? start\b', b.text)]
         if not found:
-            raise cmdtext.TextNotFound("Step 1 has no start-function fallback")
+            raise cmdtext.TextNotFound(f"Step {DC.parse} has no start-function fallback")
         blk = found[0][0]
         # The prose that follows the fallback block, up to the step's next block.
         follow = sec[sec.find(blk.text) + len(blk.text):].lstrip("`\n").split("```")[0]
@@ -371,7 +400,7 @@ class DevCommandCycle:
         cmd = cmd.replace("<HARNESS_ROOT>", o.harness)
         c = self.gated(lambda label: o.s.bash(cmd, "Re-read this command's start", label=label,
                                               deviation=o.devs.at(label)),
-                       f"Step 1 Bash start function ({ctx})")
+                       f"Step {DC.parse} Bash start function ({ctx})")
         out = c.response.get("stdout", "") if isinstance(c.response, dict) else ""
         o.hook_out = out
         self.ctx["start_function_ids"] = dict(re.findall(idre, out))
@@ -379,7 +408,7 @@ class DevCommandCycle:
 
     def step1(self) -> None:
         o = self.o
-        sec = self.ref.section("Step 1")
+        sec = self.ref.section(f"Step {S.parse}")
         line = re.search(r"`(Spec: <[^`]*>)`", sec)
         if line:  # the text has the hook decide the spec and print it as `Spec: <path>` / `Spec: none`
             v = o.hook_line(line.group(1))
@@ -387,8 +416,8 @@ class DevCommandCycle:
         elif "Auto-detect spec" in sec:  # the text's own detection: the pattern it names, newest first
             para = next(p for p in re.split(r"\n\s*\n", sec) if "Auto-detect spec" in p)
             pattern = next(c for c in re.findall(r"`([^`\s]+)`", para) if "*" in c)
-            g = o.s.tool("Glob", {"pattern": pattern, "path": o.project}, label="Step 1 Glob auto-detect spec",
-                         deviation=o.devs.at("Step 1 Glob auto-detect spec"))
+            g = o.s.tool("Glob", {"pattern": pattern, "path": o.project}, label=f"Step {DC.parse} Glob auto-detect spec",
+                         deviation=o.devs.at(f"Step {DC.parse} Glob auto-detect spec"))
             found = g.response.get("filenames", []) if g.ok else []
             found = sorted(found, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0, reverse=True)
             self.spec_path = os.path.relpath(found[0], o.project) if found else ""
@@ -399,14 +428,14 @@ class DevCommandCycle:
         # Practices), where the text still names one (read_patterns skips when it names none).
         self.read_patterns()
         fallback = re.compile(r"(?i)\*\*fallback\*\*|hook output (?:is )?absent|not in your context")
-        o.run_step_blocks(1, skip=lambda name, b, para: bool(fallback.search(para)),
+        o.run_step_blocks(DC.parse, skip=lambda name, b, para: bool(fallback.search(para)),
                           capture=("SPEC_ID",))
         self.spec_id = o.values.get("SPEC_ID", "")
 
     def step2(self) -> None:
         # "See `commands/dev.md` graphify hydrator block for the canonical Bash invocation."
-        text = self.ref.block("Step 2", anchor="graphify-query.py", lang="bash")
-        self.o.run_text(text, "Step 2 Bash graphify-query.py", "Step 2: graphify pre-BA hydrator")
+        text = self.ref.block(f"Step {S.graphify_pre}", anchor="graphify-query.py", lang="bash")
+        self.o.run_text(text, f"Step {DC.graphify_pre} Bash graphify-query.py", f"Step {DC.graphify_pre}: graphify pre-BA hydrator")
 
     def step3(self) -> None:
         self.o.s.say("ui-specialist: SKIP — a command file, no UI\n"
@@ -419,15 +448,15 @@ class DevCommandCycle:
         o = self.o
         # Pre-BA: surface retry signals (Four Contracts Awareness), as the text spells each.
         cmd = o.bind(self.ref.inline("Pre-BA: surface retry signals", "Recent related commits", startswith="git log"))
-        c = o.run(cmd, "Recent related commits", "Step 4 Bash recent commits")
+        c = o.run(cmd, "Recent related commits", f"Step {DC.round} Bash recent commits")
         self.commits = [l for l in c.response.get("stdout", "").split("\n") if l.strip()] if c.ok else []
         item = next(l for l in self.ref.section("Pre-BA: surface retry signals").split("\n") if "Existing BA specs" in l)
         pattern = re.findall(r"`([^`]+)`", re.sub(r"\(legacy[^)]*\)", "", item))[0]
-        g = o.s.tool("Glob", {"pattern": pattern, "path": o.project}, label="Step 4 Glob prior tickets",
-                     deviation=o.devs.at("Step 4 Glob prior tickets"))
+        g = o.s.tool("Glob", {"pattern": pattern, "path": o.project}, label=f"Step {DC.round} Glob prior tickets",
+                     deviation=o.devs.at(f"Step {DC.round} Glob prior tickets"))
         self.specs = [os.path.relpath(p, o.project) for p in g.response.get("filenames", [])] if g.ok else []
         self.round()
-        self.to("4c")
+        self.to(self.round_step("4c"))
         content = _ba_content(self.tid)
         mapping = _round.analysis(self.rp, o.project, self.tid, "AC-01")
         content["context.v1"]["requirement"].update(mapping["requirement"])
@@ -447,16 +476,16 @@ class DevCommandCycle:
             self.angle = angle
             act = agents.Act(notes=_round.panel_notes(angle), status="ready", summary=f"panel {angle}",
                              terminal={"docs/dev/ba-panel-*": f"BA PANEL {angle}: DONE"})
-            o.dispatch(self.tpl(4, anchor="Mode: panel"), act, f"Step 4 Agent(ba) panel {angle}", self.tid,
-                       subagent_type=self.step_role(4))
+            o.dispatch(self.tpl(DC.round, anchor="Mode: panel"), act, f"Step {DC.round} Agent(ba) panel {angle}", self.tid,
+                       subagent_type=self.step_role(DC.round))
         self.angle = None
-        self.to("4a")
+        self.to(self.round_step("4a"))
         doc = _round.with_paths(_round.round1(self.tid, panel=_round.panel()), self.tid)
         o.dispatch(self.tpl("4a"), agents.Act(content={"requirement-round.v1": doc}, summary="panel QA"),
                    "Step 4a Agent(qa) panel QA", self.tid, subagent_type=self.step_role("4a"))
         rel = f"docs/dev/ba-panel-{self.tid}-r1.json"
         self.round_files.append(rel)
-        self.to("4b")
+        self.to(self.round_step("4b"))
         call, _tin = _round.ask(o, rel, f"requirement-round:{self.tid}:r1", "Step 4b AskUserQuestion r1")
         ans = f"docs/dev/requirement-answers-{self.tid}-r1.json"
         if not os.path.isfile(os.path.join(o.project, ans)):
@@ -466,9 +495,9 @@ class DevCommandCycle:
                                           "ok": call.ok})
 
     def step6(self) -> None:
-        self.ba_outputs = self.text_paths(6, "Read BA output files")
+        self.ba_outputs = self.text_paths(DC.validate_ba, "Read BA output files")
         for rel in self.ba_outputs:
-            self.read(rel, f"Step 6 Read {rel}")
+            self.read(rel, f"Step {DC.validate_ba} Read {rel}")
         ctx = self.load(self.context_rel)
         # Post-BA: verify contract compliance (the fields the text lists), from what was read.
         missing = [k for k, v in (("evidence.measured.value", ((ctx.get("evidence") or {}).get("measured") or {}).get("value")),
@@ -480,29 +509,29 @@ class DevCommandCycle:
 
     def step7(self) -> dict:
         o = self.o
-        o.run_step_blocks(7)
+        o.run_step_blocks(DC.qa_ba)
         act = agents.Act(verdict="pass", summary="BA analysis checked")
-        d = o.dispatch(self.tpl(7), act, "Step 7 Agent(qa) ba_validation", self.tid)
+        d = o.dispatch(self.tpl(DC.qa_ba), act, f"Step {DC.qa_ba} Agent(qa) ba_validation", self.tid)
         rel = next(a["path"] for a in d.player.b.obligation["artifacts"] if a.get("kind") == "json")
-        self.read(rel, f"Step 7 Read {rel}")
+        self.read(rel, f"Step {DC.qa_ba} Read {rel}")
         return self.load(rel)
 
     # ------------------------------------------------------------ graphify
     def step9(self) -> None:
         o, ref = self.o, self.ref
         # The step dispatches graphify from commands/dev.md's enrichment template.
-        fields = ref.template("Step 9")
-        o.dispatch(fields, agents.Act(), "Step 9 Agent(graphify)", self.tid)
-        if "Graph context file:" not in o.section("Step 9"):
-            o.s.say("graphify dispatched (advisory); proceeding to Step 10")
+        fields = ref.template(f"Step {S.graphify}")
+        o.dispatch(fields, agents.Act(), f"Step {DC.graphify} Agent(graphify)", self.tid)
+        if "Graph context file:" not in o.section(f"Step {DC.graphify}"):
+            o.s.say(f"graphify dispatched (advisory); proceeding to Step {DC.dev}")
             return
         # The run record dev.md names, and the line its status puts into the dev and QA dispatches.
-        sec = ref.section("Step 9")
+        sec = ref.section(f"Step {S.graphify}")
         status = None
         for code in re.findall(r"`(\.claude/dev-registry/<DEV_SESSION_ID>/graphify/[\w.-]+\.json)`", sec):
             path = os.path.join(o.project, o.bind(code))
             if os.path.isfile(path):
-                o.s.read(path, label=f"Step 9 Read {os.path.basename(path)}")
+                o.s.read(path, label=f"Step {DC.graphify} Read {os.path.basename(path)}")
                 status = json.loads(agents.peek(self.rp, "main", path)).get("status")
                 break
         o.s.say(f"graphify_status={status}")
@@ -513,7 +542,7 @@ class DevCommandCycle:
     # ------------------------------------------------------------ dev, QA
     def dispatch_dev(self, label: str, context_rel: str | None = None, add_lines=(), iteration: bool = False):
         o = self.o
-        fields = with_lines(self.tpl(10, "You are the dev subagent"), list(add_lines) + self.graph_lines, context_rel)
+        fields = with_lines(self.tpl(DC.dev, "You are the dev subagent"), list(add_lines) + self.graph_lines, context_rel)
         if iteration:  # QA's finding: the command runs the whole tree; dev narrows it to -q tests/
             work = roles.dev([(CMD_REL, "python3 -m pytest\n", "python3 -m pytest -q tests/\n")])
         else:
@@ -521,19 +550,19 @@ class DevCommandCycle:
         content = {"*": {"baseline_head_sha": "", "baseline_dirty_snapshot": "",  # none in the dispatch payload
                          "dev": {"fix_layer": LAYER}}}
         act = agents.Act(work=work, content=content, summary="the test command runs the toy package tests")
-        return o.dispatch(fields, act, label, self.tid, subagent_type=self.step_role(10))
+        return o.dispatch(fields, act, label, self.tid, subagent_type=self.step_role(DC.dev))
 
-    def step11(self, label: str = "Step 11") -> None:
-        rel = self.text_paths(11, "Read dev implementation report")[0]
+    def step11(self, label: str = f"Step {DC.validate_dev}") -> None:
+        rel = self.text_paths(DC.validate_dev, "Read dev implementation report")[0]
         self.read(rel, f"{label} Read {rel}")
         dev = self.load(rel).get("dev") or {}
         # "Files exist that were reported as created/modified".
         for f in sorted(set(dev.get("files_created") or []) | set(dev.get("files_modified") or [])):
             self.read(f, f"{label} Read {f}")
 
-    def step12(self, label: str = "Step 12", verdict: str = "pass") -> None:
+    def step12(self, label: str = f"Step {DC.qa}", verdict: str = "pass") -> None:
         o = self.o
-        o.run_step_blocks(12, label=label)
+        o.run_step_blocks(DC.qa, label=label)
         extra = {}
         if verdict == "fail":
             extra = {"qa": {"failures": [QA_FAILURE], "overall_assessment": "AC-01 not met",
@@ -550,45 +579,45 @@ class DevCommandCycle:
             return qa_work(sub, b, player)
         act = agents.Act(verdict=verdict, work=work, summary=f"QA {verdict}", respell=o.respell,
                          text_calls=[("Phase 6: Blast-Radius Phase 2 Verification", {})])
-        o.dispatch(with_lines(self.tpl(12), self.graph_lines), act, f"{label} Agent(qa)", self.tid)
+        o.dispatch(with_lines(self.tpl(DC.qa), self.graph_lines), act, f"{label} Agent(qa)", self.tid)
 
-    def step13(self, label: str = "Step 13") -> str:
-        rel = self.qa_report_rel = self.text_paths(13, "Read QA report")[0]
+    def step13(self, label: str = f"Step {DC.qa_results}") -> str:
+        rel = self.qa_report_rel = self.text_paths(DC.qa_results, "Read QA report")[0]
         self.read(rel, f"{label} Read {rel}")
         return (self.load(rel).get("qa") or {}).get("status")
 
-    def step14(self, label: str = "Step 14") -> None:
+    def step14(self, label: str = f"Step {DC.settings}") -> None:
         perms = ((self.load(self.qa_report_rel).get("qa") or {}).get("permissions_verification")
                  or {}).get("validated_permissions") or []
         # The text's per-permission jq edit (an example entry) runs once per validated permission: none here.
-        self.o.run_step_blocks(14, label=label,
+        self.o.run_step_blocks(DC.settings, label=label,
                                skip=lambda name, b, para: "permissions.allow +=" in b.text and not perms)
 
     def step15(self) -> None:
         o = self.o
         self.iteration += 1
         rules = [(r"^N$", str(self.iteration))]
-        o.run_step_blocks(15, extra_rules=rules)
+        o.run_step_blocks(DC.iterate, extra_rules=rules)
         # "Return to Step 10 with new context JSON": the context file a Step 15 block writes, if any.
-        ctx_tpl = re.search(r"Context file:\s*(\S+)", self.tpl(10, "You are the dev subagent")["prompt"]).group(1)
+        ctx_tpl = re.search(r"Context file:\s*(\S+)", self.tpl(DC.dev, "You are the dev subagent")["prompt"]).group(1)
         ctx_rx = re.escape(ctx_tpl.split("<", 1)[0]) + r"\S*\.json"
         new_ctx = None
-        for _name, b, _para in o.step_blocks("Step 15"):
+        for _name, b, _para in o.step_blocks(f"Step {DC.iterate}"):
             for t in re.findall(r">\s*(" + ctx_rx + ")", o.bind(b.text, rules)):
                 new_ctx = t
         # Lines the text adds to Step 10's template for the re-dispatch ("adding the line `X: path`").
-        add = [o.bind(c) for c in re.findall(r"`([A-Z][\w ]* file:\s*[^`\s]+)`", o.section("Step 15"))]
-        self.dispatch_dev(f"Step 15 Agent(dev) iteration {self.iteration}", new_ctx, add, iteration=True)
-        self.step11("Step 15 (Step 11 again)")
-        self.step12("Step 15 (Step 12 again)", "pass")
-        status = self.step13("Step 15 (Step 13 again)")
+        add = [o.bind(c) for c in re.findall(r"`([A-Z][\w ]* file:\s*[^`\s]+)`", o.section(f"Step {DC.iterate}"))]
+        self.dispatch_dev(f"Step {DC.iterate} Agent(dev) iteration {self.iteration}", new_ctx, add, iteration=True)
+        self.step11(f"Step {DC.iterate} (Step {DC.validate_dev} again)")
+        self.step12(f"Step {DC.iterate} (Step {DC.qa} again)", "pass")
+        status = self.step13(f"Step {DC.iterate} (Step {DC.qa_results} again)")
         assert status == "pass", status
-        self.step14("Step 15 (Step 14 again)")
+        self.step14(f"Step {DC.iterate} (Step {DC.settings} again)")
 
     # ------------------------------------------------------------ completion
     def step16(self, status: str) -> None:
         o = self.o
-        tpl = o.block("Step 16", anchor="Development Completion Report")
+        tpl = o.block(f"Step {DC.report}", anchor="Development Completion Report")
         fill = {"original user request": REQUIREMENT, "final clarified requirement": REQUIREMENT,
                 "criterion 1": AC["then"], "what user reported": "the project has no test command",
                 "underlying issue": f"no {CMD_REL} exists", "how root cause was addressed": f"created {CMD_REL}",
@@ -602,27 +631,27 @@ class DevCommandCycle:
         report = "\n".join(lines).replace("`path/to/file`", f"`{CMD_REL}`")
         report = o.bind(report, [(r"^ISO-8601$", utc_now()), (r"^N$", str(self.iteration)),
                                  (r"^hash$", "none"), (r"^message$", "no prior commit: the file is new")])
-        rel = self.text_paths(16, "Save report to")[0]
-        o.s.write(os.path.join(o.project, rel), report, label="Step 16 Write completion report",
-                  deviation=o.devs.at("Step 16 Write completion report"))
-        calls = [o.run_text(b.text, f"Step 16 Bash {name}", f"Step 16: {name}", capture=("ARTIFACT_CHAIN",))
-                 for name, b, _para in self.ref.step_blocks("Step 17")]  # the resolver block is /dev's
+        rel = self.text_paths(DC.report, "Save report to")[0]
+        o.s.write(os.path.join(o.project, rel), report, label=f"Step {DC.report} Write completion report",
+                  deviation=o.devs.at(f"Step {DC.report} Write completion report"))
+        calls = [o.run_text(b.text, f"Step {DC.report} Bash {name}", f"Step {DC.report}: {name}", capture=("ARTIFACT_CHAIN",))
+                 for name, b, _para in self.ref.step_blocks(f"Step {S.report}")]  # the resolver block is /dev's
         # "Completion requires process exit 0 and top-level status == pass": the resolver block's own result.
         self.chain_ok = bool(calls) and all(c.ok for c in calls) and \
             json.loads(o.values.get("ARTIFACT_CHAIN") or "{}").get("status") == "pass"
-        if "/spec-update --temp" not in o.section("Step 16"):
+        if "/spec-update --temp" not in o.section(f"Step {DC.report}"):
             return
         # Workflow update: all requested work is complete -> /spec-update --temp, as that command's text says.
         su = Orchestrator(self.rp, "spec-update", session=o.s, deviations=o.devs)
         mk = su.inline("Temp-note mode", "mktemp", startswith="mktemp")
-        c = o.run(mk, "Create the temp update note", "Step 16 Bash mktemp update note")
+        c = o.run(mk, "Create the temp update note", f"Step {DC.report} Bash mktemp update note")
         path = c.response.get("stdout", "").strip() if c.ok else ""
         if not path:
             return
         m = re.search(r"update-([A-Za-z0-9]+)\.md$", path)
         if m:
             self.rp.rand(m.group(1))
-        o.s.read(path, label="Step 16 Read update note", deviation=o.devs.at("Step 16 Read update note"))
+        o.s.read(path, label=f"Step {DC.report} Read update note", deviation=o.devs.at(f"Step {DC.report} Read update note"))
         paths = ", ".join(self.ba_outputs + [f"docs/dev/dev-report-{self.tid}.json", self.qa_report_rel, rel])
         note = su.block("Temp-note mode", anchor="# Update")
         note = su.bind(note, [(r"^ISO-8601$", utc_now()), (r'id or "unknown"', self.tid),
@@ -631,43 +660,43 @@ class DevCommandCycle:
                               (r"3-8 sentences", f"/dev-command {self.tid} is complete: QA {status} after "
                                                  f"{self.iteration} iteration(s). Close it, then commit and push."),
                               (r".", "see the completion report")])
-        o.s.write(path, note, label="Step 16 Write update note", deviation=o.devs.at("Step 16 Write update note"))
+        o.s.write(path, note, label=f"Step {DC.report} Write update note", deviation=o.devs.at(f"Step {DC.report} Write update note"))
 
     # ------------------------------------------------------------ the whole cycle
     def run(self) -> None:
         o = self.o
         self.start()
         self.step1()
-        self.to(2); self.step2()
-        self.to(3); self.step3()
-        self.to(4); self.step4()
-        self.to(5)  # BA wrote its report (status ready): no clarification round
-        self.to(6); self.step6()
-        self.to(7)
+        self.to(DC.graphify_pre); self.step2()
+        self.to(DC.specialists); self.step3()
+        self.to(DC.round); self.step4()
+        self.to(DC.clarify)  # BA wrote its report (status ready): no clarification round
+        self.to(DC.validate_ba); self.step6()
+        self.to(DC.qa_ba)
         report = self.step7()
         assert report.get("verdict") == "pass", report
-        self.to(8)  # QA passed BA: no BA-QA iteration
-        self.to(9); self.step9()
-        self.to(10); self.dispatch_dev("Step 10 Agent(dev)")
-        self.to(11); self.step11()
-        self.to(12); self.step12(verdict="fail" if self.variant == "qa-fail" else "pass")
-        self.to(13)
+        self.to(DC.ba_qa_loop)  # QA passed BA: no BA-QA iteration
+        self.to(DC.graphify); self.step9()
+        self.to(DC.dev); self.dispatch_dev(f"Step {DC.dev} Agent(dev)")
+        self.to(DC.validate_dev); self.step11()
+        self.to(DC.qa); self.step12(verdict="fail" if self.variant == "qa-fail" else "pass")
+        self.to(DC.qa_results)
         status = self.step13()
-        self.to(14)
+        self.to(DC.settings)
         if status == "pass":
             self.step14()
-        self.to(15)
+        self.to(DC.iterate)
         if status != "pass":
             self.step15()
             status = "pass"
-        self.to(16); self.step16(status)
+        self.to(DC.report); self.step16(status)
         o.advance()
         if self.chain_ok:
             text = (f"/dev-command {self.tid} complete: {CMD_REL} runs the toy package tests; QA passed. "
                     f"Next: /close {self.tid}")
         else:  # the postcondition blocks completion; the block's `|| exit 2` printed no errors[]
             text = (f"/dev-command {self.tid}: QA passed and {CMD_REL} runs the toy package tests, but the "
-                    "artifact-chain postcondition (Step 16) exited 2, so the cycle is not complete.")
+                    f"artifact-chain postcondition (Step {DC.report}) exited 2, so the cycle is not complete.")
         ev = o.s.stop(text, label="Stop", deviation=o.devs.at("Stop"))
         self.rp.terminal("dev-command", self.chain_ok, ev, task=self.tid)
 

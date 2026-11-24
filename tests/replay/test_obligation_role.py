@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from tests.replay import agents, cmdtext
+from tests.replay.drivers.dev import S
 from tests.replay.pipeline import Orchestrator
 from tests.replay.test_live_landing import TRANSITIONS
 
@@ -71,8 +72,8 @@ def test_sentence_template_role_is_its_obligation_not_its_first_action(dev):
     role=..." sentence. With the FIRST ACTION sentinel naming another role, each still resolves to
     its obligation's role."""
     found = {}
-    for t in _templates(dev, "Step 10"):
-        assert not t.get("subagent_type"), "the Step 10 templates name no subagent_type"
+    for t in _templates(dev, f"Step {S.dev}"):
+        assert not t.get("subagent_type"), "the dev step's templates name no subagent_type"
         role = dev.template_role(t, "20260101-000000")
         found[role] = t
         assert role == _sentinel_role(t["prompt"])  # the shipped text: both say the same
@@ -84,7 +85,7 @@ def test_sentence_template_role_is_its_obligation_not_its_first_action(dev):
 def _worked_example(o: Orchestrator) -> dict:
     """The one template that carries the literal worked-example block (role "ba"): Step 4's BA
     template before P13-1, Step 4c's BA analysis template since (which also names subagent_type)."""
-    found = [t for h in ("Step 4", "Step 4c") for t in _templates(o, h)
+    found = [t for h in (f"Step {S.round}", "Step 4c") for t in _templates(o, h)
              if "Obligation block (worked example):" in t.get("prompt", "")]
     assert len(found) == 1, "dev.md has one worked-example obligation block"
     return found[0]
@@ -104,7 +105,7 @@ def test_literal_block_template_role_is_its_obligation_not_its_first_action(dev)
 def test_rendered_prompt_role_is_its_obligation_block(dev):
     """The rendered dispatch prompt (what dispatch() reads its subagent_type from): the obligation's
     role, whatever the FIRST ACTION sentinel names; no block names no role, the sentinel does not."""
-    t = next(t for t in _templates(dev, "Step 10") if dev.template_role(t, "x") == "dev")
+    t = next(t for t in _templates(dev, f"Step {S.dev}") if dev.template_role(t, "x") == "dev")
     prompt = dev.instantiate(_renamed(t, "qa")["prompt"], "20260101-000000")
     assert _sentinel_role(prompt) == "qa"
     assert dev.tree.obligation_role(prompt) == "dev"
@@ -117,7 +118,7 @@ def test_rendered_prompt_role_is_its_obligation_block(dev):
 
 
 def test_subagent_type_still_wins(dev):
-    t = next(t for t in _templates(dev, "Step 10") if dev.template_role(t, "x") == "dev")
+    t = next(t for t in _templates(dev, f"Step {S.dev}") if dev.template_role(t, "x") == "dev")
     assert dev.template_role(dict(t, subagent_type="test-writer"), "x") == "test-writer"
 
 

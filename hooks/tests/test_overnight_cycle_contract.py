@@ -173,7 +173,11 @@ def test_the_rendered_contract_and_its_re_dispatches(main_root):
     contract = json.loads((_cycle_dir(working) / "cycle-contract.json").read_text())
     jsonschema.validate(contract, json.loads((REPO / "schemas" / "cycle-contract.v1.json").read_text()))
     entries = contract["required_calls"]
-    assert {e["step"] for e in entries} == {"8", "9", "10", "11", "11g", "12", "13", "15", "17", "20"}
+    # every step of scripts/todo/dev-overnight.py after PM TRIAGE that dispatches, or re-dispatches an earlier call
+    steps = contract_runtime.overnight_steps()
+    triage = next(i for i, (_label, call) in enumerate(steps) if call.get("mode") == "TRIAGE")
+    assert {e["step"] for e in entries} == {label for label, call in steps[triage + 1:]
+                                            if call or label in contract_runtime._REDISPATCHES}
     assert {e["step"] for e in entries} <= set(LABELS)
     for entry in entries:
         assert set(entry) == {"step", "role", "mode", "pipeline_id"}

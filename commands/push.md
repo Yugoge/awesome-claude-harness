@@ -26,7 +26,7 @@ group: Ship
 
 ## Agentic dispatch protocol (pre-execution)
 
-Run these steps in order. Where one refuses, ask ONE AskUserQuestion in this turn instead of exiting: the question is the refusal's message with its facts; the options are the action the refusal names, marked (Recommended), and "I give another instruction". Act on the answer; a refusal met again after it is reported in the reply, not asked again.
+Run these steps in order. Where one refuses, nobody is asked about it. An action the refusal names that is the agent's own ("re-run the snapshot now", "re-run the analysis now") is taken at once, once; met again, the refusal ends the run. Any other action is the owner's: end with the refusal reported in the reply, its message with its facts and the action it names, and the refused call is not run again. When a hook refuses the push-analyst dispatch itself, no grant is written and Step 5 cannot run: end with one line `REFUSED: <hook> refused the push-analyst dispatch; nothing was published` and the hook's output; the Stop gate (`analyst_refused`) lets the run end on it when the transcript records that refusal of the last push-analyst dispatch.
 
 **Step 0: Parse arguments and resolve remote**
 
@@ -64,7 +64,7 @@ SESSION_ID=<SESSION_ID>
 REPO_HASH=<REPO_HASH>
 
 <obligation v="1">
-{"task_id": null, "lane": null, "lane_set": null, "role": "push-analyst", "pipeline": "push", "profile": "ad_hoc", "dispatched_at": "<ISO-8601 UTC ending in Z, captured immediately before this dispatch, for example the output of date -u +%Y-%m-%dT%H:%M:%SZ>", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^push-analyst grant written: \\S+\\.json$"}]}
+{"task_id": null, "lane": null, "lane_set": null, "role": "push-analyst", "pipeline": "push", "profile": "ad_hoc", "artifacts": [{"kind": "response_line", "terminal_line_regex": "^push-analyst grant written: \\S+\\.json$"}]}
 </obligation>
 ```
 

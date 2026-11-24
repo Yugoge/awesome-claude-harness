@@ -46,6 +46,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib.subagent import DISPATCH_TOOLS, is_subagent  # noqa: E402
+
 
 # Rule-doc pointers are derived from THIS hook's own on-disk location
 # (<harness-home>/hooks/<name>.py), so the stderr message names the files that
@@ -138,7 +141,7 @@ USER_VERBATIM_RE = re.compile(
 # dev-registry heredoc rooted at a non-root home, so that block escaped
 # redaction on every non-root install. `\S*` keeps the old form matching too.
 DEV_REGISTRY_HEREDOC_RE = re.compile(
-    r"cat\s*>\s*\S*/dev-registry/[^\n]*<<\s*['\"]?REGEOF['\"]?"
+    r"cat\s*>\s*\S*/%s/[^\n]*<<\s*['\"]?REGEOF['\"]?" % "dev-registry" +  # the registry folder's name
     r".*?\nREGEOF\b",
     re.DOTALL,
 )
@@ -242,7 +245,7 @@ def _parse_payload():
 
 def _extract_prompt(data: dict):
     tool_name = data.get("tool_name") or data.get("toolName") or ""
-    if tool_name and tool_name != "Agent":
+    if tool_name and tool_name not in DISPATCH_TOOLS:
         return None
     tool_input = data.get("tool_input") or data.get("toolInput") or {}
     prompt = tool_input.get("prompt")
@@ -273,8 +276,7 @@ def main() -> int:
     if hit is None:
         return 0
     category, snippet = hit
-    is_subagent = bool(data.get("agent_id"))
-    return _route_hit(category, snippet, is_subagent)
+    return _route_hit(category, snippet, is_subagent(data))
 
 
 if __name__ == "__main__":

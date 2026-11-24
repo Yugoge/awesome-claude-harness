@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# The replay's clock for a Python started isolated (`python3 -I`, scripts/overnight-status.sh): -I ignores
+# PYTHONPATH, so the clock (tests/replay/clock/sitecustomize.py) would never load and the program would read the
+# real clock while every other process of the replay reads the modeled one. With REPLAY_CLOCK_AT set, -I runs as
+# -s -P (no user site, no script directory on sys.path; PYTHONPATH, the clock's, honoured). Every other call, and
+# every call without REPLAY_CLOCK_AT, is the real python3's, unchanged.
+here=$(cd "$(dirname "$0")" && pwd)
+real=
+IFS=: read -r -a dirs <<< "$PATH"
+for d in "${dirs[@]}"; do
+  [ "$d" = "$here" ] && continue
+  [ -x "$d/python3" ] && { real=$d/python3; break; }
+done
+[ -n "$real" ] || { echo "python3: no real python3 on PATH" >&2; exit 127; }
+[ -n "${REPLAY_CLOCK_AT:-}" ] || exec "$real" "$@"
+args=()
+for a in "$@"; do
+  if [ "$a" = "-I" ]; then args+=(-s -P); else args+=("$a"); fi
+done
+exec "$real" "${args[@]}"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serialize Stop phases and call the sole receipt-gated resource finalizer.
+"""Serialize Stop phases.
 
 LANE-B (20260808-035658) M4/M7, P5 R9: run by hooks/stop-launch.py (directly by a session that
 loaded an older hook list), in order: coverage, auto_commit, completion (hooks/stop-command-gate.py,
@@ -10,25 +10,23 @@ Only coverage and completion block: a coverage block relays failed_phase=coverag
 4 KB of its stderr, completion's stderr (its block text, or advisory `would block`) is relayed
 whole and first. Other failures are recorded in the result JSON and allowed; a completion that did
 not decide (exit outside {0, 2}, timeout, launch error, missing file) goes to `fallback`. Cleanup
-runs only on an allowed Stop, the finalizer only when every phase allowed cleanly. `gate_mode`
-reads the process environment only. The gate prints an allowed Stop's terminal time-lock status as
-its last stdout line, and this coordinator alone publishes the receipt finalize reads (P1b row 15).
-
-Resource preflight/finalize is opt-in: LANEB_SESSION_RESOURCE_TRUST_KEY and _TRUST_ROOT
-are set nowhere by default (no SessionStart provisioning). Without both, only the phases
-run and session_resources.resolve_current_resource_session() must NOT be called: it
-raises when the trust authority is unconfigured, which would make that default state a
-permanent Stop block. Fail-closed finalization applies once a resource session exists.
-No phase receives either key.
+runs only on an allowed Stop. `gate_mode` reads the process environment only. Each phase runs in
+a process group of its own; one out of time is ended with its whole group (`_end_group`), so
+`worst_case_seconds` (each limit plus KILL_GRACE, plus the fallback's FALLBACK_LIMIT) bounds the
+coordinator under the launcher's limit. The fallback reads a running background child as the gate
+and the launcher do (the gate's waiting_for): a wait, exit 0, its text relayed and shown.
 """
 
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -38,23 +36,14 @@ HOOKS = Path(__file__).resolve().parent
 if str(HOOKS) not in sys.path:
     sys.path.insert(0, str(HOOKS))
 
-from lib import command_span, session_resources
+from lib import command_span
 
 
 PHASE_ORDER = ("coverage", "auto_commit", "completion", "cleanup")
 BLOCKING_PHASES = ("coverage", "completion")
 STDERR_RELAY_BYTES = 4096
-TRUST_ENVIRONMENT_KEYS = (
-    session_resources.TRUST_KEY_ENV,
-    session_resources.TRUST_ROOT_ENV,
-)
-FINALIZER_FAILURE_REASONS = frozenset(
-    {
-        "scratch_symlink_detected",
-        "process_identity_mismatch",
-        "process_exit_timeout",
-    }
-)
+KILL_GRACE = 5.0  # what ending a phase out of time may cost (_end_group)
+FALLBACK_LIMIT = 10.0  # what fallback's reading of the session record may cost (_bounded)
 
 
 @dataclass(frozen=True)
@@ -115,17 +104,26 @@ def _configured_phases(environment: Mapping[str, str], mode: str) -> list[Phase]
     return phases
 
 
-def _environment_views(
-    environment: Mapping[str, str] | None,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Separate ordinary child state from the two-key trust capability."""
+def worst_case_seconds(phases: Sequence[Phase]) -> float:
+    """The longest the phases can take: each runs to its limit and is then ended (KILL_GRACE),
+    and a completion with no verdict is decided by `fallback` within FALLBACK_LIMIT."""
+    return sum(phase.timeout + KILL_GRACE for phase in phases) + FALLBACK_LIMIT
 
-    values = dict(os.environ if environment is None else environment)
-    phase_environment = {
-        key: value for key, value in values.items() if key not in TRUST_ENVIRONMENT_KEYS
-    }
-    trust_environment = {key: values.get(key, "") for key in TRUST_ENVIRONMENT_KEYS}
-    return phase_environment, trust_environment
+
+def _end_group(proc: subprocess.Popen) -> None:
+    """End a phase out of time with its whole process group (SIGKILL), then reap it: its pipes
+    close once every process of the group has died. A process that left the group (a session of
+    its own) and still holds a pipe is waited for no longer than KILL_GRACE."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        proc.communicate(timeout=KILL_GRACE)
+    except subprocess.TimeoutExpired:
+        for stream in (proc.stdout, proc.stderr):
+            stream.close()
+        proc.wait()
 
 
 def _phase_script(argv: Sequence[str]) -> str | None:
@@ -149,20 +147,20 @@ def _run_phase(
     script = _phase_script(phase.argv)
     if script is not None and not Path(script).is_file():
         return {"phase": phase.name, "status": "fail", "returncode": None, "failure": "missing file"}
-    try:
-        result = subprocess.run(
-            list(phase.argv),
-            input=raw_payload,
-            capture_output=True,
-            cwd=str(project_dir),
-            env=child_env,
-            timeout=phase.timeout,
-        )
-    except subprocess.TimeoutExpired:
-        return {"phase": phase.name, "status": "timeout", "returncode": None, "failure": "timeout"}
+    try:  # its own process group, so a phase out of time ends with everything it started
+        proc = subprocess.Popen(list(phase.argv), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, cwd=str(project_dir), env=child_env,
+                                start_new_session=True)  # process_group needs 3.11; CI runs 3.10
     except Exception:
         # Phase-launch diagnostics can contain argv/environment data; fail by code only.
         return {"phase": phase.name, "status": "fail", "returncode": None, "failure": "launch error"}
+    try:
+        out, err = proc.communicate(raw_payload, timeout=phase.timeout)
+    except subprocess.TimeoutExpired:
+        _end_group(proc)
+        return {"phase": phase.name, "status": "timeout", "returncode": None, "failure": "timeout",
+                "limit": phase.timeout}
+    result = subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
     stdout = result.stdout.decode("utf-8", "replace")
     stderr = result.stderr.decode("utf-8", "replace")
     status = (
@@ -175,7 +173,7 @@ def _run_phase(
     except (LookupError, TypeError, ValueError):
         last = {}
     last = last if isinstance(last, dict) else {}
-    notice, terminal = last.get("systemMessage"), last.get("timelock_terminal")
+    notice = last.get("systemMessage")
     failure = {"fail": f"exit code {result.returncode}"}.get(status)
     # The gate's own text is relayed whole and first (P5 R9); a coverage block's last 4 KB.
     relayed = stderr if phase.name == "completion" else stderr[-STDERR_RELAY_BYTES:]
@@ -187,52 +185,76 @@ def _run_phase(
         "stderr_sha256": hashlib.sha256(result.stderr).hexdigest(),
         **({"failure": failure} if failure else {}),
         **({"notice": notice} if status == "allow" and isinstance(notice, str) else {}),
-        **({"_terminal": terminal} if status == "allow" and phase.name == "completion"
-           and isinstance(terminal, str) else {}),
         **({"_stderr": relayed} if status == "block" or phase.name == "completion" else {}),
     }
 
 
-def fallback(payload: Mapping[str, object], mode: str, reason: str) -> tuple[int, str]:
-    """A completion that did not decide (exit outside {0, 2}, timeout, launch error,
-    missing file), decided on the transcript reader alone: block while the session's
-    overnight window is open (overnight.window_open) or, in block mode, while the latest
-    human-typed command is a gated one; else allow. The reader reads the whole transcript:
-    an opener may lie far back. A check whose module cannot load counts as not holding."""
+def _holds(check) -> bool:
     try:
-        from lib import overnight
-
-        window = bool(overnight.window_open(dict(payload)))
+        return bool(check())
     except Exception:
-        window = False
-    gated = mode == "block" and (
-        command_span.active_command(payload.get("transcript_path")) in command_span.GATED_COMMANDS
-    )
-    if window or gated:
-        return 2, (
-            f"COMMAND_GATE instrument failure: {reason}. The gate is broken; "
-            "the human can type /stop\n"
-        )
-    return 0, ""
+        return False
 
 
-def _publish_receipt(root: Path, session_id: str, terminal: str, payload: Mapping[str, object]) -> str | None:
-    """The terminal receipt finalize reads (P1b row 15), published from the gate's terminal
-    time-lock status; None, else the reason it was not published (recorded, allowed)."""
-    try:
+def _record(payload: Mapping[str, object], mode: str) -> tuple[bool, bool, list[str]]:
+    """(overnight window open, latest human-typed command gated in block mode, its running background
+    children as the gate reads them: stop-command-gate.py's waiting_for, the one reading of the wait)."""
+    def window() -> bool:
         from lib import overnight
+        return overnight.window_open(dict(payload))
 
-        _state_file, state = overnight.session_state_file(  # as the gate's time-lock found it
-            session_id, (os.environ.get("CLAUDE_PROJECT_DIR"), payload.get("cwd") or str(root))
-        )
-        if state is None:
-            return "no overnight state record"
-        result = session_resources.publish_overnight_receipt(
-            root, claude_session_id=session_id, state=state, terminal_status=terminal
-        )
-    except Exception as exc:  # recorded by type only: trust diagnostics never cross hook output
-        return f"receipt not published ({type(exc).__name__})"
-    return None if isinstance(result, Mapping) and result.get("status") == "pass" else "receipt not published"
+    def latest_command():  # read from what the Stop gate's index keeps of the conversation, not the whole of it again
+        from lib import locations
+        return command_span.active_command(payload.get("transcript_path"), keep=locations.state_root())
+
+    gated = mode == "block" and _holds(lambda: latest_command() in command_span.GATED_COMMANDS)
+    try:
+        spec = importlib.util.spec_from_file_location("stop_command_gate", HOOKS / "stop-command-gate.py")
+        gate = sys.modules["stop_command_gate"] = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        running = list(gate.waiting_for(dict(payload))) if gated else []
+    except Exception:
+        running = []
+    return _holds(window), gated, running
+
+
+def _bounded(read, limit: float):
+    """read()'s value, or None when it has not returned within ``limit`` s (it is left in a daemon thread)."""
+    box: list = []
+    worker = threading.Thread(target=lambda: box.append(read()), daemon=True)
+    worker.start()
+    worker.join(limit)
+    return box[0] if box else None
+
+
+def no_verdict_text(subject: str, limit: float) -> tuple[str, str]:
+    """(head, tail) of the text for ``subject`` out of time after ``limit`` s; hooks/stop-launch.py says the same."""
+    return (f"COMMAND_GATE: {subject} ran out of time after {limit:g} s and has no verdict",
+            ", so this stop is not let through as complete. The gate keeps what it computed, so the next stop "
+            "continues from there. The owner can end the command with /stop.\n")
+
+
+def fallback(payload: Mapping[str, object], mode: str, reason: str,
+             limit: float | None = None) -> tuple[int, str]:
+    """A completion that did not decide (exit outside {0, 2}, timeout, launch error,
+    missing file), decided on the session record alone (_record, read within FALLBACK_LIMIT):
+    a running background child of a gated span is a wait (exit 0, its text shown); else
+    block while the session's overnight window is open or, in block mode, while the latest
+    human-typed command is a gated one; else allow. A record not read in time blocks, saying
+    so. The reader reads the whole transcript: an opener may lie far back. A check whose
+    module cannot load counts as not holding. A gate out of time (``limit`` its seconds) is
+    said to have no verdict, naming /stop and that the next stop continues its work."""
+    head, tail = (no_verdict_text("the gate", limit) if reason == "timeout" and limit is not None else
+                  (f"COMMAND_GATE instrument failure: {reason}", ". The gate is broken; the human can type /stop\n"))
+    facts = _bounded(lambda: _record(payload, mode), FALLBACK_LIMIT)
+    if facts is None:
+        return 2, f"{head}; the session record was not read within {FALLBACK_LIMIT:g} s{tail}"
+    window, gated, running = facts
+    if running:
+        return 0, f"{head}; waiting for {', '.join(running)}, still running; not complete\n"
+    if not (window or gated):
+        return 0, ""
+    return 2, head + tail
 
 
 def run_coordinator(
@@ -245,7 +267,7 @@ def run_coordinator(
 ) -> tuple[dict, int]:
     """Run phases sequentially; every non-success is non-destructive."""
 
-    phase_environment, trust_environment = _environment_views(environment)
+    phase_environment = dict(os.environ if environment is None else environment)
     root_value = (
         project_dir
         or phase_environment.get("CLAUDE_PROJECT_DIR")
@@ -258,9 +280,8 @@ def run_coordinator(
     if payload.get("agent_id"):
         return {
             "status": "nonterminal",
-            "reason": "subagent_stop_never_finalizes_parent_resources",
+            "reason": "subagent_stop_runs_no_phase",
             "phases": [],
-            "finalizer_called": False,
         }, 0
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -268,7 +289,6 @@ def run_coordinator(
             "status": "nonterminal",
             "reason": "missing_parent_session_id",
             "phases": [],
-            "finalizer_called": False,
         }, 0
     if raw_payload is None:
         raw_payload = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -284,32 +304,7 @@ def run_coordinator(
             "status": "blocked",
             "reason": "invalid_phase_configuration",
             "phases": [],
-            "finalizer_called": False,
         }, 2
-    resource_broker_configured = bool(trust_environment.get(session_resources.TRUST_KEY_ENV)) and bool(
-        trust_environment.get(session_resources.TRUST_ROOT_ENV)
-    )
-    resource_session_id: str | None = None
-    if resource_broker_configured:
-        try:
-            pointer = session_resources.resolve_current_resource_session(
-                root,
-                session_id,
-                trust_environment=trust_environment,
-            )
-            if not isinstance(pointer, Mapping):
-                raise ValueError("invalid resource preflight result")
-            resource_session_id = pointer.get("resource_session_id")
-            if not isinstance(resource_session_id, str) or not resource_session_id:
-                raise ValueError("invalid resource preflight identity")
-        except Exception:
-            # Trust-provider diagnostics are capabilities and never cross hook output.
-            return {
-                "status": "blocked",
-                "reason": "resource_preflight_contract_error",
-                "phases": [],
-                "finalizer_called": False,
-            }, 2
     results = []
     relays = []
     for phase in selected:
@@ -325,13 +320,8 @@ def run_coordinator(
         )
         results.append(result)
         stderr = result.pop("_stderr", "")
-        terminal = result.pop("_terminal", None)
         if phase.name == "completion" and result["status"] in ("allow", "block") and stderr:
             relays.append(stderr)
-        if terminal and resource_session_id is not None:  # finalize decides on the receipt
-            receipt = _publish_receipt(root, session_id, terminal, payload)
-            if receipt:
-                result["receipt"] = receipt
         if result["status"] == "allow":
             continue
         if result["status"] == "block" and phase.name in BLOCKING_PHASES:
@@ -340,79 +330,30 @@ def run_coordinator(
                 "reason": "phase_block",
                 "failed_phase": phase.name,
                 "phases": results,
-                "finalizer_called": False,
                 "_relay": "".join(relays) if phase.name == "completion" else f"failed_phase={phase.name}\n{stderr}",
             }, result["returncode"]  # the phase's own exit (2), relayed as stop-launch.py relays its child
         if phase.name != "completion":
             continue  # recorded in the result and allowed
-        code, relay = fallback(payload, mode, result["failure"])
-        result["fallback"] = "block" if code == 2 else "allow"
+        code, relay = fallback(payload, mode, result["failure"], result.get("limit"))
+        result["fallback"] = "block" if code == 2 else ("wait" if relay else "allow")
         if code != 2:
+            if relay:  # the wait: relayed and shown to the owner as the gate's own wait is
+                relays.append(relay)
+                result["notice"] = relay
             continue  # recorded in the result and allowed
         return {
             "status": "blocked",
             "reason": "completion_instrument_failure",
             "failed_phase": phase.name,
             "phases": results,
-            "finalizer_called": False,
             "_relay": relay,
         }, 2
     advisory = "".join(relays)
-    if any(result["status"] not in ("allow", "skipped") for result in results):
-        # A recorded failure is allowed but never followed by the destructive finalizer.
-        return {
-            "status": "pass",
-            "phases": results,
-            "finalizer_called": False,
-            "reason": "phase_failure_recorded",
-            **({"_relay": advisory} if advisory else {}),
-        }, 0
-    if resource_session_id is None:
-        # No resource session was provisioned (the default): the phases passed and
-        # there is nothing to finalize, so this is a normal pass, not a block.
-        return {
-            "status": "pass",
-            "phases": results,
-            "finalizer_called": False,
-            "reason": "resource_broker_not_configured",
-            **({"_relay": advisory} if advisory else {}),
-        }, 0
-    try:
-        finalized = session_resources.finalize(
-            root,
-            claude_session_id=session_id,
-            resource_session_id=resource_session_id,
-            trust_environment=trust_environment,
-        )
-    except Exception:
-        # Finalizer diagnostics may name trusted paths; expose only a fixed code.
-        return {
-            "status": "blocked",
-            "reason": "resource_finalizer_contract_error",
-            "phases": results,
-            "finalizer_called": True,
-        }, 2
-    if not isinstance(finalized, Mapping) or finalized.get("status") != "pass":
-        error_code = (
-            finalized.get("error_code") if isinstance(finalized, Mapping) else None
-        )
-        reason = (
-            error_code
-            if error_code in FINALIZER_FAILURE_REASONS
-            else "resource_finalize_failed"
-        )
-        return {
-            "status": "blocked",
-            "reason": reason,
-            "phases": results,
-            "finalizer_called": True,
-        }, 2
+    recorded = any(result["status"] not in ("allow", "skipped") for result in results)
     return {
         "status": "pass",
         "phases": results,
-        "finalizer_called": True,
-        "resource_session_id": resource_session_id,
-        "finalizer": finalized,
+        **({"reason": "phase_failure_recorded"} if recorded else {}),
         **({"_relay": advisory} if advisory else {}),
     }, 0
 

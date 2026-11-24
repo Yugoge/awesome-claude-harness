@@ -61,7 +61,8 @@ which hooks; nothing repairs it, and the pipeline goes on with its own step.
 Before the step whose label matches, the fault (actor "fault") writes `path` (project-relative;
 `{task}` is the cycle's task id, the shortest task id the run learned) with `content kind`:
 `qa-report.v1` (a stale schema-v1 QA report: F3b), `junk`, `schema-invalid` (the file as written, its
-required owned_edits removed), `ignored` (a dev report as written, a path the toy project's .gitignore
+required owned_edits removed), `identity` (a canonical as written, another task's task_id and
+request_id, its mtime left newer than its lane reports), `ignored` (a dev report as written, a path the toy project's .gitignore
 matches added to its dev.files_created: the report the gitignore rule of the next dispatch naming it
 reads, after its dev's own stop passed), or `absent` (the file removed). A path
 nothing in the pipeline produced is no producer's to repair; the pipeline must reach its terminal past
@@ -432,6 +433,11 @@ def _plant(rp, glob: str, what: str) -> callable:
                 doc = json.loads(open(full).read())
             doc.pop("owned_edits", None)
             text = json.dumps(doc, indent=2) + "\n"
+        if content == "identity":  # the canonical as written, another task's id, newer than its lanes
+            with rp.acting("fault"):
+                doc = json.loads(open(full).read())
+            doc["task_id"] = doc["request_id"] = "19990101-000000"
+            text = json.dumps(doc, indent=2) + "\n"
         if content == "ignored":  # the dev report as written, listing a file the toy's .gitignore matches
             with rp.acting("fault"), open(full) as fh:
                 doc = json.load(fh)
@@ -448,8 +454,9 @@ def _plant(rp, glob: str, what: str) -> callable:
             else:
                 with open(full, "w") as fh:
                     fh.write(text)
-                old = os.path.getmtime(full) - 3600
-                os.utime(full, (old, old))
+                if content != "identity":  # newer than its lanes: no rebuild replaces it before a reader
+                    old = os.path.getmtime(full) - 3600
+                    os.utime(full, (old, old))
         if meant is not None and content != "absent":  # its producer's next round writes it as it meant to
             rec.update(agent=None, repaired=False, rounds=0)
             rp.fault_pending[rel] = {"meant": meant, "faulted": text, "rec": rec, "forged": False}
@@ -662,6 +669,31 @@ def on_stop_block(sub, ev):
     return final
 
 
+def _canonical_at_stop(rp) -> callable:
+    """A `bash` fault of a lane report (F9): once the faulted agent's dispatch has ended, its stop included,
+    whether the task's canonical aggregate is there and which lane reports of the task are newer than it
+    (the record's `canonical_at_stop`)."""
+    def fn(rp_, phase, step):
+        if phase != "after" or step.get("kind") != "dispatch":
+            return
+        aid = getattr(step.get("result"), "agent_id", None)
+        for rec in [r for r in rp.fault_records if r.get("kind") == "bash" and aid and r.get("agent") == aid
+                    and "canonical_at_stop" not in r]:
+            lane = re.match(r"(docs/dev/dev-report-.+)-l\d+\.json$", rec.get("path") or "")
+            if not lane:
+                continue
+            proj = rp.layout.project
+            with rp.acting("driver"):
+                full = os.path.join(proj, lane.group(1) + ".json")
+                at = os.stat(full).st_mtime_ns if os.path.isfile(full) else None
+                lanes = glob_mod.glob(os.path.join(proj, lane.group(1) + "-l*.json"))
+                newer = sorted(os.path.relpath(p, proj) for p in lanes if at is None or os.stat(p).st_mtime_ns > at)
+            rec["canonical_at_stop"] = {"path": lane.group(1) + ".json", "exists": at is not None,
+                                        "newer_lane_reports": newer}
+            _record(rp, rec)
+    return fn
+
+
 def install(rp, spec: str) -> None:
     """Register the faults `spec` names on rp (Replay.step's fault hooks)."""
     rp.fault_records = []
@@ -691,6 +723,8 @@ def install(rp, spec: str) -> None:
             rp.faults += [(glob, inject), ("*", observe)]
         else:
             rp.faults.append((glob, _write_fault(rp, kind, glob, what)))
+            if kind == "bash":
+                rp.faults.append(("*", _canonical_at_stop(rp)))
     rp.faults.append(("*", _collection_round(rp)))
     rp.on_stop_block_default = on_stop_block
 

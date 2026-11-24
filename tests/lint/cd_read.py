@@ -16,8 +16,12 @@ Two kinds of finding, over the prompt corpus (CLAUDE.md, commands/, agents/) and
 - settings.json denies a `Read()` path but CLAUDE.md states no convention: no line names
   `cd`, `Read()` and a path operand together.
 
-The Read() deny rules stay: they keep `cat .env` denied and keep the guard asking for
-`cd config && cat .env`. Only the prose that steers agents into the guard changes.
+settings.json's deny list holds no `Read()` entry now: the entries moved to
+policies/cli-deny.v1.json, and the pre-tool rule hooks/pretool-deny-list.py refuses
+`cat .env` and, following the `cd`, `cd config && cat .env`, as well as a relative read after
+a `cd` to a directory it cannot know whose name an entry could match. `read_denies` reads
+settings.json only, so the second finding finds nothing; the convention still keeps agents
+clear of that refusal.
 """
 from __future__ import annotations
 

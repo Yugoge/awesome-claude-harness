@@ -18,9 +18,9 @@ GIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
 
-def run(repo: Path, base: str, head: str, body: str | None = None, tmp: Path | None = None):
+def run(repo: Path, base: str, head: str, body: str | None = None, tmp: Path | None = None, *more: str):
     cmd = [sys.executable, str(SCRIPT), "--repo", str(repo), "--base", base, "--head", head,
-           "--python", sys.executable]
+           "--python", sys.executable, *more]
     if body is not None:
         assert tmp is not None
         (tmp / "body.md").write_text(body, encoding="utf-8")
@@ -223,3 +223,33 @@ def test_the_merge_base_is_the_red_side(small):
     r = run(repo, moved, head)
     assert r.returncode == 0, r.stdout + r.stderr
     assert f"merge base `{base[:12]}`" in r.stdout
+
+
+# --- the budget bounds the run and never changes its result --------------------------------------------
+
+SLOW_F = "import time, helper\nfrom lib import f\n\ndef test_f():\n    time.sleep(1.2)\n    assert f() == {}\n"
+TEST_G = "import helper\nfrom lib import f\n\ndef test_g():\n    assert f() == {}\n"
+
+
+def test_once_decided_the_budget_leaves_the_rest_unrun_and_says_so(small):
+    repo, base = small
+    head = commit(repo, {"lib.py": "def f():\n    return 2\n", "tests/test_f.py": SLOW_F.format(2),
+                         "tests/test_g.py": TEST_G.format(2)}, "fix")
+    r = run(repo, base, head, None, None, "--budget", "1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "**PASS**: 1 test id(s) red then green." in r.stdout
+    assert "Not run, the result being decided and the budget of 1s spent: `tests/test_g.py`" in r.stdout
+    assert "test_g.py::test_g" not in r.stdout
+
+
+def test_until_decided_the_budget_stops_nothing(small):
+    repo, base = small
+    # test_f passes on both sides after more than the budget: nothing is decided, so test_g still runs.
+    head = commit(repo, {"lib.py": "def f():\n    return 1\n\ndef g():\n    return 3\n",
+                         "tests/test_f.py": SLOW_F.format(1),
+                         "tests/test_g.py": "import helper\nfrom lib import g\n\ndef test_g():\n"
+                                            "    assert g() == 3\n"}, "add g")
+    r = run(repo, base, head, None, None, "--budget", "1")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "**PASS**: 1 test id(s) red then green." in r.stdout and "Not run" not in r.stdout
+    assert "| `tests/test_g.py::test_g` | collection error | passed | red then green (collection error on red) |" in r.stdout

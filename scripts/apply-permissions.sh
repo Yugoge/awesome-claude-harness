@@ -19,6 +19,7 @@ resolve_project_dir() {
 PERMS="${1:?Missing permissions JSON path}"
 PROJECT_DIR="$(resolve_project_dir)"
 SETTINGS="${2:-$PROJECT_DIR/.claude/settings.json}"
+if [ -z "${2:-}" ] && claude_refuse_root "$PROJECT_DIR" apply-permissions; then exit 1; fi  # the filesystem root is no project
 # Readable, not regular: /dev/stdin takes the list from a pipe (/dev and /dev-command).
 [ -r "$PERMS" ]    || { echo "perms file not found: $PERMS" >&2; exit 1; }
 # The file is read through the one load of a settings file (hooks/lib/claude_home.py): an

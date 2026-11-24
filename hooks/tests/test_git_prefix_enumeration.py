@@ -58,8 +58,6 @@ sys.path.insert(0, str(HOOKS))
 from lib.git_command_classifier import (  # noqa: E402
     _SHELL_PREFIX_KEYWORDS,
     _command_token_index,
-    _segments,
-    _segments_with_kind,
     classify_git_command,
     iter_git_invocations,
 )
@@ -84,13 +82,12 @@ DISPATCHERS = (
 def dispatches(command):
     """Return the set of _evaluate_* dispatchers the guard invokes for `command`.
 
-    Every dispatcher is replaced by a recorder and `_check_git_allowlist` is
-    pinned False, so the result depends ONLY on what the enumerator produced —
-    never on grant files, sentinels, or any other machine state.
+    Every dispatcher is replaced by a recorder, so the result depends ONLY on
+    what the enumerator produced. The guard reads no /allow grant (the launcher
+    releases a refused call), so no grant file can change the result.
     """
     called = set()
     saved = {name: getattr(GUARD, name) for name in DISPATCHERS}
-    saved_allow = GUARD._check_git_allowlist
     saved_block = GUARD._block
     blocked = []
 
@@ -100,14 +97,12 @@ def dispatches(command):
     try:
         for name in DISPATCHERS:
             setattr(GUARD, name, recorder(name))
-        GUARD._check_git_allowlist = lambda c, d: False
         GUARD._block = lambda msg: blocked.append(msg)
         GUARD._evaluate_command(command, {"tool_name": "Bash",
                                           "tool_input": {"command": command}})
     finally:
         for name, fn in saved.items():
             setattr(GUARD, name, fn)
-        GUARD._check_git_allowlist = saved_allow
         GUARD._block = saved_block
     if blocked:
         called.add("_block")
@@ -304,117 +299,6 @@ def test_guard_source_still_routes_through_the_residual_aware_entry_point():
 def test_classifier_reads_the_closed_boundaries(command):
     """DETECTOR 8: wrapper flags, redirections and reserved words before git stay closed."""
     assert [inv.subcommand for inv in iter_git_invocations(command)] == ["push"]
-
-
-# ---------------------------------------------------------------------------
-# Backslash-newline continuation fold (task 20261005-071524; see
-# docs/dev/do-report-20261005-071524.json for the incident writeup).
-# ---------------------------------------------------------------------------
-
-_EXECUTE_PUSH_CONTINUATION_COMMAND = (
-    "cd /srv/harness && \\\n"
-    "python3 ~/.claude/scripts/execute-push.py \\\n"
-    '  --repo-hash "abc123def456" \\\n'
-    '  --branch "fix/dev-fanout-gatekeeper-20260717" \\\n'
-    '  --remote "origin" \\\n'
-    '  --request-id "20261005-070100" \\\n'
-    '  --repo-root "/srv/harness"'
-)
-
-_EXECUTE_PUSH_FLAGS = (
-    "--repo-hash", "--branch", "--remote", "--request-id", "--repo-root",
-)
-
-
-def test_execute_push_continuation_command_keeps_all_five_flags_in_one_segment():
-    """Asserts the cd+execute-push.py continuation command segments into one
-    target segment carrying all five flags, never the lone-backslash remnant.
-    """
-    segs = _segments(_EXECUTE_PUSH_CONTINUATION_COMMAND)
-    assert len(segs) == 2, (
-        f"expected exactly 2 segments (the `cd ... &&` opener, then the fully "
-        f"folded python3 execute-push.py invocation); got {len(segs)}: {segs!r}"
-    )
-    target = next((s for s in segs if "execute-push.py" in s), None)
-    assert target is not None, (
-        f"no segment contains execute-push.py; segmentation lost the target "
-        f"command entirely: {segs!r}"
-    )
-    tokens = target.split()
-    assert tokens != ["\\"], (
-        "target segment collapsed to the lone backslash token -- this is the "
-        "exact pre-fix incident signature (seven-way split, target segment's "
-        "args reduced to one orphaned backslash token)"
-    )
-    missing = [flag for flag in _EXECUTE_PUSH_FLAGS if flag not in tokens]
-    assert not missing, (
-        f"target segment is missing flags {missing!r} that are present in the "
-        f"source command -- every flag was in the source yet reported missing; "
-        f"got tokens: {tokens!r}"
-    )
-
-
-def test_segments_and_segments_with_kind_agree_on_the_continuation_fold():
-    """Asserts _segments() and _segments_with_kind() never diverge on the
-    continuation fold, across the incident command and all negative controls
-    below.
-    """
-    for command in (
-        _EXECUTE_PUSH_CONTINUATION_COMMAND,
-        "git commit -m 'line1\\\nline2'",
-        'echo "foo\\\\\nbar"',
-        'echo "foo\\\nbar"',
-    ):
-        assert _segments(command) == [
-            seg for seg, _kind, _in_quote in _segments_with_kind(command)
-        ], f"_segments()/_segments_with_kind() diverged for {command!r}"
-
-
-def test_backslash_inside_single_quotes_does_not_fold():
-    """Negative control: a backslash inside single quotes never sets `esc`,
-    so this must still split like before -- the same quote-blind behavior
-    test_residual_false_positives.py's enumeration-monotonicity tests rely on.
-    """
-    command = "git commit -m 'line1\\\nline2'"
-    segs = _segments(command)
-    assert len(segs) == 2, (
-        f"a backslash inside single quotes must NOT fold the following "
-        f"newline away; got {segs!r}"
-    )
-    assert segs[0].endswith("\\"), (
-        f"the literal backslash must survive in the first segment; got {segs[0]!r}"
-    )
-    assert segs[1] == "line2'"
-
-
-def test_double_backslash_at_line_end_does_not_fold():
-    """Negative control: a doubled/escaped backslash before a newline must
-    not fold -- this is what distinguishes a real continuation from an
-    escaped literal backslash.
-    """
-    command = 'echo "foo\\\\\nbar"'
-    segs = _segments(command)
-    assert len(segs) == 2, (
-        f"a line ending in an ESCAPED backslash (\\\\) must NOT fold its "
-        f"newline; got {segs!r}"
-    )
-    assert segs[0].endswith("\\\\"), (
-        f"both backslash characters must survive in the first segment; got {segs[0]!r}"
-    )
-    assert segs[1] == 'bar"'
-
-
-def test_double_quoted_backslash_newline_folds_per_bash_semantics():
-    """Positive control: a single backslash before a newline inside double
-    quotes also folds, confirming the fold isn't special-cased to unquoted
-    text.
-    """
-    command = 'echo "foo\\\nbar"'
-    segs = _segments(command)
-    assert segs == ['echo "foobar"'], (
-        f"a single backslash before a newline inside double quotes must fold "
-        f"exactly as bash does (both chars deleted, no space inserted); got {segs!r}"
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -301,21 +301,6 @@ def test_plan_mode_is_refused_on_every_call(session, tool, consent):
         assert not session.streak_file().exists(), "a refused plan-mode call counts nothing"
 
 
-@pytest.mark.parametrize("tool", PLAN_TOOLS)
-@pytest.mark.parametrize("consent", [False, True], ids=["plain", "under-do"])
-def test_an_allow_grant_naming_the_tool_passes_one_call(session, tool, consent):
-    if consent:
-        session.do_consent()
-    other = next(t for t in PLAN_TOOLS if t != tool)
-    session.allow(tool)
-    assert not session.passes(other, PERMANENT), f"a grant naming {tool} passed {other}"
-    assert session.grant_file().exists()
-    assert session.passes(tool, PERMANENT), "the granted call"
-    session.finished(tool)
-    assert not session.grant_file().exists(), "the grant is spent by the call it let through"
-    assert not session.passes(tool, PERMANENT), "a second call on one grant"
-
-
 def test_a_grant_naming_another_tool_does_not_pass_plan_mode(session):
     session.allow("Monitor")
     for tool in PLAN_TOOLS:

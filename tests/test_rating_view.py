@@ -2,7 +2,7 @@
 text, and commands/rating.md only runs that script.
 
 Every run uses a temporary config directory (CLAUDE_CONFIG_DIR) and a temporary home, so the real home is never
-read or written. The renderer itself is tested in tests/test_score_log.py; here the script is run as a process."""
+read or written; the log is where score_log.log_path() puts it for that home (its state root's logs/). The renderer itself is tested in tests/test_score_log.py; here the script is run as a process."""
 
 from __future__ import annotations
 
@@ -34,8 +34,14 @@ def world(tmp_path: Path) -> SimpleNamespace:
     config.mkdir()
     home.mkdir()
     subprocess.run(["git", "-C", str(project), "init", "-q"], check=True, capture_output=True, env={**os.environ, "HOME": str(home)})
-    return SimpleNamespace(project=project, config=config, home=home, log=config / "logs" / "lifecycle.jsonl",
-                           key=score_log.project_key(project))
+    return SimpleNamespace(project=project, config=config, home=home, log=_log_under(home), key=score_log.project_key(project))
+
+
+def _log_under(home: Path) -> Path:
+    """Where the score log is for a run whose HOME is `home`, by the writer's own definition (score_log.log_path)."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("HOME", str(home))
+        return score_log.log_path()
 
 
 def _rows(key: str) -> list[dict]:
@@ -83,12 +89,19 @@ def test_the_script_prints_the_renderers_text_for_the_working_directorys_project
     assert "stranger" not in expected and "ghost" not in expected
 
 
-def test_the_default_log_is_under_the_homes_dot_claude_when_no_config_directory_is_set(world: SimpleNamespace) -> None:
+def test_the_log_is_read_from_the_homes_state_root_whatever_the_config_directory(world: SimpleNamespace) -> None:
     rows = _rows(world.key)
-    world.log = world.home / ".claude" / "logs" / "lifecycle.jsonl"
     _write(world, rows)
-    done = _run(world, CLAUDE_CONFIG_DIR=None)
-    assert done.stdout == score_log.render_rating_view(rows, world.key, LATER) + "\n" and done.returncode == 0
+    expected = score_log.render_rating_view(rows, world.key, LATER) + "\n"
+    assert world.log.is_relative_to(world.home / ".local" / "state" / "claude-harness")
+    for config in (str(world.config), None):
+        done = _run(world, CLAUDE_CONFIG_DIR=config)
+        assert (done.returncode, done.stdout) == (0, expected)
+    world.log.unlink()  # rows only in the old places (the config directory's logs, the home's .claude/logs) are not read
+    for old in (world.config, world.home / ".claude"):
+        world.log = old / "logs" / "lifecycle.jsonl"
+        _write(world, rows)
+    assert all(_run(world, CLAUDE_CONFIG_DIR=config).stdout == NO_RECORDS + "\n" for config in (str(world.config), None))
 
 
 def test_the_output_is_plain_text(world: SimpleNamespace) -> None:
@@ -108,10 +121,11 @@ def test_a_log_with_no_record_for_the_project_means_no_records_yet(world: Simple
         _write(world, _rows("d" * 12))
     elif log == "no kind only":
         _write(world, [{"ts": "2026-05-01T00:00:00Z", "agent": "dev", "event": "old", "delta": 2, "new_score": 52}])
+    before = _tree(world.home)
     done = _run(world)
     assert (done.returncode, done.stdout, done.stderr) == (0, NO_RECORDS + "\n", "")
-    if log == "missing":
-        assert list(world.config.iterdir()) == []  # the view creates nothing, not even the logs directory
+    if log == "missing":  # the view creates nothing, not even the logs directory
+        assert list(world.config.iterdir()) == [] and _tree(world.home) == before
 
 
 @pytest.mark.parametrize("damage", ["malformed middle line", "directory", "undecodable"])
@@ -163,7 +177,7 @@ def test_the_command_is_human_only_and_denied_to_the_skill_tool() -> None:
     front, _ = _command()
     assert front["disable-model-invocation"] == "true" and front["description"].strip()
     settings = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))
-    assert "Skill(rating)" in settings["permissions"]["deny"]
+    assert "Skill(rating)" in json.loads((REPO / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"]
     assert not [rule for rule in settings["permissions"]["allow"] if "rating" in rule]
 
 

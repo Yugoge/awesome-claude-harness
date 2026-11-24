@@ -156,6 +156,34 @@ resolve_optional_file() {
   return 1
 }
 
+# claude_config_home -- twin of claude_home.py config_home(): ${CLAUDE_CONFIG_DIR:-$HOME/.claude} as
+# written; when its settings.json is a link, the directory that link resolves into.
+claude_config_home() {
+  local cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}" s
+  s="$(readlink -m -- "$cfg/settings.json")"
+  if [ "$s" = "$(readlink -m -- "$cfg")/settings.json" ]; then printf '%s\n' "$cfg"; else dirname -- "$s"; fi
+}
+
+# claude_is_fs_root DIR -- twin of locations.is_fs_root: whether DIR, resolved, is the filesystem root.
+# The one shell definition of "the root is no top".
+claude_is_fs_root() { [ "$(readlink -m -- "$1" 2>/dev/null)" = "/" ]; }
+
+# claude_repo_top DIR -- twin of locations.repo_top: the top of the git work tree holding DIR; nothing
+# (status 1) outside one and when that top is the filesystem root.
+claude_repo_top() {
+  local top
+  top="$(git -C "${1:-.}" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$top" ] && ! claude_is_fs_root "$top" && printf '%s\n' "$top"
+}
+
+# claude_refuse_root DIR WHO -- status 0 and one line on stderr per process when DIR, the project a writer
+# would write below, is the filesystem root: the writer then writes nothing.
+claude_refuse_root() {
+  claude_is_fs_root "$1" || return 1
+  printf '%s: the filesystem root is no project: nothing is written below it\n' "$2" >&2
+  return 0
+}
+
 # When executed directly (not sourced), act as a tiny CLI so other languages /
 # tests can shell out:  claude_home.sh resolve | require <rel> | optional <rel>
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then

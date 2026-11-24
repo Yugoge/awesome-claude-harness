@@ -46,6 +46,8 @@ ENV_ROOTS = {
     "CLAUDE_CODE_TMPDIR": "tmpdir",
 }
 
+_ROOT_TOKENS = frozenset(P.tok(r) for r in P.ROOTS)  # a value that is a root and nothing more
+
 _EXIT_CALLS = {"sys.exit", "exit", "quit", "os._exit", "builtins.exit"}
 _SUBPROCESS = {"subprocess.run", "subprocess.Popen", "subprocess.check_output",
                "subprocess.check_call", "subprocess.call", "os.system", "os.popen",
@@ -875,6 +877,10 @@ class FunctionWalk:
                     unk = [v for v in vals if isinstance(v, Unk)]
                     return unk[0] if unk else vals[-1]
                 first = keep[0][0]
+                if isinstance(first, Str) and first.alts and set(first.alts) <= _ROOT_TOKENS:
+                    # `os.environ.get("TMPDIR") or "/var/tmp/x"`: a root variable's value with a fallback
+                    # names the root, as `get(ROOT, fallback)` (_env) and the shell's `${ROOT:-fallback}` do
+                    return first
                 if (len(keep) > 1 and isinstance(first, Str) and all(P.has_params(t) for t in first.alts)
                         and all(isinstance(v, Str) and set(v.alts) <= {".", "./"} for v, _ in keep[1:])):
                     # `os.path.dirname(p) or "."`: the "." is the directory of a bare relative p,

@@ -38,7 +38,7 @@ Usage: /codex <prompt>                    run codex exec (gpt-5.6-sol, reasoning
 One Bash call runs `scripts/steps/codex-run.py`: it calls the wrapper, tees the output into a file and
 prints `out=<path>` first (`detach` also prints `pid=<pid>`). The file is
 `docs/codex/<task_id>/<role>.txt` when `CODEX_OUT_TASK_ID` and `CODEX_OUT_ROLE` are set to safe names,
-else a new file under `/var/tmp/codex-outputs/`. The prompt goes in through a quoted heredoc, verbatim.
+else a new file under `/var/tmp/codex-outputs/` (`$CODEX_OUT_DIR` instead, when it is an absolute path). The prompt goes in through a quoted heredoc, verbatim.
 
 ```bash
 python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/steps/codex-run.py" review

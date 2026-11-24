@@ -4,7 +4,7 @@
 A specialist is whatever dispatch's own obligation declares a specialist
 report (schemas/specialist-report.v1.json; /dev-overnight Step 3's template),
 not a role list in the hook: such a dispatch's report is classified and its
-yield logged under the dispatch's type, every other dispatch only traced.
+yield logged under the dispatch's type; any other dispatch leaves nothing.
 """
 from __future__ import annotations
 
@@ -60,11 +60,10 @@ def _dispatch(tmp_path: Path, subagent_type: str, prompt: str) -> Path:
 
 @pytest.mark.parametrize("subagent_type", ["architect", "ui-specialist", "user", "product-owner"])
 def test_a_dispatch_declaring_a_specialist_report_records_its_yield(tmp_path, subagent_type):
-    cycle = _project(tmp_path)
+    _project(tmp_path)
     log = _dispatch(tmp_path, subagent_type, _obligation(subagent_type, "specialist-report.v1"))
     records = [json.loads(line) for line in log.read_text().splitlines()]
     assert [r["specialist_type"] for r in records] == [subagent_type]
-    assert (cycle / "trace.jsonl").is_file()
 
 
 # The obligation is built inside the test, not in the parameter list: its dispatched_at is the
@@ -75,11 +74,10 @@ def test_a_dispatch_declaring_a_specialist_report_records_its_yield(tmp_path, su
     ("pm", "triage-report.v1"),
     ("qa", "qa-report.v2"),
 ])
-def test_any_other_dispatch_is_only_traced(tmp_path, subagent_type, schema):
+def test_any_other_dispatch_leaves_nothing(tmp_path, subagent_type, schema):
     cycle = _project(tmp_path)
     prompt = (_obligation(subagent_type, schema) if schema
               else "Provide your observations; no obligation")
     log = _dispatch(tmp_path, subagent_type, prompt)
     assert not log.exists()
-    assert [json.loads(line)["agent_type"] for line in (cycle / "trace.jsonl").read_text().splitlines()] \
-        == [subagent_type]
+    assert sorted(p.name for p in cycle.iterdir()) == ["cycle-contract.json"]  # no record of the call beside the contract

@@ -41,7 +41,7 @@ Your prompt carries `Project path:`, `Already addressed:` (a JSON array of issue
 
 ## Steps
 
-Your steps start after the test plan is read (the shared protocol's Step 0). Browser tools are `mcp__playwright__browser_*` (navigate, console_messages, network_requests, evaluate, snapshot, take_screenshot).
+Your steps start after the test plan is read (the shared protocol's Step 0). Browser tools are the ones your session has, whichever provider supplies them (your row admits them all as `<browser tools>`, defined once in `hooks/lib/policy_registry.py`); in Playwright's names, `mcp__playwright__browser_*` (navigate, console_messages, network_requests, evaluate, snapshot, take_screenshot).
 
 ### Step 1: App discovery
 
@@ -141,7 +141,7 @@ Write a JSON report to the specified output path. Under /dev-overnight your disp
 
 Every issue needs `location.file`, `location.line`, `measured` and `expected`; BA treats a finding without them as tainted (`templates/prompt-includes/specialist-findings-intake.md`).
 
-**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`, OB-L46) lets a Write replace `docs/codex/` and `/var/tmp/codex-outputs/` and `/tmp/claude-scratch/architect/` drafts and your `.claude/scratch/<session>/<role>/<dispatch>/` dir (the namespace tool-policy gives you): scratch, and temp files that are not harness state. Write-once (a second Write is refused): your report under `docs/dev/overnight/` (the obligation path G2 reads); any tracked file; and every file the rule protects (harness state, another session's scratch, a hard-linked file, a file another enclosing git work tree tracks, dot-named or `.claude`/`.git` paths outside a project's `.claude/scratch/`, and gate-read artifacts under `docs/dev/`, `docs/clean/`, `docs/test/` and `tests/`). Write those once, complete, and report a refusal rather than route around it.
+**Rewriting your own output.** You have Write, and Edit only on the report your dispatch's obligation declares (`declared_artifact_tools` in your `policies/tool-policy.v1.json` row), so a second Write is how you revise any other file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`, OB-L46) lets a Write replace `docs/codex/` and `/var/tmp/codex-outputs/` and `<session root>/architect/` drafts (your drafts directory under the session's scratch directory) and your own scratch directory `<session scratch directory>/<role>/<agent id>/` (made when you start; tool-policy names it in a refusal): scratch, and temp files that are not harness state. Write-once (a second Write is refused): your report under `docs/dev/overnight/` (the obligation path G2 reads; when G2 returns it, repair it in place with Edit); any tracked file; and every file the rule protects (harness state, another session's scratch, a hard-linked file, a file another enclosing git work tree tracks, dot-named or `.claude`/`.git` paths outside a project's `.claude/scratch/`, and gate-read artifacts under `docs/dev/`, `docs/clean/`, `docs/test/` and `tests/`). Write those once, complete, and report a refusal rather than route around it.
 
 ## Severity Calibration
 

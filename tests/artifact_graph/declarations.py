@@ -117,6 +117,9 @@ class TodoEval:
                 return [scope[n.id]]
             if n.id in self.consts:
                 return self.ev(self.consts[n.id], {})
+            other = self.loader(self.imports[n.id][0]) if n.id in self.imports else None
+            if other is not None and self.imports[n.id][1] in other.consts:  # a constant another todo script states
+                return other.ev(other.consts[self.imports[n.id][1]], {})  # (dev-command's ROUND_CALLS: dev.py's)
             raise _Unsupported(f"name {n.id}")
         if isinstance(n, (ast.List, ast.Tuple)):
             items = []
@@ -209,11 +212,16 @@ def todo_steps(root: Path, files: list[str]) -> list[dict]:
                     continue
                 content = str(step.get("content", ""))
                 call = step.get("subagent_call")
-                agent = call.get("subagent_type") or call.get("agent") if isinstance(call, dict) else None
+                # one call, or a list stating every call of the step (the requirement round: ROUND_CALLS), each by
+                # what it is: role, prompt mode, optional; subagent_call is the one the step requires
+                calls = [{"role": c.get("subagent_type") or c.get("agent"), "mode": c.get("prompt_mode") or c.get("mode"),
+                          "optional": bool(c.get("optional"))}
+                         for c in (call if isinstance(call, list) else [call]) if isinstance(c, dict)]
+                required = [c["role"] for c in calls if not c["optional"]]
                 out.append({
                     "kind": "declaration", "type": "todo_step", "command": command,
                     "variant": vi, "index": si + 1, "step": content,
-                    "subagent_call": agent,
+                    "subagent_call": required[0] if len(required) == 1 else None, "subagent_calls": calls,
                     "site": f"{definer.path}:{_line_of_text(text, content, step)}",
                 })
     return out

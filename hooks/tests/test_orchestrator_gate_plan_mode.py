@@ -185,11 +185,8 @@ def test_refusal_says_when_exit_plan_mode_passes(tmp_path):
     assert "plan mode" not in p.stderr.split("\n", 1)[1].split("Whitelisted tools")[0]
 
 
-@pytest.mark.parametrize("tool", ["EnterPlanMode", "ExitPlanMode"])
-def test_allow_grant_still_passes_one_call(tmp_path, tool):
-    s = Session(tmp_path)
-    s.allow_grant(tool)
-    assert s.allowed(tool, "default", tool_input={})
+# Retired: test_allow_grant_still_passes_one_call. The gate reads no /allow grant; the owner's
+# /allow releases its refusal in the launcher (test_allow_releases_anything.py).
 
 
 @pytest.mark.parametrize("tool", ["EnterPlanMode", "ExitPlanMode"])

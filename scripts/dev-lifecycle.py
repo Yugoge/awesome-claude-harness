@@ -37,6 +37,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -52,11 +53,6 @@ from hooks.lib.obligation import terminal_status  # noqa: E402  (the one termina
 # rule (hooks/lib/obligation.py).
 from hooks.lib.obligation import TASK_ID_RE  # noqa: E402
 from hooks.lib.obligation import transcript_scan  # noqa: E402  (one read of each transcript per scan)
-
-_HOOK_DENY_RE = re.compile(
-    r"(?:PreToolUse|PostToolUse|Stop):[^\n]*hook error:[^\n]*BLOCKED",
-    re.IGNORECASE,
-)
 
 # --------------------------------------------------------------------------
 # Read-only reuse of sibling scripts (module exec, never their main()/CLI).
@@ -305,9 +301,41 @@ def close_and_commit(
     if text is None:
         return {"state": "blocked", "next_action": "inspect", "blocker": "UNREADABLE_CLOSE_REPORT"}
     verdict = close_verdict_mod.classify_line(close_verdict_mod.last_nonempty(text))
+    if verdict == "retired":
+        return retirement(text, task_id, close_verdict_mod)
     if verdict in ("no", "unknown"):
         return {"state": "close_failed", "next_action": "resume_close"}
     return commit_detection(project_root, task_id, report_path, commit_repos_mod)
+
+
+_TRANSCRIPT_LINE = re.compile(r"^Transcript: (.+)$", re.M)
+
+
+def retirement(text: str, task_id: str, close_verdict_mod: ModuleType) -> dict:
+    """The row of a close report ending on the owner's retirement (hooks/lib/close_exit.py): state
+    ``retired`` (next_action none: no --auto list and no Stop gate --auto list holds it) with its reason
+    and time, when the transcript its section names holds a human-typed ``/close --retire`` opener of
+    this task whose hook context holds close_exit's ``retired`` result line (command_span: origin human
+    or sdk; a scheduled prompt, an agent's text or a hand-run of the hook leaves no such pair). Else
+    blocked, RETIRE_UNVERIFIED: a line nobody can show the owner typed retires nothing. The time and
+    reason are close-verdict.py's reading of the line (retired_fields), not one of this script's."""
+    from hooks.lib import command_span
+
+    found = close_verdict_mod.retired_fields(close_verdict_mod.last_nonempty(text))
+    named = _TRANSCRIPT_LINE.findall(text)
+    result = re.compile(rf"^\[/close\] completed by code: {re.escape(task_id)} retired$", re.M)
+    if found and named:
+        transcript = named[-1].strip()
+        for line, command, args in command_span.openers(transcript):
+            try:
+                words = shlex.split(args)
+            except ValueError:
+                continue
+            if command == "close" and "--retire" in words and task_id in words and \
+                    any(command_span.Span(command, args, line, transcript)._opener_context(result)):
+                return {"state": "retired", "next_action": "none",
+                        "retired_at": found[0], "retired_reason": found[1]}
+    return {"state": "blocked", "next_action": "inspect", "blocker": "RETIRE_UNVERIFIED"}
 
 
 # --------------------------------------------------------------------------
@@ -539,6 +567,61 @@ def auto_targets(project_root: Path, next_action: str, cutoff: Optional[float] =
     return targets
 
 
+# The --auto list fixed at the owner's command (commands/commit.md and close.md: "the snapshot is frozen for the
+# batch"): written once by freeze_auto_targets at the typed prompt (hooks/userprompt-auto-targets.py), read by the
+# Stop gate (read_frozen); the gate scans no ticket for a run whose list it reads. One file per session under the
+# state root, replaced by the session's next --auto command; a file older than FROZEN_KEEP goes at the next write.
+FROZEN_DIR = "auto-targets"
+FROZEN_KEEP = 7 * 86400
+FROZEN_SKEW = 300.0  # seconds between the prompt hook's clock and the CLI's record of the same prompt
+
+
+def frozen_path(session_id: str) -> Optional[Path]:
+    import re
+    from hooks.lib import locations
+    if not isinstance(session_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id):
+        return None
+    return Path(locations.state_root()) / FROZEN_DIR / f"{session_id}.json"
+
+
+def freeze_auto_targets(project_root: Path, action: str, session_id: str, arrived_at: float) -> Optional[Path]:
+    """Write the --auto ``action``'s targets at ``arrived_at`` (auto_targets with that cut-off) for the session.
+    The session's earlier list goes first, so a listing that does not finish leaves none to be taken for this one."""
+    path = frozen_path(session_id)
+    if path is None:
+        return None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    for old in path.parent.glob("*.json"):
+        try:
+            if old.stat().st_mtime < arrived_at - FROZEN_KEEP:
+                old.unlink()
+        except OSError:
+            pass
+    doc = {"action": action, "project_root": str(Path(project_root).resolve()), "arrived_at": arrived_at,
+           "targets": auto_targets(Path(project_root), action, arrived_at)}
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}.", suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(doc, handle)
+    os.replace(tmp, path)
+    return path
+
+
+def read_frozen(session_id: str, project_root: Path, action: str, opened_at: Optional[float]) -> Optional[list[str]]:
+    """The session's frozen targets when they were fixed for this run (same action and project, written within
+    FROZEN_SKEW of the opener the CLI recorded); None otherwise."""
+    path = frozen_path(session_id)
+    doc = _read_json(path) if path is not None and opened_at is not None else None
+    if not isinstance(doc, dict) or doc.get("action") != action or not isinstance(doc.get("targets"), list):
+        return None
+    if doc.get("project_root") != str(Path(project_root).resolve()):
+        return None
+    arrived = doc.get("arrived_at")
+    if not isinstance(arrived, (int, float)) or abs(arrived - opened_at) > FROZEN_SKEW:
+        return None
+    return [t for t in doc["targets"] if isinstance(t, str)]
+
+
 def validate_auto_flag_combination(
     auto: bool, explicit_task_id: Optional[str], force: bool, bulk: bool
 ) -> Optional[str]:
@@ -556,37 +639,6 @@ def validate_auto_flag_combination(
     if bulk:
         return "--auto cannot be combined with --bulk"
     return None
-
-
-def classify_walk_outcome(tool_result_text: str, *, partial_multi_repo_commit: bool = False) -> str:
-    """Classify one parent's Step-walk outcome (objection 7's structured taxonomy).
-
-    The walk itself is an orchestrator PROCEDURE (commands/close.md Step 0-3 /
-    commands/commit.md Step 3-8 -- prose an agent follows via individual tool
-    calls, not a literal bash script an exit code terminates). This pure
-    function is the recognition predicate --auto applies to each walk's
-    terminal tool-call result text:
-
-      hook_deny        -- a PreToolUse/PostToolUse/Stop hook literally
-                           blocked a tool call ("hook error: ... BLOCKED")
-      partial_abort     -- a partial multi-repository commit (commit.md only)
-      success            -- the last line's close verdict classifies yes
-                             (hooks/lib/close-verdict.py), or COMMIT: APPROVE
-                             observed
-      ordinary_reject    -- everything else (a script's own exit 1/2,
-                             CLOSE_FINDINGS, COMMIT: REJECT, ...)
-    """
-    if partial_multi_repo_commit:
-        return "partial_abort"
-    text = tool_result_text or ""
-    if _HOOK_DENY_RE.search(text):
-        return "hook_deny"
-    verdict = _load_close_verdict_module()
-    if verdict.classify_line(verdict.last_nonempty(text)) == "yes":
-        return "success"
-    if re.search(r"COMMIT:\s*APPROVE", text, re.IGNORECASE) or re.search(r"\bcommitted\b", text, re.IGNORECASE):
-        return "success"
-    return "ordinary_reject"
 
 
 # --------------------------------------------------------------------------
@@ -608,6 +660,8 @@ def render_table(rows: list[dict]) -> str:
     lines.append("  ".join("-" * widths[h] for h in _TABLE_HEADERS))
     for sr in str_rows:
         lines.append("  ".join(sr[h].ljust(widths[h]) for h in _TABLE_HEADERS))
+    lines += [f"{r['task_id']}: retired by the owner at {r['retired_at']}: {r['retired_reason']}"
+              for r in rows if r.get("state") == "retired"]
     return "\n".join(lines)
 
 
@@ -652,7 +706,8 @@ class Progress:
 
 
 def _default_project_dir() -> str:
-    return str(Path(__file__).resolve().parent.parent)
+    from hooks.lib import locations  # as hooks.lib.obligation above: this script runs in its harness
+    return str(locations.project_root(bash=True))
 
 
 def main(argv: Optional[list[str]] = None) -> int:

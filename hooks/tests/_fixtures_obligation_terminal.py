@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Shared fixture builders for hooks/tests/test_stop_obligation_gate.py,
-hooks/tests/test_posttool_overnight_loop_terminal_gate.py (which pin that
-neither G4's Stop stub nor the overnight cycle reset re-checks an artifact
-any more, P1b row 3) and the dispatch-record walk's test in
+"""Shared fixture builders for
+hooks/tests/test_posttool_overnight_loop_terminal_gate.py (which pins that
+the overnight cycle reset no longer re-checks an artifact, P1b row 3) and
+the dispatch-record walk's test in
 hooks/tests/test_obligation.py.
 
 NOT a test module itself (no test_* functions -- pytest will not collect

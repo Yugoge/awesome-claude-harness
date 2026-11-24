@@ -118,10 +118,12 @@ def test_registered_entries_pass_harmless_forms(tmp_path, command):
         assert not _refused(proc), (hook, command, proc.returncode, proc.stderr[-400:])
 
 
-def test_allow_grant_still_releases_direct_form(tmp_path):
+def test_the_direct_form_is_refused_and_a_grant_file_changes_nothing(tmp_path):
+    # The guard reads no /allow grant; the owner's /allow releases the refused call in the
+    # launcher (test_allow_releases_anything.py).
     grant = [{"op": "git", "args_contain": ["branch", "-D", "old"]}]
     proc = _run(tmp_path / "granted", GUARD, "git branch -D old", grant=grant)
-    assert proc.returncode == 0, proc.stderr[-400:]
+    assert proc.returncode == 2, proc.stderr[-400:]
     proc = _run(tmp_path / "ungranted", GUARD, "git branch -D old")
     assert proc.returncode == 2, proc.stderr[-400:]
 

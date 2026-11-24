@@ -60,10 +60,7 @@ IMPLICIT_REFERENCE_WORDS = [
 
 PREQUERY_SCHEMA = "graphify-prequery.v1"  # pre_query.json's schema: checked before every write
 
-# Hard token cap for structural_context
 HARD_TOKEN_CAP = 2000
-TARGET_TOKEN_MIN = 800
-TARGET_TOKEN_MAX = 1500
 
 # Rough token estimate: 1 token ≈ 4 chars
 def _estimate_tokens(text: str) -> int:
@@ -127,16 +124,14 @@ def _resolve_anchors_in_graph(mentions: list[str], graph: dict) -> dict[str, str
     return resolved
 
 
-# Coupling relations that constitute real structural signal — aligned with
-# scripts/graphify-enrich.py R1 REVERSE_DEPENDENT_RELATIONS. The pre-BA excerpt
+# Coupling relations that constitute real structural signal (graphify_lib.COUPLING_RELATIONS,
+# graphify-enrich's REVERSE_DEPENDENT_RELATIONS). The pre-BA excerpt
 # PRIORITISES these so inert `contains` (file->symbol skeleton, ~80% of links on
 # doc/config-heavy repos) and bare `references` (mostly return-type-annotation noise)
 # do NOT dominate the [:20] cap. Mirrors the Step-7.5/9 focused-subgraph emphasis so both
 # touchpoints surface coupling first; non-coupling edges only fill leftover slots (so the
 # excerpt is never empty on a coupling-poor graph — it just shows skeleton as last resort).
-COUPLING_RELATIONS = frozenset(
-    {"imports", "imports_from", "calls", "inherits", "uses", "re_exports"}
-)
+from graphify_lib import COUPLING_RELATIONS  # noqa: E402
 
 
 def _build_import_excerpt(graph: dict, anchor_labels: set[str]) -> list[str]:
@@ -239,7 +234,6 @@ def _truncate_structural_context(context: dict, hard_cap: int) -> tuple[dict, bo
             while context[key] and _estimate_tokens(json.dumps(context, ensure_ascii=False)) > hard_cap:
                 context[key] = context[key][:-1]
 
-    # Trim candidate_anchors if still over
     if "candidate_anchors" in context:
         while context["candidate_anchors"] and _estimate_tokens(json.dumps(context, ensure_ascii=False)) > hard_cap:
             context["candidate_anchors"] = context["candidate_anchors"][:-1]
@@ -300,7 +294,6 @@ def main() -> int:
         print(f"graphify-query: status=unavailable ({reason})")
         return 0
 
-    # Read requirement text
     req_path = Path(args.requirement_file)
     if not req_path.exists():
         result = empty_graph_context(STATUS_UNAVAILABLE, f"requirement file not found: {req_path}")

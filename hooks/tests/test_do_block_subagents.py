@@ -167,15 +167,8 @@ def test_e_flag_content_not_true_allowed():
     assert BLOCK_BANNER not in result.stderr
 
 
-def test_f_allow_agent_grant_overrides_block():
-    """(f) /allow Agent grant present + consent present -> exit 0
-    (human escape hatch, same match_sentinel_grant_for_tool lookup)."""
-    sid = _unique_sid()
-    with _consent_flag(sid), _allow_agent_grant(sid):
-        result = _run_hook({"tool_name": "Agent", "session_id": sid,
-                            "tool_input": {"prompt": "do work"}})
-    assert result.returncode == 0
-    assert BLOCK_BANNER not in result.stderr
+# (f) retired: the hook reads no /allow grant (match_sentinel_grant_for_tool is removed); the
+# owner's /allow releases its refusal in the launcher (test_allow_releases_anything.py).
 
 
 def test_g_non_agent_task_tool_allowed():

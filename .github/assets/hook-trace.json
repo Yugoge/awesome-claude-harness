@@ -78,20 +78,20 @@
       "stage": "safe-tools",
       "kind": "verdict",
       "block": true,
-      "text": "runs in the background by default and is forbidden",
+      "text": "Bash(run_in_background=true) is forbidden for orchestrator.",
       "source_ref": "hooks/pretool-block-background-tasks.py",
-      "source_locator": "hooks/pretool-block-background-tasks.py:113",
-      "extract_hash": "d06e3dcf7681f1b556a19f5f1685aaa97ac777b4d087ba9cd88d7c5cf491de74"
+      "source_locator": "hooks/pretool-block-background-tasks.py:125",
+      "extract_hash": "d6094d8eb4061369ed1ab8eb924da457b8d0f10f450dea8ae61f8c55fb8787fe"
     },
     {
       "id": "h08",
       "ordinal": 8,
       "stage": "safe-tools",
       "kind": "adaptation",
-      "text": "Pass run_in_background=false for synchronous execution",
+      "text": "Remove run_in_background or use /do.",
       "source_ref": "hooks/pretool-block-background-tasks.py",
-      "source_locator": "hooks/pretool-block-background-tasks.py:115",
-      "extract_hash": "e1642f503ced6801ea7141b810f2ce56a13d1ff6c1fc4816832beaeca2985475"
+      "source_locator": "hooks/pretool-block-background-tasks.py:126",
+      "extract_hash": "80f7583693e230c0e501f9d4d8945a52b8b3b7b3b5c6182a48355ba9a5142eef"
     },
     {
       "id": "h09",

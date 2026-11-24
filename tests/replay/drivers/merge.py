@@ -76,10 +76,20 @@ import subprocess
 from datetime import datetime, timezone
 
 from .. import agents, cmdtext
+from ..replay import clock_now
 from ..pipeline import _ASSIGN_RE, _FOR_RE, _SHELL_SPECIAL, _VAR_RE, Deviations, Orchestrator, parse_declare
 from . import close as closedrv
+from .dev import Steps, text_todos
 
 PIPELINE = "merge"
+# /merge has no todo script: its steps are the `### Step N:` headings of commands/merge.md (the text the Stop gate's
+# predicate cites), found by what each IS; the step that dispatches the analyst must still call merge-analyst
+M = Steps(text_todos("merge"), "merge", {
+    "shape": ("Determine worktree shape", None), "snapshot": ("Compute pre-merge snapshot", None),
+    "analyst": ("Dispatch merge-analyst subagent", "merge-analyst"), "grant": ("Read the merge-analyst grant", None),
+    "tips": ("Revalidate branch tips", None), "merge": ("Call merge.sh", None)})
+for _name in M._what:  # a step that is gone, or whose role changed, fails the load, naming the step
+    getattr(M, _name)
 # The artifact check's cost of each variant (tests/artifact_graph/shards.py balances its CI shards by it):
 # CPU seconds of the shipped and armed traced replays and their differential runs, measured at b8e34f4
 COST = {"plain": 104, "conflict": 177}
@@ -108,12 +118,22 @@ def refusal(rp, label: str) -> str:
     return f"{b['hook']} refused {label!r}: {b['text'][:300]}" if b else f"a hook refused {label!r}"
 
 
+REPORTED = "Where one refuses, nobody is asked about it."
+OWN_ACTIONS = re.compile(r'An action the refusal names that is the agent\'s own \(("[^)]*)\) is taken at once')
+
+
 def ask_refusal(o, devs, label: str, sec: str, anchor: str, facts: str = "") -> str:
     """A refusal as the text's Refusals rule words it: ONE AskUserQuestion, the refusal's quoted message
     (and its facts) the question, the action it names (Recommended) and the rule's other option the
-    options. Returns (action, answer); the owner picks the recommended option (replay.py)."""
+    options. Returns (action, answer); the owner picks the recommended option (replay.py). A Refusals rule that
+    reports the refusal and asks nobody (the 2026-11-19 text) asks nothing: (action, None)."""
     i = sec.find(anchor)
     act = re.search(r'action "([^"]+)"', sec[i:]) if i >= 0 else None
+    text = " ".join(o.text.split())
+    if act and (REPORTED in text or REPORTED.replace("Where one", "Where a step below") in text):
+        action = " ".join(act.group(1).split())
+        own = OWN_ACTIONS.search(text)
+        return action, (action if own and f'"{action}"' in own.group(1) else None)
     other = re.search(r'\(Recommended\), and "([^"]+)"', o.text)
     if not (act and other):
         raise cmdtext.TextNotFound(f"no refusal action after {anchor!r}, or no Refusals rule")
@@ -200,9 +220,9 @@ class MergeRun:
         return f"{self.tag} {text}"
 
     def role(self) -> str:
-        m = re.search(r"Dispatch the `([\w-]+)` subagent", cmdtext.section(self.o.text, "Step 2"))
+        m = re.search(r"Dispatch the `([\w-]+)` subagent", cmdtext.section(self.o.text, f"Step {M.analyst}"))
         if not m:
-            raise cmdtext.TextNotFound("Step 2 names no `<role>` subagent to dispatch")
+            raise cmdtext.TextNotFound(f"Step {M.analyst} names no `<role>` subagent to dispatch")
         return m.group(1)
 
     def quoted_after(self, heading: str, anchor: str) -> str:
@@ -228,6 +248,8 @@ class MergeRun:
         lab = self.label(f"{heading} AskUserQuestion") + (f" {len(self.asked)}" if len(self.asked) > 1 else "")
         action, answer = ask_refusal(self.o, self.devs, lab, cmdtext.section(self.o.text, heading), anchor, facts)
         closedrv.fact(self.rp, "merge refusal", {"step": heading, "action": action, "answer": answer})
+        if answer is None and not self.outcome:  # reported, nobody asked: the turn ends on the report
+            self.say_stop(f"/merge refused ({anchor}): {action}; nothing merged.\n{facts}".rstrip())
         return answer == action
 
     def captured(self, text: str, label: str, desc: str, names=(), actor=None):
@@ -260,11 +282,11 @@ class MergeRun:
     # ------------------------------------------------------------ Step 0
     def step0(self) -> str:
         o = self.o
-        para = cmdtext.inline_codes(o.text, "Step 0", "first entry of")
+        para = cmdtext.inline_codes(o.text, f"Step {M.shape}", "first entry of")
         gits = [" ".join(c.split()) for c in para if c.split()[:1] == ["git"]]
         if len(gits) < 2:
-            raise cmdtext.TextNotFound("Step 0 names no read-only git for the worktree-shape judgment")
-        c = self.check(o.run("\n".join(gits), "Step 0: worktree shape (read-only)", self.label("Step 0 Bash worktree shape")))
+            raise cmdtext.TextNotFound(f"Step {M.shape} names no read-only git for the worktree-shape judgment")
+        c = self.check(o.run("\n".join(gits), f"Step {M.shape}: worktree shape (read-only)", self.label(f"Step {M.shape} Bash worktree shape")))
         out = (c.response.get("stdout") or "").split("\n") if c.ok else []
         first = next((l.split()[0] for l in out if l.strip()), "")
         top = next((l.strip() for l in out[1:] if l.startswith("/") and not re.search(r"\s", l.strip())), "")
@@ -276,11 +298,11 @@ class MergeRun:
         # tier 2: an overnight-state record in the conversation's context: this session has none.
         if not in_place:
             return ""
-        tier3 = [" ".join(c.split()) for c in cmdtext.inline_codes(o.text, "Step 0", "show-current")
+        tier3 = [" ".join(c.split()) for c in cmdtext.inline_codes(o.text, f"Step {M.shape}", "show-current")
                  if c.startswith("git ")]
         if not tier3:
-            raise cmdtext.TextNotFound("Step 0's tier 3 names no git call")
-        c = self.check(o.run(tier3[0], "Step 0: tier 3, the current branch", self.label("Step 0 Bash current branch")))
+            raise cmdtext.TextNotFound(f"Step {M.shape}'s tier 3 names no git call")
+        c = self.check(o.run(tier3[0], f"Step {M.shape}: tier 3, the current branch", self.label(f"Step {M.shape} Bash current branch")))
         return (c.response.get("stdout") or "").strip() if c.ok else ""
 
     # ------------------------------------------------------------ Step 1
@@ -290,11 +312,11 @@ class MergeRun:
         o = self.o
         o.values["RESOLVED_REF"] = ref
         self.snapshots += 1
-        label = self.label("Step 1 Bash snapshot" + (f" again {self.snapshots - 1}" if self.snapshots > 1 else ""))
-        lines = self.key_values(o.block("Step 1", lang="bash"), label, "Step 1: pre-merge snapshot")
-        named = [c for c in cmdtext.inline_codes(o.text, "Step 1", "KEY=value") if re.fullmatch(r"[A-Z]+(?:_[A-Z]+)+", c)]
+        label = self.label(f"Step {M.snapshot} Bash snapshot" + (f" again {self.snapshots - 1}" if self.snapshots > 1 else ""))
+        lines = self.key_values(o.block(f"Step {M.snapshot}", lang="bash"), label, f"Step {M.snapshot}: pre-merge snapshot")
+        named = [c for c in cmdtext.inline_codes(o.text, f"Step {M.snapshot}", "KEY=value") if re.fullmatch(r"[A-Z]+(?:_[A-Z]+)+", c)]
         if not named or [k for k, _ in lines] != named:
-            raise cmdtext.TextNotFound(f"Step 1 names the keys {named}; its script printed {[k for k, _ in lines]}")
+            raise cmdtext.TextNotFound(f"Step {M.snapshot} names the keys {named}; its script printed {[k for k, _ in lines]}")
         self.snapshot_lines = [f"{k}={v}" for k, v in lines]
         self.rp.rand(o.values.get("REQUEST_ID"))
 
@@ -302,14 +324,14 @@ class MergeRun:
         self.snapshot(ref)
         v = self.o.values
         if not v.get("SESSION_ID"):
-            return self.refuse("Step 1", "`SESSION_ID` is empty") and self.step1(ref)
+            return self.refuse(f"Step {M.snapshot}", "`SESSION_ID` is empty") and self.step1(ref)
         missing = [k for k in ("SOURCE_TIP", "DEFAULT_TIP") if v.get(k, "MISSING") == "MISSING"]
         if missing:
-            self.refuse("Step 1", "`SOURCE_TIP` or `DEFAULT_TIP` is `MISSING`", f"{', '.join(missing)} not found "
+            self.refuse(f"Step {M.snapshot}", "`SOURCE_TIP` or `DEFAULT_TIP` is `MISSING`", f"{', '.join(missing)} not found "
                         f"({v.get('RESOLVED_REF')} / {v.get('DEFAULT_BRANCH')} does not resolve to a commit)")
             return self.stop_unanswered()
         if v["SOURCE_TIP"] == v["DEFAULT_TIP"]:
-            self.refuse("Step 1", "`SOURCE_TIP` equals `DEFAULT_TIP`")
+            self.refuse(f"Step {M.snapshot}", "`SOURCE_TIP` equals `DEFAULT_TIP`")
             return self.stop_unanswered()
         return True
 
@@ -322,19 +344,19 @@ class MergeRun:
     # ------------------------------------------------------------ Step 2 and the analyst
     def prompt(self) -> str:
         o = self.o
-        sec = o.section("Step 2")
+        sec = o.section(f"Step {M.analyst}")
         fence = next(b.text for b in cmdtext.blocks(sec) if "<obligation" in b.text)
         prompt = o.instantiate(fence, None)
         left: list = []
-        prompt = o.bind(prompt, [(r"^the eight lines Step 1 printed$", "\n".join(self.snapshot_lines))], left)
+        prompt = o.bind(prompt, [(rf"^the eight lines Step {M.snapshot} printed$", "\n".join(self.snapshot_lines))], left)
         if left:
-            raise cmdtext.TextNotFound(f"Step 2 prompt: unbound placeholders {sorted(set(left))}")
+            raise cmdtext.TextNotFound(f"Step {M.analyst} prompt: unbound placeholders {sorted(set(left))}")
         return prompt.rstrip("\n")
 
     def step2(self) -> None:
         o = self.o
         self.round += 1
-        lab = self.label("Step 2 Agent(merge-analyst)") + (f" round {self.round}" if self.round > 1 else "")
+        lab = self.label(f"Step {M.analyst} Agent(merge-analyst)") + (f" round {self.round}" if self.round > 1 else "")
         prompt = self.prompt()
         analyst = Analyst(self, prompt)
         player = agents.Player(o.tree, prompt, agents.Act(work=analyst.work, summary="pre-merge analysis"),
@@ -356,7 +378,7 @@ class MergeRun:
     def grant_location(self) -> str:
         """The path Step 3 gives, its placeholders bound; `<state dir>` as the step's parenthesis says."""
         o = self.o
-        sec = o.section("Step 3")
+        sec = o.section(f"Step {M.grant}")
         path = next(b.text for b in cmdtext.blocks(sec) if "agentic-commit/merge-analyst" in b.text).strip()
         path = o.bind(path, [(r"^state dir$", lambda m: "<state dir>")])
         if "<state dir>" in path:
@@ -373,15 +395,15 @@ class MergeRun:
         """"approved", "blocked", "missing", "invalid" or "expired"."""
         o = self.o
         self.grant_path = path = self.grant_location()
-        c = self.check(o.s.read(path, label=self.label("Step 3 Read grant"),
-                                deviation=self.devs.at(self.label("Step 3 Read grant"))))
+        c = self.check(o.s.read(path, label=self.label(f"Step {M.grant} Read grant"),
+                                deviation=self.devs.at(self.label(f"Step {M.grant} Read grant"))))
         if not c.ok:
-            return "again" if self.refuse("Step 3", "No grant at that path") else "missing"
+            return "again" if self.refuse(f"Step {M.grant}", "No grant at that path") else "missing"
         try:
             self.grant = json.loads(agents.peek(self.rp, "main", path))
         except ValueError:
             self.grant = None
-        sec = o.section("Step 3")
+        sec = o.section(f"Step {M.grant}")
         if "Validate the following fields" in sec:  # the text validates the grant itself (the base)
             fault = self.validate(sec)
             if fault == "expired":
@@ -391,10 +413,10 @@ class MergeRun:
                 return "invalid"
             consume = next((b.text for b in cmdtext.blocks(sec, None, "bash") if "rm -f" in b.text), None)
             if consume:
-                self.captured(consume, self.label("Step 3 Bash consume grant"), "Consume (unlink) the grant")
+                self.captured(consume, self.label(f"Step {M.grant} Bash consume grant"), "Consume (unlink) the grant")
         verdict = (self.grant or {}).get("verdict")
         if verdict == "blocked":
-            self.refuse("Step 3", "`verdict` = `blocked`", "\n".join(f"- {r}" for r in self.grant.get("risks") or []))
+            self.refuse(f"Step {M.grant}", "`verdict` = `blocked`", "\n".join(f"- {r}" for r in self.grant.get("risks") or []))
             self.stop_unanswered()
         return verdict or "invalid"
 
@@ -417,24 +439,24 @@ class MergeRun:
             exp = datetime.fromisoformat(str(g.get("expires_at")).replace("Z", "+00:00"))
         except ValueError:
             return "field `expires_at` is not ISO-8601"
-        if exp.tzinfo is None or exp <= datetime.now(timezone.utc):
+        if exp.tzinfo is None or exp <= datetime.fromtimestamp(clock_now(), timezone.utc):
             return "expired"
         return ""
 
     # ------------------------------------------------------------ Steps 4 and 5
     def step4(self) -> bool:
         o = self.o
-        self.key_values(o.block("Step 4", lang="bash"), self.label("Step 4 Bash revalidate tips"),
-                        "Step 4: re-read the branch tips")
+        self.key_values(o.block(f"Step {M.tips}", lang="bash"), self.label(f"Step {M.tips} Bash revalidate tips"),
+                        f"Step {M.tips}: re-read the branch tips")
         v, g = o.values, self.grant or {}
         if v.get("CURRENT_SOURCE_TIP") != g.get("source_tip") or v.get("CURRENT_DEFAULT_TIP") != g.get("default_tip"):
-            return None if self.refuse("Step 4", "differs from the grant's") else False
+            return None if self.refuse(f"Step {M.tips}", "differs from the grant's") else False
         return True
 
     def step5(self):
         o = self.o
-        block = o.block("Step 5", lang="bash")
-        c = self.check(o.run(o.bind(block), "Step 5: call merge.sh", self.label("Step 5 Bash merge.sh")))
+        block = o.block(f"Step {M.merge}", lang="bash")
+        c = self.check(o.run(o.bind(block), f"Step {M.merge}: call merge.sh", self.label(f"Step {M.merge} Bash merge.sh")))
         self.merged = c.ok and not c.blocked
         closedrv.fact(self.rp, "merge.sh", {"ok": c.ok, "blocked": c.blocked,
                                            "output": self.rp.norm_text((c.response.get("stdout") or "") if c.ok
@@ -457,7 +479,7 @@ class MergeRun:
         o.slash(args, label=self.label("typed"))
         ref = self.step0()
         if not ref:
-            self.refuse("Step 0", "If no tier resolves a source")
+            self.refuse(f"Step {M.shape}", "If no tier resolves a source")
             self.stop_unanswered()
             return self.outcome
         from_step1 = True
@@ -491,7 +513,7 @@ class MergeRun:
                 self.say_stop(f"Merged {o.values['RESOLVED_REF']} into {o.values['DEFAULT_BRANCH']}.\n" + "\n".join(
                     l for l in (c.response.get("stdout") or "").split("\n") if l.startswith("merge.sh:")))
                 return self.outcome
-            if not self.refuse("Step 5", "If the merge has conflicts", (c.error or "")[-800:]):
+            if not self.refuse(f"Step {M.merge}", "If the merge has conflicts", (c.error or "")[-800:]):
                 return self.outcome
             if self.on_conflict:
                 self.on_conflict()
@@ -636,7 +658,7 @@ class Analyst:
         if not m or not line:
             return
         target = self.fill(m.group(1))
-        line = self.fill(line).replace("<ISO-8601 UTC>", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        line = self.fill(line).replace("<ISO-8601 UTC>", datetime.fromtimestamp(clock_now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         line = line.replace("<SOURCE_TIP[:8]>", self.values.get("SOURCE_TIP", "")[:8]).replace("<verdict>", self.verdict)
         self.bash(f"printf '%s\\n' {shlex.quote(line)} >> {shlex.quote(target)}", f"{title.split(':')[0]} append",
                   "Append the audit entry")
@@ -754,6 +776,8 @@ def run(rp) -> None:
         raise ValueError(f"unknown variant {variant!r}")
     ref = rp.args.get("ref", "")
     rp.pipeline = "merge" + (f"/{variant}" if variant != "plain" else "")
+    # the grant's 60 s run from its Write to the merge.sh call on the modeled clock, not on this machine's speed
+    rp.model_clock()
     owner_setup(rp, variant)
     closedrv.fact(rp, "owner setup", toy_state(rp))
     def resolve():

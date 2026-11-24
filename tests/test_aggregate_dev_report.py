@@ -2331,6 +2331,7 @@ class TestCanonicalAggregateCheckUnaffectedByObligationOrRepairProfile:
                    {**_good_shard(), "lane": lane, "lane_set": ["A", "B"]})
 
         calls = []
+        monkeypatch.setattr(_hook_mod, "_rebuild_stale", lambda *a: {})  # a rebuild that leaves it missing
         real_barrier = _hook_mod._run_obligation_barrier
         monkeypatch.setattr(_hook_mod, "_run_obligation_barrier", lambda d: calls.append(d))
 
@@ -2433,20 +2434,47 @@ class TestFanoutCollectionCheck:
         assert "reached by" not in result.stderr
 
     @pytest.mark.parametrize("mode", [None, "block"])
-    def test_missing_canonical_names_the_hook_as_its_producer(self, project_dir, tmp_path, mode):
+    def test_missing_canonical_is_built_by_the_check_before_it_judges(self, project_dir, tmp_path, mode):
+        # The Stop gate's rebuild (lib/aggregate_rebuild.py), run here first: the script writes it.
         dev_dir = project_dir / "docs" / "dev"
         for lane in ("l1", "l2"):
             self._lane(dev_dir, BARE_TID, lane, ["l1", "l2"])
         result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l2", mode)
+        assert result.returncode == 0, result.stderr
+        canonical = json.loads((dev_dir / f"dev-report-{BARE_TID}.json").read_text())
+        assert sorted(canonical["parallel_workers"]) == ["l1", "l2"]
+
+    @pytest.mark.parametrize("mode", [None, "block"])
+    def test_missing_canonical_names_the_producers_reason_and_the_lane_it_refuses(self, project_dir, tmp_path, mode):
+        # W1: the producer refuses lane l1's report; QA stays refused, and the finding reaches the main agent
+        # with the producer's reason and the dispatch that can repair it, l1's, whichever lane this QA names.
+        dev_dir = project_dir / "docs" / "dev"
+        for lane in ("l1", "l2"):
+            self._lane(dev_dir, BARE_TID, lane, ["l1", "l2"])
+        path = dev_dir / f"dev-report-{BARE_TID}-l1.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "baseline_dirty_snapshot": "see the manifest"}))
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l2", mode)
         assert result.returncode == 2
-        assert (f"[canonical_missing] {dev_dir / f'dev-report-{BARE_TID}.json'}: the canonical "
-                "aggregate of lanes l1, l2 is missing | producer: "
-                "hooks/posttool-lane-completeness-watch.py") in result.stderr
-        # A hook has no dispatch: the finding names the one that reaches it, the
-        # declaring dispatch of this QA dispatch's own lane report (E5 (a)).
+        assert (f"[canonical_missing] {dev_dir / f'dev-report-{BARE_TID}.json'}: the canonical aggregate of "
+                "lanes l1, l2 is missing; its producer, scripts/aggregate-dev-report.py, refuses: shard 'l1': "
+                "baseline_dirty_snapshot is neither verbatim porcelain output nor a leading-count summary") in result.stderr
         assert (f"| reached by: dispatching again the dev dispatch that declared "
-                f"docs/dev/dev-report-{BARE_TID}-l2.json (lane l2), which writes that report "
-                "again in that dispatch; the write runs it") in result.stderr
+                f"docs/dev/dev-report-{BARE_TID}-l1.json (lane l1)") in result.stderr
+
+    @pytest.mark.parametrize("wrong", ["l1", "l2"])
+    def test_lanes_whose_heads_differ_refuse_qa_naming_both_lanes_and_the_reason(self, project_dir, tmp_path, wrong):
+        # W1: which of two differing reports is wrong no lane can know; the main agent decides, told both lanes.
+        dev_dir = project_dir / "docs" / "dev"
+        for lane in ("l1", "l2"):
+            self._lane(dev_dir, BARE_TID, lane, ["l1", "l2"])
+        path = dev_dir / f"dev-report-{BARE_TID}-{wrong}.json"
+        path.write_text(json.dumps({**json.loads(path.read_text()), "baseline_head_sha": "f" * 40}))
+        result = self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l2", "block")
+        assert result.returncode == 2
+        heads = ("f" * 40, "abc123def456") if wrong == "l2" else ("abc123def456", "f" * 40)
+        assert (f"is missing; its producer, scripts/aggregate-dev-report.py, refuses: shard 'l2': baseline_head_sha "
+                f"'{heads[0]}' != first shard '{heads[1]}' (lanes l1 and l2 differ; dispatch again the one that is "
+                "wrong)") in result.stderr
 
     def test_canonical_that_misses_a_lane_is_stale(self, project_dir, tmp_path):
         dev_dir = project_dir / "docs" / "dev"
@@ -2467,8 +2495,9 @@ class TestFanoutCollectionCheck:
         dev_dir = project_dir / "docs" / "dev"
         self._lane(dev_dir, BARE_TID, "l1", ["l1", "l2"])
         assert self._qa(project_dir, tmp_path / "home", f"{BARE_TID}-l1", None).returncode == 0
-        for lane in ("l1", "l2", "l3"):
-            self._lane(dev_dir, OTHER_TID, lane, ["l1", "l2", "l3"])
+        for lane in ("l1", "l2", "l3"):  # unbuildable, so the check's own rebuild leaves the canonical missing
+            _write(dev_dir, f"dev-report-{OTHER_TID}-{lane}.json", {**_good_shard(f"{OTHER_TID}-{lane}"), "lane": lane,
+                                                                    "lane_set": ["l1", "l2", "l3"], "baseline_head_sha": ""})
         _write(dev_dir, f"dev-report-{OTHER_TID}.json", {**_good_shard(), "parallel_workers": ["l1", "l2"]})
         assert self._qa(project_dir, tmp_path / "home", f"{OTHER_TID}-l1", None).returncode == 0
         (dev_dir / f"dev-report-{OTHER_TID}.json").unlink()
@@ -3140,7 +3169,7 @@ class TestOutcomeAndLaneRoster:
 
 # ---------------------------------------------------------------------------
 # P1b E5: --project-dir (the resolver's meaning), passed by the one producer
-# (hooks/posttool-lane-completeness-watch.py) that runs the harness's copy
+# (hooks/lib/aggregate_rebuild.py) that runs the harness's copy
 # ---------------------------------------------------------------------------
 
 class TestProjectDirOption:

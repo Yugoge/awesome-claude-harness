@@ -47,12 +47,13 @@ import pytest
 from hooks.lib import score_log
 from tests.replay import suite
 from tests.replay.drivers import _round
+from tests.replay.drivers.close import CL
 
 OBSERVER = "hooks/posttool-close-rating.py"
 ZULU = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 LANE_REPORT = re.compile(r"docs/dev/qa-report-[\w.-]+\.json")  # the lane QA's report (the BA-validation QA's is ba-qa-report-...)
 OBLIGATION = re.compile(r'<obligation\s+v="1"\s*>\s*(\{.*?\})\s*</obligation>', re.S)
-RATING_LABEL = "/close Step 4 AskUserQuestion"  # the first question's step label; the n-th asked again adds " again n"
+RATING_LABEL = f"/close Step {CL.rating} AskUserQuestion"  # the first question's step label; the n-th asked again adds " again n"
 
 QA_FAIL_CLOSE = suite.Scenario("score: /dev qa-fail, then /close", "close",
                                (("variant", "plain"), ("cycle_variant", "qa-fail"), ("rating", "4"), ("resweep", "1")),
@@ -220,7 +221,7 @@ def questions(r) -> list[dict]:
 def rating_steps(r) -> list[dict]:
     """What the driver recorded after each rating question (facts.json "close Step 4"), in order: the answer it
     played, whether any PostToolUse hook ran, and the rating rows the score log held right after."""
-    return [f["value"] for f in r.facts if f["key"] == "close Step 4"]
+    return [f["value"] for f in r.facts if f["key"] == f"close Step {CL.rating}"]
 
 
 def after_call(r, label: str) -> list[dict]:

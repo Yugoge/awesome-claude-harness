@@ -3,7 +3,7 @@
 
 Monitor runs an arbitrary shell command in the background. On CLI 2.1.325 the CLI delivers that
 command as a Bash call ({command, description}, the same tool_use_id) only to hooks registered
-under a "Bash" matcher in settings.json (pretool-bash-safety.sh). The launcher's Bash rules
+under a "Bash" matcher in settings.json (none now: pretool-bash-safety.sh is a launcher rule). The launcher's Bash rules
 (hooks/pretool-launch.py) select by tool_name, and so does the write gate's Bash branch, so they
 saw the call only as Monitor and skipped it: `gh pr create` was refused as Bash and passed as
 Monitor.
@@ -54,9 +54,13 @@ BASH_RULES = () if Rule is None else (
     Rule('wrapper-userintent', 'pretool-wrapper-userintent.py', ('Bash',)),
     Rule('grep-backtrack-guard', 'pretool-grep-backtrack-guard.py', ('Bash',)),
     Rule('attribution-pre', 'pretool-attribution-pre.py', ('Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'), timeout=30),
+    Rule('lane-ledger', 'pretool-lane-ledger.py', ('Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash'), timeout=10),
     Rule('block-branch-pr-worktree', 'pretool-block-branch-pr-worktree.py', ('Bash',)),
-    Rule('bulk-commit-detector', 'pretool-bulk-commit-detector.py', ('Bash',), timeout=5),
     Rule('git-privilege-guard', 'pretool-git-privilege-guard.py', ('Bash',)),
+    Rule('merge-verdict', 'pretool-merge-verdict.py', ('Bash',), timeout=20),
+    Rule('deny-list', 'pretool-deny-list.py', ('Bash', 'Read', 'Grep', 'Glob', 'Edit', 'Write', 'MultiEdit',
+                                               'NotebookEdit', 'Skill'), timeout=10),
+    Rule('bash-safety', 'pretool-bash-safety.sh', ('Bash',)),
 )
 
 

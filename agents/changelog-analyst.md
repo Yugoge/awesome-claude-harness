@@ -34,7 +34,6 @@ Hooks cover the git operations below; `docs/ENFORCEMENT-LEDGER.md` states how st
 
 - `hooks/pretool-git-privilege-guard.py` covers `git push`, merge, `git reset --hard`, `git rebase` and the other history-moving verbs, ref changes (branch deletion, force-push), a commit outside a live `/commit` grant or the bulk sentinel, and the `auto-bulk:` subject outside a bulk commit. Never suggest widening its blessed commit pattern (`BLESSED_BRIDGE_RE`).
 - `hooks/pretool-bash-safety.sh` and `hooks/pretool-write-guard.sh` cover `claude-bulk-commit-sentinel-*.json`: only the human-run `/commit --bulk` creates one, never you, by any route.
-- `hooks/pretool-bulk-commit-detector.py` only warns on sync-style subjects (Phase 6 keeps the rule).
 
 Rules no hook covers:
 
@@ -53,20 +52,29 @@ Rules no hook covers:
 
 `hooks/pretool-bash-safety.sh` scans the whole text of a Bash command for protected phrases and paths, so a commit message that quotes documentation phrases (a package-manager global install, a daemon restart), or one command that inlines a message and also names protected paths, is treated as the operation itself. The message and the token therefore reach disk by other routes and the command line stays minimal. This section binds every commit and token write in this file.
 
-**Rule CP-1 — the commit message reaches disk through the Write tool, never Bash.** Write the full message to a temp file (`/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt`) with the Write tool. Never create it with a heredoc, `echo`, `printf` or any redirect, and never pass it with `git commit -m`: message text never appears on a Bash command line.
+**Rule CP-1 — the commit message reaches disk through the Write tool, never Bash.** Write the full message to a file in your drafts directory (`<SESSION_ROOT>/changelog-analyst/commit-msg-<unique>.txt`, Rule CP-5) with the Write tool. Never create it with a heredoc, `echo`, `printf` or any redirect, and never pass it with `git commit -m`: message text never appears on a Bash command line.
 
 **Rule CP-2 — the commit command is minimal.** Exactly two commit forms are permitted, each alone on its command line:
 
 ```bash
-git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"                 # normal commit
-git -C "<GIT_ROOT>" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"   # recovery commit (Recovery step 3 only)
+git -C "<GIT_ROOT>" commit -F "<SESSION_ROOT>/changelog-analyst/commit-msg-<unique>.txt"                 # normal commit
+git -C "<GIT_ROOT>" commit --allow-empty -F "<SESSION_ROOT>/changelog-analyst/commit-msg-<unique>.txt"   # recovery commit (Recovery step 3 only)
 ```
 
-Write `<GIT_ROOT>` out as the repository's absolute path, never `${GIT_ROOT}`: the privilege guard refuses a commit whose `-C` argument is an unexpanded variable. The prohibition is about content and side effects on the command line, not control flow: no message text, inline diff (`$(git diff ...)`), `--stat`, `cat` or `echo` of file content, push-gate write, heredoc, or chained side effect (`&&`, `;`, `|`). Pure control flow that adds nothing to the command line is allowed, such as the `if ! git -C "<GIT_ROOT>" commit -F ...; then` test of Error handling. The message file stays where it is: no cleanup is chained onto or run after the commit (the removal policy refuses an `rm` of it; `scripts/install/tmpfiles-claude-scratch.conf` ages `/tmp/claude-scratch` out).
+Write `<GIT_ROOT>` out as the repository's absolute path, never `${GIT_ROOT}`: the privilege guard refuses a commit whose `-C` argument is an unexpanded variable. The prohibition is about content and side effects on the command line, not control flow: no message text, inline diff (`$(git diff ...)`), `--stat`, `cat` or `echo` of file content, push-gate write, heredoc, or chained side effect (`&&`, `;`, `|`). Pure control flow that adds nothing to the command line is allowed, such as the `if ! git -C "<GIT_ROOT>" commit -F ...; then` test of Error handling. The message file stays where it is: no cleanup is chained onto or run after the commit (the removal policy refuses an `rm` of it). When the session ends, `hooks/sessionend-scratch-sweep.sh` removes it with the session's scratch directory; a drafts directory that also holds an agent's own directory stays for a resumed session, and the age rule of `scripts/install/tmp-cleanup-install.sh` removes it later.
 
 **Rule CP-3 — the push-gate token reaches disk only through its one writer, in a SEPARATE step** (the command is in Phase 10), never through the Write tool, an inline `python3 -c`, a heredoc, `echo` or a redirect, and never chained with `git commit`. The writer resolves the token path itself, so the command line carries neither token JSON nor destination.
 
 **Rule CP-4 — keep command-like phrases and protected-path strings off the command line.** The `<diff --stat>` body, `git diff` or `git show` output and file content are embedded only in files written by the Write tool, never appended to a message through the command line. Keep every git invocation minimal so the substring scanner has nothing to misread.
+
+**Rule CP-5 — two places, each written out literally.** Before the first Write or lock, print them once:
+
+```bash
+printf '%s/%s\n' "${CLAUDE_CODE_TMPDIR:-/var/tmp/claude-scratch}" "${CLAUDE_CODE_SESSION_ID:?}"
+. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh" && harness_state_dir
+```
+
+The first line is `<SESSION_ROOT>`, the session's scratch directory; your drafts directory is `<SESSION_ROOT>/changelog-analyst/` (`<session root>/changelog-analyst/` in `policies/tool-policy.v1.json`), and every message file and the dry-run index copy is a file right in it, never in a directory below it. The second line is `<STATE_DIR>`, the state root, which holds the fd-9 lock (control state). Write each out wherever this file says `<SESSION_ROOT>` or `<STATE_DIR>`, as `<GIT_ROOT>`: the guards read a path that starts with `${VAR}` as relative. Neither is the system temp directory; write nothing there.
 
 ---
 
@@ -167,11 +175,11 @@ Under the lock, before touching the index and again immediately before each `git
 The Write tool is a separate tool call, not a Bash call. The two requirements are reconciled by a **held-lock handshake**: the flock is acquired once and held continuously across `stage → staged stat → (Write MSGFILE) → commit`. The Write mutates no git index, so a peer blocked on fd 9 cannot touch the index between our staging and our commit. The message stat must come from the real staged index measured AFTER Phase 5, never the pre-staging candidate set or the whole repo.
 
 ```bash
-mkdir -p /tmp/agentic-commit/locks
+mkdir -p "<STATE_DIR>/agentic-commit/locks"
 REPO_HASH="$(printf '%s' "$(git -C "${GIT_ROOT}" rev-parse --show-toplevel)" | sha256sum | cut -c1-16)"
-exec 9>"/tmp/agentic-commit/locks/${REPO_HASH}.lock"
+exec 9>"<STATE_DIR>/agentic-commit/locks/${REPO_HASH}.lock"
 flock -w 30 -x 9 || {
-    echo "ERROR: could not acquire /tmp/agentic-commit/locks/${REPO_HASH}.lock within 30s — another commit in progress?"
+    echo "ERROR: could not acquire <STATE_DIR>/agentic-commit/locks/${REPO_HASH}.lock within 30s — another commit in progress?"
     exit 1
 }
 SESSION_INDEX_ENV="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/session-index.py" init --git-root "${GIT_ROOT}")" && eval "$SESSION_INDEX_ENV" || {
@@ -180,7 +188,7 @@ SESSION_INDEX_ENV="$(python3 "${CLAUDE_HOME:-$HOME/.claude}/scripts/session-inde
 }
 ```
 
-The lock file lives under `/tmp`, outside `.git/`, named per repository (sha256 of the toplevel); its redirect target must start with a literal `/tmp` prefix, never a leading `${VAR}`, which the guards read as relative and misresolve. `init` seeds a session-private index from HEAD and exports `GIT_INDEX_FILE`: the flock still serializes this repo's commits across sessions, and the private index keeps a peer's concurrent stage or unstage in the shared index away from this session's staged bytes. It fails closed (missing or corrupt index, or HEAD moved since seeding), a genuine abort of the `repository_plan_invalid` class, never warn-and-continue. Run it before EACH group's cycle, since every group's commit moves HEAD.
+The lock file lives under the state root (`<STATE_DIR>`, Rule CP-5), outside `.git/`, named per repository (sha256 of the toplevel); its redirect target starts with that directory written out literally, never a leading `${VAR}`, which the guards read as relative and misresolve. `init` seeds a session-private index from HEAD and exports `GIT_INDEX_FILE`: the flock still serializes this repo's commits across sessions, and the private index keeps a peer's concurrent stage or unstage in the shared index away from this session's staged bytes. It fails closed (missing or corrupt index, or HEAD moved since seeding), a genuine abort of the `repository_plan_invalid` class, never warn-and-continue. Run it before EACH group's cycle, since every group's commit moves HEAD.
 
 Order of effects for one repository, in one continuously held fd-9 transaction spanning ALL its groups (never release fd 9 between groups: a peer commit could land between two groups of one dispatch):
 
@@ -197,7 +205,7 @@ Order of effects for one repository, in one continuously held fd-9 transaction s
 
 ### Phase 4: Pre-staged verification
 
-When `DRYRUN=true`, stage into a temporary copy of the index, never the index itself. In the dry run's one Bash process, before any staging, `cp -p` the index file (the path `git -C "<GIT_ROOT>" rev-parse --path-format=absolute --git-path index` prints) to a fresh path under `/tmp/claude-scratch/changelog-analyst/` (e.g. `dryrun-index-<unique>`), both paths literal (the guards refuse a copy source they cannot resolve), and `export GIT_INDEX_FILE=` that copy: every later dry-run stage, unstage and `--cached` read uses it. The copy keeps the index extensions and pre-existing staged state; the index itself is only read, so its bytes stay identical and nothing is restored (a copy back onto it is a `.git/` write the role's write policy refuses). A dry run never changes HEAD or worktree bytes.
+When `DRYRUN=true`, stage into a temporary copy of the index, never the index itself. In the dry run's one Bash process, before any staging, `cp -p` the index file (the path `git -C "<GIT_ROOT>" rev-parse --path-format=absolute --git-path index` prints) to a fresh file in `<SESSION_ROOT>/changelog-analyst/` (e.g. `dryrun-index-<unique>`), both paths literal (the guards refuse a copy source they cannot resolve), and `export GIT_INDEX_FILE=` that copy: every later dry-run stage, unstage and `--cached` read uses it. The copy keeps the index extensions and pre-existing staged state; the index itself is only read, so its bytes stay identical and nothing is restored (a copy back onto it is a `.git/` write the role's write policy refuses). A dry run never changes HEAD or worktree bytes.
 
 Before staging, list the index with `git -C "${GIT_ROOT}" diff --cached --name-only`. For every cached file outside the classified and filtered set run `git -C "${GIT_ROOT}" restore --staged -- "<file>"` and log `Pre-staged verify: unstaged <file> (not in classified set)`.
 
@@ -254,13 +262,13 @@ Attribution-basis: <path> (<dev-report-declared|baseline-dirty-snapshot|no-evide
 
 Omit a line type when no staged file triggers it. This is disclosure, not a gate: it never changes whether a file is staged.
 
-**Subject guard.** The subject must not match `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync` (case-insensitive). If it does (for example the description said "sync uncommitted"), replace the summary with `session changes for <scope>`. `hooks/pretool-bulk-commit-detector.py` only warns (see `docs/ENFORCEMENT-LEDGER.md`) and does not inspect `git -C` commits, so keeping the rule is yours. It also looks at a staged set spanning 3 or more of `hooks/`, `commands/`, `scripts/`, `packages/`, `docs/`: in bulk mode commit one subsystem per batch; in normal mode a task touching 3 or more of them still lands as a single commit, with the risk noted in the output.
+**Subject guard.** The subject must not match `\bsync\b.*\buncommitted\b` or `chore\(claude\)\s*:\s*sync` (case-insensitive). If it does (for example the description said "sync uncommitted"), replace the summary with `session changes for <scope>`. No hook checks the subject, so keeping the rule is yours. For a staged set spanning 3 or more of `hooks/`, `commands/`, `scripts/`, `packages/`, `docs/`: in bulk mode commit one subsystem per batch; in normal mode a task touching 3 or more of them still lands as a single commit, with the risk noted in the output.
 
 **Reversal citation (this section is the rule's sole binding home; `commands/commit.md` only cross-references it).** When a forward-fix commit intentionally reverses a recent prior commit's policy or behavior, the message body must carry the verbatim line `Reverses <SHA>: <one-line rationale for why the prior reasoning no longer holds>`, with the short SHA (at least 7 characters) of the reversed commit. A forward fix is a normal new commit: `git revert`, `git reset --hard`, `git rebase`, amend and force-push stay forbidden unless the user explicitly authorizes them (Destructive-Action Escalation in `agents/ba.md`). The citation is documentation only; past commits are never amended retroactively.
 
 ### Phase 7: Orphan handling
 
-A tracked-modified file that is absent from the dev-report, from `ARTIFACT_CHAIN.commit_whitelist_artifacts` and from the parent task's anchored post-chain patterns (the do path uses its preserved anchored set) is an orphan. Never stage or commit an orphan, in either mode. BULK=false: print `WARNING: skipping orphan file <path> — not in dev-report and not a task-id artifact for <TASK_ID> (possible cross-session contamination)`; every committed file must be attributable to `TASK_ID`. BULK=true: the bulk orphan skip applies (Bulk Mode, step 5). With no orphans, skip this step.
+A tracked-modified file that is absent from the dev-report, from `ARTIFACT_CHAIN.commit_whitelist_artifacts` and from the parent task's anchored post-chain patterns (the do path uses its preserved anchored set) is an orphan. Never stage or commit an orphan, in either mode. A path in `UNCLAIMED_PATHS` (commit.md Step 7: a cycle that declares no file, and a change no open cycle or open command claims) is no orphan: it is a whitelisted candidate of the control-repo entry, staged and committed with the `Unclaimed:` body line commit.md names. BULK=false: print `WARNING: skipping orphan file <path> — not in dev-report and not a task-id artifact for <TASK_ID> (possible cross-session contamination)`; every committed file must be attributable to `TASK_ID`. BULK=true: the bulk orphan skip applies (Bulk Mode, step 5). With no orphans, skip this step.
 
 ### Phase 8: Execute commit (or dry-run)
 
@@ -270,7 +278,7 @@ In bulk mode each subsystem group's commit uses the skip-and-continue pattern of
 
 Otherwise continue the SAME fd-9 transaction from Phase 3; do not start a new flock or re-author the message under a fresh lock. The message is written at handshake step (e), after staging and `ACTUALLY_STAGED_PATHS`:
 
-1. Choose a unique message path, e.g. `MSGFILE=/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt`.
+1. Choose a unique message path, e.g. `MSGFILE=<SESSION_ROOT>/changelog-analyst/commit-msg-<unique>.txt`.
 2. Handshake step (e): with the **Write tool**, write the Phase 6 message to `MSGFILE`; the diff stat is embedded in the FILE, never on the command line (CP-4).
 3. Handshake step (f): in ONE fd-9 Bash block (nothing else chained, CP-2) re-read the staged set and abort only on true post-message drift, otherwise run the minimal commit:
 
@@ -278,7 +286,7 @@ Otherwise continue the SAME fd-9 transaction from Phase 3; do not start a new fl
    if [ "$(git -C "${GIT_ROOT}" diff --cached --name-only)" != "${ACTUALLY_STAGED_PATHS}" ]; then
        git -C "${GIT_ROOT}" restore --staged -- ${ACTUALLY_STAGED_PATHS}
    else
-       git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
+       git -C "<GIT_ROOT>" commit -F "<SESSION_ROOT>/changelog-analyst/commit-msg-<unique>.txt"
    fi
    ```
 
@@ -361,7 +369,7 @@ Every message is surfaced under CP-1 (Phase 8).
 - Bulk mode, `git commit` fails for a subsystem group: unstage the group with `git -C "${GIT_ROOT}" restore --staged -- <group files>` as its own Bash step (never chained onto the commit), add the group scope to `FAILED_GROUPS` (initialized empty before the loop), print `WARNING: Failed to commit group <scope> in batch <ITERATION>. Skipping and continuing.` and continue with the next group; do not exit the loop. The commit step is:
 
   ```bash
-  if ! git -C "<GIT_ROOT>" commit -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"; then
+  if ! git -C "<GIT_ROOT>" commit -F "<SESSION_ROOT>/changelog-analyst/commit-msg-<unique>.txt"; then
       echo "WARNING: Failed to commit group ${scope} in batch ${ITERATION}. Skipping and continuing."
   fi
   ```
@@ -370,7 +378,7 @@ Every message is surfaced under CP-1 (Phase 8).
 - The push-gate write fails: log a warning. The commit stands, but `/commit` must be re-run to regenerate the token before `/push` succeeds.
 - No files remain after exclusions: print `Nothing to commit after exclusions.` and exit 0.
 
-**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`, OB-L46) lets a Write replace drafts in `/tmp/claude-scratch/changelog-analyst/` and your `.claude/scratch/<session>/<role>/<dispatch>/` dir (the namespace tool-policy gives you): scratch, and temp files that are not harness state. Write-once (a second Write is refused): the artifacts you write under `docs/dev/` (`commit-qa-report-*.md`, `close-report-*.md` annotations, every JSON report; a top-level `docs/dev/` markdown draft outside the artifact name families is rewritable) and the `/tmp/agentic-commit/` locks; any tracked file; and every file the rule protects (harness state, another session's scratch, a hard-linked file, a file another enclosing git work tree tracks, dot-named or `.claude`/`.git` paths outside a project's `.claude/scratch/`, and gate-read artifacts under `docs/dev/`, `docs/clean/`, `docs/test/` and `tests/`). Write those once, complete, and report a refusal rather than route around it.
+**Rewriting your own output.** You have Write but no Edit, so a second Write is how you revise a file. The write gate's overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`, OB-L46) lets a Write replace drafts in your drafts directory `<SESSION_ROOT>/changelog-analyst/` and your own scratch directory `<session scratch directory>/<role>/<agent id>/` (made when you start; tool-policy names it in a refusal): scratch, and temp files that are not harness state. Write-once (a second Write is refused): the artifacts you write under `docs/dev/` (`commit-qa-report-*.md`, `close-report-*.md` annotations, every JSON report; a top-level `docs/dev/` markdown draft outside the artifact name families is rewritable) and the `<STATE_DIR>/agentic-commit/` locks; any tracked file; and every file the rule protects (harness state, another session's scratch, a hard-linked file, a file another enclosing git work tree tracks, dot-named or `.claude`/`.git` paths outside a project's `.claude/scratch/`, and gate-read artifacts under `docs/dev/`, `docs/clean/`, `docs/test/` and `tests/`). Write those once, complete, and report a refusal rather than route around it.
 
 ---
 
@@ -460,7 +468,7 @@ When all three conditions hold AND `BULK=false` AND `DRYRUN=false`, do not retur
 **Recovery step 3: Build and execute the recovery commit.** Derive `scope` as in Phase 6 (from `task_cycle_files` paths; mixed → `repo`). Compose the message: subject `chore(${scope}): recovery commit — task ${TASK_ID} pre-empted by bulk session` (if it would match a Phase 6 forbidden pattern, use `session recovery for ${scope}`), then `Task-id: ${TASK_ID}`, one `Precommitted-by: <sha>` line per sha and an `Attributed-files:` block. Write it to `MSGFILE` with the **Write tool** (CP-1; `precommitted-recovery.sh build-commit-msg` may derive the content, never write the file). Under the existing single-use commit grant (still unspent: no commit fired against the clean tree) run ONLY the minimal commit (CP-2):
 
 ```bash
-git -C "<GIT_ROOT>" commit --allow-empty -F "/tmp/claude-scratch/changelog-analyst/commit-msg-<unique>.txt"
+git -C "<GIT_ROOT>" commit --allow-empty -F "<SESSION_ROOT>/changelog-analyst/commit-msg-<unique>.txt"
 ```
 
 `bash "${CLAUDE_HOME:-$HOME/.claude}/scripts/precommitted-recovery.sh" execute-commit "${GIT_ROOT}" "${MSGFILE}"` is an acceptable equivalent.

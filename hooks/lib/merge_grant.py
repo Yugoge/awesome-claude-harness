@@ -9,7 +9,8 @@ and /merge Step 3 reads its verdict and risks verbatim. The grant is checked
 once, on the producer's own tool call: hooks/posttool-allowlist-consume.py runs
 `fault()` at the PostToolUse of that Write, removes a faulty grant (as /merge
 Step 3 did before) and returns the fault to the merge-analyst, which writes the
-grant again before it stops. (Experiment E11: the
+grant again before it stops. It is checked again, with its verdict, at the
+merge.sh call (approval(), hooks/pretool-merge-verdict.py). (Experiment E11: the
 privilege guard's merge-grant check sat behind CLAUDE_MERGE_COMMAND_ACTIVE=1 in
 the hook's own environment, which the compliant /merge never produces --
 hooks/merge.sh exports it only to its own subprocess, which no hook sees.)
@@ -32,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness_state_dir import harness_state_dir  # noqa: E402
+import locations  # noqa: E402  (the filesystem root is no top)
 
 VERDICTS = ("approved", "blocked")
 
@@ -62,10 +64,28 @@ def newest(repo_root: str, session_id: str, since: float, analyst: str = "merge-
     """The session's last grant for the repository at `repo_root`, if written at or after `since`
     (fault() passed it on that Write; it removes one load() rejects, so that one is none), else {}:
     the Stop gate's source. The push-analyst's grant has the same path rule (agents/push-analyst.md Phase 7)."""
+    path = _newest_path(repo_root, session_id, since, analyst)
+    grant = load(path) if path else {}
+    return grant if isinstance(grant, dict) else {}
+
+
+def _newest_path(repo_root: str, session_id: str, since: float, analyst: str = "merge-analyst") -> Path | None:
     folder = Path(grant_root()).with_name(analyst) / hashlib.sha256(os.path.realpath(repo_root).encode()).hexdigest()[:16]
     found = sorted((p.stat().st_mtime, p) for p in (folder / session_id).glob("*.json")) if session_id else []
-    grant = load(found[-1][1]) if found and found[-1][0] >= since else {}
-    return grant if isinstance(grant, dict) else {}
+    return found[-1][1] if found and found[-1][0] >= since else None
+
+
+def approval(repo_root: str, session_id: str, since: float) -> tuple[dict, str]:
+    """(the session's newest merge-analyst grant since `since`, why it does not approve a merge now, or ''):
+    hooks/pretool-merge-verdict.py's reading at the merge.sh call. fault() again, now: tips and expiry."""
+    path = _newest_path(repo_root, session_id, since)
+    if path is None:
+        return {}, "no merge-analyst grant of this session for this repository since the /merge opener"
+    grant, why = load(path), fault(str(path))
+    grant = grant if isinstance(grant, dict) else {}
+    if not why and grant.get("verdict") != "approved":
+        why = f"the merge-analyst's verdict is {grant.get('verdict')!r}, risks {grant.get('risks')!r}"
+    return grant, why and f"grant {path.name}: {why}"
 
 
 def _git(cwd: str, *args: str) -> str:
@@ -93,7 +113,7 @@ def fault(path: str) -> str:
         return "`repo_root` is missing"
     if hashlib.sha256(os.path.realpath(repo_root).encode()).hexdigest()[:16] != repo_hash:
         return f"`repo_root` {repo_root!r} does not hash to the path's REPO_HASH {repo_hash!r}"
-    toplevel = _git(repo_root, "rev-parse", "--show-toplevel")
+    toplevel = locations.repo_top(repo_root)
     if not toplevel or os.path.realpath(toplevel) != os.path.realpath(repo_root):
         return f"`repo_root` {repo_root!r} is not the top level of a git repository"
     ref, default_branch = grant.get("branch"), grant.get("default_branch")

@@ -117,10 +117,11 @@ def merge(rp, case: str) -> None:
     if case == "merge-nogrant":
         faults.install(rp, "missing@agent:merge-analyst Write grant")
     elif case == "merge-moved":
-        rp.faults.append(("/merge Step 4 Bash revalidate tips", _once(rp, case, lambda step: _owner_commit(
-            rp, "toy/util.py", SUB_MORE, "toy: neg", "2026-01-01T00:04:00+0000"))))
+        rp.faults.append((f"/merge Step {mergedrv.M.tips} Bash revalidate tips", _once(
+            rp, case, lambda step: _owner_commit(rp, "toy/util.py", SUB_MORE, "toy: neg", "2026-01-01T00:04:00+0000"))))
     elif case == "merge-nosession":
-        rp.faults.append(("/merge Step 1 Bash snapshot", _once(rp, case, _without_session_id(rp))))
+        rp.faults.append((f"/merge Step {mergedrv.M.snapshot} Bash snapshot",
+                          _once(rp, case, _without_session_id(rp))))
     last = mr = mergedrv.MergeRun(rp)
     mr.run("")
     if case == "merge-blocked" and not _merged(rp):
@@ -148,9 +149,9 @@ def push(rp, case: str) -> None:
     s = rp.session()
     closedrv.fact(rp, "before /push", {"owner commit": True, "toy": pushdrv.origin_state(rp),
                                        "left": pushdrv.leftovers(rp)})
-    if case == "push-nosession":
-        rp.faults.append(("/push Step 2 Bash snapshot", _once(rp, case, _without_session_id(rp))))
     last = pr = pushdrv.PushRun(rp, s)
+    if case == "push-nosession":
+        rp.faults.append((f"/push {pr.S.snapshot} Bash snapshot", _once(rp, case, _without_session_id(rp))))
     pr.run()
     if case == "push-blocked" and not _pushed(rp):
         # The owner's action: the flagged file out of his commit (amended), the token's one writer run for

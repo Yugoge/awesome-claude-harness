@@ -22,7 +22,7 @@ set -euo pipefail
 trap 'exit 0' EXIT
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-  || harness_state_dir() { printf '%s\n' /tmp; }
+  || exit 0  # no state root, no cache: the warning is advisory
 CACHE_FILE="$(harness_state_dir)/worktree-guard-cache"
 CACHE_TTL=60
 
@@ -43,7 +43,8 @@ if [ -f "$CACHE_FILE" ]; then
 fi
 
 # Find git root
-GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/claude_home.sh" 2>/dev/null || exit 0
+GIT_ROOT=$(claude_repo_top .) || exit 0  # the filesystem root is no repository: as for no repository
 MAIN_BRANCH=""
 
 # Detect main branch name

@@ -98,6 +98,16 @@ def helper_path():
     return bash_safety_rules.runtime_fallback_denies
 
 
+def test_the_rules_module_imports_whatever_the_importing_process_was_given():
+    """Imported (not run as the shell entry's script), the module finds its own hooks directory: a process started
+    with other arguments (pytest on one test file) can import it with only hooks/lib on its path."""
+    code = ("import sys; sys.argv = ['pytest', 'hooks/tests/test_x.py']; sys.path.insert(0, %r); "
+            "import bash_safety_rules" % os.path.join(HOOKS_DIR, "lib"))
+    p = subprocess.run([sys.executable, "-I", "-c", code], cwd=os.path.dirname(HOOKS_DIR), capture_output=True,
+                       text=True, timeout=60)
+    assert p.returncode == 0, p.stderr[-800:]
+
+
 def _denies(helper, cmd):
     """True iff the fallback conservatively DENIES this raw command text."""
     return helper(cmd)

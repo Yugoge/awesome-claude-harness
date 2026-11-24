@@ -372,7 +372,11 @@ WRAPPERS = {"timeout", "time", "nice", "nohup", "stdbuf", "command", "builtin", 
 
 
 def _deny(settings: Path = REPO / "settings.json") -> list[str]:
-    return json.loads(settings.read_text(encoding="utf-8"))["permissions"]["deny"]
+    """settings.json's own entries, and for the shipped file the hook rule's (policies/cli-deny.v1.json)."""
+    own = json.loads(settings.read_text(encoding="utf-8"))["permissions"]["deny"]
+    if settings != REPO / "settings.json":
+        return own
+    return own + json.loads((REPO / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"]
 
 
 def bash_rule_matches(entry: str, text: str) -> bool:
@@ -567,10 +571,24 @@ def _cli_decision(perms: dict, cmd: str, work: Path, port: int, cmdfile: Path) -
     raise AssertionError(f"no tool result for {cmd!r}: {r.stderr[-400:]}")
 
 
+def _wait_listening(port: int, limit: float = 60.0) -> None:
+    """Wait for the mock server itself: connect until it accepts (the limit is an outer one, reached only by a
+    server that never comes up), instead of a pause that stands for "it is listening by now"."""
+    end = time.monotonic() + limit
+    while True:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=2).close()
+            return
+        except OSError:
+            if time.monotonic() > end:
+                raise AssertionError(f"the mock server did not listen on port {port} within {limit:g} s")
+            time.sleep(0.05)
+
+
 @pytest.mark.skipif(os.environ.get("HARNESS_LIVE_CLI") != "1" or not shutil.which("claude"),
                     reason="live CLI re-measurement is opt-in: HARNESS_LIVE_CLI=1 with `claude` installed")
 def test_live_cli_decisions(tmp_path):
-    perms = json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"]
+    perms = dict(json.loads((REPO / "settings.json").read_text(encoding="utf-8"))["permissions"], deny=_deny())
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
@@ -580,7 +598,7 @@ def test_live_cli_decisions(tmp_path):
     cmdfile.write_text("true")
     srv = subprocess.Popen([sys.executable, "-I", str(tmp_path / "mock.py"), str(port), str(cmdfile)])
     try:
-        time.sleep(1)
+        _wait_listening(port)
         cases = dict(MEASURED)
         cases.update({ex: (None, "deny") for ex in ENTRIES.values()})
         got = {cmd: _cli_decision(perms, cmd, tmp_path, port, cmdfile) for cmd in cases}

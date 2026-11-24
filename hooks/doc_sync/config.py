@@ -13,6 +13,33 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path, PurePath
 
+# The project directories doc-sync watches.
+WATCHED_DIRS = frozenset({
+    '.claude/commands',
+    '.claude/agents',
+    '.claude/hooks',
+    '.claude/skills',
+    '.claude/scripts',
+})
+
+# The names doc-sync leaves out, defined once for every doc-sync module and for
+# hooks/userprompt-doc-sync-check.py, which loads this file by its path (it must not import the
+# doc_sync package, whose __init__ loads every module): so this file imports only the stdlib.
+#
+# File names that are never an entry of a folder document: the folder documents themselves,
+# package markers, and gitignored runtime telemetry (listing it in a tracked INDEX or README
+# would leak it again on the next regeneration).
+SKIP_FILES = frozenset({
+    'INDEX.md', 'README.md', '__init__.py', '.DS_Store',
+    # Runtime telemetry, gitignored (spec-20260518-225715 Cycle 2 P2.3).
+    'agent-scores.json', 'agent-scores.json.lock',
+    # The rating log lifecycle.jsonl (under the state root's logs/, hooks/lib/score_log.py) and its lock file.
+    'lifecycle.jsonl', 'lifecycle.jsonl.lock',
+})
+# File-name prefixes left out the same way: cp-state-*.json runtime telemetry and spec-2026*
+# spec views, whose timestamped names a set cannot enumerate (spec-20260518-225715 Cycle 3).
+SKIP_PREFIXES = ('cp-state-', 'spec-2026')
+
 # While a PostToolUse event regenerates, a file not yet in the index but not gitignored counts
 # as published: `git add -A` would stage it, so the text written now is the text the tree-wide
 # --check (scripts/regen-folder-docs.py) renders once the change is committed, however many new
@@ -35,13 +62,13 @@ def counting_untracked():
 
 def work_tree_root(dir_path: Path) -> Path | None:
     """The resolved top level of the git work tree holding dir_path, or None outside one."""
-    try:
-        proc = subprocess.run(['git', '-C', str(dir_path), 'rev-parse', '--show-toplevel'],
-                              capture_output=True, text=True, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    top = proc.stdout.strip()
-    if proc.returncode != 0 or not top:
+    import sys
+    hooks = str(Path(__file__).resolve().parents[1])
+    if hooks not in sys.path:
+        sys.path.insert(0, hooks)
+    from lib import locations  # the filesystem root is no work tree: no file is generated there
+    top = locations.repo_top(dir_path)
+    if not top:
         return None
     try:
         return Path(top).resolve()

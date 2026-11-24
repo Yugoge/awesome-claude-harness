@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,23 @@ PHASES = ["coverage", "auto_commit", "completion", "cleanup"]
 LITERAL_RULE = "the private-literal rule"
 SETTINGS_CHECK = "the settings check (render-settings check --staged)"
 SETTINGS_FILTER = "the settings filter (render-settings clean)"
+REFUSED = "Checkpoint snapshot refused by {}: nothing written, see logs/checkpoint.log"
+LEFT_OUT = "Checkpoint snapshot left out 1 file(s) holding a private literal: {}, see logs/checkpoint.log"
+STREAK = re.compile(r"; no complete snapshot of refs/checkpoints/main since (\S+ \S+) \((\d+) in a row\)$")
+
+
+def _streak(notice: str, head: str) -> tuple[str, int]:
+    """The notice is <head> plus the run it extends: (since, count)."""
+    assert notice.startswith(head), notice
+    match = STREAK.fullmatch(notice[len(head):])
+    assert match, notice
+    return match.group(1), int(match.group(2))
+
+
+def _count(home: Path) -> int:
+    """The consecutive-incomplete counter of refs/checkpoints/main of this repository."""
+    path = home / ".git" / "checkpoint-fail-count.main"
+    return int(path.read_text().split()[0]) if path.is_file() else 0
 
 
 def _git(env: dict, repo: Path, *args: str, check: bool = True) -> str:
@@ -57,6 +75,7 @@ def harness(tmp_path: Path) -> tuple[Path, dict]:
         "LANG": "C.UTF-8",
         "HOME": str(tmp_path / "user-home"),
         "CLAUDE_CONFIG_DIR": str(tmp_path / "config"),
+        "CHECKPOINT_LOG_DIR": str(tmp_path / "config" / "logs"),
         "CLAUDE_STATE_DIR": str(tmp_path / "state"),
         "TMPDIR": str(tmp_path / "tmp"),
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -144,14 +163,15 @@ UNCLEANABLE = {
 
 
 @pytest.mark.parametrize(
-    "case, rules",
+    "case, head, logged",
     [
-        ("literal", LITERAL_RULE),
-        ("settings", SETTINGS_CHECK),
-        ("both", f"{LITERAL_RULE} and {SETTINGS_CHECK}"),
+        ("literal", LEFT_OUT.format("leak.txt"), "left out 1 file(s) holding a private literal: leak.txt"),
+        ("settings", REFUSED.format(SETTINGS_CHECK), f"snapshot refused by {SETTINGS_CHECK}: nothing written"),
+        # the machine form holds the listed literal too: left out, HEAD's settings.json stays
+        ("both", LEFT_OUT.format("settings.json"), "left out 1 file(s) holding a private literal: settings.json"),
     ],
 )
-def test_refused_snapshot_never_blocks_a_stop(harness, case: str, rules: str) -> None:
+def test_refused_snapshot_never_blocks_a_stop(harness, case: str, head: str, logged: str) -> None:
     home, env = harness
     if case in ("literal", "both"):
         (home / "private-literals.txt").write_text(f"# stand-in list\n{STANDIN}\n")
@@ -162,7 +182,8 @@ def test_refused_snapshot_never_blocks_a_stop(harness, case: str, rules: str) ->
     commits_before = _git(env, home, "rev-list", "--all", "--count")
 
     # Past CHECKPOINT_FAIL_ALERT_THRESHOLD (3): a refusal never escalates.
-    for active in (False, True, False, True):
+    first_since = None
+    for n, active in enumerate((False, True, False, True), start=1):
         stop = _stop(home, env, active=active)
         out = stop["out"]
         assert stop["rc"] == 0, stop["raw"]
@@ -171,18 +192,17 @@ def test_refused_snapshot_never_blocks_a_stop(harness, case: str, rules: str) ->
         assert all(p["status"] == "allow" for p in out["phases"]), out
         assert stop["cleanup_ran"], "the cleanup phase did not run"
         notice = out["systemMessage"]
-        assert notice == (
-            f"Checkpoint snapshot refused by {rules}: nothing written, see logs/checkpoint.log"
-        )
+        since, count = _streak(notice, head)
+        first_since = first_since or since
+        assert (since, count) == (first_since, n)
         assert "\n" not in notice and STANDIN not in stop["raw"]
 
     assert _git(env, home, "for-each-ref", "refs/checkpoints") == ""
     assert _git(env, home, "rev-list", "--all", "--count") == commits_before
     log = _log(env)
-    assert log.count(f"snapshot refused by {rules}: nothing written") == 4
+    assert log.count(logged) == 4
     assert STANDIN not in log
-    count = Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / ".checkpoint-fail-count"
-    assert not count.exists() or count.read_text().strip() == "0"
+    assert _count(home) == 4
 
 
 def test_ordinary_snapshot_is_still_written_without_a_notice(harness) -> None:
@@ -230,7 +250,7 @@ def test_settings_json_the_clean_filter_refuses_never_blocks_a_stop(harness, cas
     (home / "notes.txt").write_text("second note\n")
     commits_before = _git(env, home, "rev-list", "--all", "--count")
 
-    for active in (False, True, False, True):  # past the failure-alert threshold
+    for n, active in enumerate((False, True, False, True), start=1):  # past the alert threshold
         stop = _stop(home, env, active=active)
         out = stop["out"]
         assert stop["rc"] == 0, stop["raw"]
@@ -238,10 +258,7 @@ def test_settings_json_the_clean_filter_refuses_never_blocks_a_stop(harness, cas
         assert [p["phase"] for p in out["phases"]] == PHASES
         assert all(p["status"] == "allow" for p in out["phases"]), out
         assert stop["cleanup_ran"], "the cleanup phase did not run"
-        assert out["systemMessage"] == (
-            f"Checkpoint snapshot refused by {SETTINGS_FILTER}: nothing written,"
-            " see logs/checkpoint.log"
-        )
+        assert _streak(out["systemMessage"], REFUSED.format(SETTINGS_FILTER))[1] == n
         assert STANDIN not in stop["raw"]
 
     assert _git(env, home, "rev-parse", "-q", "--verify", REF) == tip
@@ -249,8 +266,7 @@ def test_settings_json_the_clean_filter_refuses_never_blocks_a_stop(harness, cas
     log = _log(env)
     assert log.count(f"snapshot refused by {SETTINGS_FILTER}: nothing written") == 4
     assert "add -A failed" not in log and STANDIN not in log
-    count = Path(env["CLAUDE_CONFIG_DIR"]) / "logs" / ".checkpoint-fail-count"
-    assert not count.exists() or count.read_text().strip() == "0"
+    assert _count(home) == 4
 
 
 def test_broken_filter_install_fails_the_phase_but_not_the_stop(harness) -> None:

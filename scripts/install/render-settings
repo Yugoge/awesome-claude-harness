@@ -38,8 +38,9 @@ keeps the two apart, so machine values and CLI-owned keys never reach the index.
                      the working settings.json is the OFF FORM of the machine form: what the clean form
                      and the optional modules ship (their env keys, permission entries, hook commands,
                      every hook command under <H>/hooks or <H>/scripts, the clean form's other
-                     top-level keys but OFF_KEEPS) is left out; the switch's own hook and permission
-                     entries, env.CLAUDE_HOME and everything else (the owner's) stay. smudge writes the
+                     top-level keys but OFF_KEEPS, their env keys but OFF_KEEPS_ENV) is left out; the
+                     switch's own hook and permission entries, env.CLAUDE_HOME and everything else
+                     (the owner's) stay. smudge writes the
                      off form, clean reads an off form back as the machine form it stands for (plus the
                      owner's changes), so a pull while off neither fails on it nor turns it on; render
                      and check work on the off form.
@@ -564,6 +565,10 @@ SWITCH_PERMISSIONS = ("Skill(harness)", "Edit(**/.harness-switch/**)")  # the sw
 # otherwise delete after its default 30 days; deniedMcpServers keeps three connectors off that
 # the owner never turned on.
 OFF_KEEPS = ("cleanupPeriodDays", "deniedMcpServers")
+# Env keys the clean form ships that the off form keeps, with their machine-form values: the CLI
+# fixes where it keeps command output when its process starts, so a session started while off
+# would keep it, and its commands their temp files, on the memory-backed /tmp for its whole life.
+OFF_KEEPS_ENV = ("CLAUDE_CODE_TMPDIR", "TMPDIR")
 
 
 def switched_off(home):
@@ -599,7 +604,7 @@ def shipped_entries(base):
         for event, groups in _d(src.get("hooks")).items():
             hooks.setdefault(event, set()).update(_hook_keys(groups))
     tops = {k for k in base if k not in STRUCTURED and k not in OFF_KEEPS}
-    return env, perms, values, hooks, tops
+    return env - set(OFF_KEEPS_ENV), perms, values, hooks, tops
 
 
 def off_form(y, base):
@@ -668,7 +673,8 @@ def on_form(working, base, layers):
 
 # ------------------------------------------------------------------------------------- diff
 
-_PREFIX = re.compile(r"(?<!\S)\S*?/(hooks|scripts)/")
+_CODE_DIRS = "hooks|scripts"  # the harness directories whose files a hook command runs
+_PREFIX = re.compile(r"(?<!\S)\S*?/(%s)/" % _CODE_DIRS)
 
 
 def norm_command(cmd):
@@ -867,10 +873,11 @@ def load_settings(home):
     return settings, problem and problem.replace(os.path.join(home, ""), "", 1)
 
 
-def clean_source(home):
-    """The clean form's bytes: the index blob, else HEAD's, else the working file."""
+def clean_source(home, checkout=None):
+    """The clean form's bytes: the index blob, else HEAD's, else the working file. `checkout`: the
+    caller's own answer to is_checkout, for a caller that must use one answer throughout."""
     source = None
-    if is_checkout(home):
+    if is_checkout(home) if checkout is None else checkout:
         source = blob(home, ":" + SETTINGS)
         if source is None:
             source = blob(home, "HEAD:" + SETTINGS)
@@ -995,13 +1002,13 @@ def check_hook_paths(home, working, overlay):
     env = dict(os.environ)
     env.update({k: v for k, v in _d(working.get("env")).items() if isinstance(v, str)})
     # Only a command of the clean form or of a module is echoed; any other may be personal.
-    docs = [parse(clean_source(home)) or {}] + list(MODULES.values())
+    checkout = is_checkout(home)  # one answer: a git call that failed once must not split the check
+    docs = [parse(clean_source(home, checkout)) or {}] + list(MODULES.values())
     kit = {(event, key) for d in docs for event, gs in _d(d.get("hooks")).items()
            for key in _hook_keys(gs)}
     mine = {(event, key) for event, gs in _d(_layer_of(overlay or {}).get("hooks")).items()
             for key in _hook_keys(gs)}
     public = {key for _, key in kit} - {key for _, key in mine}
-    checkout = is_checkout(home)
     if not checkout:  # the clean form read is the working file, which holds the overlay's too
         kit -= mine
     root = os.path.realpath(home)
@@ -1228,12 +1235,6 @@ def _hard_bans(text):
     return "|".join(patterns)
 
 
-def _process_family(text):
-    m = re.search(re.escape(r"docker\s+(stop|restart|rm|kill)\s+.*")
-                  + r"([A-Za-z0-9_][A-Za-z0-9_.-]*)", text)
-    return m.group(1) if m else ""
-
-
 def _extra_trailer(text):
     for line in text.splitlines():
         trailer = line.strip().rstrip("\"'").strip()
@@ -1271,7 +1272,6 @@ CODE_DEFAULTS = (
     ("WORKFLOW_PRUNE_PROJECT_DIRNAME", "scripts/prune-orphaned-workflow-bookmarks.sh",
      _shell_default),
     ("CLAUDE_HARD_BANNED_SCRIPTS", SAFETY_HOOK, lambda text, _name: _hard_bans(text)),
-    ("CLAUDE_PROTECTED_PROCESS_FAMILY", SAFETY_HOOK, lambda text, _name: _process_family(text)),
     ("CLAUDE_CHECKPOINT_EXTRA_TRAILER", "hooks/lib/checkpoint-core.sh",
      lambda text, _name: _extra_trailer(text)),
     ("PASEO_DAEMON_ACCOUNTS", "scripts/paseo-daemon-ledger.py",
@@ -1327,7 +1327,7 @@ def module_enabled(fragment, prev, base):
 
 
 def _script(hook):
-    m = re.search(r"@H/((?:hooks|scripts)/\S+)", norm_command(str(hook.get("command", ""))))
+    m = re.search(r"@H/((?:%s)/\S+)" % _CODE_DIRS, norm_command(str(hook.get("command", ""))))
     return m.group(1) if m else None
 
 
@@ -1533,7 +1533,7 @@ FOLDER_DOC_LINE = re.compile(rb"^(\*Last updated: [^*]*\*|\*Auto-generated by do
 AUTO_MARKER = re.compile(rb"^<!-- (/?)AUTO:[^ ]+ -->$")
 INDEX_TITLE = re.compile(rb"^# [^ \t]+$")  # regen_index's `# <directory>`, kept below when stale
 SEED_KEYS = tuple(name for name, _, _ in CODE_DEFAULTS) + ("GRAPHIFY_BIN",)
-_HOME_OF = re.compile(r"""(?<![^\s"'])(/[^\s"']*?)/((?:hooks|scripts)/[^\s"';]+)""")
+_HOME_OF = re.compile(r"""(?<![^\s"'])(/[^\s"']*?)/((?:%s)/[^\s"';]+)""" % _CODE_DIRS)
 # Fact 9's history sources: the engine's EMAIL (scripts/check-public-core.sh) from its "@", the
 # local part found backwards (at most 64 characters), and a commit's author and committer lines.
 EMAIL_AT = re.compile(rb"@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")

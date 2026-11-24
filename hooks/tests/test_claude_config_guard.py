@@ -168,3 +168,20 @@ def test_the_sentinel_still_lets_everything_through(cycle):
     (cycle.project / ".claude" / ".hook-refactor-allow").write_text("")
     assert cycle.write().returncode == 0
     assert cycle.write(".claude/hooks/x.py").returncode == 0
+
+
+@pytest.mark.parametrize("hook_runs_in", ["the-project", "elsewhere"])
+def test_the_project_is_the_calls_own_directory_wherever_the_hook_process_runs(tmp_path, hook_runs_in):
+    """g-locfind1 F4: with no $CLAUDE_PROJECT_DIR the project whose sentinel releases the write is the directory
+    the call runs in (the payload's cwd), not the one the hook process was started in."""
+    project, elsewhere = tmp_path / "proj", tmp_path / "elsewhere"
+    for d in (project / ".claude" / "hooks", elsewhere):
+        d.mkdir(parents=True)
+    (project / ".claude" / ".hook-refactor-allow").write_text("")
+    payload = {"tool_name": "Write", "cwd": str(project), "session_id": "s-f4",
+               "tool_input": {"file_path": ".claude/hooks/x.py", "content": "x"}}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE")}
+    env.update(HOME=str(tmp_path / "home"), PYTHONDONTWRITEBYTECODE="1")
+    proc = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True, text=True,
+                          env=env, cwd=str(project if hook_runs_in == "the-project" else elsewhere), timeout=60)
+    assert proc.returncode == 0, proc.stderr

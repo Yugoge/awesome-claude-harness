@@ -15,7 +15,7 @@ CODEX_REQUESTED = $ARGUMENTS contains literal token "--codex"
 TASK = $ARGUMENTS with "--codex" token removed (trimmed)
 ```
 
-If `TASK` is empty, ask the user for the task with AskUserQuestion inside the turn before proceeding (a typed reply would be a new prompt, which ends the /do consent).
+If `TASK` is empty, end with one line `NO_TARGET: /do was given no task; /do <the task> runs one`. Nobody is asked; the Stop gate (`no_target_end`) lets a run that dispatched nothing end on it.
 
 ## Workflow
 
@@ -43,11 +43,11 @@ State what changed, which files were modified, and (if Step 3 ran) whether codex
 
 End every `/do` with a do-report at `docs/dev/do-report-<TASK_ID>.json`, written whole by you (the template below; no hook pre-writes it) once `TASK` is done: `do.status` `"completed"` is its one terminal.
 
-The Stop gate (`hooks/stop-command-gate.py`) exits 2 until the report validates against `schemas/do-report.v1.json` and its file lists are exact (below). When `TASK` cannot be finished as asked, or needs a decision only the user can make (an operation a hook refuses included), ask one specific AskUserQuestion in this turn naming it, then continue the work; the answer releases no gate.
+The Stop gate (`hooks/stop-command-gate.py`) exits 2 until the report validates against `schemas/do-report.v1.json` and its file lists are exact (below). When part of `TASK` cannot be done as asked (an operation a hook refuses included), nobody is asked: do what a rule allows, write the do-report, and state in Step 4 what was not done, with the hook's output for each refused operation. When the pending step cannot go on because a hook refused its own call (the do-report's Write included), end the turn with one line `REFUSED: Step <n>: <the refused call> - refused by <the hook>: <the rule it applies, in plain words>. Next: <who must do what, and what then happens>` and the hook's output, as `commands/dev.md` says; the Stop gate (`step_refused_end`) lets the turn end then, and the next prompt resumes the step.
 
 **`TASK_ID`** is the id in the hook's `[/do] task-id minted: <id>` line. The hook is the only mint: never mint one, and never take the newest `claude-orchestrator-consent-*.flag` in the state dir (two concurrent `/do` sessions would alias onto one id and overwrite each other's do-reports). To read it back for the current session (after a compaction):
 1. `SID = $CLAUDE_CODE_SESSION_ID` (fallback `$CLAUDE_SESSION_ID`).
-2. Read `task_id` from the session-keyed sidecar `claude-do-task-$SID.json` in the state dir (`$CLAUDE_STATE_DIR` when that is an absolute path, else `/tmp`: `. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"; harness_state_dir`), the path the minted line printed.
+2. Read `task_id` from the session-keyed sidecar `claude-do-task-$SID.json` in the state dir (`. "${CLAUDE_HOME:-$HOME/.claude}/hooks/lib/harness_state_dir.sh"; harness_state_dir`), the path the minted line printed.
 
 Use this `TASK_ID` for the do-report filename and every downstream `/close <TASK_ID>` and `/commit <TASK_ID>`.
 

@@ -88,7 +88,8 @@ def test_no_permission_rule_names_the_codex_skill():
 
 
 def test_every_human_only_command_has_its_skill_deny_and_no_other_command_has_one():
-    deny = set(_settings()["permissions"]["deny"])
+    with open(os.path.join(ROOT, "policies", "cli-deny.v1.json"), encoding="utf-8") as fh:
+        deny = set(json.load(fh)["deny"]) | set(_settings()["permissions"]["deny"])  # the rule's and the CLI's
     marked = {s for s in _stems() if _MARKER.search(_frontmatter(s))}
     missing = sorted(s for s in marked - CONTROL if f"Skill({s})" not in deny)
     assert not missing, "human-only commands without a Skill deny (CLAUDE.md lesson 15): " + ", ".join(missing)

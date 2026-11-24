@@ -82,11 +82,13 @@ def test_the_folders_are_not_split_artifacts_so_the_resolver_still_sees_no_split
     assert json.loads(out.stdout)["views_available"] is False
 
 
-def test_the_project_is_claude_project_dir_then_the_git_top_level(tmp_path):
+def test_the_project_is_claude_project_dir_then_the_working_directory(tmp_path):
+    """R1: without CLAUDE_PROJECT_DIR the project is the cwd (the session's directory), as the hooks
+    take it, not the git top level above it."""
     cwd = project(tmp_path / "proj")
-    subprocess.run(["git", "init", "-q", str(cwd)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)  # the git top level lies above the project
     sub = cwd / "docs" / "dev"
-    facts, proc = design(sub, b"d\n", spec=str(cwd / SPEC_REL))
+    facts, proc = design(cwd, b"d\n", spec=str(cwd / SPEC_REL))
     assert facts["artifact"] == f"docs/dev/specs/{SPEC_ID}/design/turn-3-type-check-placement.md", proc.stderr
     assert (folder(cwd) / "design" / "turn-3-type-check-placement.md").is_file()
 

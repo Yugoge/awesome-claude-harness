@@ -636,6 +636,9 @@ def _relations(findings: M.Findings, file_set: set, md_env: dict) -> tuple[list,
         unres.append({"kind": "unresolved", "component": o.component, "op": o.op, "mode": o.mode, "via": o.via,
                       "lang": o.lang, "site": f"{o.component}:{o.line}", "function": o.function,
                       "reason": _primary_reason(reasons), "reasons": reasons, "partial": pat,
+                      # a rename onto a name only the run knows (a listed entry) still names its temp source
+                      **({"from": sorted({s for r in recs for s in r.get("from", ())})}
+                         if o.op == "rename" and any(r.get("from") for r in recs) else {}),
                       **({"origin": o.origin} if o.origin else {}),
                       **({"through": list(o.chain)} if o.chain else {})})
     return rels, unres
@@ -692,22 +695,29 @@ def _bind_argv(findings: M.Findings, md_env: dict) -> None:
                     return []
                 return [_resolve_ph(t, env) for t in V.as_templates(inv.args[n - 1])]
 
-            alts = []
-            for t in temps:
-                cur = [t]
-                for n in sorted({int(x) if x.isdigit() else x for x in _ARGV_RE.findall(t)}, key=str):
-                    vals = arg(n)
-                    if not vals:
-                        cur = []
-                        break
-                    tok = P.argv(n) if isinstance(n, int) else P.tok("argv:" + n)
-                    cur = [c.replace(tok, v) for c in cur for v in vals]
-                alts += cur
+            def bind(temps) -> list:
+                alts = []
+                for t in temps:
+                    cur = [t]
+                    for n in sorted({int(x) if x.isdigit() else x for x in _ARGV_RE.findall(t)}, key=str):
+                        vals = arg(n)
+                        if not vals:
+                            cur = []
+                            break
+                        tok = P.argv(n) if isinstance(n, int) else P.tok("argv:" + n)
+                        cur = [c.replace(tok, v) for c in cur for v in vals]
+                    alts += cur
+                return alts
+
+            alts = bind(temps)
             if not alts:
                 continue
             via = f"{inv.component.split('#')[0]}:{inv.line}"
             if isinstance(o, M.Op):
-                src = o.src
+                # a rename's source is the same expression of the argument as its destination (a temp beside the
+                # file, `f"{path}.{pid}"`): bound by the same invocation, or the temp would not fold (rule (1))
+                src_alts = bind(V.as_templates(o.src)) if o.src is not None and V.as_templates(o.src) else []
+                src = V.make_str(src_alts) if src_alts else o.src
                 bound.append(M.Op(o.component, o.line, o.op, V.make_str(alts), o.mode, o.via, o.lang, o.function,
                                   src, tuple(o.chain), o.origin, via))
             else:

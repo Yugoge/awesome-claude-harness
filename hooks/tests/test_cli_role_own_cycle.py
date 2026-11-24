@@ -330,8 +330,7 @@ def test_overnight_dev_child_resolves_its_sessions_state(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("event,extra,status", [
-    ("PostToolUse", {"tool_response": {"output": "ok"}}, "called"),
-    ("PostToolUse", {"tool_response": {"output": "quota exceeded"}}, "quota_error"),
+    ("PostToolUse", {"tool_response": {"success": True, "commandName": "codex"}}, "called"),
     ("PostToolUseFailure", {"error": "Unknown skill: codex"}, "failed"),
     ("PostToolUseFailure", {"error": "timeout", "is_interrupt": True}, "failed"),
 ])

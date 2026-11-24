@@ -42,6 +42,7 @@ Stdlib-only, so the shell callers can run it with `python3 -I`; readers never
 raise (every probe fails closed).
 """
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -49,6 +50,49 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
+
+
+def _locations():
+    """The shared place that holds the rule "the filesystem root is no top" (locations.py), loaded by path
+    on first use, never at import: this module needs the standard library alone to load, so the Stop
+    launcher's fallback can read the window when the rest of the library is broken. None when it cannot be loaded."""
+    module = sys.modules.get('locations')
+    if module is None or not hasattr(module, 'repo_top'):
+        try:
+            path = Path(__file__).with_name('locations.py')
+            spec = importlib.util.spec_from_file_location('locations', path)
+            module = importlib.util.module_from_spec(spec)
+            sys.path.insert(0, str(path.parent))  # its own import of harness_state_dir
+            try:
+                spec.loader.exec_module(module)
+            finally:
+                sys.path.pop(0)
+            sys.modules['locations'] = module
+        except Exception:
+            sys.modules.pop('locations', None)
+            return None
+    return module
+
+
+def _top(where):
+    """The top of the git work tree holding `where`, None when it has none or when the top is the filesystem
+    root. The rule is locations.repo_top's; only when that cannot be loaded does the same comparison run here
+    (the root is no top in either case)."""
+    shared = _locations()
+    if shared is not None:
+        return shared.repo_top(where)
+    top = _git(where, 'rev-parse', '--show-toplevel')
+    return None if top is None or os.path.realpath(top) == os.sep else top
+
+
+def _common_dir(where):
+    """The git common directory of `where`'s repository, None outside one or when its top is the filesystem
+    root: locations.repo_common_dir's rule, else (that module unloadable) the same comparison here."""
+    shared = _locations()
+    if shared is not None:
+        return shared.repo_common_dir(where)
+    common = _git(where, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    return None if common is None or os.path.realpath(os.path.dirname(common)) == os.sep else os.path.realpath(common)
 
 
 class Verdicts(NamedTuple):
@@ -194,13 +238,13 @@ def _roots(start):
     (its own .git, a local clone of the main repository, wherever
     OVERNIGHT_FRESH_CLONE_ROOT put it), the main root of its origin."""
     yield start
-    common = _git(start, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    common = _common_dir(start)
     if common is None:
         return
     yield Path(common).parent
     origin = _git(start, 'config', '--get', 'remote.origin.url')
     if origin and os.path.isabs(origin):
-        common = _git(origin, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+        common = _common_dir(origin)
         if common is not None:
             yield Path(common).parent
 
@@ -247,6 +291,51 @@ def window_open(payload):
         return False
 
 
+class Reading(NamedTuple):
+    """What `read_declared_json` found: ``exists`` and ``is_file`` of the path;
+    ``status`` one of absent (nothing there), unreadable (the read raised; ``error``
+    is the OSError or the decode error), empty (blank text; ``error`` is the
+    JSONDecodeError of parsing it), malformed (``error`` is the JSONDecodeError),
+    ok (``value`` is the parsed JSON, of any type)."""
+    exists: bool
+    is_file: bool
+    status: str
+    value: object = None
+    error: Optional[Exception] = None
+
+
+def read_declared_json(path):
+    """The one place that says a declared artifact is on disk and reads as JSON.
+
+    Every reader of such an artifact (the cycle counter, the closeout reader, the
+    contract library's validation, the artifact chain's reader) asks here and keeps
+    its own verdict on the `Reading`. Stdlib only; never raises."""
+    p = Path(path)
+    try:
+        exists, is_file = p.exists(), p.is_file()
+    except (OSError, ValueError):
+        return Reading(False, False, 'absent')
+    if not exists:
+        return Reading(False, False, 'absent')
+    try:
+        raw = p.read_bytes().decode('utf-8')
+    except (OSError, ValueError) as exc:
+        return Reading(exists, is_file, 'unreadable', error=exc)
+    try:
+        value = json.loads(raw)
+    except ValueError as exc:
+        return Reading(exists, is_file, 'empty' if not raw.strip() else 'malformed', error=exc)
+    return Reading(exists, is_file, 'ok', value=value)
+
+
+def cycle_complete(base, cycle):
+    """The one place that says a cycle is complete: its PM retrospective,
+    `<base>/retro-report-cycle<cycle>.json`, is on disk as a file, as the one reading
+    function (read_declared_json) sees it. The cycle counter (cycle_index) and the
+    closeout reader (closeout_gaps) both ask here."""
+    return read_declared_json(Path(base) / f'retro-report-cycle{cycle}.json').is_file
+
+
 def closeout_gaps(state, working_root):
     """What the session's closeout lacks on disk, one fact per gap: a PM
     retrospective (retro-report-cycle*.json under
@@ -267,7 +356,8 @@ def closeout_gaps(state, working_root):
             return False
 
     gaps = []
-    if not any(retro.glob('retro-report-cycle*.json')):
+    if not any(cycle_complete(retro, p.name[len('retro-report-cycle'):-len('.json')])
+               for p in retro.glob('retro-report-cycle*.json')):
         gaps.append(f'{retro}/retro-report-cycle*.json: no PM retrospective report')
     if not any(written(p) for p in docs.glob('overnight-summary-*.md')):
         gaps.append(f'{docs}/overnight-summary-*.md: no summary written since start_time '
@@ -306,7 +396,7 @@ def cycle_index(state, written=()):
         base = session_dir(state)
         before = {os.path.realpath(str(p)) for p in written}
         n = 1
-        while (base / f'retro-report-cycle{n}.json').is_file() and \
+        while cycle_complete(base, n) and \
                 os.path.realpath(str(base / f'retro-report-cycle{n}.json')) not in before:
             n += 1
         return n
@@ -317,32 +407,28 @@ def cycle_index(state, written=()):
 def candidate_project_dirs(project_dir=None):
     """Ordered, de-duplicated dirs whose .claude/ may hold the state file.
 
-    Precedence: explicit project_dir arg → $CLAUDE_PROJECT_DIR → cwd →
-    git-toplevel. The state file lives in the MAIN repo's .claude/, so a subagent
-    running inside a worktree still resolves it via $CLAUDE_PROJECT_DIR (set by
-    the harness to the main repo).
+    Precedence: explicit project_dir arg → $CLAUDE_PROJECT_DIR → the directory
+    the call names (the arg; the process's own cwd only when none is named) →
+    its git-toplevel. The state file lives in the MAIN repo's .claude/, so a
+    subagent running inside a worktree still resolves it via $CLAUDE_PROJECT_DIR
+    (set by the harness to the main repo).
     """
     dirs = []
     for d in (project_dir, os.environ.get('CLAUDE_PROJECT_DIR')):
         if d and d not in dirs:
             dirs.append(d)
     try:
-        cwd = os.getcwd()
-        if cwd and cwd not in dirs:
-            dirs.append(cwd)
+        here = project_dir or os.getcwd()
+        if here and here not in dirs:
+            dirs.append(here)
     except Exception:
-        pass
+        here = None
     try:
-        top = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True, text=True, timeout=3,
-        )
-        if top.returncode == 0:
-            t = (top.stdout or '').strip()
-            if t and t not in dirs:
-                dirs.append(t)
-    except Exception:
-        pass
+        t = _top(here) if isinstance(here, (str, os.PathLike)) and here else None
+    except (OSError, TypeError, ValueError):
+        t = None
+    if t and t not in dirs:
+        dirs.append(t)
     return dirs
 
 

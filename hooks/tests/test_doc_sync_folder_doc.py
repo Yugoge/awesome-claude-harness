@@ -142,6 +142,8 @@ def emptied_home(tmp_path, harness_writer=None):
     commands.mkdir()
     shutil.copytree(REPO_ROOT / 'hooks' / 'doc_sync', hooks_dir / 'doc_sync',
                     ignore=shutil.ignore_patterns('__pycache__', 'README.md', 'INDEX.md'))
+    shutil.copytree(REPO_ROOT / 'hooks' / 'lib', hooks_dir / 'lib',  # doc_sync asks lib/locations where a repository's top is
+                    ignore=shutil.ignore_patterns('__pycache__'))
     if harness_writer is not None:
         (hooks_dir / 'doc_sync' / 'folder_doc.py').write_text(harness_writer)
     (commands / 'INDEX.md').write_text('# commands\n')

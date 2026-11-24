@@ -24,7 +24,7 @@ CONTROL_ROOT="${CONTROL_ROOT:-$(claude_home_resolve || echo "$HOME")}"
 # git-toplevel-of-cwd candidate: when /close runs with cwd inside a (possibly
 # nested) repo, probe that repo's docs/dev/ before the control-root fallback.
 # Empty/failed git lookup yields an empty candidate, which the -n guard skips.
-GIT_TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+GIT_TOPLEVEL="$(claude_repo_top . || true)"  # never the filesystem root
 
 for candidate in \
     "${CLAUDE_PROJECT_DIR:-}/docs/dev/close-report-${TASK_ID}.md" \

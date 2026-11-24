@@ -15,7 +15,6 @@
 
 set -euo pipefail
 
-# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -36,7 +35,6 @@ echo ""
 while IFS= read -r -d '' file; do
     basename=$(basename "$file")
 
-    # Skip if already compliant
     if [[ "$basename" =~ ^[a-z0-9-]+\.md$ ]]; then
         continue
     fi
@@ -44,13 +42,11 @@ while IFS= read -r -d '' file; do
     suggested="$basename"
     violations=()
 
-    # Check for uppercase letters
     if [[ "$basename" =~ [A-Z] ]]; then
         suggested=$(echo "$suggested" | tr '[:upper:]' '[:lower:]')
         violations+=("uppercase")
     fi
 
-    # Check for underscores
     if [[ "$basename" =~ _ ]]; then
         suggested=$(echo "$suggested" | sed 's/_/-/g')
         violations+=("underscore")
@@ -62,7 +58,6 @@ while IFS= read -r -d '' file; do
         violations+=("camelCase")
     fi
 
-    # Report if violations found
     if [[ ${#violations[@]} -gt 0 ]]; then
         echo -e "${YELLOW}❌ Non-compliant:${NC} $file"
         echo -e "   ${RED}Issues:${NC} ${violations[*]}"

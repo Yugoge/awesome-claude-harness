@@ -191,12 +191,26 @@ def test_each_rule_sees_the_tools_its_guard_was_registered_for(tmp_path):
     by_file = {Path(r.path).name: r for r in write_gate.RULES}
     assert registered.pop("pretool-write-guard.sh") == by_file.pop("overwrite.py").tools
     assert registered.pop("pretool-subagent-code-block.py") is not None  # not a rule: see below
-    # the harness switch's guard was never a registration of its own: a rule from its start
-    assert by_file.pop("pretool-harness-switch-guard.py").tools == write_gate.WRITE_TOOLS | {
-        "Bash", "Skill", "SlashCommand", "CronCreate", "ScheduleWakeup", "SendMessage"}
+    # the harness switch's guard was never a registration of its own: rules from its start, the guard on
+    # the tools whose commands, files and invoked commands it reads, its prompt rule on every other tool but
+    # the CLI's own that deliver no prompt (a prompt that types /harness is known by the input, not the
+    # tool's name, so no MCP tool and no tool of a later CLI is skipped); each tool reaches exactly one
+    switch, prompt = by_file.pop("pretool-harness-switch-guard.py"), by_file.pop("pretool-harness-switch-prompt.py")
+    assert switch.tools == write_gate.WRITE_TOOLS | {"Bash", "Skill", "SlashCommand"} and not switch.skips
+    assert prompt.tools is None and {"Read", "Grep", "Glob"} <= prompt.skips
+    for t in ("Bash", "Write", "NotebookEdit", "Skill", "CronCreate", "ScheduleWakeup", "SendMessage", "Agent",
+              "mcp__any__tool", "ALaterTool"):
+        assert [r.name for r in (switch, prompt) if r.applies(t)] == [
+            "harness-switch" if t in switch.tools else "harness-switch-prompt"], t
+    assert not switch.applies("Read") and not prompt.applies("Read")
+    assert all(r.skips == frozenset() for r in by_file.values())
+    # the overnight boundary's old matcher left NotebookEdit out; its rule sees every file-writing tool
+    assert registered.pop("pretool-overnight-hook-guard.py") | {"NotebookEdit"} == \
+        by_file.pop("pretool-overnight-hook-guard.py").tools == write_gate.WRITE_TOOLS | {"Bash", "AskUserQuestion"}
     assert {k: v for k, v in registered.items()} == {k: r.tools for k, r in by_file.items()}
     assert [r.name for r in write_gate.RULES] == ["bash-views", "overnight-boundary", "tool-policy",
-                                                  "cp-state", "overwrite", "claude-config", "harness-switch"]
+                                                  "cp-state", "overwrite", "claude-config", "harness-switch",
+                                                  "harness-switch-prompt"]
     assert all(Path(r.file).is_file() for r in write_gate.RULES)
 
 
@@ -260,10 +274,10 @@ def test_a_rule_that_raises_fails_in_its_direction_and_others_still_decide(tmp_p
 
 
 def test_a_rule_past_its_budget_is_stopped_and_fails_in_its_direction(tmp_path):
-    slow = _rule_file(tmp_path, "slow", "time.sleep(30)\n")
-    start = time.monotonic()
+    slow = _rule_file(tmp_path, "slow", "time.sleep(30)\n" + "open(__file__ + '.ended', 'w').close()  # reached only when nothing stopped it\n")
     run = run_rule(slow, b"{}", 0.3)
-    assert time.monotonic() - start < 5 and run.overrun and "0.3 s budget" in run.error
+    # Stopped, not waited for: the rule never reached its end (a fact, not a time on this runner's clock).
+    assert not os.path.exists(slow + ".ended") and run.overrun and "0.3 s budget" in run.error
     assert write_gate.combine([(_rule("s", slow, "open", 0.3), run)]).code == 1
     assert write_gate.combine([(_rule("s", slow, "closed", 0.3), run)]).code == 2
 
@@ -428,12 +442,12 @@ def test_the_fallback_answers_as_the_gate(lab, monkeypatch):
 
 def test_l4s_whole_registration_change():
     """The registration change of L4 and L5 together, as settings.json makes it
-    (hooks/tests/write_gate_settings.py): 78 registrations at the P12 base become 52; the harness
-    switch's own registration and P13-3's two (the SubagentStart injector, the codex ledger on
-    PostToolUseFailure) make 55; #27's P2-4 and P2-3 make 57: prompt-workflow.py at SessionStart and at
-    SubagentStart, each a rule of its event's launcher, after the event's hook registered before it;
-    OB-L02's two make 59: posttool-orchestrator-ran.py on every tool at PostToolUse and at
-    PostToolUseFailure, each a rule of its event's launcher; T4's Monitor rule makes 60."""
+    (hooks/tests/write_gate_settings.py): the replaced, anti-loop, stub and dispatch registrations are
+    gone; the three gates are registered once each; prompt-workflow.py runs at SessionStart and at
+    SubagentStart after the event's hook registered before it; posttool-orchestrator-ran.py runs on
+    every tool at PostToolUse and at PostToolUseFailure; every registered file exists.
+    The total number of registrations is not compared: it changed with every hook or launcher rule a
+    later change added or retired, and a hand-kept running sum of them named no defect."""
     w = write_gate_settings
     regs = _registrations(_settings())
     gone = w.REPLACED + w.ANTI_LOOP + w.STUBS + w.DISPATCH
@@ -448,19 +462,18 @@ def test_l4s_whole_registration_change():
         assert calls == ([(dev_loop, "advise")] if dev_loop else []), gate
     # P2-4, P2-3: prompt-workflow.py on every source and every agent type, after the event's one Python hook
     # before it (each event's launcher runs both: hooks/tests/test_start_launchers.py)
-    for event, before in (("SessionStart", "check-todo-md-sync.py"), ("SubagentStart", "subagentstart-record.py")):
+    # and at SubagentStart, after them, the own scratch's maker with its own 5-second budget
+    for event, before, after in (("SessionStart", "check-todo-md-sync.py", []),
+                                 ("SubagentStart", "subagentstart-record.py",
+                                  [(None, f'python3 "{w._HOME}subagentstart-scratch.py"', 5)])):
         assert [(m, c, t) for e, m, c, t in regs if e == event and c.startswith("python")] == \
-            [(None, f'python3 "{w._HOME}{name}"', None) for name in (before, "prompt-workflow.py")], event
+            [(None, f'python3 "{w._HOME}{name}"', None) for name in (before, "prompt-workflow.py")] + after, event
     # OB-L02: the orchestrator gate's record of the calls that ran, on both events that follow a call that ran
     assert [(e, m, t) for e, m, c, t in regs if c.endswith('/posttool-orchestrator-ran.py"')] == \
         [("PostToolUse", None, 10), ("PostToolUseFailure", None, 10)]
-    # + 1: the harness switch's own UserPromptSubmit registration (hooks/userprompt-harness-switch.sh);
-    # - 2: P13-3's two, the SubagentStart injector and the codex ledger on PostToolUseFailure;
-    # - 2: #27's two, prompt-workflow.py at SessionStart (P2-4) and at SubagentStart (P2-3);
-    # - 2: OB-L02's two, posttool-orchestrator-ran.py at PostToolUse and at PostToolUseFailure;
-    # - 1: T4's Monitor rule (pretool-monitor-command.py, a rule of pretool-launch.py)
-    assert len(regs) - 2 - 2 - 2 - 1 == w.BASE_COUNT - len(w.REPLACED) + 1 - len(w.ANTI_LOOP) - len(w.STUBS) - 1 + 1 \
-        - len(w.DISPATCH) + len(w.GATES) + 1 == 53
+    # the bulk-commit detector's file stays an exit-0 stub, registered nowhere; a retired file is gone,
+    # so the every-registered-file-exists loop below refuses any registration of it
+    assert not [r for r in regs if w._names(r[2], ("pretool-bulk-commit-detector.py",))]
     for _, _, command, _ in regs:  # every registered file exists
         path = command.split('$HOME/.claude}/')[-1].rstrip('"')
         assert (ROOT / path).is_file(), command
@@ -574,7 +587,7 @@ def test_the_gates_rules_run_at_the_same_time(tmp_path):
     assert all(r is not None and r[0] != pid for r in ran), (pid, ran)  # each in a process of its own
     assert len({r[0] for r in ran}) == 3
     assert max(r[1] for r in ran) < min(r[2] for r in ran), ran  # every run overlaps every other
-    assert took < 2.0, took  # one sleep, not three
+    # one sleep, not three: the overlap above, read from the rules' own stamps, needs no bound on this runner's clock
 
 
 def test_with_another_thread_alive_the_gates_rules_run_one_after_another(tmp_path):
@@ -595,8 +608,9 @@ def test_the_tools_named_one_after_another_run_their_rules_in_the_gates_process(
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     assert gate.ONE_AFTER_ANOTHER == frozenset({"Bash"})
-    from lib import hook_launch
-    assert gate.WARM == hook_launch.WARM
+    from lib import hook_launch, rule_fork
+    # one list of the modules warmed before the forks, read by the gate and the launcher
+    assert not hasattr(gate, "WARM") and not hasattr(hook_launch, "WARM") and rule_fork.WARM
     rules = [(f"s{i}", _timed(tmp_path, f"s{i}", "time.sleep(0.3)\n"), "open", 5.0) for i in range(2)]
     for tool, forked in (("Bash", False), ("Write", True), ("Edit", True), (None, True)):
         code, out, err, pid, _ = _gate_runs(tmp_path, rules, tool=tool)
@@ -671,7 +685,7 @@ def test_the_answer_combines_in_rule_order_byte_for_byte_as_one_after_another(tm
 ALLOW = "print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow'}}))\n"
 CLOSED_FAILURES = {
     "raises": "raise RuntimeError('cannot load its policy')\n",
-    "overruns its budget": "time.sleep(30)\n",
+    "overruns its budget": "time.sleep(30)\nopen(__file__ + '.ended', 'w').close()  # reached only when nothing stopped it\n",
     "swallows its overrun": "while True:\n    try:\n        time.sleep(30)\n    except BaseException:\n        pass\n",
     "dies by a signal": "import signal\nos.kill(os.getpid(), signal.SIGKILL)\n",
 }
@@ -687,14 +701,15 @@ def test_a_fail_closed_rule_that_cannot_decide_still_refuses_next_to_allows(tmp_
         code, out, err, _, took = _gate_runs(tmp_path, rules)
         assert (code, out) == (2, ""), (name, code, out, err)
         assert err.startswith("write gate: rule tool-policy ") and "fails closed, so the call is refused" in err
-        assert took < 8, took
+        # answered before the rule's end, not after it (a rule that never ends hangs the run past its 60 s guard)
+        assert not os.path.exists(bad[1] + ".ended"), name
 
 
 OPEN_FAILURES = {
     "raises": "raise RuntimeError('crash')\n",
     "os._exit(0)": "sys.stdout.write('partial'); sys.stdout.flush(); os._exit(0)\n",
     "os._exit(3)": "os._exit(3)\n",
-    "overruns its budget": "time.sleep(30)\n",
+    "overruns its budget": "time.sleep(30)\nopen(__file__ + '.ended', 'w').close()  # reached only when nothing stopped it\n",
     "swallows its overrun": "while True:\n    try:\n        time.sleep(30)\n    except BaseException:\n        pass\n",
     "dies by a signal": "import signal\nos.kill(os.getpid(), signal.SIGKILL)\n",
 }
@@ -709,7 +724,7 @@ def test_a_refusal_stands_next_to_a_failing_rule_run_at_once_in_either_order(tmp
     for rules in ([bad, refuse, allow], [refuse, bad, allow]):
         code, out, err, _, took = _gate_runs(tmp_path, rules)
         assert (code, out, err) == (2, "", "no: refused\n"), (name, rules, code, out, err)
-        assert took < 8, took
+        assert not os.path.exists(bad[1] + ".ended"), name  # answered before the failing rule's end
 
 
 def test_the_gate_answers_the_corpus_byte_for_byte_as_one_after_another(lab):
@@ -725,3 +740,60 @@ def test_the_gate_answers_the_corpus_byte_for_byte_as_one_after_another(lab):
         assert at_once == in_order, raw
         seen.add(at_once[0])
     assert {0, 2} <= seen, seen
+
+
+FORK_WINDOW = """
+import os, signal, sys
+sys.path.insert(0, {hooks!r})
+from lib import rule_fork
+real = os.fork
+def fork():  # the signal arrives in the parent right after the fork returns: before the run notes the child
+    pid = real()
+    if pid and {signal_in_window!r}:
+        open({pidfile!r}, "w").write(str(pid))
+        os.kill(os.getpid(), signal.SIGTERM)
+    return pid
+os.fork = fork
+assert rule_fork.can_fork()
+rule_fork.run_at_once([rule_fork.Job({hook!r}, b"{{}}", 1800.0)])
+"""
+
+
+def test_a_signal_between_a_fork_and_the_run_noting_it_still_ends_that_fork(tmp_path):
+    """No child outlives a run that ends by SIGTERM, whichever instant the signal arrives at: one that arrives
+    after the fork returned and before the run has noted the child is held back until it has, then acted on.
+    The child itself starts with no signal held back (the mask of the fork is the one before it)."""
+    import signal
+    seen, pidfile = tmp_path / "seen", tmp_path / "pid"
+    hook = _rule_file(tmp_path, "hook", "import signal\nopen(%r, 'w').write(repr(sorted(signal.pthread_sigmask("
+                      "signal.SIG_BLOCK, []))))\nimport time; time.sleep(1800)\n" % str(seen))
+    forks = []
+    try:
+        for in_window in (False, True):
+            script = tmp_path / f"window-{in_window}.py"
+            script.write_text(FORK_WINDOW.format(hooks=str(HOOKS), hook=hook, pidfile=str(pidfile),
+                                                 signal_in_window=in_window))
+            if not in_window:  # no signal: the child runs; its own mask is read, then the test ends the run
+                p = subprocess.Popen([sys.executable, str(script)])
+                deadline = time.monotonic() + 120
+                while not seen.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                p.send_signal(signal.SIGTERM)
+                p.wait(timeout=120)
+                assert seen.read_text() == "[]", "the child started with signals held back: " + seen.read_text()
+                continue
+            p = subprocess.run([sys.executable, str(script)], timeout=120)
+            assert p.returncode == -signal.SIGTERM, p.returncode  # it ended as that signal ends it
+            pid = int(pidfile.read_text())
+            forks.append(pid)
+            try:
+                state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            except OSError:
+                state = "gone"
+            assert state in ("gone", "Z"), f"the fork {pid} outlived its launcher (state {state})"
+    finally:
+        for pid in forks:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass

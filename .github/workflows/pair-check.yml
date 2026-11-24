@@ -47,6 +47,7 @@ jobs:
     name: plan pairs
     if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && (github.event_name != 'pull_request' || github.event.label.name == 'pair-check') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
@@ -171,6 +172,7 @@ jobs:
     needs: [plan, run]
     if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && always() && needs.plan.outputs.pairs != '' && needs.plan.outputs.pairs != '[]' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       checks: write
     steps:

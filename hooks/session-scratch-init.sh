@@ -16,6 +16,9 @@
 #
 # Non-blocking: best-effort, exits 0 unconditionally. SessionStart must never
 # fail a session over scratch bookkeeping.
+# It also runs late, at the first prompt after /harness on of a session whose process started
+# while off (scripts/harness-switch late_setup), when the .owner it writes, with CLAUDE_PID and its
+# start time, does not name that process; then there is no CLAUDE_ENV_FILE and no TMPDIR export.
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/harness_switch.sh" 2>/dev/null && harness_switch_exit_if_off  # the harness switch: no harness hook runs while /harness off holds
 
 set -u
@@ -24,7 +27,13 @@ set -u
 # stderr, which reaches no one.
 exec 3>&1 >&2
 
-ROOT="${TMPDIR:-/var/tmp/claude-scratch}"
+# The root every reader uses (lib/locations.py session_scratch_root: an absolute TMPDIR, else
+# /var/tmp/claude-scratch, real; a TMPDIR that is one session's own directory names its parent).
+ROOT=$(python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/scratch_owner.py" --root 2>/dev/null) || ROOT=""
+if [ -z "$ROOT" ]; then
+  echo "session-scratch-init: no session scratch root (lib/scratch_owner.py --root) — skipping" >&3
+  exit 0
+fi
 SID="${CLAUDE_CODE_SESSION_ID:-}"
 PID="${CLAUDE_PID:-$$}"
 
@@ -42,13 +51,11 @@ if [ -z "$SID" ]; then
 fi
 
 # Charset guard: SID becomes a literal path component below and must never
-# carry a path separator or traversal sequence.
-case "$SID" in
-  */*|*..*)
-    echo "session-scratch-init: unsafe session id '$SID' — skipping" >&3
-    exit 0
-    ;;
-esac
+# carry a path separator or traversal sequence: the one rule of hooks/lib/scratch_owner.py.
+if ! python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/scratch_owner.py" --safe-sid "$SID" 2>/dev/null; then
+  echo "session-scratch-init: unsafe session id '$SID' — skipping" >&3
+  exit 0
+fi
 
 mkdir -p "$ROOT" 2>/dev/null || { echo "session-scratch-init: cannot create root $ROOT" >&3; exit 0; }
 chmod 1777 "$ROOT" 2>/dev/null || true
@@ -70,6 +77,9 @@ fi
 BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)
 CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# Before the new .owner: no dispatch is open at a start; the dispatch temp directories left go (lib/dispatch_temp.py).
+python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/dispatch_temp.py" --start "$SESSION_DIR" "$SID" 2>/dev/null || true
+
 OWNER_FILE="$SESSION_DIR/.owner"
 TMP_OWNER="$SESSION_DIR/.owner.$$.tmp"
 if python3 -c "
@@ -89,6 +99,16 @@ with open(sys.argv[6], 'w') as fh:
 else
   echo "session-scratch-init: failed to write .owner for $SID" >&3
   rm -f "$TMP_OWNER" 2>/dev/null || true
+fi
+
+# The session's programs keep their temp files here, the main agent's own scratch (pytest's
+# basetemp root included), or, while a foreground dispatch is open, in the directory
+# lib/dispatch_temp.py names in .dispatch-tmp: the CLI runs the env file's content before each
+# Bash command. Builtins only, and it ends with status 0 whatever is missing.
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+  printf 'if [ -d %q ]; then export TMPDIR=%q; if { IFS= read -r _claude_dtmp < %q/.dispatch-tmp; } 2>/dev/null && [ -n "$_claude_dtmp" ] && [ -d "$_claude_dtmp" ]; then export TMPDIR="$_claude_dtmp"; fi; unset _claude_dtmp; fi\n' \
+    "$SESSION_DIR" "$SESSION_DIR" "$SESSION_DIR" >> "$CLAUDE_ENV_FILE" \
+    || echo "session-scratch-init: cannot set TMPDIR in $CLAUDE_ENV_FILE" >&3
 fi
 
 exit 0

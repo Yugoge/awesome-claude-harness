@@ -6,8 +6,8 @@ Every Python hook registered on SubagentStart runs here, each as `python3 <file>
 with ``after`` starts once the earlier rules it names have ended), and the answer is the one the
 CLI gave for those hooks together, read in the table's order: subagentstart-record.py's record of
 the agent and prompt-workflow.py's PROJECT_ROOT and HARNESS_ROOT lines (P2-3), one
-additionalContext the CLI puts in the starting subagent's context. Neither writes anything the
-other reads, so neither has ``after``. A new SubagentStart Python hook is one Rule line below, at
+additionalContext the CLI puts in the starting subagent's context; subagentstart-scratch.py makes the
+agent's own scratch directory and prints nothing. None writes anything another reads, so none has ``after``. A new SubagentStart Python hook is one Rule line below, at
 the place its registration would have had: its file, its timeout (default 60 s), and ``after``
 when it reads what an earlier rule of the same call writes (or writes what one reads); this
 file's registered timeout in settings.json is the sum of the rules'.
@@ -34,6 +34,7 @@ EVENT = "SubagentStart"
 RULES = (
     Rule('record', 'subagentstart-record.py'),
     Rule('prompt-workflow', 'prompt-workflow.py'),
+    Rule('scratch', 'subagentstart-scratch.py', timeout=5),  # the agent's own scratch directory: made, nothing printed
 )
 
 if __name__ == "__main__":

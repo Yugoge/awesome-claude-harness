@@ -1,5 +1,9 @@
 """The main agent's SendMessage policy (lib/send_policy, CLAUDE.md lesson 16) and its journal.
 
+The owner's ruling of 2026-11-21: a send to another session is allowed; a send to an own subagent is a
+dispatch, admitted by the dispatch gate whatever the subagent's state, and its next stop is judged by
+the send's declaration; a wake after the owner's /stop still resumes nothing.
+
 The Agent records below are the shape CLI 2.1.325 writes (measured with `claude -p
 --output-format stream-json` under a throwaway HOME): a synchronous dispatch's tool_result text is
 the subagent hand-back frame ending "agentId: <id> (use SendMessage with to: '<id>' ...)" and its
@@ -76,7 +80,8 @@ def session(tmp_path: Path):
     transcript = tmp_path / f"{sid}.jsonl"
     env = {**os.environ, "HOME": str(tmp_path / "home"), "CLAUDE_STATE_DIR": str(tmp_path / "state"),
            "CLAUDE_RESTART_GRANT_DIR": str(tmp_path / "grants"),
-           "CLAUDE_RESTART_STATE_DIR": str(tmp_path / "restart"), "CLAUDE_CODE_SESSION_ID": sid}
+           "CLAUDE_RESTART_STATE_DIR": str(tmp_path / "restart"), "CLAUDE_CODE_SESSION_ID": sid,
+           "CLAUDE_OBLIGATION_GATE": "block"}
     env.pop("CLAUDE_AGENT_ID", None)
     (tmp_path / "state").mkdir()  # the gate's streak record fails open where its directory is missing
 
@@ -102,26 +107,19 @@ def test_a_send_to_this_sessions_finished_child_passes_by_id_and_by_name(session
         assert p.returncode == 0, p.stderr
 
 
-@pytest.mark.parametrize("to", ["main", f"probe [f37851]", "a0000000000000000", "other-session-worker", ""])
-def test_main_other_sessions_and_unreturned_targets_are_refused(session, to):
+@pytest.mark.parametrize("to", ["main", "worker-b [f37851]", "a0000000000000000", "other-session-worker"])
+def test_a_send_to_another_session_is_allowed(session, to):
     session.write(_dispatch("toolu_1", name="probe"), _returned("toolu_1", CHILD))
     p = session.run(BACKGROUND, to)
-    assert p.returncode == 2 and "SendMessage refused" in p.stderr, p.stderr
+    assert p.returncode == 0, p.stderr
 
 
-def test_a_send_to_a_child_with_an_obligation_is_refused(session):
-    prompt = 'Do one issue.\n<obligation v="1">{"role": "dev"}</obligation>'
-    session.write(_dispatch("toolu_1", prompt=prompt), _returned("toolu_1", CHILD))
-    p = session.run(BACKGROUND, CHILD)
-    assert p.returncode == 2 and "obligation" in p.stderr, p.stderr
-
-
-@pytest.mark.parametrize("command", ["dev", "dev-overnight", "redev", "dev-command"])
-def test_a_send_to_a_child_dispatched_in_a_gated_span_is_refused(session, command):
-    session.write(_typed(f"/{command} fix the bug"), _dispatch("toolu_1"), _returned("toolu_1", CHILD),
-                  _typed("/spec next thing"))
-    p = session.run(BACKGROUND, CHILD)
-    assert p.returncode == 2 and f"inside /{command}" in p.stderr, p.stderr
+def test_live_case_a_a_send_to_another_sessions_name_now_passes(session):
+    """2026-11-21 case a, as recorded: a controlling session's send to another session by its name was
+    refused as "no agent id or name an Agent result in this session's transcript returned"."""
+    session.write(_typed("relay the owner's note"))
+    p = session.run(BACKGROUND, "worker-0c", "The owner asks: stop the requests to the job board now.")
+    assert p.returncode == 0, p.stderr
 
 
 def test_a_child_dispatched_before_a_gated_span_opened_stays_reachable(session):
@@ -135,10 +133,12 @@ def test_a_child_dispatched_before_a_gated_span_opened_stays_reachable(session):
     [_returned("toolu_1", CHILD, status="async_launched"), _notified(CHILD, status="failed")],
     [_returned("toolu_1", CHILD, error=True)],
 ], ids=["quota-cut", "async-running", "async-failed", "error-result"])
-def test_a_cut_running_or_failed_child_is_refused(session, records):
+def test_a_cut_running_or_failed_child_is_reached(session, records):
+    """The live refusal of 2026-11-21 ("... has not finished ...: a cut or running child resumes only
+    through /restart") was of the quota-cut row: every state now passes as the dispatch it is."""
     session.write(_dispatch("toolu_1"), *records)
     p = session.run(BACKGROUND, CHILD)
-    assert p.returncode == 2, p.stderr
+    assert p.returncode == 0, p.stderr
 
 
 def test_an_async_child_whose_notification_completed_passes(session):
@@ -149,7 +149,8 @@ def test_an_async_child_whose_notification_completed_passes(session):
 
 def _candidate(session) -> dict:
     """A /restart candidate: a dispatch the session never got back, under a live grant."""
-    session.write(_dispatch("toolu_cut", name="cut"), _dispatch("toolu_1"), _returned("toolu_1", CHILD))
+    session.write(_dispatch("toolu_cut", name="cut", prompt="Probe the cut lane."), _dispatch("toolu_1"),
+                  _returned("toolu_1", CHILD))
     sub = session.transcript.with_suffix("") / "subagents"
     sub.mkdir(parents=True)
     (sub / "agent-agent-cut.meta.json").write_text(json.dumps(
@@ -167,21 +168,24 @@ def _candidate(session) -> dict:
     return next(c for c in view["candidates"] if c["agent_id"] == "agent-cut")
 
 
-def test_a_free_form_send_to_a_restart_candidate_is_refused_and_the_exact_one_passes(session):
+def test_a_restart_candidate_is_reached_by_any_send_the_dispatch_gate_admits(session):
+    """/restart lists and resumes the passively ended; it is no permission: a child cut before its
+    result (known by its meta.json) takes a free-form send as well as the recovery message."""
     cand = _candidate(session)
-    p = session.run(BACKGROUND, cand["agent_id"], "continue")
-    assert p.returncode == 2 and "exact restart-v1" in p.stderr and "/restart candidate" in p.stderr, p.stderr
+    assert session.run(BACKGROUND, cand["agent_id"], "continue").returncode == 0
     assert session.run(BACKGROUND, cand["agent_id"], cand["resume_message"]).returncode == 0
-    # the ordinary rule never decides for a candidate, and the finished child beside it still passes
     assert session.run(BACKGROUND, CHILD).returncode == 0
 
 
-def test_budget_is_one_ordinary_send_per_turn_and_restart_sends_are_exempt(session):
+def test_budget_is_one_send_per_turn_to_others_and_sends_to_own_or_restart_children_are_exempt(session):
+    """A send to an own subagent is a dispatch and takes no slot (tests/test_sends_count_as_dispatches.py)."""
     cand = _candidate(session)
     assert session.run(ORCHESTRATOR, cand["agent_id"], cand["resume_message"]).returncode == 0
     assert session.run(ORCHESTRATOR, CHILD).returncode == 0
+    assert session.run(ORCHESTRATOR, "other-session-worker").returncode == 0
     assert session.run(ORCHESTRATOR, cand["agent_id"], cand["resume_message"]).returncode == 0
-    second = session.run(ORCHESTRATOR, CHILD)
+    assert session.run(ORCHESTRATOR, CHILD).returncode == 0
+    second = session.run(ORCHESTRATOR, "other-session-worker")
     assert second.returncode == 2 and "SendMessage" in second.stderr, second.stderr
 
 
@@ -233,17 +237,16 @@ def _journal(session, tool_id: str, to: str) -> None:
 
 
 @pytest.mark.parametrize("to", [CHILD, "probe"])
-def test_a_child_a_journaled_send_resumed_runs_until_its_completion_notification(session, to):
-    """Rule 3 reads the journal (rule 4): a send resumes the child in the background, so the child is running
-    again until a completion notification arrives after that send. A send to it in a later turn (the
-    orchestrator gate's once-per-turn count starts over there) is refused; after the notification it passes."""
+def test_a_child_a_journaled_send_resumed_is_reached_running_and_finished(session, to):
+    """A send resumes the child in the background; a send to it while it runs and after its
+    completion notification both pass."""
     head = [_typed("look at the repo"), _dispatch("toolu_1", name="probe"), _returned("toolu_1", CHILD),
             *_sent("toolu_send", to)]
     session.write(*head)
     _journal(session, "toolu_send", to)
     session.write(*head, _typed("and now?"))
     p = session.run(BACKGROUND, to)
-    assert p.returncode == 2 and "resumed by SendMessage toolu_send" in p.stderr, p.stderr
+    assert p.returncode == 0, p.stderr  # running again: a send still reaches it
     session.write(*head, _typed("and now?"), _notified(CHILD, result="PONG2"))
     p = session.run(BACKGROUND, to)
     assert p.returncode == 0, p.stderr
@@ -253,13 +256,13 @@ def test_a_child_a_journaled_send_resumed_runs_until_its_completion_notification
     [_notified(CHILD, status="stopped")],
     [_notified(CHILD, result="You've hit your session limit · resets 2:40pm (UTC)")],
 ], ids=["stopped", "quota-cut"])
-def test_a_resumed_child_whose_resumed_run_was_cut_is_refused(session, ending):
+def test_a_resumed_child_whose_resumed_run_was_cut_is_reached(session, ending):
     head = [_dispatch("toolu_1"), _returned("toolu_1", CHILD), *_sent("toolu_send", CHILD)]
     session.write(*head)
     _journal(session, "toolu_send", CHILD)
     session.write(*head, *ending, _typed("and now?"))
     p = session.run(BACKGROUND, CHILD)
-    assert p.returncode == 2 and "has not finished" in p.stderr, p.stderr
+    assert p.returncode == 0, p.stderr
 
 
 def test_the_journal_is_read_back_through_one_function(session):
@@ -281,3 +284,177 @@ def test_the_journal_is_read_back_through_one_function(session):
     finally:
         os.environ.pop("CLAUDE_RESTART_STATE_DIR") if old is None else os.environ.__setitem__(
             "CLAUDE_RESTART_STATE_DIR", old)
+
+
+# --- A send to an own subagent is a dispatch (the dispatch gate decides) ----------------------------
+
+TASK = "20261121-090000"
+
+
+def _block(role: str, line: str = "^DONE$", task: str = TASK) -> str:
+    from datetime import datetime, timezone
+    doc = {"task_id": task, "role": role, "pipeline": "dev", "profile": "singular",
+           "dispatched_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+           "artifacts": [{"kind": "response_line", "terminal_line_regex": line}]}
+    return '<obligation v="1">' + json.dumps(doc) + "</obligation>"
+
+
+def _typed_dispatch(tool_id: str, role: str, prompt: str) -> dict:
+    record = _dispatch(tool_id, prompt=prompt)
+    record["message"]["content"][0]["input"]["subagent_type"] = role
+    return record
+
+
+STATES = {
+    "finished": lambda: [_returned("toolu_dev", CHILD)],
+    "running": lambda: [_returned("toolu_dev", CHILD, status="async_launched")],
+    "cut": lambda: [_returned("toolu_dev", CHILD, report="You've hit your session limit · resets 2:40pm (UTC)")],
+}
+
+
+@pytest.mark.parametrize("state", sorted(STATES))
+def test_inside_dev_a_send_with_a_declaration_passes_and_one_without_is_refused_as_that_dispatch(session, state):
+    session.write(_typed(f"/dev {TASK} fix the bug"), _typed_dispatch("toolu_dev", "dev", "Fix it.\n" + _block("dev")),
+                  *STATES[state]())
+    ok = session.run(BACKGROUND, CHILD, "Go on with the fix.\n" + _block("dev"))
+    assert ok.returncode == 0, ok.stderr
+    bare = session.run(BACKGROUND, CHILD, "Go on with the fix.")
+    assert bare.returncode == 2 and "missing_block" in bare.stderr and "is a dispatch of dev" in bare.stderr, bare.stderr
+
+
+def test_a_qa_rejection_goes_back_to_the_same_dev_subagent(session):
+    qa_agent = "a3333333333333333"
+    session.write(_typed(f"/dev {TASK} fix the bug"),
+                  _typed_dispatch("toolu_dev", "dev", "Fix it.\n" + _block("dev")), _returned("toolu_dev", CHILD),
+                  _typed_dispatch("toolu_qa", "qa", "Verify the fix.\n" + _block("qa", "^QA: (PASS|FAIL)$")),
+                  _returned("toolu_qa", qa_agent, report="QA: FAIL"))
+    p = session.run(BACKGROUND, CHILD, "QA rejected the fix: the second case fails. Rework it.\n" + _block("dev"))
+    assert p.returncode == 0, p.stderr
+
+
+def test_a_wake_after_the_owners_stop_still_resumes_nothing(session):
+    from lib import overnight
+    wake = {"type": "user", "isSidechain": False, "message": {"role": "user", "content": overnight.WAKE_PROMPT}}
+    head = [_typed("/dev-overnight"), _dispatch("toolu_1"), _returned("toolu_1", CHILD)]
+    session.write(*head, _typed("/stop"), wake)
+    p = session.run(BACKGROUND, CHILD)
+    assert p.returncode == 2 and "after the owner's /stop" in p.stderr, p.stderr
+    session.write(*head, _typed("/stop"), wake, _typed("send it anyway"))
+    assert session.run(BACKGROUND, CHILD).returncode == 0  # the owner's own next prompt is no wake
+
+
+def test_the_next_stop_is_judged_by_the_send_declaration(tmp_path):
+    """The subagent's transcript, as the CLI writes a resumed run: its first record is the dispatch, a
+    later user record of origin kind coordinator holds the send (a running child: a queued_command
+    attachment); obligation.resolve_own_obligation (the stop gate's reading of the agent's own
+    obligation) returns the send's block, cross-checked against the parent's SendMessage call."""
+    from lib import obligation
+    sid = str(uuid.uuid4())
+    parent = tmp_path / f"{sid}.jsonl"
+    agent_file = tmp_path / sid / "subagents" / f"agent-{CHILD}.jsonl"
+    agent_file.parent.mkdir(parents=True)
+    first, again = "Fix it.\n" + _block("dev", "^FIRST$"), "Rework it.\n" + _block("dev", "^AGAIN$")
+    send = {"type": "assistant", "isSidechain": False, "timestamp": "2026-11-21T09:10:00Z", "message": {
+        "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_send", "name": "SendMessage",
+                                          "input": {"to": CHILD, "summary": "rework", "message": again}}]}}
+    parent.write_text(json.dumps(_typed_dispatch("toolu_dev", "dev", first)) + "\n" + json.dumps(send) + "\n")
+    delivered = {"type": "user", "isSidechain": True, "origin": {"kind": "coordinator"}, "isMeta": True,
+                 "message": {"role": "user", "content": "The coordinator sent a message while you were working:\n"
+                             + again + "\n\nAddress this before completing your current task."}}
+    queued = {"type": "attachment", "isSidechain": True, "attachment": {
+        "type": "queued_command", "prompt": again, "origin": {"kind": "coordinator"}, "isMeta": True}}
+    records = [{"type": "user", "isSidechain": True, "message": {"role": "user", "content": first}}]
+
+    def judged(*later):
+        agent_file.write_text("".join(json.dumps(r) + "\n" for r in records + list(later)))
+        found = obligation.resolve_own_obligation(sid, CHILD, tmp_path, agent_file, expected_role="dev")
+        assert isinstance(found, obligation.Resolved), found
+        return found.obligation["artifacts"][0]["terminal_line_regex"], found.cross_check
+
+    assert judged()[0] == "^FIRST$"
+    assert judged(delivered) == ("^AGAIN$", "ok")
+    assert judged(queued) == ("^AGAIN$", "ok")
+
+
+# --- The recovery's own resume message adds no work: judged by the child's original dispatch -------
+
+CUT = "You've hit your session limit · resets 2:40pm (UTC)"
+
+
+def _cut_dev(session) -> str:
+    """Inside /dev, a dev child whose dispatch declared a block, cut by the session limit; its block."""
+    block = _block("dev")
+    session.write(_typed(f"/dev {TASK} fix the bug"), _typed_dispatch("toolu_dev", "dev", "Fix it.\n" + block),
+                  _returned("toolu_dev", CHILD, report=CUT))
+    return block
+
+
+def test_the_recoverys_exact_resume_message_passes_on_the_original_dispatch(session):
+    """The dispatch gate refuses a dev dispatch without its declaration inside /dev; the resume message
+    carries none and needs none: the child goes on with the task its first dispatch declared."""
+    block = _cut_dev(session)
+    resume = restart.build_resume_message(session.sid, CHILD)
+    p = session.run(BACKGROUND, CHILD, resume)
+    assert p.returncode == 0, p.stderr
+    assert session.run(BACKGROUND, CHILD, resume + "\n" + block).returncode == 0  # commands/restart.md step 3
+
+
+@pytest.mark.parametrize("extra", ["\nAlso rewrite the parser.", "\n\nThen open a PR for it."])
+def test_the_resume_message_with_new_work_appended_is_a_dispatch(session, extra):
+    block = _cut_dev(session)
+    resume = restart.build_resume_message(session.sid, CHILD)
+    p = session.run(BACKGROUND, CHILD, resume + extra)
+    assert p.returncode == 2 and "is a dispatch of dev" in p.stderr and "missing_block" in p.stderr, p.stderr
+    child = {"agent_id": CHILD, "prompt": "Fix it.\n" + block}  # with the block it is an admitted dispatch, no resume
+    assert restart.is_resume_message(session.sid, child, resume + "\n" + block)
+    assert not restart.is_resume_message(session.sid, child, resume + "\n" + block + extra)
+
+
+def test_a_resume_message_naming_another_agent_or_session_is_a_dispatch(session):
+    _cut_dev(session)
+    for message in (restart.build_resume_message(session.sid, "a0000000000000000"),
+                    restart.build_resume_message(str(uuid.uuid4()), CHILD)):
+        p = session.run(BACKGROUND, CHILD, message)
+        assert p.returncode == 2 and "missing_block" in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("repeated", [False, True], ids=["bare", "block-repeated"])
+def test_a_resumed_childs_stop_is_judged_by_its_original_dispatch(tmp_path, monkeypatch, repeated):
+    """A resume (subagent_restart.is_resume_message) adds no work: the next stop is judged by the
+    declaration of the dispatch it resumes, the first record's or the latest send that was a dispatch,
+    whether or not the resume repeats that block. A send that is a dispatch is judged by its own."""
+    from lib import obligation
+    monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "restart"))
+    sid = str(uuid.uuid4())
+    parent = tmp_path / f"{sid}.jsonl"
+    agent_file = tmp_path / sid / "subagents" / f"agent-{CHILD}.jsonl"
+    agent_file.parent.mkdir(parents=True)
+    first_block = _block("dev", "^FIRST$")
+    first, again = "Fix it.\n" + first_block, "Rework it.\n" + _block("dev", "^AGAIN$")
+    resume = restart.build_resume_message(sid, CHILD) + ("\n" + first_block if repeated else "")
+
+    def sent(tool_id: str, message: str) -> dict:
+        return {"type": "assistant", "isSidechain": False, "timestamp": "2026-11-21T09:10:00Z", "message": {
+            "role": "assistant", "content": [{"type": "tool_use", "id": tool_id, "name": "SendMessage",
+                                              "input": {"to": CHILD, "summary": "go on", "message": message}}]}}
+
+    def delivered(message: str) -> dict:
+        return {"type": "user", "isSidechain": True, "origin": {"kind": "coordinator"}, "isMeta": True,
+                "message": {"role": "user", "content": "The coordinator sent a message while you were working:\n"
+                            + message + "\n\nAddress this before completing your current task."}}
+
+    parent.write_text("".join(json.dumps(r) + "\n" for r in (
+        _typed_dispatch("toolu_dev", "dev", first), sent("toolu_s1", again), sent("toolu_s2", resume))))
+    head = {"type": "user", "isSidechain": True, "message": {"role": "user", "content": first}}
+
+    def judged(*later):
+        agent_file.write_text("".join(json.dumps(r) + "\n" for r in (head, *later)))
+        found = obligation.resolve_own_obligation(sid, CHILD, tmp_path, agent_file, expected_role="dev")
+        assert isinstance(found, obligation.Resolved), found
+        return found.obligation["artifacts"][0]["terminal_line_regex"]
+
+    assert judged(delivered(resume)) == "^FIRST$"  # resumed after the cut of its first run
+    assert judged(delivered(again)) == "^AGAIN$"  # a dispatch by message: its own declaration
+    # resumed after the cut of the run that message started: that message is the dispatch it resumes
+    assert judged(delivered(again), delivered(resume)) == "^AGAIN$"
+    assert judged(delivered(resume), delivered(again), delivered(resume)) == "^AGAIN$"

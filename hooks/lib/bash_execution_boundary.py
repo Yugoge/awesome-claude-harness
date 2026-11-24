@@ -13,13 +13,38 @@ boundary in a command ends in exactly one of:
     UNRESOLVED           the analyzer could not PROVE which of the above holds
 
 Precedence: FORBIDDEN_REMOVAL > UNRESOLVED > PROVEN_SAFE_REMOVAL > PROVEN_INERT.
-The command is authorized by the removal policy only when every boundary is
+This module reports a command ``allowed`` only when every boundary is
 terminal-safe.  There is deliberately NO code path from "no adapter matched",
-"parser gave up", "unsupported syntax", or "analyzer crashed" to *allow* — that
-inversion is the whole point.  The analyzer enumerates what is PROVABLY SAFE
-and denies on silence; it never enumerates what is FORBIDDEN and allows on
-silence.  Consequently every lookup table below may only ever move a
-boundary toward SAFE: absence from a table falls to UNRESOLVED, never to allow.
+"parser gave up", "unsupported syntax", or "analyzer crashed" to *allowed* —
+that inversion is the whole point.  The analyzer enumerates what is PROVABLY
+SAFE and answers UNRESOLVED on silence; it never enumerates what is FORBIDDEN
+and allows on silence.  Consequently every lookup table below may only ever
+move a boundary toward SAFE: absence from a table falls to UNRESOLVED, never to
+allowed.
+
+WHAT THE POLICY DOES WITH UNRESOLVED (owner's rule, 2026-11-19).  The reader of
+this verdict, lib/bash_safety_rules.py::removal_policy, no longer refuses on
+that silence alone.  A command this module leaves UNRESOLVED, like one for
+which it gives no verdict at all, is refused when its raw text holds a removal
+word (lib/pol_degraded_removal_reference.ere) and otherwise runs, handed to the
+record as let through unproven, after a snapshot (lib/checkpoint-core.sh) of the
+repository holding the call's cwd, named in the record.  The snapshot holds that
+repository's tracked and untracked files, not ignored ones, not the classes the
+snapshot code leaves out, not another repository, not files outside any.  With no
+snapshot (also for a while after one ran past its time limit) the command still
+runs and the record says why.  FORBIDDEN_REMOVAL is
+refused whatever the text holds.  So a proof here now decides whether a command that NAMES a removal may
+run, and a FORBIDDEN_REMOVAL finding still refuses a removal the text does not
+name (``r''m x``).
+
+THE FILES A REMOVAL NAMES.  When the only unsafe boundaries of a command are
+``rm`` or ``unlink`` run as a command's own head with every operand written out
+(no variable, substitution, pattern or ``~``), the result carries
+``removal_targets``: those operands, and the absolute directories a written-out
+``cd`` may leave the removal in (None when some ``cd`` cannot be followed).  The
+verdict stays FORBIDDEN_REMOVAL.  The policy alone decides whose the files are:
+it lets the command run when each lies in the calling actor's own scratch
+directory.
 
 Two failure classes are distinguished so the deny surface stays proportionate:
 
@@ -37,9 +62,12 @@ Two failure classes are distinguished so the deny surface stays proportionate:
     assembles a removal.  A parse failure alone is not a removal reference.
   * REMOVAL-SCOPED failures (an unknown option inside a known dispatcher, an
     unknown git subcommand, interpreter code whose removal token cannot be
-    proven inert) are UNRESOLVED only when the command carries removal
-    evidence.  Without such evidence there is nothing for the removal policy
-    to authorize, so the boundary is inert for THIS policy's purposes.
+    proven inert) are UNRESOLVED only when the text that can become that
+    command carries removal evidence; otherwise they are inert for THIS policy.
+
+Every UNRESOLVED boundary carries that text, its scope (Analyzer._scope_text),
+and an UNRESOLVED result lists them as ``unresolved_scopes``: the only text the
+removal policy asks its word list of (owner's rule, 2026-11-19).
 
 Completeness obligation: ``bash_active_syntax_census`` independently
 scans the raw bytes and lists every active-syntax site it can see.  This module
@@ -53,6 +81,7 @@ runs the text it analyzes.  Command text is data (prove_git_rm runs git itself).
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -61,9 +90,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bash_active_syntax_census as census_mod  # noqa: E402  (path set above)
+import locations  # noqa: E402  (the filesystem root is no repository top)
 from shell_parse import (  # noqa: E402,F401  (the lexer and option reader)
-    WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
-    _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+    AWK_NAMES, AWK_SOURCE_OPTS, HEREDOC_OPS, GREP_CORE_VALUE_OPTS, GREP_VALUE_OPTS, MAN_PROGRAM_OPTS, AWK_VALUE_OPTS, FIND_EXEC_ENDS, WRAPPERS, LexError, Redir, Src, Word, _find_ansi_end, _lex_backtick, _lex_dollar,
+    CD_TARGET_BUILTINS, COMMAND_OPTS, DECLARATION_BUILTINS, COMMAND_PREFIX_WORDS, ENV_SPLIT_OPTS, EXEC_ASSIGNMENT_VARS,
+    OPTION_SIGNS, PARALLEL_SEPARATORS, PEEL, PIPE_OPS, REEXPAND_OPS, SU_COMMAND_OPTS, XARGS_SPEC,
+    FIND_EXEC, GIT_CONFIG_OPTS, HERE_DOCUMENT_OPS, LITERAL_PART_KINDS, SHELL_FILE_OPTS, _SSH_SPEC, _SU_SPEC, _match_pair, _resolve_long, _spec, ansi_decode, lex, split_opts, src_concat)
+from shell_parse import GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS, GIT_LOCATION_OPTS, GIT_PATHSPEC_FLAGS  # noqa: E402
+from shell_parse import GIT_LONG_OPTIONS  # noqa: E402
+from git_facts import GIT_SHELL_PAYLOAD_SUBCOMMANDS  # noqa: E402
 
 SCHEMA = "bash-execution-boundary.v1"
 
@@ -80,14 +115,14 @@ MAX_BOUNDARIES = 400
 
 # Filesystem-removal front ends. This set defines the POLICY SCOPE (what is
 # forbidden), not the authorization mechanism. Widening it widens the deny
-# surface. It is the SINGLE shared definition of "removal binary": the degraded
-# fallback in hooks/pretool-bash-safety.sh names the same four, so the primary
-# path can never be laxer than the fallback.
-REMOVAL_EXES = {"rm", "unlink", "shred", "srm"}
+# surface. The one definition of "removal binary" is the census's
+# REMOVAL_BINARIES (the census, an independent backstop, imports nothing from
+# here; this analyzer reads its set).
+REMOVAL_EXES = frozenset(census_mod.REMOVAL_BINARIES)
 
 # Removal evidence gates the REMOVAL-SCOPED failure class only.
 _REMOVAL_EVIDENCE_RE = re.compile(
-    r"(?:^|[^A-Za-z0-9_])(rm|unlink|shred|srm)(?![A-Za-z0-9_])")
+    r"(?:^|[^A-Za-z0-9_])(%s)(?![A-Za-z0-9_])" % "|".join(map(re.escape, sorted(REMOVAL_EXES))))
 
 # Library-level removal in interpreter payloads. These carry NO rm/unlink/
 # shred/srm token, so _REMOVAL_EVIDENCE_RE is structurally blind to them; this
@@ -150,7 +185,164 @@ def _expression_names_removal_api(text):
     return None
 
 
+# The reasons _classify_inline_code proves a program inert by.
+_INLINE_INERT_REASONS = ("interpreter_removal_token_in_output_sink", "interpreter_code_without_removal_token",
+                         "interpreter_python_no_removal_call")
+# Python calls that remove a file or directory: os, shutil and pathlib name them so. `remove` also
+# names list.remove and set.remove, so it counts only as the os module's (os.remove, an alias of os,
+# or a bare `remove` imported from os).
+_PY_REMOVAL_CALLS = frozenset(("unlink", "rmdir", "rmtree", "removedirs"))
+# The removal programs whose operands _removal_targets reads: every operand a target, no option takes a value.
+_OPERAND_REMOVERS = ("rm", "unlink")
+# Calls that start a program: a string is a shell command line for the first four (and for any
+# call given shell=True); otherwise the first word, or the first element of a list, is the program.
+_PY_SHELL_CALLS = frozenset(("system", "popen", "getoutput", "getstatusoutput"))
+_PY_SPAWN_CALLS = _PY_SHELL_CALLS | frozenset((
+    "run", "call", "check_call", "check_output", "Popen", "spawn", "execv", "execve", "execvp", "execvpe",
+    "execl", "execle", "execlp", "execlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe", "spawnl", "spawnle",
+    "spawnlp", "spawnlpe", "create_subprocess_exec", "create_subprocess_shell"))
+
+
+def _reads_program_on_stdin(args):
+    """Whether an interpreter given no inline-code option reads its program from standard input:
+    no operand before `-`, which names standard input."""
+    for w in args:
+        lit = w if w is None or isinstance(w, str) else w.literal()
+        if lit == "-":
+            return True
+        if lit is None or not lit.startswith("-"):
+            return False
+    return True
+
+
+def _py_dynamic(node):
+    """Whether an expression reaches its object by a name chosen at run time (`globals()["os"]`,
+    `__import__("os")`, `sys.modules[...]`, `x.__dict__[...]`): then `.remove` may be os.remove."""
+    import ast
+    return any(isinstance(n, ast.Name) and n.id in ("globals", "locals", "vars", "__import__", "__builtins__")
+               or isinstance(n, ast.Attribute) and n.attr in ("__dict__", "modules", "import_module")
+               for n in ast.walk(node))
+
+
+def _py_started(node, text):
+    """(kind, value, source, shape) of the program a Python call starts, None if it starts none: kind "argv" (value
+    its literal leading words), "shell" (value the line, None if computed) or None; shape: the command as shell text,
+    a computed word or f-string part "$__py" (None or "" when the program is computed)."""
+    import ast
+    import shlex
+    f = node.func
+    name = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
+    if name not in _PY_SPAWN_CALLS or not node.args:
+        return None
+    seg, first = ast.get_source_segment(text, node) or "", node.args[0]
+    const = lambda n: n.value if isinstance(n, ast.Constant) and isinstance(n.value, str) else None  # noqa: E731
+    if name in _PY_SHELL_CALLS or name in ("spawn", "create_subprocess_shell") or any(
+            k.arg == "shell" and not (isinstance(k.value, ast.Constant) and not k.value.value) for k in node.keywords):
+        parts = first.values if isinstance(first, ast.JoinedStr) else [first]
+        return "shell", const(first), seg, "".join("$__py" if isinstance(p, ast.FormattedValue) else const(p) or ""
+                                                   for p in parts)
+    elts = first.elts if isinstance(first, (ast.List, ast.Tuple)) else \
+        node.args if name.startswith(("exec", "spawn", "create_subprocess_exec")) else [first]
+    if name.startswith(("execv", "spawnv")) and len(node.args) > 1 and isinstance(node.args[1], (ast.List, ast.Tuple)):
+        elts = [node.args[0]] + node.args[1].elts[1:]
+    if name.startswith("spawn") and name != "spawn" and elts:
+        elts = elts[1:]  # the mode
+    words = list(itertools.takewhile(lambda v: v is not None, map(const, elts)))
+    shape = " ".join(shlex.quote(const(e)) if const(e) is not None else '"$__py"' for e in elts)
+    return ("argv", words, seg, shape) if words else (None, seg, seg, None)
+
+
+def python_started_commands(text):
+    """The shapes (_py_started) of the programs Python source starts, or None when it is not Python."""
+    import ast
+    try:
+        return [e[3] for n in ast.walk(ast.parse(text)) if isinstance(n, ast.Call) for e in [_py_started(n, text)] if e]
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+
+
+def _python_removal_calls(text):
+    """Python source read with the standard library's parser: (removals, unknown) or None when the
+    text is not Python. A removal is a CALL that removes (_PY_REMOVAL_CALLS, os.remove, getattr or
+    a subscript naming one, a started program whose command line the walk does not prove inert);
+    names, strings and comments are not calls. `unknown` holds the source of each call whose
+    program or code is computed (eval or exec of a non-literal, a computed command line): residue."""
+    import ast
+    import shlex
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+    os_names = {"os"}
+    removal_names = set(_PY_REMOVAL_CALLS)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            os_names |= {a.asname or a.name for a in node.names if a.name == "os"}
+        elif isinstance(node, ast.ImportFrom) and node.module == "os":
+            removal_names |= {a.asname or a.name for a in node.names if a.name == "remove"}
+    removals, unknown = [], []
+
+    def const(n):
+        return n.value if isinstance(n, ast.Constant) and isinstance(n.value, str) else None
+
+    def seg(n):
+        return ast.get_source_segment(text, n) or ""
+
+    def command(line, why):  # a shell command line a call hands on
+        if line is None:
+            unknown.append(why)
+        elif Analyzer.payload_is_not_provably_inert(line):
+            unknown.append(line)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        name = f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
+        if isinstance(f, ast.Subscript) and const(f.slice) in removal_names | {"remove"}:
+            removals.append(seg(node.func))
+        elif name in _PY_REMOVAL_CALLS or isinstance(f, ast.Name) and name in removal_names \
+                or name == "remove" and isinstance(f, ast.Attribute) and (
+                    isinstance(f.value, ast.Name) and f.value.id in os_names or _py_dynamic(f.value)):
+            removals.append(seg(node.func))
+        elif name == "getattr" and len(node.args) > 1:
+            attr = const(node.args[1])
+            if attr is None:
+                unknown.append(seg(node))
+            elif attr in _PY_REMOVAL_CALLS or attr == "remove":
+                removals.append(seg(node.func))
+        elif name in ("eval", "exec") and isinstance(f, ast.Name) and node.args:
+            code = const(node.args[0])
+            inner = _python_removal_calls(code) if code is not None else None
+            if inner is None:
+                unknown.append(seg(node))
+            else:
+                removals += inner[0]
+                unknown += inner[1]
+        elif (started := _py_started(node, text)) is not None:
+            kind, value, where, _shape = started
+            if kind == "argv" and os.path.basename(value[0]) in REMOVAL_EXES:
+                removals.append(seg(node.func))
+            elif kind is None:  # a computed argv: residue
+                unknown.append(where)
+            else:
+                command(value if kind == "shell" else shlex.join(value), where)
+    return removals, unknown
+
+
 _ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?\+?=")
+
+
+def _is_assignment(w):
+    return bool(w.segs) and w.segs[0][0] == "lit" and bool(_ASSIGN_RE.match(w.segs[0][1].text))
+
+
+# UNRESOLVED reasons that are not residue (the owner's rule, 2026-11-19): what is unknown is an
+# argument of a program this module names, or code that is not in the command text at all (a
+# sourced file), or nothing runs (a missing option value). No word of the command can become a
+# program there, so the removal word list is never asked of it: the boundary carries an empty scope.
+NOT_RESIDUE = frozenset(("inert_consumer_unresolvable_option", "sourced_file_contents_unknown",
+                         "missing_option_value"))
 _ENVVAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -160,20 +352,6 @@ _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # is reached from static call sites; the analyzer is a single-shot CLI.
 _PAYLOAD_NESTING = [0]
 
-# Environment variables whose VALUE is executed by the command that follows
-# them. An assignment prefix normally never executes -- `A=(/bin/rm) echo x` is
-# a fixture-pinned safe row -- but these named vectors are documented command
-# hooks, so `GIT_EXTERNAL_DIFF=/bin/rm git diff` runs the removal.
-EXEC_ASSIGNMENT_VARS = {
-    "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_SSH", "GIT_SSH_COMMAND",
-    "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "GIT_ASKPASS", "GIT_MERGE_TOOL",
-    "GIT_DIFF_TOOL", "GIT_TEXTCONV", "GIT_PROXY_COMMAND", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "PAGER", "MANPAGER", "LESSOPEN", "LESSCLOSE", "LESSEDIT", "EDITOR",
-    "VISUAL", "FCEDIT", "BROWSER", "SSH_ASKPASS", "SUDO_EDITOR", "SUDO_ASKPASS",
-    "DIFFPROG", "MERGE", "PERL5OPT", "PYTHONSTARTUP", "BASH_ENV", "ENV",
-    "SHELL", "RSYNC_RSH", "CVS_RSH", "SVN_SSH", "HGEDITOR", "P4EDITOR",
-    "SYSTEMD_PAGER", "SYSTEMD_EDITOR", "DEBUGINFOD_URLS", "LD_PRELOAD",
-}
 
 
 def _static_prefix(w):
@@ -270,14 +448,14 @@ def _resolve_ic_long(name, model):
 # reference. Only an operand may carry one, which is what keeps `man rm`,
 # `which rm` and `grep -F /bin/rm README.md` flowing.
 #
-def _ic(why, bool_=(), exec_=(), val=()):
+def _ic(why, bool_=(), exec_=(), val=(), first_operand_ends_options=False):
     return {"why": why, "bool": set(bool_) | {"--help", "--version"},
-            "exec": set(exec_), "val": set(val), "kind": _kind_for_why(why)}
+            "exec": set(exec_), "val": set(val), "kind": _kind_for_why(why),
+            "first_operand_ends_options": first_operand_ends_options}
 
 
-# The PROOF KIND a member's operand position yields. It is carried into the
-# boundary reason code so the laxity ledger can be keyed on an
-# admissible proof kind instead of on a blanket "the head was in a table".
+# The PROOF KIND a member's operand position yields, carried into the boundary
+# reason code instead of a blanket "the head was in a table".
 _KIND_LOOKUP = "operand_of_documentation_or_query_consumer"
 _KIND_SEARCH = "search_pattern_operand"
 _KIND_OUTPUT = "literal_output_text"
@@ -318,13 +496,8 @@ _RELOCATE_WHY = "file relocation/copy: argv words are source and destination pat
 _DATA_VAL_WHY = ("declared data value: read as a regex, a pattern file, a "
                  "count, a glob or a label; never as a program name")
 
-_GREP_CORE_DATA = ("-e", "--regexp", "-f", "--file", "-m", "--max-count",
-                   "-A", "--after-context", "-B", "--before-context",
-                   "-C", "--context")
-_GREP_DATA = _GREP_CORE_DATA + ("-d", "--directories", "--binary-files",
-                                "--include", "--exclude", "--exclude-dir",
-                                "--exclude-from", "--label",
-                                "--group-separator")
+_GREP_CORE_DATA = GREP_CORE_VALUE_OPTS  # shell_parse's grep value options
+_GREP_DATA = GREP_VALUE_OPTS
 
 # Long options of a non-removal git subcommand whose value git reads as DATA:
 # a regex, an author name, a message, a date. None of them names a program.
@@ -338,13 +511,13 @@ _GREP_DATA = _GREP_CORE_DATA + ("-d", "--directories", "--binary-files",
 # selector's own value position.
 SELECTOR_DATA_OPTIONS = {
     "pytest": ("-k", "-m", "--deselect", "--ignore", "--ignore-glob"),
-    "py.test": ("-k", "-m", "--deselect", "--ignore", "--ignore-glob"),
     "go": ("-run", "-bench", "-skip"),
     "cargo": ("--test", "--bench", "--example"),
     "ctest": ("-R", "-E", "--tests-regex", "--exclude-regex"),
     "tox": ("-e",),
     "nox": ("-s",),
 }
+SELECTOR_DATA_OPTIONS["py.test"] = SELECTOR_DATA_OPTIONS["pytest"]  # pytest's older entry point, the same program
 
 GIT_DATA_OPTIONS = frozenset((
     # `-m` is git's own short spelling of `--message`; both spellings must
@@ -359,11 +532,11 @@ GIT_DATA_OPTIONS = frozenset((
 ))
 
 # Subcommands that HAND A COMMAND LINE ONWARD (`git bisect run <cmd>`,
-# `git submodule foreach <cmd>`). For these, NO option may declare its value
+# `git submodule foreach <cmd>`, `git rebase -x <cmd>`, `git difftool -x <cmd>`). For these, NO option may declare its value
 # data: otherwise `git bisect run -m '/bin/rm -rf T'` and `git submodule
 # foreach --message '/bin/rm -rf T'` would read as PROVEN_INERT. Scoping the
 # table by subcommand can only ever remove allows.
-GIT_PAYLOAD_FORWARDING_SUBCOMMANDS = frozenset(("bisect", "submodule"))
+GIT_PAYLOAD_FORWARDING_SUBCOMMANDS = GIT_SHELL_PAYLOAD_SUBCOMMANDS
 
 INERT_ARGV_CONSUMERS = {
     # ---- name / documentation lookup -------------------------------------
@@ -375,7 +548,7 @@ INERT_ARGV_CONSUMERS = {
                       "--ascii", "--global-apropos", "--no-hyphenation",
                       "--no-justification", "--names-only", "--regex", "--wildcard",
                       "--ignore-case", "--match-case", "--no-subpages"),
-               exec_=("-P", "--pager", "-H", "--html", "-B", "--browser")),
+               exec_=MAN_PROGRAM_OPTS),
     "whatis": _ic(_LOOKUP_WHY, bool_=("-d", "-v", "-a", "-l", "-w", "-r", "-e"),
                   exec_=("-P", "--pager")),
     "apropos": _ic(_LOOKUP_WHY, bool_=("-d", "-v", "-a", "-l", "-w", "-r", "-e"),
@@ -400,7 +573,8 @@ INERT_ARGV_CONSUMERS = {
     "pinfo": _ic(_LOOKUP_WHY, bool_=("-r", "-t", "-h", "-v")),
     # ---- text emission -----------------------------------------------------
     "echo": _ic(_EMIT_WHY, bool_=("-n", "-e", "-E")),
-    "printf": _ic(_EMIT_WHY, bool_=("-v",)),
+    # bash's printf reads options only before its format: every later word is an argument of it.
+    "printf": _ic(_EMIT_WHY, bool_=("-v",), first_operand_ends_options=True),
     # `print` IS ABSENT ON PURPOSE. The ksh/zsh builtin's option model and
     # text-emission proof do not hold for it: on a Debian host /usr/bin/print
     # is run-mailcap — "execute programs via entries in the mailcap file",
@@ -743,8 +917,7 @@ COND_SHELLS = {"bash", "zsh", "ksh", "ksh93", "mksh", "rbash", "bash5"}
 # word of a command (`if [[`, `! [[`, `while ! [[`, `{ [[` ...). Any other word,
 # an assignment or a redirection before it makes `[[` an argument or a command
 # name, and then nothing inside it is a conditional expression.
-COND_OPENER_PREFIX = frozenset(("!", "if", "then", "else", "elif", "while",
-                                "until", "do", "{"))
+COND_OPENER_PREFIX = COMMAND_PREFIX_WORDS
 # Builtins that can stop `[[` from being read as the reserved word on a later
 # line: an alias named `[[` (or `if`, `while` ...) turns it into a simple
 # command, and zsh's `disable -r` switches the reserved word off.
@@ -756,15 +929,16 @@ SHELL_SHORT_BOOL = set("abBCefhHiklmnpPrstTuvxD")
 SHELL_LONG_BOOL = {"--posix", "--norc", "--noprofile", "--login", "--restricted",
                    "--verbose", "--debugger", "--dump-strings", "--dump-po-strings",
                    "--help", "--version", "--noediting", "--protected", "--pretty-print"}
-SHELL_LONG_VAL = {"--rcfile", "--init-file"}
+SHELL_LONG_VAL = set(SHELL_FILE_OPTS)
 
 INTERPRETERS = {
     "python": ("-c",), "python2": ("-c",), "python3": ("-c",),
     "perl": ("-e", "-E"), "ruby": ("-e",), "node": ("-e", "--eval", "-p", "--print"),
-    "nodejs": ("-e", "--eval", "-p"), "php": ("-r",), "lua": ("-e",),
+    "php": ("-r",), "lua": ("-e",),
     "lua5.1": ("-e",), "lua5.3": ("-e",), "deno": ("eval",),
 }
-AWKS = {"awk", "gawk", "mawk", "nawk", "busybox-awk"}
+INTERPRETERS["nodejs"] = INTERPRETERS["node"]  # Debian's name for node, the same program
+AWKS = set(AWK_NAMES) | {"busybox-awk"}  # and busybox's applet, as this reader names it
 
 # Calls that only render text. A removal token reaching one of these and
 # nothing else is PROVEN inert; anything else is not proven and denies.
@@ -775,26 +949,19 @@ OUTPUT_SINKS = {
     "STDOUT.puts", "STDERR.puts", "process.stdout.write",
 }
 
-GIT_GLOBAL = _spec(
-    ("--paginate", "-p", "--no-pager", "-P", "--bare", "--literal-pathspecs",
-     "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
-     "--no-optional-locks", "--no-replace-objects", "--html-path", "--man-path",
-     "--info-path", "--version", "--help", "-v", "-h", "--no-lazy-fetch"),
-    ("-C", "-c", "--exec-path", "--git-dir", "--work-tree", "--namespace",
-     "--super-prefix", "--config-env", "--attr-source"))
+GIT_GLOBAL = _spec(GIT_GLOBAL_FLAGS, GIT_GLOBAL_VALUE_OPTS)
 
+# git rm's options: its long ones as shell_parse lists them, and the short ones.
 GIT_RM = _spec(
-    ("-n", "--dry-run", "-r", "--cached", "-f", "--force", "-q", "--quiet",
-     "--ignore-unmatch", "--sparse", "--pathspec-file-nul"),
+    ("-n", "-r", "-f", "-q") + tuple(o for o in GIT_LONG_OPTIONS["rm"] if o != "--pathspec-from-file"),
     ("--pathspec-from-file",))
 # A non-forced `git rm` is recoverable: git refuses a file that differs from HEAD or the index, and a
 # removed clean file comes back with `git checkout <sha>^ -- <path>`. It is allowed only when the walk
 # can hand prove_git_rm the repository it runs in: written at the top level as its command's own head
 # (no wrapper, nested shell or assignment), only these git options before `rm`, literal pathspecs, and
 # no shell state a later command inherits other than `cd`/`pushd` to a literal absolute directory.
-_GIT_RM_LOCATION_OPTS = ("-C", "--git-dir", "--work-tree")
-_GIT_RM_PATHSPEC_OPTS = ("--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
-                         "--icase-pathspecs")
+_GIT_RM_LOCATION_OPTS = GIT_LOCATION_OPTS
+_GIT_RM_PATHSPEC_OPTS = GIT_PATHSPEC_FLAGS
 _SHELL_STATE_BUILTINS = {"export", "declare", "typeset", "local", "readonly", "unset", "source",
                          ".", "enable", "read", "readarray", "mapfile", "getopts", "trap", "for",
                          "select"}
@@ -836,12 +1003,6 @@ DOCKER_RESOURCE_NOUNS = {"container", "image", "volume", "network", "system",
                          "builder", "buildx", "config", "secret", "service",
                          "stack", "node", "plugin", "context", "compose"}
 
-XARGS = _spec(("-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose",
-               "-p", "--interactive", "-x", "--exit", "--open-tty", "--show-limits",
-               "--process-slot-var"),
-              ("-n", "--max-args", "-L", "-l", "--max-lines", "-P", "--max-procs",
-               "-s", "--max-chars", "-I", "--replace", "-i", "-d", "--delimiter",
-               "-E", "-e", "--eof", "-a", "--arg-file"))
 
 PARALLEL = _spec(
     ("--gnu", "--bar", "--eta", "--progress", "-k", "--keep-order", "--will-cite",
@@ -857,17 +1018,11 @@ PARALLEL = _spec(
      "--trc", "-a", "--arg-file", "-N", "-L", "-l", "-I", "--recstart", "--recend",
      "--transfer", "--cleanup", "--sshloginfile", "--interactive", "--limit"))
 
-WATCH = _spec(("-d", "--differences", "-t", "--no-title", "-b", "--beep",
-               "-e", "--errexit", "-g", "--chgexit", "-c", "--color", "-x", "--exec",
-               "-h", "--help", "-v", "--version", "-p", "--precise", "-w", "--no-wrap"),
-              ("-n", "--interval"))
+WATCH = PEEL["watch"][0]
 
-SSH_SPEC = _spec(("-4", "-6", "-A", "-a", "-C", "-f", "-G", "-g", "-K", "-k", "-M",
-                  "-N", "-n", "-q", "-s", "-T", "-t", "-V", "-v", "-X", "-x", "-Y", "-y"),
-                 ("-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L",
-                  "-l", "-m", "-O", "-o", "-p", "-Q", "-R", "-S", "-W", "-w"))
+SSH_SPEC = _SSH_SPEC
 
-FIND_EXEC_OPS = {"-exec", "-execdir", "-ok", "-okdir"}
+FIND_EXEC_OPS = set(FIND_EXEC)
 FIND_DELETE_OPS = {"-delete"}
 
 BWRAP_NARGS = {
@@ -1077,7 +1232,7 @@ def word_chunks(w):
 # those answers "it could".
 # ---------------------------------------------------------------------------
 
-_PATTERN_SEGS = ("lit", "glob", "brace")
+_PATTERN_SEGS = LITERAL_PART_KINDS
 # Glob or brace text whose meaning ``_glob_to_regex`` / ``_brace_alternatives``
 # do not model: an extglob group, a POSIX bracket class / equivalence class /
 # collating symbol, a sequence expression, and any expansion, substitution or
@@ -1325,92 +1480,6 @@ _IC_OPAQUE_VALUE = "opaque_option_value"
 _IC_UNRESOLVABLE = "unresolvable_option_word"
 _IC_MISSING_VALUE = "missing_option_value"
 
-# The CLOSED positional-shape vocabulary. Each token names WHERE the parse
-# placed the word carrying a removal name. The ledger is keyed on
-# (reason_code, positional_shape) because a reason code alone would let an
-# element inherit a justification reading "it sits in OPERAND position" when
-# it was not in operand position.
-#
-# `unclassified` is the reserved TOTALITY fallback and is inadmissible as a
-# ledger key: a parse that cannot place the word must fail the criterion rather
-# than borrow a neighbouring entry's proof.
-SHAPE_OPERAND = "operand"
-SHAPE_POST_DOUBLE_DASH = "post_double_dash_operand"
-SHAPE_BOOL_OPTION_WORD = "declared_bool_option_word"
-SHAPE_DATA_OPTION_VALUE = "declared_data_option_value"
-SHAPE_EXEC_OPTION_VALUE = "declared_exec_option_value"
-SHAPE_UNDECLARED_SEPARATED = "undeclared_option_value_separated"
-SHAPE_UNDECLARED_ATTACHED = "undeclared_option_value_attached"
-SHAPE_SUBCOMMAND_RESOURCE = "subcommand_resource_operand"
-SHAPE_OUTPUT_SINK_LITERAL = "interpreter_string_literal_in_output_sink"
-SHAPE_PARSE_ONLY_PAYLOAD = "parse_only_payload"
-SHAPE_SCRIPT_FILE_OPERAND = "script_file_data_operand"
-SHAPE_BUILTIN_LOOKUP = "builtin_lookup_operand"
-# Heredoc bodies and assignment prefixes are positions the walk reaches and
-# covers; naming them keeps such a boundary from reporting the inadmissible
-# `unclassified` with an empty shape list.
-SHAPE_HEREDOC_BODY = "heredoc_or_herestring_body"
-SHAPE_ASSIGNMENT_PREFIX = "assignment_prefix_binding"
-SHAPE_UNCLASSIFIED = "unclassified"
-
-POSITIONAL_SHAPES = (
-    SHAPE_OPERAND, SHAPE_POST_DOUBLE_DASH, SHAPE_BOOL_OPTION_WORD,
-    SHAPE_DATA_OPTION_VALUE, SHAPE_EXEC_OPTION_VALUE,
-    SHAPE_UNDECLARED_SEPARATED, SHAPE_UNDECLARED_ATTACHED,
-    SHAPE_SUBCOMMAND_RESOURCE, SHAPE_OUTPUT_SINK_LITERAL,
-    SHAPE_PARSE_ONLY_PAYLOAD, SHAPE_SCRIPT_FILE_OPERAND,
-    SHAPE_BUILTIN_LOOKUP, SHAPE_HEREDOC_BODY, SHAPE_ASSIGNMENT_PREFIX,
-    SHAPE_UNCLASSIFIED,
-)
-
-_IC_SHAPES = {
-    _IC_OPERAND: SHAPE_OPERAND,
-    _IC_POST_DASH_OPERAND: SHAPE_POST_DOUBLE_DASH,
-    _IC_BOOL: SHAPE_BOOL_OPTION_WORD,
-    _IC_EXEC_VALUE: SHAPE_EXEC_OPTION_VALUE,
-    _IC_DATA_VALUE: SHAPE_DATA_OPTION_VALUE,
-    _IC_OPAQUE_VALUE: SHAPE_UNDECLARED_SEPARATED,
-    _IC_UNRESOLVABLE: SHAPE_UNDECLARED_ATTACHED,
-    _IC_MISSING_VALUE: SHAPE_UNDECLARED_SEPARATED,
-}
-
-_REMOVAL_MENTION_SPLIT = re.compile(r"[^A-Za-z0-9_]+")
-
-# Names the SHAPE ATTRIBUTION must recognise. Deliberately WIDER than
-# REMOVAL_EXES and matching the degraded predicate's vocabulary, because the
-# shape function has to be TOTAL over the DEGRADED-restricted domain: `man
-# rmdir` and `man remove-shell` are in that domain, and the parse must still be
-# able to say that `rmdir` sat in operand position. This list decides NO
-# verdict — widening it can only move an element from `unclassified` to a named
-# position, never from deny to allow.
-REMOVAL_NAME_MENTIONS = frozenset(REMOVAL_EXES) | frozenset((
-    "rmdir", "rmtree", "rimraf", "unlinkSync", "rmSync", "rmdirSync",
-    "removeSync", "remove", "removedirs", "remove_tree", "rm_rf", "rm_r",
-    "delete", "deleteIfExists"))
-
-
-def text_mentions_removal_name(text):
-    """Does this text CONTAIN a removal front end's name anywhere?
-
-    Deliberately weaker than recognition, and it decides NO verdict. Its only
-    job is to pick WHICH covered word the element's positional shape describes,
-    so the shape function is TOTAL over the restricted domain: `cat -- rm.txt`
-    is in that domain because the degraded predicate is a character regex, and
-    the shape must still say where `rm.txt` sat.
-    """
-    if not text:
-        return False
-    for token in _REMOVAL_MENTION_SPLIT.split(text):
-        if not token:
-            continue
-        if token in REMOVAL_NAME_MENTIONS:
-            return True
-        for piece in token.split("."):
-            if piece in REMOVAL_NAME_MENTIONS or basename(piece) in REMOVAL_EXES:
-                return True
-    return False
-
-
 def _text_is_nested_command_line(text):
     """Would this text have to be RE-PARSED as a command line to be judged?
 
@@ -1481,20 +1550,19 @@ class Analyzer:
         self.raw = raw
         self.boundaries = []
         self.discharged = set()
-        self.removal_shape = None
-        self.removal_shapes = []
-        # Shapes noted since the last boundary was recorded. They belong to the
-        # boundary about to be recorded, which is how a shape stays bound to
-        # the walk that produced the verdict instead of to whatever word
-        # happened to mention a removal name first.
-        self._pending_shapes = []
-        self.removal_evidence = bool(_REMOVAL_EVIDENCE_RE.search(raw))
         self.depth = 0
         self.overflow = False
         # A non-forced git rm's run-time obligations (git options, pathspecs), the
         # directories a `cd` may leave a later one in, and why they cannot be known.
         self.git_rm, self.git_rm_cwds, self.git_rm_unresolved = [], [], ""
+        # Per filesystem removal, the files it names when every one is written out (else None), and
+        # whether some `cd` leaves the directory of what follows unknown (see _removal_targets).
+        self.removals, self.cwd_unknown = [], False
         self._head, self.direct = None, False
+        # The simple command being read (its tokens), the one read before it (what a pipe feeds the
+        # next), and the assignment words read so far: the text an UNRESOLVED boundary's scope is
+        # drawn from (see _scope_text).
+        self._scope, self._last, self._assigned, self._values = None, None, [], []
         # Whether the code being walked is read by a shell that has `[[ ]]`
         # (see walk). Set per analyze_code call; a call that does not say so
         # gets False. Any alias text in the command, or a run
@@ -1507,58 +1575,19 @@ class Analyzer:
         # sets it, so the walk of a command line itself never changes.
         self.data_reading = False
 
-    def note_removal_position(self, shape, text):
-        """Record EVERY parse-derived position a removal NAME was placed in.
-
-        Called BY THE WALK, at the moment the walk places a word — never
-        re-derived afterwards from the reason-code string, which would just be
-        the reason code wearing a second name.
-
-        FIRST PLACEMENT DOES NOT WIN. Recording only the first word that
-        merely MENTIONS a removal name would let one benign leading operand
-        capture the shape of the whole command: `cat rm.txt --opt='<payload>'
-        f` would report `operand` and borrow that entry's written proof, while
-        the same command without `rm.txt` reports
-        `undeclared_option_value_attached`.
-
-        Recording the SET means an element is covered only when every position
-        that carries a removal name is ledgered, so no position can borrow a
-        neighbour's justification.
-
-        Keying the laxity ledger on the boundary reason code alone would make
-        new laxity invisible: any command the analyzer maps onto a ledgered
-        code would inherit that entry's written positional justification even
-        when the justification does not describe it.
-        """
-        if text and text_mentions_removal_name(text):
-            if shape not in self._pending_shapes:
-                self._pending_shapes.append(shape)
-            if shape not in self.removal_shapes:
-                self.removal_shapes.append(shape)
-            if self.removal_shape is None:
-                self.removal_shape = shape
-
-    def note_removal_word(self, shape, w):
-        if w is not None:
-            self.note_removal_position(shape, w.raw.text)
-
     # -- verdict recording ---------------------------------------------------
 
-    def add(self, verdict, reason, detail=""):
+    def add(self, verdict, reason, detail="", scope=None):
         if len(self.boundaries) >= MAX_BOUNDARIES:
             self.overflow = True
             return
-        # EVERY position this boundary's own walk placed a removal name in.
-        # Attaching the set here is what binds the positional shape to the walk
-        # that produced the verdict: `echo "$(command -v rm)"` has an operand
-        # AND a builtin-lookup operand, but they belong to two DIFFERENT
-        # boundaries, and only the deciding one's shapes may key the ledger.
-        shapes, self._pending_shapes = self._pending_shapes, []
-        self.boundaries.append({"verdict": verdict, "reason": reason,
-                                "detail": detail[:160],
-                                "positional_shapes": shapes})
+        if verdict == UNRESOLVED:
+            scope = "" if reason in NOT_RESIDUE else self._scope_text() if scope is None else scope
+        self.boundaries.append({"verdict": verdict, "reason": reason, "detail": detail[:160]})
+        if verdict == UNRESOLVED:
+            self.boundaries[-1]["scope"] = scope
 
-    def add_terminal(self, verdict, reason, detail=""):
+    def add_terminal(self, verdict, reason, detail="", scope=""):
         """Record a WHOLE-ANALYSIS finding, exempt from the boundary budget.
 
         ``add`` refuses to append once the budget is spent — which is exactly
@@ -1568,25 +1597,77 @@ class Analyzer:
         bound. It is an OBSERVABILITY channel only: ``analyze`` seeds the
         verdict from the flags themselves, never from what lands here.
         """
-        shapes, self._pending_shapes = self._pending_shapes, []
-        self.boundaries.append({"verdict": verdict, "reason": reason,
-                                "detail": detail[:160],
-                                "positional_shapes": shapes})
+        self.boundaries.append({"verdict": verdict, "reason": reason, "detail": detail[:160], "scope": scope})
 
-    def structural(self, reason, detail=""):
+    def structural(self, reason, detail="", scope=None):
         """Unconditionally UNRESOLVED: the boundary could not be identified."""
-        self.add(UNRESOLVED, reason, detail)
+        self.add(UNRESOLVED, reason, detail, scope)
 
-    def scoped(self, reason, detail=""):
-        """UNRESOLVED when the command carries removal evidence, else inert.
+    def scoped(self, reason, detail="", scope=None):
+        """UNRESOLVED when the text that can become this command carries removal evidence, else inert.
 
         Without removal evidence there is no removal for this policy to
         authorize, so an unmodelled option or subcommand is not a removal risk.
+        The evidence is looked for in the boundary's scope (_scope_text), never
+        in the rest of the command line: a removal word in another command's
+        arguments, a heredoc written to a file or a message decides nothing here.
         """
-        if self.removal_evidence:
-            self.add(UNRESOLVED, reason, detail)
+        text = self._scope_text() if scope is None else scope
+        if _REMOVAL_EVIDENCE_RE.search(text):
+            self.add(UNRESOLVED, reason, detail, text)
         else:
             self.add(PROVEN_INERT, "no_removal_evidence:" + reason, detail)
+
+    @staticmethod
+    def _word_text(w):
+        """A word as written, piece by piece (shell_parse's parts: each quoted or bare run, each
+        expansion), the pieces set apart by spaces so none is joined to its neighbour into a new
+        word. A variable is reduced to what can change its value (`${X:-rm}` keeps `:-rm`), never
+        its name."""
+        out = []
+        for p in w.parts:
+            if p.kind == "param":
+                out.append(re.sub(r"^[!#]?[A-Za-z_][A-Za-z0-9_]*|^[0-9@*#?$!-]", "", p.text))
+            else:
+                out.append(p.text)
+        return " ".join(out)
+
+    def _scope_text(self):
+        """The text that can become the command an UNRESOLVED boundary belongs to (the owner's rule,
+        2026-11-19): the words of the simple command being read, the values (not the names) of the
+        assignments read so far, and a here-document or here-string that command reads unless its
+        program is a declared reader of data (INERT_ARGV_CONSUMERS: `cat > f <<EOF` writes text, it
+        runs none). The whole text when no command is being read (a lexing failure at the top)."""
+        if self._scope is None:
+            return self.raw
+        return self._toks_text(self._scope)
+
+    def _stdin_text(self, redirs, piped):
+        """The text that can reach a program's standard input as code: this command's words with its
+        here-documents, the words of a `<` redirection (`< <(printf ...)`) and, through a pipe, the
+        command before it with its here-documents."""
+        parts = [self._scope_text()]
+        parts += [self._word_text(r.target) for r in redirs if r.op == "<" and r.target is not None]
+        if piped and self._last is not None:
+            parts.append(self._toks_text(self._last, stdin=True))
+        return "\n".join(parts)
+
+    def _toks_text(self, toks, stdin=False):
+        words = [t[1] for t in toks if t[0] == "W"]
+        parts = [self._word_text(w) for w in words]
+        parts += [self._word_text(w).partition("=")[2] for w in self._assigned] + self._values
+        k = 0
+        while k < len(words) and words[k].segs and words[k].segs[0][0] == "lit" \
+                and _ASSIGN_RE.match(words[k].segs[0][1].text):
+            k += 1
+        head = words[k].literal() if k < len(words) else None
+        if stdin or head is None or basename(head) not in INERT_ARGV_CONSUMERS:
+            for r in (t[1] for t in toks if t[0] == "R"):
+                if r.op in HERE_DOCUMENT_OPS and r.heredoc is not None:
+                    parts.append(r.heredoc[2].text)
+                elif r.op == "<<<" and r.target is not None:
+                    parts.append(self._word_text(r.target))
+        return "\n".join(parts)
 
     def note(self, kind, off):
         if off is not None and off >= 0:
@@ -1621,25 +1702,13 @@ class Analyzer:
             self.cover_src(w.raw)
 
     def cover_redir(self, r):
-        """Discharge a redirection, and REPORT the position it discharged.
-
-        The stdin payload of a `<<`/`<<-` heredoc and the target of a `<<<`
-        here-string are delivered to the receiving command's STDIN; they are
-        not words of its argv. The walk already reached both — the body as the
-        redirection's own (delim, quoted, body) triple, the here-string as its
-        target word — and this records SHAPE_HEREDOC_BODY for both, so neither
-        reports `unclassified` from an empty shape list. An ordinary `>`/`<`
-        target is NOT this position and stays unreported.
-        """
+        """Discharge a redirection: its target word and a here-document's body."""
         if r is None:
             return
         if r.target is not None:
             self.cover(r.target)
-            if r.op == "<<<":
-                self.note_removal_word(SHAPE_HEREDOC_BODY, r.target)
         if r.heredoc is not None and len(r.heredoc) > 2:
             self.cover_src(r.heredoc[2])
-            self.note_removal_position(SHAPE_HEREDOC_BODY, r.heredoc[2].text)
 
     # -- affirmative inertness ------------------------------------------------
 
@@ -1749,12 +1818,12 @@ class Analyzer:
     def unreadable_option_word_names_removal(w):
         """The same question for an option word that is not fully literal.
 
-        `cat -X/bin/r? T` is judged by the one predicate, not by whether the
-        raw text carries removal evidence. The word's own option marker is
+        `cat -X/bin/r? T` is judged by the one predicate, not by removal
+        evidence in the text. The word's own option marker is
         stripped by the split search, so the value is what gets recognised.
         """
         raw = _strip_outer_quotes(w.raw.text)
-        if not raw[:1] in ("-", "+"):
+        if not raw[:1] in OPTION_SIGNS:
             return False
         return Analyzer.attached_value_names_removal(raw[1:])
 
@@ -1882,13 +1951,8 @@ class Analyzer:
                     optname, attached = lit[:2], lit[2:]
                     eq = bool(attached)
                 if optname in data_opts:
-                    if eq or attached:
-                        self.note_removal_position(SHAPE_DATA_OPTION_VALUE,
-                                                   attached)
-                    elif idx + 1 < len(residual):
+                    if not (eq or attached) and idx + 1 < len(residual):
                         skip = idx + 1
-                        self.note_removal_word(SHAPE_DATA_OPTION_VALUE,
-                                               residual[idx + 1])
                     continue
             if self.word_is_removal_reference(w):
                 self.structural(
@@ -1931,7 +1995,7 @@ class Analyzer:
             elif kind == "param":
                 body = s.text
                 if body.startswith("!") or (
-                        "@" in body and body.rsplit("@", 1)[1][:1] in ("P", "E", "A")):
+                        "@" in body and body.rsplit("@", 1)[1][:1] in REEXPAND_OPS):
                     self.note("param_reexpand", off)
                     self.structural("param_reexpansion", body)
                 self.scan_expansions(s, env)
@@ -1988,7 +2052,7 @@ class Analyzer:
                         body = s.text
                         if body.startswith("!") or (
                                 "@" in body
-                                and body.rsplit("@", 1)[1][:1] in ("P", "E", "A")):
+                                and body.rsplit("@", 1)[1][:1] in REEXPAND_OPS):
                             self.note("param_reexpand", off)
                             self.structural("param_reexpansion", body)
                         self.scan_expansions(s, env)
@@ -2040,7 +2104,6 @@ class Analyzer:
     def walk(self, toks, env):
         cur = []
         piped = False
-        next_piped = False
         # Inside `[[ ... ]]` (cond_depth is not None) the shell reads a
         # conditional expression, not commands: `&&`, `||`, `!`, `(` and `)` are
         # its operators and a line break between its terms is blank, so none of
@@ -2068,7 +2131,7 @@ class Analyzer:
                     cond_depth = None
                 self.flush(cur, env, piped)
                 cur = []
-                piped = next_piped = (op in ("|", "|&"))
+                piped = op in PIPE_OPS
                 continue
             if tok[0] == "W":
                 if cond_depth is None:
@@ -2080,12 +2143,27 @@ class Analyzer:
         self.flush(cur, env, piped)
 
     def flush(self, toks, env, piped):
+        outer, self._scope = self._scope, toks
+        words = [t[1] for t in toks if t[0] == "W"]
+        k = 0
+        while k < len(words) and _is_assignment(words[k]):
+            k += 1
+        self._assigned += words[:k] + [w for w in words[k + 1:] if _is_assignment(w)
+                                       and words[k].literal() in DECLARATION_BUILTINS]
+        if k < len(words) and words[k].literal() == "printf" and any(w.literal() == "-v" for w in words[k + 1:]):
+            self._values += [self._word_text(w) for w in words[k + 1:]]  # printf -v NAME assigns its output
+        try:
+            self._flush(toks, env, piped)
+        finally:
+            self._scope, self._last = outer, toks
+
+    def _flush(self, toks, env, piped):
         words = [t[1] for t in toks if t[0] == "W"]
         redirs = [t[1] for t in toks if t[0] == "R"]
         if not words and not redirs:
             return
         for r in redirs:
-            if r.op in ("<<", "<<-"):
+            if r.op in HERE_DOCUMENT_OPS:
                 self.note("heredoc", r.off)
                 # An UNQUOTED delimiter leaves the body subject to expansion, so
                 # any substitution inside it runs even when the body is mere
@@ -2130,7 +2208,6 @@ class Analyzer:
                 # Guarded by `k < len(words)` so a prefix with no following
                 # command records nothing — there is no boundary to attach to
                 # and the note would drain into an unrelated later one.
-                self.note_removal_word(SHAPE_ASSIGNMENT_PREFIX, w)
         if k:  # a variable (GIT_DIR, HOME, PATH, ...) a later git may run with
             self.git_rm_unresolved = self.git_rm_unresolved or "variable assignment"
         for w in words[:k]:
@@ -2179,7 +2256,7 @@ class Analyzer:
 
     DROP = {"if", "then", "else", "elif", "fi", "while", "until", "do", "done",
             "esac", "!", "{", "}", "in", ";;"}
-    HEADER = {"for", "case", "select", "function"}
+    HEADER = {"for", "case", "select"}
 
     def eval_command(self, words, redirs, env, piped):
         while words:
@@ -2190,6 +2267,9 @@ class Analyzer:
             if lit in self.HEADER:
                 self._shell_state(lit, words[1:])  # `for`/`select` assign their variable
                 return  # loop/case header: its words are patterns, not commands
+            if lit == "function":  # `function NAME` heads a body of commands, read as `NAME() { ...; }` is
+                words = words[2:]
+                continue
             if lit == "coproc":
                 words = words[1:]
                 if len(words) >= 2 and words[0].literal() and \
@@ -2205,14 +2285,14 @@ class Analyzer:
     def _shell_state(self, base, args):
         """Record what a later command inherits from shell builtin `base` (see _GIT_RM_LOCATION_OPTS)."""
         lits = [a.literal() for a in args]
-        if base in ("cd", "pushd"):  # popd only returns to a directory already listed
+        if base in CD_TARGET_BUILTINS:  # popd only returns to a directory already listed
             ops = [x for x in lits if x is None or x == "-" or not x.startswith("-")]
             if len(ops) == 1 and ops[0] and ops[0].startswith("/"):
                 self.git_rm_cwds.append(ops[0])
                 return
+            self.cwd_unknown = True
         elif base == "set":  # allexport, keyword and posix let an assignment reach git
-            if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in (
-                    "-", "+") and x != "--" and ("a" in x or "k" in x) for x in lits):
+            if None not in lits and not any(x in ("allexport", "keyword", "posix") or x[:1] in OPTION_SIGNS and x != "--" and ("a" in x or "k" in x) for x in lits):
                 return
         elif base == "printf":
             if None not in lits and not any(x.startswith("-v") for x in lits):
@@ -2242,7 +2322,10 @@ class Analyzer:
                 return
             # The program that will execute cannot be named. Nothing about it
             # can be proven, so it is UNRESOLVED regardless of removal tokens.
-            self.structural("dynamic_command_head", head.raw.text[:80])
+            # The name as it reads with every variable empty (`r${EMPTY}m` is rm): a program name
+            # is the one word whose pieces join into what runs.
+            joined = "".join(p.text for p in head.parts if p.kind == "lit")
+            self.structural("dynamic_command_head", head.raw.text[:80], self._scope_text() + "\n" + joined)
             return
         if name in env.aliases:
             body = env.aliases[name]
@@ -2261,6 +2344,7 @@ class Analyzer:
         if base in REMOVAL_EXES:
             self.cover(head)  # accounted for: it IS the removal we denied
             self.add(FORBIDDEN_REMOVAL, "filesystem_removal", name)
+            self.removals.append(self._removal_targets(base, args) if self.direct else None)
             return
 
         if base == ".":
@@ -2274,11 +2358,11 @@ class Analyzer:
             self._shell(name, args, redirs, env, piped)
             return
         if base in INTERPRETERS or base in AWKS:
-            self._interpreter(base, args, env)
+            self._interpreter(base, args, env, redirs, piped)
             return
         if base in WRAPPERS and WRAPPERS[base] is not None:
             spec, nops = WRAPPERS[base]
-            self._prefix_wrapper(base, args, spec, nops, env)
+            self._prefix_wrapper(base, args, spec, nops, env, redirs=redirs)
             return
         if base in INERT_ARGV_CONSUMERS:
             self._inert_consumer(base, name, args, redirs, env)
@@ -2296,8 +2380,38 @@ class Analyzer:
         # argv, so the removal arrives AS the command head — `setsid -c 'rm
         # <path>'`, `strace -c '<removal>'`, `exec -c '<removal>'`. Testing
         # arguments alone leaves that entire shape authorized.
+        stdin = [r.heredoc[2].text if r.heredoc is not None else self._word_text(r.target)
+                 for r in redirs if r.op in HEREDOC_OPS and r.io in (None, "0")
+                 and (r.heredoc is not None or r.target is not None)]
+        if stdin:
+            # What an unmodelled program does with text on its standard input is unknown: that text
+            # is residue, and the word list is asked of it (`psql <<EOF` passes, `fish <<EOF` with
+            # a removal in it does not).
+            self.scoped("unmodelled_program_reads_text", name, "\n".join(stdin))
         self._terminal_inert("named_program_no_removal_reference", name, words,
                              data_opts=SELECTOR_DATA_OPTIONS.get(basename(name), ()))
+
+    @staticmethod
+    def _removal_targets(base, args):
+        """The operands of a `rm` or `unlink` run as the command's own head: written out, or the offset
+        of one that expands (resolved by _known_removal_targets). None for a pattern, `~`, a possible
+        option, no operand, or shred/srm. Neither has an option taking a value."""
+        if base not in _OPERAND_REMOVERS:
+            return None
+        lits = [a.literal() for a in args]
+        end = lits.index("--") if "--" in lits else len(lits)
+        targets = []
+        for k, (a, x) in enumerate(zip(args, lits)):
+            if k == end:
+                continue
+            if x is None:
+                if k < end and _static_prefix(a).startswith("-"):
+                    return None  # may be an option
+                targets.append(a.raw.off(0))
+            elif k > end or x == "-" or not x.startswith("-"):
+                targets.append(x)
+        return targets if targets and not any(isinstance(x, str) and (not x or x.startswith("~"))
+                                              for x in targets) else None
 
     # -- declared-inert argv consumers: POSITION, not membership -------------
 
@@ -2328,7 +2442,6 @@ class Analyzer:
         """
         model = INERT_ARGV_CONSUMERS[base]
         for kind, opt, value, words in self._ic_canonicalize(args, model):
-            post_dash = kind is _IC_POST_DASH_OPERAND
             if kind is _IC_UNRESOLVABLE:
                 # This word's option/value split is unreadable, but that is a
                 # reason to ask the ONE predicate about every split — not a
@@ -2357,16 +2470,8 @@ class Analyzer:
                         "option_value_removal_reference",
                         "%s:%s" % (name, (opt + "=" + value.describe())[:60]))
                     return
-            shape = _IC_SHAPES[kind]
-            if kind is _IC_OPAQUE_VALUE and value is not None:
-                shape = (SHAPE_UNDECLARED_ATTACHED if value.text is not None
-                         else SHAPE_UNDECLARED_SEPARATED)
-            if value is not None:
-                self.note_removal_position(shape, value.describe())
             for w in words:
                 self.cover(w)
-                self.note_removal_word(
-                    SHAPE_POST_DOUBLE_DASH if post_dash else shape, w)
         for r in (redirs or ()):
             self.cover_redir(r)
         self.add(PROVEN_INERT,
@@ -2497,6 +2602,9 @@ class Analyzer:
             # Pure OPERAND position: data for a program proven not to exec it.
             slots.append((_IC_OPERAND, "", None, [w]))
             i += 1
+            if model.get("first_operand_ends_options"):
+                slots += [(_IC_OPERAND, "", None, [w2]) for w2 in args[i:]]
+                break
         return slots
 
     def _ic_exec_value(self, name, opt, optword, value, env):
@@ -2527,7 +2635,7 @@ class Analyzer:
 
     # -- generic prefix wrapper ---------------------------------------------
 
-    def _prefix_wrapper(self, base, args, spec, nops, env, allow_assignments=False):
+    def _prefix_wrapper(self, base, args, spec, nops, env, redirs=()):
         i, err = split_opts(args, spec)
         if err == "missing_option_value":
             self.structural("missing_option_value", base)
@@ -2535,7 +2643,7 @@ class Analyzer:
         if err:
             self.scoped(err, base)
             return
-        if base == "env" or allow_assignments:
+        if base == "env":
             while i < len(args):
                 lit = args[i].literal()
                 if lit is not None and _ENVVAR_RE.match(lit):
@@ -2549,7 +2657,7 @@ class Analyzer:
         if not payload:
             self._terminal_inert("wrapper_without_payload", base, args)
             return
-        self.eval_argv(payload, [], env)
+        self.eval_argv(payload, list(redirs), env)
 
     # -- specific handlers ---------------------------------------------------
 
@@ -2574,14 +2682,13 @@ class Analyzer:
             # -v/-V resolve a NAME and print it; they never run it.
             for w in args:
                 self.cover(w)
-            self.note_removal_position(SHAPE_BUILTIN_LOOKUP, self.raw)
             self.add(PROVEN_INERT, "command_lookup_only", "command -v")
             return
         payload = args[i:]
         if not payload:
             self._terminal_inert("wrapper_without_payload", "command", args)
             return
-        self.eval_argv(payload, [], env)
+        self.eval_argv(payload, redirs, env)
 
     def _h_env(self, name, args, redirs, env, piped):
         # `env -S 'cmd args'` splits the string into argv itself. It performs
@@ -2591,7 +2698,7 @@ class Analyzer:
             lit = a.literal()
             if lit is None:
                 break
-            if lit in ("-S", "--split-string"):
+            if lit in ENV_SPLIT_OPTS:
                 if idx + 1 >= len(args):
                     self.structural("missing_option_value", "env -S")
                     return
@@ -2606,7 +2713,7 @@ class Analyzer:
                                       args[idx + 1:], env)
                 return
         spec, nops = WRAPPERS["env"]
-        self._prefix_wrapper("env", args, spec, nops, env)
+        self._prefix_wrapper("env", args, spec, nops, env, redirs=redirs)
 
     def _env_split_string(self, word, env):
         if word.literal() is None:
@@ -2657,7 +2764,11 @@ class Analyzer:
     def _h_source(self, name, args, redirs, env, piped):
         # The sourced file's contents are not in the command text. Nothing about
         # what it executes can be proven, so it is unresolved for the removal
-        # policy whenever the command carries removal evidence.
+        # policy. A named file is not residue (a path is no command); text a
+        # substitution produces (`source <(printf ...)`) is, and its words are the scope.
+        if args and args[0].literal() is None:
+            self.scoped("sourced_code_computed", (args[0].raw.text)[:60])
+            return
         self.scoped("sourced_file_contents_unknown", " ".join(
             (a.literal() or a.raw.text) for a in args[:2]))
 
@@ -2671,7 +2782,6 @@ class Analyzer:
                 env.hashed[alias] = target
         for w in args:  # hash records a NAME in the lookup table; it runs nothing
             self.cover(w)
-        self.note_removal_position(SHAPE_BUILTIN_LOOKUP, self.raw)
         self.add(PROVEN_INERT, "hash_builtin", "hash")
 
     def _h_alias(self, name, args, redirs, env, piped):
@@ -2695,11 +2805,7 @@ class Analyzer:
     _h_builtin = _h_busybox
 
     def _h_flock(self, name, args, redirs, env, piped):
-        spec = _spec(("-s", "--shared", "-x", "--exclusive", "-u", "--unlock",
-                      "-n", "--nonblock", "-o", "--close", "-v", "--verbose",
-                      "-F", "--no-fork"),
-                     ("-w", "--wait", "--timeout", "-E", "--conflict-exit-code"))
-        i, err = split_opts(args, spec)
+        i, err = split_opts(args, PEEL["flock"][0])
         if err == "missing_option_value":
             self.structural("missing_option_value", "flock")
             return
@@ -2709,40 +2815,28 @@ class Analyzer:
         i += 1  # the lock file / directory / fd operand
         if self._swallowed_removal("flock", args[:i]):
             return
-        if i < len(args) and args[i].literal() in ("-c", "--command"):
+        if i < len(args) and args[i].literal() in COMMAND_OPTS:
             self._shell_code_operand(args, i + 1, env, "flock")
             return
         payload = args[i:]
         if not payload:
             self._terminal_inert("wrapper_without_payload", "flock", args)
             return
-        self.eval_argv(payload, [], env)
+        self.eval_argv(payload, redirs, env)
 
     def _h_su(self, name, args, redirs, env, piped):
-        spec = _spec(("-l", "--login", "-", "-p", "--preserve-environment", "-m",
-                      "-P", "--pty", "-f", "--fast"),
-                     ("-c", "--command", "-s", "--shell", "-g", "--group",
-                      "-G", "--supp-group", "-w", "--whitelist-environment"))
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "su")
-                return
-        i, err = split_opts(args, spec)
+        if self._command_option(args, env, "su", SU_COMMAND_OPTS):
+            return
+        i, err = split_opts(args, _SU_SPEC)
         if err:
             self.scoped(err, "su")
             return
         self._terminal_inert("su_without_command", "su", args)
 
     def _h_runuser(self, name, args, redirs, env, piped):
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "runuser")
-                return
-        spec = _spec(("-l", "--login", "-p", "--preserve-environment", "-m",
-                      "-P", "--pty", "-f", "--fast"),
-                     ("-u", "--user", "-g", "--group", "-G", "--supp-group",
-                      "-s", "--shell", "-w", "--whitelist-environment"))
-        i, err = split_opts(args, spec)
+        if self._command_option(args, env, "runuser", SU_COMMAND_OPTS):
+            return
+        i, err = split_opts(args, PEEL["runuser"][0])
         if err == "missing_option_value":
             self.structural("missing_option_value", "runuser")
             return
@@ -2753,7 +2847,7 @@ class Analyzer:
         if not payload:
             self._terminal_inert("wrapper_without_payload", "runuser", args)
             return
-        self.eval_argv(payload, [], env)
+        self.eval_argv(payload, redirs, env)
 
     def _h_sg(self, name, args, redirs, env, piped):
         for idx, a in enumerate(args):
@@ -2763,10 +2857,8 @@ class Analyzer:
         self._terminal_inert("sg_without_command", "sg", args)
 
     def _h_script(self, name, args, redirs, env, piped):
-        for idx, a in enumerate(args):
-            if a.literal() in ("-c", "--command"):
-                self._shell_code_operand(args, idx + 1, env, "script")
-                return
+        if self._command_option(args, env, "script"):
+            return
         # `-c` is matched EXACTLY above, so `script -qc '<code>'` (a clustered
         # short option, the canonical documented form) misses it. Falling to a
         # residual-proof terminal is what makes the miss deny instead of allow.
@@ -2865,7 +2957,7 @@ class Analyzer:
         if body is not None:
             self.analyze_code(body, Env())
             return
-        self.scoped("at_stdin_payload_unknown", name)
+        self.scoped("at_stdin_payload_unknown", name, self._stdin_text(redirs, piped))
 
     _h_batch = _h_at
 
@@ -2884,7 +2976,7 @@ class Analyzer:
         self.eval_argv(payload, [], env)
 
     def _h_xargs(self, name, args, redirs, env, piped):
-        i, err = split_opts(args, XARGS)
+        i, err = split_opts(args, XARGS_SPEC)
         if err == "missing_option_value":
             self.structural("missing_option_value", "xargs")
             return
@@ -2901,7 +2993,7 @@ class Analyzer:
     def _h_parallel(self, name, args, redirs, env, piped):
         cut = len(args)
         for idx, a in enumerate(args):
-            if (a.literal() or "") in (":::", "::::", ":::+", "::::+"):
+            if (a.literal() or "") in PARALLEL_SEPARATORS:
                 cut = idx
                 break
         head_args = args[:cut]
@@ -2915,18 +3007,18 @@ class Analyzer:
         payload = head_args[i:]
         if not payload:
             # With no template the command itself comes from the input stream.
-            self.scoped("parallel_command_from_input", "parallel")
+            self.scoped("parallel_command_from_input", "parallel", self._stdin_text(redirs, piped))
             return
         if "{" in (payload[0].literal() or "{"):
             # A placeholder in command position: the head comes from the input
             # items, which this analyzer cannot enumerate.
-            self.scoped("parallel_command_from_input", "parallel")
+            self.scoped("parallel_command_from_input", "parallel", self._stdin_text(redirs, piped))
             return
         # Input items are substituted as ARGUMENTS of the template, so they
         # belong to the same argv. Passing them through is both more faithful
         # and what lets `parallel echo ::: /bin/rm` explain its removal name.
         items = [a for a in args[cut:]
-                 if (a.literal() or "") not in (":::", "::::", ":::+", "::::+")]
+                 if (a.literal() or "") not in PARALLEL_SEPARATORS]
         self.eval_argv(payload + items, [], env)
 
     def _h_find(self, name, args, redirs, env, piped):
@@ -2947,7 +3039,7 @@ class Analyzer:
                 payload = []
                 while j < len(args):
                     jl = args[j].literal()
-                    if jl in (";", "+"):
+                    if jl in FIND_EXEC_ENDS:
                         break
                     payload.append(args[j])
                     j += 1
@@ -2995,6 +3087,21 @@ class Analyzer:
 
     # -- shells --------------------------------------------------------------
 
+    def _command_option(self, args, env, who, names=COMMAND_OPTS):
+        """Analyze the code of a `-c CODE`, `--command CODE` or `--command=CODE` among args."""
+        for idx, a in enumerate(args):
+            lit = a.literal()
+            if lit in names:
+                self._shell_code_operand(args, idx + 1, env, who)
+                return True
+            long = next((n for n in names if n.startswith("--") and (lit or "").startswith(n + "=")), None)
+            if long is not None:
+                content = a.content()
+                start = len(content.text) - (len(lit) - len(long) - 1)
+                self.analyze_code(content.slice(start, len(content.text)), Env(env.hashed, env.aliases))
+                return True
+        return False
+
     def _shell_code_operand(self, args, idx, env, who):
         if idx >= len(args):
             self.structural("missing_option_value", who)
@@ -3008,7 +3115,7 @@ class Analyzer:
     def _stdin_code(self, redirs):
         """Return the Src of code arriving on stdin, or None when not provable."""
         for r in redirs:
-            if r.op in ("<<", "<<-") and (r.io in (None, "0")):
+            if r.op in HERE_DOCUMENT_OPS and (r.io in (None, "0")):
                 if r.heredoc is None:
                     return None
                 delim, quoted, body = r.heredoc
@@ -3029,7 +3136,7 @@ class Analyzer:
         n = len(args)
         while i < n:
             lit = args[i].literal()
-            if lit is None or not lit or lit[0] not in "-+" or lit in ("-", "+"):
+            if lit is None or not lit or lit[0] not in "-+" or lit in OPTION_SIGNS:
                 break
             if lit == "--":
                 i += 1
@@ -3093,7 +3200,6 @@ class Analyzer:
                 self.cover(w)
             for r in (redirs or ()):
                 self.cover_redir(r)
-            self.note_removal_position(SHAPE_PARSE_ONLY_PAYLOAD, self.raw)
             self.add(PROVEN_INERT, "shell_parse_only", name)
             return
         if code_word is not None:
@@ -3133,11 +3239,11 @@ class Analyzer:
             self.analyze_code(body, Env(env.hashed, env.aliases),
                               cond=basename(name) in COND_SHELLS)
             return
-        self.scoped("shell_code_source_unknown", name)
+        self.scoped("shell_code_source_unknown", name, self._stdin_text(redirs, piped))
 
     # -- inline interpreter code --------------------------------------------
 
-    def _interpreter(self, base, args, env):
+    def _interpreter(self, base, args, env, redirs=(), piped=False):
         code = None
         if base in AWKS:
             i = 0
@@ -3145,7 +3251,11 @@ class Analyzer:
                 lit = args[i].literal()
                 if lit is None or not lit.startswith("-") or lit == "-":
                     break
-                if lit in ("-f", "--file", "-v", "--assign"):
+                if lit in AWK_SOURCE_OPTS or lit.startswith(tuple(o + "=" for o in AWK_SOURCE_OPTS if o[1] == "-")):
+                    # the program text: the next word, or the value attached with `=`
+                    i += 0 if "=" in lit else 1
+                    break
+                if lit in AWK_VALUE_OPTS:
                     i += 2
                     continue
                 if lit == "--":
@@ -3170,6 +3280,31 @@ class Analyzer:
                         if f.startswith("-") and len(f) == 2):
                     code = a
                     break
+        if code is None and base not in AWKS and _reads_program_on_stdin(args):
+            # No script file: the program arrives on standard input, from a here-document or
+            # here-string (read as inline code is) or from a pipe (unknown text: residue).
+            body = self._stdin_code(redirs)
+            if body is not None:
+                mark = len(self.boundaries)
+                self._classify_inline_code(base, body.text)
+                if all(b["reason"] in _INLINE_INERT_REASONS for b in self.boundaries[mark:]) \
+                        and self.boundaries[mark:]:
+                    for r in redirs:
+                        self.cover_redir(r)
+                return
+            fed = [r for r in redirs if r.op in HEREDOC_OPS and r.io in (None, "0")]
+            if fed:  # an unquoted delimiter whose body the shell rewrites first
+                self.structural("interpreter_stdin_code_rewritten", base, self._scope_text())
+                return
+            fed = [r for r in (t[1] for t in self._last or () if t[0] == "R")
+                   if r.op in HERE_DOCUMENT_OPS and r.heredoc is not None and r.heredoc[1]] if piped else []
+            if fed:  # `cat <<'EOF' | python3`: the program is that here-document, read as code
+                for r in fed:
+                    self._classify_inline_code(base, r.heredoc[2].text)
+                return
+            if piped or any(r.op == "<" for r in redirs):
+                self.scoped("interpreter_code_from_pipe", base, self._stdin_text(redirs, piped))
+                return
         if code is None:
             # Same rule as for shells: a script-file operand naming a removal
             # front end is not a proven-inert data path. The reading is the
@@ -3183,7 +3318,6 @@ class Analyzer:
                     return
             for w in args:  # script file + its data operands
                 self.cover(w)
-            self.note_removal_position(SHAPE_SCRIPT_FILE_OPERAND, self.raw)
             self.add(PROVEN_INERT, "interpreter_script_file", base)
             return
         if code.literal() is None:
@@ -3194,15 +3328,14 @@ class Analyzer:
         self._classify_inline_code(base, text)
         # Only an OUTPUT-SINK proof explains a removal name inside generated
         # code (`print("/bin/rm")`). Any other outcome leaves it unexplained.
-        if all(b["reason"].startswith("interpreter_removal_token_in_output_sink")
-               or b["reason"].startswith("interpreter_code_without_removal_token")
-               for b in self.boundaries[mark:]) and self.boundaries[mark:]:
+        if all(b["reason"] in _INLINE_INERT_REASONS for b in self.boundaries[mark:]) \
+                and self.boundaries[mark:]:
             self.cover(code)
 
     def _dynamic_interpreter_code(self, base, code):
         """An inline program whose word holds an expansion.
 
-        The scoped check alone refuses only when the raw command carries an
+        The scoped check alone refuses only when the command's scope carries an
         rm/unlink/shred/srm word, so it would judge `python3 -c
         "shutil.rmtree('$HOME/x')"` inert while refusing its literal-path form.
         The fixed text is therefore classified by the SAME classifier as the
@@ -3215,14 +3348,10 @@ class Analyzer:
         """
         text, why = _program_with_placeholders(code, base, self.raw)
         mark = len(self.boundaries)
-        saved = (list(self._pending_shapes), list(self.removal_shapes),
-                 self.removal_shape)
         self._classify_inline_code(base, text)
         if any(b["verdict"] != PROVEN_INERT for b in self.boundaries[mark:]):
             return
         del self.boundaries[mark:]
-        self._pending_shapes, self.removal_shapes, self.removal_shape = (
-            saved[0], saved[1], saved[2])
         if why:
             self.structural("interpreter_expansion_changes_program",
                             "%s:%s" % (base, why))
@@ -3230,6 +3359,21 @@ class Analyzer:
         self.scoped("dynamic_interpreter_code", code.raw.text[:60])
 
     def _classify_inline_code(self, base, text):
+        # PYTHON IS READ, NOT SCANNED (the owner's rule, 2026-11-19): its standard library parses it,
+        # and only CALLS count (_python_removal_calls). Code that is not Python keeps the scans below.
+        if re.match(r"python[0-9.]*$", base):
+            found = _python_removal_calls(text)
+            if found is None and text.startswith("-c"):  # the attached form: `-c"<program>"`
+                found = _python_removal_calls(text[2:])
+            if found is not None:
+                removals, unknown = found
+                if removals:
+                    self.add(FORBIDDEN_REMOVAL, "interpreter_removal_call", "%s:%s" % (base, removals[0][:60]))
+                for seg in unknown:
+                    self.structural("interpreter_computed_call", base, seg)
+                if not removals and not unknown:
+                    self.add(PROVEN_INERT, "interpreter_python_no_removal_call", base)
+                return
         # DYNAMIC ATTRIBUTE ACCESS FIRST. `getattr(os,"remove")(p)`,
         # `os.__dict__["unlink"](p)`, `globals()["shutil"].rmtree(p)` and
         # `__import__("os").remove(p)` reach the same syscalls while the name
@@ -3265,7 +3409,6 @@ class Analyzer:
                 self.scoped("interpreter_removal_token_not_proven_inert",
                             "%s:%s" % (base, sink or "<none>"))
                 return
-        self.note_removal_position(SHAPE_OUTPUT_SINK_LITERAL, self.raw)
         self.add(PROVEN_INERT, "interpreter_removal_token_in_output_sink", base)
 
     # -- git -----------------------------------------------------------------
@@ -3304,7 +3447,7 @@ class Analyzer:
                 break
             if not lit.startswith("-"):
                 break
-            if lit in ("-c", "--config-env") or lit.startswith("-c="):
+            if lit in GIT_CONFIG_OPTS or lit.startswith("-c="):
                 val = None
                 val_word = None
                 if "=" in lit and lit.startswith("--config-env="):
@@ -3366,7 +3509,6 @@ class Analyzer:
             # messages) — but `git submodule foreach '<removal>'` and
             # `git bisect run '<removal>'` hand a command line onward, so the
             # residual is proved rather than assumed.
-            self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
             self._terminal_inert(
                 "git_non_removal_subcommand", "git " + sub, rest,
                 data_opts=() if sub in GIT_PAYLOAD_FORWARDING_SUBCOMMANDS
@@ -3414,33 +3556,50 @@ class Analyzer:
             unproven = unproven or "f" in lit
             i += 1
         loc = [w.literal() for w in git_opts]  # kept only if they just locate the repository
-        if None in loc or not all(x in _GIT_RM_LOCATION_OPTS + _GIT_RM_PATHSPEC_OPTS or "=" in x and x.split(
-                "=", 1)[0] in _GIT_RM_LOCATION_OPTS[1:] or loc[j - 1:j] and loc[j - 1] in _GIT_RM_LOCATION_OPTS
+        if None in loc or not all(x in _GIT_RM_LOCATION_OPTS | _GIT_RM_PATHSPEC_OPTS or "=" in x and x.split(
+                "=", 1)[0] in _GIT_RM_LOCATION_OPTS - {"-C"} or loc[j - 1:j] and loc[j - 1] in _GIT_RM_LOCATION_OPTS
                 for j, x in enumerate(loc)):
             loc = None
         if cached:
             # --cached removes from the index only; the working tree is untouched.
-            self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
             self.add(PROVEN_SAFE_REMOVAL, "git_rm_cached_index_only", "git rm --cached")
         elif unproven or not direct or loc is None or any(x is None or "~" in x for x in loc + paths):
             self.add(FORBIDDEN_REMOVAL, "git_rm_worktree", "git rm")
         else:
             # Recoverable; prove_git_rm checks the repository at run time.
-            self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
             self.git_rm.append({"git": loc, "paths": paths})
             self.add(PROVEN_SAFE_REMOVAL, "git_rm_recoverable", "git rm")
 
     # -- docker --------------------------------------------------------------
 
+    def _docker_readings(self, ws, spec, what):
+        """Every index the first operand of `what` can start at. Docker's option
+        reader knows two kinds of option: a flag, and an option taking one value
+        (attached with `=` or the next word). An option the table does not know
+        is read both ways, and the caller judges what follows under every
+        reading, so the worst of them decides: a removal stays judged wherever
+        it can stand. No reading that runs out of words is kept."""
+        ends, seen, todo = set(), set(), [0]
+        while todo:
+            s = todo.pop()
+            if s in seen:
+                continue
+            seen.add(s)
+            i, err = split_opts(ws, spec, s)
+            if err and err.startswith("unknown_option:"):
+                lit = ws[i].literal()
+                todo.append(i + 1)
+                if not (lit[:2] == "--" and "=" in lit):
+                    todo.append(i + 2)
+            elif not err and i <= len(ws):
+                ends.add(i)
+        if not ends:
+            self.structural("missing_option_value", what)
+        return sorted(ends)
+
     def _h_docker(self, name, args, redirs, env, piped):
-        i, err = split_opts(args, DOCKER_GLOBAL)
-        if err == "missing_option_value":
-            self.structural("missing_option_value", "docker")
-            return
-        if err:
-            self.scoped(err, "docker")
-            return
-        self._docker_sub(name, args, i, env)
+        for i in self._docker_readings(args, DOCKER_GLOBAL, "docker"):
+            self._docker_sub(name, args, i, env)
 
     _h_podman = _h_docker
 
@@ -3453,14 +3612,11 @@ class Analyzer:
             self.structural("dynamic_docker_subcommand", args[i].raw.text[:60])
             return
         if sub == "compose":
-            j, err = split_opts(args[i + 1:], _spec(
-                ("--ansi", "--dry-run", "--parallel", "--compatibility"),
-                ("-f", "--file", "-p", "--project-name", "--project-directory",
-                 "--profile", "--env-file")))
-            if err:
-                self.scoped(err, "docker compose")
-                return
-            self._docker_sub(name, args, i + 1 + j, env)
+            for j in self._docker_readings(args[i + 1:], _spec(
+                    ("--dry-run", "--compatibility"),
+                    ("--ansi", "--parallel", "-f", "--file", "-p", "--project-name",
+                     "--project-directory", "--profile", "--env-file")), "docker compose"):
+                self._docker_sub(name, args, i + 1 + j, env)
             return
         if sub in DOCKER_RESOURCE_NOUNS:
             self._docker_sub(name, args, i + 1, env)
@@ -3469,26 +3625,50 @@ class Analyzer:
             # Removing a container / image / volume / network is a Docker
             # resource operation; it does not delete host filesystem paths.
             self.cover(args[i])  # this `rm` was resolved as a Docker resource op
-            self.note_removal_position(SHAPE_SUBCOMMAND_RESOURCE, self.raw)
             self.add(PROVEN_SAFE_REMOVAL, "docker_resource_removal",
                      "%s %s" % (name, sub))
             return
         if sub in ("exec", "run", "create"):
             spec = DOCKER_EXEC if sub == "exec" else DOCKER_RUN
-            j, err = split_opts(args[i + 1:], spec)
-            if err == "missing_option_value":
-                self.structural("missing_option_value", "docker " + sub)
-                return
-            if err:
-                self.scoped(err, "docker " + sub)
-                return
-            payload = args[i + 1 + j + 1:]   # skip the container / image operand
-            if not payload:
-                self.add(PROVEN_INERT, "docker_exec_default_entrypoint", name)
-                return
-            self.eval_argv(payload, [], Env())
+            for j in self._docker_readings(args[i + 1:], spec, "docker " + sub):
+                payload = args[i + 1 + j + 1:]   # skip the container / image operand
+                if sub != "exec" and self._docker_entrypoint(args[i + 1:i + 2 + j], j, payload):
+                    continue
+                if not payload:
+                    self.add(PROVEN_INERT, "docker_exec_default_entrypoint", name)
+                else:
+                    self.eval_argv(payload, [], Env())
             return
         self.add(PROVEN_INERT, "docker_non_removal_subcommand", "%s %s" % (name, sub))
+
+    def _docker_entrypoint(self, ws, j, payload):
+        """Judge a run / create whose options (``ws[:j]``, ``ws[j]`` the image) replace the image's entry
+        program: the program `--entrypoint` names (a separate word or `=`-joined) runs with ``payload`` as
+        its arguments, judged as any other command; a value the reading cannot resolve is unproven. An
+        empty value restores the image's own, so the payload is the command as without the option. Every
+        `--entrypoint` word is judged (the worst decides). True when one was judged."""
+        found = False
+        for k in range(min(j + 1, len(ws))):  # a reading may end with no image word left (`docker create --`)
+            lit = ws[k].literal()
+            name, eq, rest = (lit if lit is not None else ws[k].static_prefix()).partition("=")
+            if name[:2] != "--" or _resolve_long(name, DOCKER_RUN) != "--entrypoint":
+                continue
+            if lit is None or (not eq and k + 1 < j and ws[k + 1].literal() is None):
+                found = True  # `--entrypoint=$X` (read as the image) or `--entrypoint "$X"`
+                self.structural("dynamic_docker_entrypoint", ws[k].raw.text[:60])
+                continue
+            if eq:
+                content = ws[k].content()
+                piece = content.slice(len(name) + 1, len(content.text))
+                value = Word([("lit", piece, piece.off(0))], piece.off(0), piece)
+            elif k + 1 < j:  # the separate word; at the image's place this reading took `--entrypoint` as a value
+                value = ws[k + 1]
+            else:
+                continue
+            if value.literal():
+                found = True
+                self.eval_argv([value] + list(payload), [], Env())
+        return found
 
 
 _IDENT_TAIL_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_.]*)$")
@@ -3724,6 +3904,7 @@ def analyze(raw):
         result["verdict"] = UNRESOLVED
         result["reason"] = "census_fatal:" + ",".join(sorted(set(cen["fatal"])))[:120]
         result["census"]["obligations"] = len(cen["obligations"])
+        result["unresolved_scopes"] = [raw]  # not read at all: the scope is the whole text
         return result
 
     az.analyze_code(Src.from_raw(raw), Env(), cond=True)
@@ -3736,11 +3917,16 @@ def analyze(raw):
         "undischarged": undischarged[:10],
     }
     if undischarged:
+        # An undischarged removal_reference is a removal name in a place no site explained. Every
+        # place a program can run from is a site of the walk, which judges it there (and refuses a
+        # removal it finds), so what is left is text: it stays UNRESOLVED, and so recorded, with an
+        # empty scope. Any other kind is active syntax the walk did not read: its scope is the whole text.
+        unread = [o for o in undischarged if o["kind"] != census_mod.KIND_REMOVAL_REFERENCE]
         az.add_terminal(UNRESOLVED, "census_obligation_undischarged",
                         ",".join("%s@%d" % (o["kind"], o["offset"])
-                                 for o in undischarged[:5]))
+                                 for o in (unread or undischarged)[:5]), raw if unread else "")
     if az.overflow:
-        az.add_terminal(UNRESOLVED, "boundary_limit_exceeded", str(MAX_BOUNDARIES))
+        az.add_terminal(UNRESOLVED, "boundary_limit_exceeded", str(MAX_BOUNDARIES), raw)
     for b in az.boundaries if az.git_rm_unresolved else ():  # git rm's directory unknown
         if b["reason"] == "git_rm_recoverable":
             b.update(verdict=FORBIDDEN_REMOVAL, reason="git_rm_worktree",
@@ -3780,41 +3966,39 @@ def analyze(raw):
     result["verdict"] = verdict
     result["reason"] = reason
     result["allowed"] = verdict in _TERMINAL_SAFE
-    result["boundaries"] = az.boundaries[:40]
-    # The parse-derived positional shape(s) in which a removal reference was
-    # COVERED. The ledger is keyed on (reason_code, positional_shape);
-    # "none" means no inert-consumer argv walk authorized a removal reference,
-    # so the proof rests entirely on the reason code's own site.
-    # EVERY position placed by EVERY boundary that CARRIES THE FINAL VERDICT —
-    # not just the first mention, and not the first co-winning boundary.
-    #
-    # Picking the first MENTION would let a benign leading operand supply the
-    # proof for laxity sitting in an option value (`cat rm.txt --opt='<payload>'
-    # f` would report `operand`, while the same command without `rm.txt`
-    # reports `undeclared_option_value_attached`).
-    #
-    # Picking the first co-winning BOUNDARY is the same defect one level up:
-    # `ack rm.txt --pager rm.txt T` would report ['operand'] while a second
-    # PROVEN_INERT boundary recorded `declared_exec_option_value`. The union
-    # can only ever report MORE positions, so it can only ever make coverage
-    # harder, and it keeps such commands from reporting `unclassified`.
-    #
-    # Boundaries that do NOT carry the final verdict are still excluded: a
-    # position belonging to a losing boundary is not a position the winning
-    # proof is responsible for. Walk order is preserved so the ledger's
-    # "counted once, under the shape the walk reached first" stays well defined.
-    shapes = []
-    for b in az.boundaries:
-        if b["verdict"] != verdict:
-            continue
-        for shape in b["positional_shapes"]:
-            if shape not in shapes:
-                shapes.append(shape)
-    result["removal_positional_shapes"] = shapes or [SHAPE_UNCLASSIFIED]
-    result["removal_positional_shape"] = result["removal_positional_shapes"][0]
+    result["boundaries"] = [{k: v for k, v in b.items() if k != "scope"} for b in az.boundaries[:40]]
+    if verdict == UNRESOLVED:
+        # The text that can become each command left unresolved (see Analyzer._scope_text): the only
+        # text the removal policy asks its word list of. An empty scope is not residue.
+        result["unresolved_scopes"] = [b["scope"] for b in az.boundaries
+                                       if b["verdict"] == UNRESOLVED and b["scope"]]
     if result["allowed"] and az.git_rm:
         result["git_rm_proof"] = {"cwds": az.git_rm_cwds, "removals": az.git_rm}
+    # A command whose only unsafe boundaries are removals that name every file they remove: the
+    # verdict stays FORBIDDEN_REMOVAL, and the files go to the policy, which alone knows whose they are.
+    if verdict == FORBIDDEN_REMOVAL and not az.overflow and not az.git_rm and None not in az.removals \
+            and all(b["verdict"] in _TERMINAL_SAFE or b["reason"] == "filesystem_removal" for b in az.boundaries) \
+            and sum(b["reason"] == "filesystem_removal" for b in az.boundaries) == len(az.removals):
+        targets = _known_removal_targets(raw, [t for ts in az.removals for t in ts])
+        if targets is not None:
+            result["removal_targets"] = {"targets": targets, "cwds": None if az.cwd_unknown else az.git_rm_cwds}
     return result
+
+
+def _known_removal_targets(raw, targets):
+    """Each operand offset replaced by the file it names by the parser's one assignment tracking
+    (shell_parse.write_targets: a literal set earlier in the command, surely run, unchanged since);
+    None when any is not known (environment, substitution, branch, loop, `read`, `+=`, pattern)."""
+    if all(isinstance(t, str) for t in targets):
+        return targets
+    from shell_parse import write_targets
+    try:
+        known = {t.word.span[0]: t.path for t in write_targets(raw) if t.mechanism in _OPERAND_REMOVERS
+                 and t.decidable and t.path and t.word is not None}
+    except Exception:  # noqa: BLE001 - a reading that fails knows nothing
+        return None
+    out = [t if isinstance(t, str) else known.get(t) for t in targets]
+    return None if any(t is None or t.startswith("~") or any(c in t for c in "*?[") for t in out) else out
 
 
 def prove_git_rm(result, cwd, home):
@@ -3842,6 +4026,8 @@ def prove_git_rm(result, cwd, home):
                 where = ls = None
             if where and where.returncode and "not a git repository" in where.stderr:
                 continue  # no repository here: git rm removes nothing
+            if where and not where.returncode and locations.is_fs_root(where.stdout.split("\n")[0]):
+                continue  # the filesystem root is no repository's top: as in no repository
             if where is None or where.returncode or ls.returncode:
                 why = "git_rm_location_unresolved"
             elif home & {os.path.realpath(os.path.join(d, x)) for x in where.stdout.splitlines()}:

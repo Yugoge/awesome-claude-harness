@@ -36,6 +36,8 @@ from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks" / "lib"))
+import locations  # noqa: E402  (the filesystem root is no repository top)
 
 
 class FactError(RuntimeError):
@@ -103,7 +105,7 @@ def _git(root: Path, *args: str) -> bytes:
 
 def _tracked(root: Path, *prefixes: str) -> list[str]:
     """Paths in the git index under `prefixes` (all when none), sorted."""
-    top = _git(root, "rev-parse", "--show-toplevel").decode("utf-8").strip()
+    top = locations.repo_top(root) or ""  # never the filesystem root
     if os.path.realpath(top) != os.path.realpath(root):
         raise FactError(f"{root} is not the top of a git work tree (the top is {top}): "
                         "the files that exist are the ones in the index")
@@ -157,6 +159,15 @@ def _load(path: Path, hint: str, package: bool = False):
 # ---------------------------------------------------------------------------------------------
 # AST helpers over the test sources
 # ---------------------------------------------------------------------------------------------
+
+def _folder_documents() -> tuple:
+    """The folder documents' names (hooks/lib/command_span.FOLDER_DOCUMENTS of this file's harness)."""
+    spec = importlib.util.spec_from_file_location(
+        "_readme_facts_command_span", Path(__file__).resolve().parent.parent / "hooks" / "lib" / "command_span.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.FOLDER_DOCUMENTS
+
 
 def _module_value(tree: ast.Module, name: str):
     """The value expression of the module-level assignment to `name`, or None."""
@@ -396,12 +407,9 @@ def _classified_sites(sites, root: Path, relay: str) -> tuple[list, list]:
 
     sites.open = tracked_open  # shadows the builtin inside that module only
     enum = sites.Enumerator(str(root))
-    dropped = set()
-    for parent, kids in enum.children.items():
-        event = next((ev for ev, _ in enum.regs.get(parent, [])), "Stop")
-        dropped |= {kid for kid in kids
-                    if not sites.relayed(str(root), parent, kid, event, os.path.join(relay, os.path.basename(kid)))}
-    return [(s, sites.classify(enum, s)) for s in enum.sites() if s.file not in dropped], sorted(enum.regs)
+    found, _ = sites.relayed_sites(enum, str(root), relay,
+                                   lambda parent: next((ev for ev, _ in enum.regs.get(parent, [])), "Stop"))
+    return [(s, sites.classify(enum, s)) for s in found], sorted(enum.regs)
 
 
 def blocking_sites(root=None) -> dict:
@@ -611,9 +619,11 @@ def _front(root: Path, rel: str) -> dict:
 
 
 def _roster(root: Path, directory: str) -> list[tuple[str, dict]]:
-    """(path, frontmatter) of each tracked <directory>/*.md file, README and INDEX left out, by path."""
+    """(path, frontmatter) of each tracked <directory>/*.md file, the folder documents (README, INDEX)
+    left out whatever their case, by path."""
+    docs = {name.upper() for name in _folder_documents()}
     names = sorted(p for p in _tracked(root, directory)
-                   if p.count("/") == 1 and p.endswith(".md") and Path(p).stem.upper() not in ("README", "INDEX"))
+                   if p.count("/") == 1 and p.endswith(".md") and Path(p).name.upper() not in docs)
     if not names:
         raise FactError(f"no {directory[:-1]} file ({directory}/*.md) in the git index of {root}")
     return [(rel, _front(root, rel)) for rel in names]
@@ -679,7 +689,8 @@ FAULTS_TEST = "tests/replay/test_faults.py"
 _CLAIM_COMPLIANT = "a compliant replay of each pipeline meets no gate block, no hook error, and reaches its terminal"
 _CLAIM_NO_CLASS = "no blocking site may lack a clearing class (a site of class \"-\" fails the suite)"
 _CLAIM_WEAKER = "a replay that reaches a blocking site with no class fails the suite"
-_CLAIM_ARTIFACT = "the artifact check asserts no violation and keeps no exception list"
+_CLAIM_ARTIFACT = ("the artifact check asserts no violation and keeps no exception list but its register of accepted "
+                   "deciding reads (rule 6 alone, each entry with a reason, a stale one failing the check)")
 _CLAIM_FAULTS = ("an injected fault is returned by a gate to the actor that produced the faulted artifact, which "
                  "repairs it with no human action, and the pipeline reaches its terminal")
 _CLAIM_UNIT = ("the unit suite (pytest over hooks/tests and tests) runs in the baseline job on every Python version "
@@ -888,7 +899,9 @@ _SHELL_SYNTAX = re.compile(r"[;&|<>`$\\()#'\"\n]")
 _PYTEST = (["python3", "-m", "pytest"], ["python", "-m", "pytest"], ["pytest"])
 _FLAG = re.compile(r"-q+|-v+|-s|-x|-r[a-zA-Z]+")
 _PATH = r"\w[\w.-]*(?:/[\w.-]+)*"
-_VALUE = {"-p": r"no:[\w-]+", "-n": r"\w+", "--dist": r"\w+", "--durations": r"\d+", "--tb": r"\w+", "--ignore": _PATH}
+_VALUE = {"-p": r"no:[\w-]+", "-n": r"\w+", "--dist": r"\w+", "--durations": r"\d+", "--tb": r"\w+", "--ignore": _PATH,
+          "-o": r"faulthandler_timeout=\d+",  # the one ini value that only makes a stuck test speak
+          "--max-worker-restart": r"0"}  # a dead worker fails the run (no narrowing)
 
 
 def _expression(value) -> str:

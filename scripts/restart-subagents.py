@@ -18,7 +18,7 @@ from lib import subagent_restart as restart  # noqa: E402
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Recover quota-interrupted Claude Code subagents")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "status", "finalize"):
+    for name in restart.HELPER_SUBCOMMANDS:
         command = sub.add_parser(name)
         command.add_argument("--session-id")
         if name == "status":
@@ -27,9 +27,9 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument(
                 "--cross-account",
                 action="store_true",
-                help="Also sweep other accounts' recent same-project sessions "
-                "(account-rotation recovery). Default discovery is strictly the "
-                "invoking session's own transcript.",
+                help="Also sweep other accounts' same-project sessions (account-rotation "
+                "recovery); those of older sessions are listed apart. Default discovery "
+                "is strictly the invoking session's own transcript.",
             )
     return parser
 
@@ -65,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
         if result.get("restart_grant"):
             # Information only: the grant is decided at SendMessage time.
             print(result["restart_grant"], file=sys.stderr)
+        for line in result.get("warnings") or ():
+            print(line, file=sys.stderr)
         return 0
     except restart.RestartError as exc:
         print(json.dumps({"error": str(exc), "command": args.command}, ensure_ascii=False), file=sys.stderr)

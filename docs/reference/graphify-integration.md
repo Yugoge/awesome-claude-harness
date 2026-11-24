@@ -160,7 +160,7 @@ source ~/.claude/venv/bin/activate && python3 ~/.claude/scripts/graphify-maintai
 |----------------|----------------------------------------------------------|
 | /dev           | pre-BA hydrator (Step 2) + graphify enrichment subagent (Step 9, after the BA-QA loop, before the dev dispatch) |
 | /dev-command   | Same as /dev (mirrors commands/dev.md)                   |
-| /dev-overnight | Full dual-touchpoint (mirrors /dev): per-pipeline pre-BA hydrator (/dev's Step 2 role; runs before each overnight BA dispatch) + graphify enrichment subagent via the shared Step 11g Dev-dispatch precondition (/dev's Step 9 role; runs before EVERY Dev dispatch on every path). Pipeline-scoped task-ids keep fanout artifacts disjoint; shares the global cache via graphify-maintain.py |
+| /dev-overnight | Full dual-touchpoint (mirrors /dev): per-pipeline pre-BA hydrator (/dev's Step 2 role; runs before each overnight BA dispatch) + graphify enrichment subagent via Step 11's shared Dev-dispatch precondition (/dev's Step 9 role; runs before EVERY Dev dispatch on every path). Pipeline-scoped task-ids keep fanout artifacts disjoint; shares the global cache via graphify-maintain.py |
 | /redev         | Inherits /dev behavior                                   |
 | /pull          | Post-pull incremental update (non-blocking advisory)     |
 | /refactor      | Optional (not implemented in v1)                         |

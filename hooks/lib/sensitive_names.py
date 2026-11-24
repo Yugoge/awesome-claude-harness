@@ -34,7 +34,8 @@ role the name plays:
 
 A word computed at run time (`$X`, `$(...)`, backticks, globs, braces) or interpreter code is judged by
 substring on its raw text, with no exemption: `> .env$X`, `> $(echo .env)` and `python3 -c 'open(".env")'` stay
-sensitive.
+sensitive. The caller also judges the names such a word's wildcards, braces and known variables can spell
+(`.en?`, `{.e,x}nv`), with SECRET_WORDS, KEY_STEMS and EXACT_NAMES (bash_safety_rules._wildcard_spells_secret).
 
 `RAW_FALLBACK_WRITE` and `RAW_FALLBACK_READ` are the substring patterns a caller that cannot parse a command
 judges its raw text by, so a command no parser reads is refused more, never less.
@@ -43,10 +44,14 @@ Callers: hooks/lib/bash_safety_rules.py (sensitive_redirect).
 """
 import re
 
-SECRET_SUBSTRING = re.compile(r"\.env|credentials|secret|password")
-PRIVATE_KEY = re.compile(r"^id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?(?!.*\.pub$)")
+SECRET_WORDS = (".env", "credentials", "secret", "password")
+SECRET_SUBSTRING = re.compile("|".join(map(re.escape, SECRET_WORDS)))
+_KEY_NAME = r"id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?"  # a private key's file name (the key types ssh-keygen writes)
+KEY_STEMS = tuple("id_" + t for t in _KEY_NAME[6:_KEY_NAME.index(")")].split("|"))  # id_rsa ... read off it
+EXACT_NAMES = (".env",) + KEY_STEMS + tuple(k + "_sk" for k in KEY_STEMS)  # what EXACT_ANY_CASE matches
+PRIVATE_KEY = re.compile(r"^" + _KEY_NAME + r"(?!.*\.pub$)")
 # An exact env-file or key name in any case (`.ENV`, `ID_RSA`): sensitive although the substring check is not.
-EXACT_ANY_CASE = re.compile(r"^(?:\.env|id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?)$", re.IGNORECASE)
+EXACT_ANY_CASE = re.compile(r"^(?:\.env|" + _KEY_NAME + r")$", re.IGNORECASE)
 # A network URL: a scheme other than `file`, then `//` and a host (checked by _url_host).
 URL = re.compile(r"^(?!file:)[a-z][a-z0-9+.-]*://[^/\s]\S*$", re.IGNORECASE)
 # A plain static path: nothing a shell would still expand or split.
@@ -58,13 +63,15 @@ TEST_FILE = re.compile(r"^(?:test_.+\.%s|.+_test\.%s|.+\.(?:test|spec)\.%s)$" % 
                        re.IGNORECASE)
 REPORT_OR_LOG = re.compile(r"(?:^|[-_.])report(?:$|[-_.])|\.log$", re.IGNORECASE)
 # A name whose stem is the secret word itself: never a report or log.
-SECRET_STEM = re.compile(r"^(?:\.env|(?:credentials|secrets?|passwords?)\.)", re.IGNORECASE)
 SECRET_TOKENS = frozenset({"env", "credentials", "secret", "secrets", "password", "passwords"})
+SECRET_STEM = re.compile(r"^(?:\.env|(?:%s)\.)" % "|".join(sorted(SECRET_TOKENS - {"env"})), re.IGNORECASE)
 TEMPLATE = re.compile(r"\.(?:example|sample|template)$", re.IGNORECASE)
 DOC_FILE = re.compile(r"\.(?:md|markdown|rst|txt|adoc|asciidoc|org|html?|pdf)$", re.IGNORECASE)
 
-RAW_FALLBACK_WRITE = re.compile(r"(>|>>)\s*\S*(\.env|credential|secret|password|id_rsa|id_dsa|id_ecdsa|id_ed25519)")
-RAW_FALLBACK_READ = re.compile(r"(\.env|credential|secret|password|id_rsa|id_dsa|id_ecdsa|id_ed25519)\S*\s*(>|>>)")
+REDIRECT_OPS = r"(?:>|>>)"  # a shell output redirect in raw text (also hooks/pretool-bash-views-guard.py)
+_RAW_NAME = r"(\.env|credential|secret|password|id_rsa|id_dsa|id_ecdsa|id_ed25519)"
+RAW_FALLBACK_WRITE = re.compile(REDIRECT_OPS + r"\s*\S*" + _RAW_NAME)
+RAW_FALLBACK_READ = re.compile(_RAW_NAME + r"\S*\s*" + REDIRECT_OPS)
 
 
 def base_name(text):
@@ -111,8 +118,9 @@ def is_code_or_doc_operand(text):
     """True when a plain static path is a source-code file or a Markdown/reStructuredText document
     (`src/password_reset.py`, `docs/password-policy.md`) whose directories carry no secret word and whose base name
     is no key or exact env-file name and does not begin with the secret word as its stem (`credentials.py`,
-    `secrets.md`, `password.md` are not). Used only for the operands of cp, mv, install, rsync, ln and sed -i, which
-    the base never judged; a redirection, tee, dd, a network client's output or truncate keeps the full check."""
+    `secrets.md`, `password.md` are not). Used for every write target (`cat > src/check_secrets.py`) and for the
+    source operands of cp, mv, install, rsync and ln; a name a command whose output goes to a file reads keeps the
+    full check."""
     if not text or not PLAIN_PATH.match(text):
         return False
     name = base_name(text)

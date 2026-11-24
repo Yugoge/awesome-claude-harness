@@ -50,16 +50,36 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # has to be normalized away, which would weaken the byte-diff linkage.
 RESERVED_TASK_ID = "readme-hero-demo-reserved"
 sys.path.insert(0, str(REPO_ROOT / "hooks" / "lib"))
-# /allow's own writer: the demo's grant is the grant /allow would write.
-from allowlist import sentinel_grant_path, write_sentinel_grant  # noqa: E402
 
-GRANT_PATH = sentinel_grant_path(RESERVED_TASK_ID)
-SENTINEL_GRANT_DIR = GRANT_PATH.parent
+# Set by use_fixture_state() once the run's fixture exists: the grant lives in the
+# fixture's own state dir, the one examples/guard-demo/run-hero-demo.sh gives its hooks.
+GRANT_PATH: Path
+SENTINEL_GRANT_DIR: Path
+
+
+def use_fixture_state(fixture: Path) -> None:
+    """Point this process, and so /allow's own grant writer, at <fixture>/state.
+
+    The hooks keep state between calls (the call streak, the grant); a state dir shared
+    with an earlier run, or with a live session, would change what they refuse. The
+    fixture is new for every run, so every run starts from empty state, and no grant of
+    any session can be in it. allowlist resolves its grant dir when imported, so the
+    import comes after the variable is set."""
+    global GRANT_PATH, SENTINEL_GRANT_DIR, write_sentinel_grant
+    state = fixture / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    os.environ["CLAUDE_STATE_DIR"] = str(state)
+    # /allow's own writer: the demo's grant is the grant /allow would write.
+    from allowlist import sentinel_grant_path, write_sentinel_grant  # noqa: E402
+    GRANT_PATH = sentinel_grant_path(RESERVED_TASK_ID)
+    SENTINEL_GRANT_DIR = GRANT_PATH.parent
 
 DEFAULT_CAPTURE = REPO_ROOT / ".github/assets/hero-capture.txt"
 DEFAULT_EVIDENCE = REPO_ROOT / ".github/assets/hero-capture-evidence.json"
 
-CONSUMPTION_MARKER = f"[ALLOW-SENTINEL] grant CONSUMED for task_id={RESERVED_TASK_ID}"
+# The pre-tool launcher's release notice (hooks/lib/hook_launch.py release_refused): the
+# grant is spent by the release itself, so this line is the consumption marker.
+CONSUMPTION_MARKER = "[allow] RELEASED by the owner's /allow grant ("
 
 WATCH_INTERVAL_S = 0.05
 
@@ -92,23 +112,6 @@ def reserved_grant_files() -> list[Path]:
     """The reserved token's grant path, the one name write_sentinel_grant() gives it.
     No directory glob, ever."""
     return [GRANT_PATH] if GRANT_PATH.exists() else []
-
-
-def preflight() -> None:
-    """Abort BEFORE anything is installed if the reserved token could collide."""
-    for var in ("CLAUDE_TASK_ID", "CLAUDE_SESSION_ID"):
-        if os.environ.get(var, "") == RESERVED_TASK_ID:
-            sys.exit(
-                f"capture-hero-run: PRECONDITION FAILED -- ${var} equals the reserved "
-                f"token {RESERVED_TASK_ID!r}. Refusing to run rather than risk touching "
-                f"a live session's grant."
-            )
-    existing = reserved_grant_files()
-    if existing:
-        sys.exit(
-            "capture-hero-run: PRECONDITION FAILED -- a grant matching the reserved "
-            f"task id already exists: {[str(p) for p in existing]}. Refusing to run."
-        )
 
 
 # Ambient git routing/config variables can redirect a push away from the fixture even
@@ -177,7 +180,7 @@ def install_grant() -> None:
     we fail rather than clobber it."""
     write_sentinel_grant(
         RESERVED_TASK_ID, RESERVED_TASK_ID,
-        [{"op": "git", "target": "push", "args_contain": ["push hero-remote main"]}],
+        {"kind": "command", "command": "git push hero-remote main"},
         exclusive=True,
     )
 
@@ -288,7 +291,7 @@ def correlate_consumption(samples: list[dict], t_marker: float,
     pre = [s for s in samples if s["t"] < t_marker]
     post = [s for s in samples if s["t"] > t_marker]
     # The marker is stamped when its line is read from the demo's pipe, after
-    # the consumer has unlinked the grant and printed the line, so a sample
+    # the launcher has spent the grant and printed the line, so a sample
     # taken between that unlink and that read is absent and still precedes the
     # marker. The grant's last observed presence is what must precede the
     # marker, with the installed content; the samples after it are absent (up
@@ -311,7 +314,8 @@ def main() -> int:
                     help="run and assert, but write the capture to a scratch path")
     args = ap.parse_args()
 
-    preflight()
+    fixture = Path(tempfile.mkdtemp(prefix="claude-hero-fixture-"))
+    use_fixture_state(fixture)
     before = inventory_foreign_grants()
 
     capture_path = Path(args.capture)
@@ -324,14 +328,13 @@ def main() -> int:
         capture_path = scratch / "hero-capture.txt"
         evidence_path = scratch / "hero-capture-evidence.json"
 
-    fixture = Path(tempfile.mkdtemp(prefix="claude-hero-fixture-"))
     failures: list[str] = []
     watcher = GrantWatcher(0.0)
 
     # Cleanup is installed BEFORE any grant is installed, and it removes ONLY the two
     # reserved-token paths -- no directory glob, no pkill, no reap_expired_sentinel_grants,
     # no hooks/stop-cleanup-allowlist.sh. On the success path it removes ZERO files, which
-    # is itself independent proof that the real consumer performed the removal.
+    # is itself independent proof that the real launcher spent the grant.
     swept: list[str] = []
     try:
         build_fixture(fixture)
@@ -369,12 +372,15 @@ def main() -> int:
 
         # Duration measured from the raw capture (never from the SVG's dur attribute).
         duration = parse_ts(lines[-1]) - parse_ts(lines[0]) if len(lines) >= 2 else 0.0
-        if not (10.0 <= duration <= 15.0):
-            failures.append(f"raw duration {duration:.3f}s outside [10,15]")
+        # Lower bound only: the demo's own pauses between first and last line take 10.4 s, so a
+        # shorter run did not run them; a busy host only lengthens a real run. The upper bound is
+        # the committed recording's, checked on that file (verify-hero-provenance.py).
+        if duration < 10.0:
+            failures.append(f"raw duration {duration:.3f}s under 10 s")
 
         # No grant belonging to the demo outlives the run.
         if GRANT_PATH.exists():
-            failures.append("demo grant outlived the run (real consumer did not remove it)")
+            failures.append("demo grant outlived the run (the launcher did not spend it)")
 
         # Foreign grants byte-identical and mtime-unchanged.
         after = inventory_foreign_grants()
@@ -441,7 +447,7 @@ def main() -> int:
         failures.append(f"cleanup removed {swept} -- on a clean run it must remove none")
 
     # Written AFTER cleanup so cleanup_removed_files reflects what cleanup actually did.
-    # On a clean run it is [] -- independent proof the real consumer did the removal.
+    # On a clean run it is [] -- independent proof the real launcher spent the grant.
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
     evidence_path.write_text(
         json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8"

@@ -10,7 +10,6 @@ conflicts=$(git grep -l '<<<<<<< \|=======$\|>>>>>>> ' -- ':!venv/' ':!node_modu
 items="[]"
 if [ -n "$conflicts" ]; then
     items=$(echo "$conflicts" | while IFS= read -r file; do
-        # Count markers in file
         count=$(grep -c '<<<<<<< \|=======$\|>>>>>>> ' "$file" 2>/dev/null || echo "0")
         echo "{\"file\": \"$file\", \"marker_count\": $count, \"severity\": \"critical\"}"
     done | jq -s '.')

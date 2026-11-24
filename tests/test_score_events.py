@@ -4,8 +4,8 @@ escaped and close_catch, and the observer.
 Every case builds a fake session in a temporary folder: the main transcript (an opener, then each dispatch as the CLI
 records it: the Agent tool_use with its obligation, and its tool_result with the timestamp and the toolUseResult), the
 subagent transcripts and their meta.json that sit beside it (the CLI's store layout: <root>/<project slug>/<session>.jsonl),
-the project with its QA reports and close report, and the config directory that holds the log. Nothing reads the real
-home. A fake clock stamps every record, dispatch and report, so freshness is exact.
+the project with its QA reports and close report, and the log where score_log.log_path() puts it for the test's own
+HOME. Nothing reads the real home. A fake clock stamps every record, dispatch and report, so freshness is exact.
 
 The close-time shapes follow what the pipeline really produces: the close-QA obligation is the one commands/close.md
 Step 2 prints (read from that file); a round's section is the one tests/replay/drivers/close.py appends to
@@ -200,9 +200,13 @@ class Cycle:
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(self.config))
         score_events.sweep(str(self.transcript), str(self.project))
 
+    @property
+    def log(self) -> Path:
+        """The score log, where the writer's own definition puts it for this test's HOME (CLAUDE_CONFIG_DIR plays no part)."""
+        return score_log.log_path()
+
     def rows(self) -> list[dict]:
-        log = self.config / "logs" / "lifecycle.jsonl"
-        return [row for _, row in score_log.read_lines(str(log))] if log.exists() else []
+        return [row for _, row in score_log.read_lines(str(self.log))] if self.log.exists() else []
 
     def facts(self) -> list[tuple]:
         return sorted((r["event"], r["role"], r["points"]) for r in self.rows())
@@ -681,10 +685,10 @@ def test_running_the_close_rules_again_adds_no_row(cycle, monkeypatch):
     cycle.dispatch("dev", wrote=[REPORT])
     cycle.close_qa()
     cycle.observe(monkeypatch)
-    before = (cycle.config / "logs" / "lifecycle.jsonl").read_bytes()
+    before = (cycle.log).read_bytes()
     cycle.observe(monkeypatch)
     cycle.sweep(monkeypatch)
-    assert (cycle.config / "logs" / "lifecycle.jsonl").read_bytes() == before and len(before.splitlines()) == 5
+    assert (cycle.log).read_bytes() == before and len(before.splitlines()) == 5
 
 
 def test_a_close_round_that_came_back_as_a_launch_notice_is_scored_by_a_later_sweep(cycle, monkeypatch):
@@ -1038,7 +1042,7 @@ def test_a_sweep_again_or_a_second_panel_dispatch_adds_no_row(cycle, monkeypatch
     panel_round(cycle, {"A": "verified", "B": "verified", "C": "refuted"})
     owner_answers(cycle, {SCOPE: OPTION["A"]})
     cycle.observe(monkeypatch)
-    log = cycle.config / "logs" / "lifecycle.jsonl"
+    log = cycle.log
     before = log.read_bytes()
     cycle.observe(monkeypatch)
     cycle.sweep(monkeypatch)
@@ -1053,7 +1057,7 @@ def test_the_rows_of_a_sweep_are_the_same_on_an_empty_log(cycle, monkeypatch):
     owner_answers(cycle, {SCOPE: OPTION["B"]})
     cycle.observe(monkeypatch)
     first = cycle.rows()
-    (cycle.config / "logs" / "lifecycle.jsonl").unlink()
+    (cycle.log).unlink()
     cycle.observe(monkeypatch)
     assert cycle.rows() == first and len(first) == 2
 
@@ -1140,7 +1144,7 @@ def test_a_repeat_sweep_reads_the_log_once_and_writes_nothing(cycle, monkeypatch
     closed(cycle)
     cycle.close_qa([(REPORT, "a"), (TICKET, "b"), ("src/app.py", "c")])
     cycle.observe(monkeypatch)
-    log = cycle.config / "logs" / "lifecycle.jsonl"
+    log = cycle.log
     before, reads, real = log.read_bytes(), [], Path.read_bytes
     monkeypatch.setattr(Path, "read_bytes", lambda self: (reads.append(1) if self == log else None) or real(self))
     cycle.observe(monkeypatch)
@@ -1256,10 +1260,10 @@ def test_project_relative_paths_resolve_from_the_project_dir_when_it_is_set(cycl
 def test_running_again_writes_no_new_row(cycle, monkeypatch):
     fail_fix_pass(cycle, monkeypatch, wrote=["src/app.py"])
     cycle.observe(monkeypatch)
-    before = (cycle.config / "logs" / "lifecycle.jsonl").read_bytes()
+    before = (cycle.log).read_bytes()
     cycle.observe(monkeypatch)
     cycle.observe(monkeypatch)
-    assert (cycle.config / "logs" / "lifecycle.jsonl").read_bytes() == before and len(before.splitlines()) == 2
+    assert (cycle.log).read_bytes() == before and len(before.splitlines()) == 2
 
 
 def test_a_launch_notice_is_scored_by_a_later_run_once_its_report_exists(cycle, monkeypatch):
@@ -1517,7 +1521,7 @@ def test_a_damaged_line_in_the_middle_of_the_log_stays_and_the_new_rows_follow_i
     # was: a damaged middle line stopped the writer (the old append refused such a log). score_log.append_all passes over it.
     cycle.qa()
     cycle.report("pass")
-    log = cycle.config / "logs" / "lifecycle.jsonl"
+    log = cycle.log
     log.parent.mkdir(parents=True)
     log.write_text('{"kind": "event", "key": "a"}\nnot json\n{"kind": "event", "key": "b"}\n')
     cycle.observe(monkeypatch)
@@ -1529,7 +1533,7 @@ def test_a_damaged_line_in_the_middle_of_the_log_stays_and_the_new_rows_follow_i
 def test_a_crash_truncated_tail_does_not_stop_recording(cycle, monkeypatch):
     cycle.qa()
     cycle.report("pass")
-    log = cycle.config / "logs" / "lifecycle.jsonl"
+    log = cycle.log
     log.parent.mkdir(parents=True)
     log.write_text('{"kind": "event", "key": "a"}\n{"kind": "event", "ke')  # the process died mid-row
     cycle.observe(monkeypatch)

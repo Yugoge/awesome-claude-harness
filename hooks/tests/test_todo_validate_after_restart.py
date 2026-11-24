@@ -1,12 +1,12 @@
 """Gate 4 after a /restart recovery (P1c R16; faults F5, F5f, F6).
 
 A dev subagent cut before its Agent call came back (no tool_result, or the CLI's error result after a
-usage limit) is resumed by the owner's /restart through SendMessage and finalized (commands/restart.md).
-Its original Agent call is then the dev step's dispatch: pretool-todo-validate.py lets the step
-complete, reading the span's SendMessage to that agent, the recovery journal
-(subagent_restart.completed_resumes) and the span's ok finalize call after it, never the
-capability itself, and asks for no replacement call (Lesson 16). Until the recovery is finalized
-the step stays refused, the message naming the step, the role and the cut call's declared artifact.
+usage limit) is resumed by the owner's /restart through SendMessage; the hook that records its
+response finalizes the recovery (commands/restart.md step 4). Its original Agent call is then the
+dev step's dispatch: pretool-todo-validate.py lets the step complete, reading the span's SendMessage
+to that agent and the recovery journal (subagent_restart.completed_resumes), never the capability
+itself nor a finalize call, and asks for no replacement call (Lesson 16). Until every response is
+in the step stays refused, the message naming the step, the role and the cut call's declared artifact.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ OBLIGATION = ('<obligation v="1">\n' + json.dumps({
 
 def _index(label):
     """The position of the canonical /dev step labelled ``label`` (``Step 10``): the tests name steps, not
-    places in the list, which the requirement round's Steps 4a-4c moved (P13-1)."""
+    places in the list, which the requirement round moved (P13-1)."""
     return next(i for i, item in enumerate(_frontier(0)) if item["content"].startswith(f"{label}:"))
 
 
@@ -59,9 +59,9 @@ class _Cycle:
         self.add({"type": "user", "message": {"role": "user", "content": "/dev fix the bug"}})
         steps = _frontier(0)
         for n in range(_index("Step 10") + 1):
-            role = (steps[n - 1].get("subagent_call") or {}).get("subagent_type") if n else None
+            role = _required_role(steps[n - 1]) if n else None
             if role:
-                self.result(self.use("Agent", {"subagent_type": role, "prompt": "x", "description": role}))
+                self.result(self.use("Agent", {"subagent_type": role, "prompt": "Mode: analysis", "description": role}))
             self.result(self.use("TodoWrite", {"todos": _frontier(n)}))
 
     def add(self, record):
@@ -97,9 +97,9 @@ class _Cycle:
                              "(error type rate_limit, HTTP 429)", error=True)
         return aid
 
-    def restart(self, aids, finalize=True, send=True):
+    def restart(self, aids, finalize=True, send=True, respond=True):
         """The owner's /restart: the capability, prepare, a SendMessage per candidate, each agent's
-        response (SubagentStop), and finalize."""
+        response (SubagentStop, which finalizes once the last is in), and the old manual finalize."""
         self.add({"type": "user", "message": {"role": "user", "content": "/restart"}})
         restart.mint_grant(self.sid, str(self.path))
         view = restart.prepare_state(self.sid)
@@ -108,10 +108,14 @@ class _Cycle:
             if send:
                 self.result(self.use("SendMessage", {"to": c["agent_id"], "message": c["resume_message"]}))
             restart.mark_dispatched(self.sid, c["agent_id"])
-            restart.observe_subagent_stop({"session_id": self.sid, "agent_id": c["agent_id"],
-                                           "last_assistant_message": "done\n\nRECOVERY_STATUS: completed"})
+            if respond:
+                self.respond(c["agent_id"])
         if finalize:
             self.finalize()
+
+    def respond(self, aid):
+        restart.observe_subagent_stop({"session_id": self.sid, "agent_id": aid,
+                                       "last_assistant_message": "done\n\nRECOVERY_STATUS: completed"})
 
     def finalize(self):
         """restart.md step 5's finalize, as the main agent's Bash call records it."""
@@ -142,26 +146,25 @@ def test_a_resumed_and_finalized_dev_call_completes_the_dev_step(cycle, error_re
     assert done.returncode == 0, done.stderr
 
 
-def test_before_finalize_the_step_is_refused_naming_step_role_and_artifact(cycle):
+def test_before_the_response_the_step_is_refused_naming_step_role_and_artifact(cycle):
     aid = cycle.cut()
-    cycle.restart([aid], finalize=False)
+    cycle.restart([aid], finalize=False, respond=False)
     refused = cycle.complete_step_10()
     assert refused.returncode == 2
     assert '"Step 10: Delegate to dev subagent" (subagent role dev)' in refused.stderr
     assert REPORT in refused.stderr and "never replaced by a new call" in refused.stderr
-    cycle.finalize()
+    cycle.respond(aid)  # the hook finalizes it: no finalize call of the agent
     assert cycle.complete_step_10().returncode == 0
 
 
-def test_a_finalize_before_the_resume_does_not_finalize_it(cycle):
-    """Only an ok finalize after the agent's SendMessage finalizes its resume (an earlier
-    recovery's finalize, or a refused call, does not)."""
+def test_a_finalize_call_is_neither_needed_nor_enough(cycle):
+    """An ok finalize call in the span completes nothing while the response is missing; the
+    response alone, finalized by the hook, completes the step."""
     aid = cycle.cut()
     cycle.result(cycle.use("Bash", {"command": FINALIZE}))
-    cycle.restart([aid], finalize=False)
-    cycle.result(cycle.use("Bash", {"command": FINALIZE}), "Exit code 2", error=True)
+    cycle.restart([aid], finalize=False, respond=False)
     assert cycle.complete_step_10().returncode == 2
-    cycle.finalize()
+    cycle.respond(aid)
     assert cycle.complete_step_10().returncode == 0
 
 
@@ -210,3 +213,10 @@ def test_a_reordered_list_is_refused_before_the_step_rules(cycle):
     assert p.returncode == 2, p.stderr
     assert "keep the text and the order" in p.stderr
 
+
+def _required_role(step):
+    """The subagent type of the call a canonical step requires (a list states every call of the step, the
+    requirement round's included: scripts/todo/dev.py ROUND_CALLS; its optional entries are not required)."""
+    call = step.get("subagent_call")
+    return next((c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+                 if isinstance(c, dict) and not c.get("optional")), None)

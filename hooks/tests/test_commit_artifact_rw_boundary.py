@@ -94,6 +94,7 @@ STATE_DIR_LIB = os.path.join(HOOKS_DIR, "lib", "harness_state_dir.sh")
 GRANT_MINTER = os.path.join(REPO_ROOT, "scripts", "write-commit-grant.py")
 
 sys.path.insert(0, os.path.join(HOOKS_DIR, "lib"))
+sys.path.insert(0, HOOKS_DIR)  # the rules module imports `lib.*`; its own path setup reads argv, which is pytest's here
 
 from commit_pipeline import ATTEST_PREFIX  # noqa: E402
 import bash_safety_rules  # noqa: E402
@@ -563,7 +564,8 @@ def test_redirection_actually_moved_the_root(layer, state_root):
         f"{layer.name} ignores CLAUDE_STATE_DIR; rc={rc1}\n{err1}"
     )
 
-    default_path = layer.path(DEFAULT_STATE_ROOT)
+    # The default root lies under HOME, which each test moves (conftest): resolve it under this test's HOME.
+    default_path = layer.path(harness_state_dir(None))
     default_cmd = f"echo x > {default_path}"
     _, err2 = run_hook(default_cmd, state_root)
     assert layer.label not in refusal_labels(err2), (
@@ -1204,3 +1206,33 @@ def test_zz_ordinary_benign_command_is_permitted(cmd, state_root):
     rc, err = run_hook(cmd, state_root)
     assert rc == ALLOW, f"benign command refused: {cmd}\nrc={rc}\n{err}"
     assert refusal_labels(err) == set()
+
+
+# location-rules U9, U10: a grant, attestation or user-intent file is refused for what it is, wherever the command's
+# spelling puts it: a `cd` into the state directory, a link to it, or $TMPDIR when the state directory lies below it.
+def _run_at(command, state, cwd, tmpdir):
+    env = {k: v for k, v in os.environ.items() if k not in ("TMPDIR", "TMP", "TEMP", "TEMPDIR", "CLAUDE_TMPDIR")}
+    env.update(CLAUDE_STATE_DIR=state, TMPDIR=tmpdir)
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd})
+    return subprocess.run(["bash", HOOK], input=payload, env=env, text=True, capture_output=True).returncode
+
+
+def test_namespace_write_one_verdict_at_every_spelling(tmp_path):
+    tmpdir = tmp_path / "t"
+    (tmpdir / "st").mkdir(parents=True)
+    state = harness_state_dir(str(tmpdir / "st"))
+    os.makedirs(state, exist_ok=True)
+    link = tmp_path / "sl"
+    link.symlink_to(state)
+    rel = os.path.relpath(state, tmpdir)
+    work = tmp_path / "w"
+    work.mkdir()
+    passed = [command for name in (GRANT_PREFIX + "x.json", ATTEST_PREFIX + "x.json", "claude-commit-userintent-x.flag")
+              for command in (f"touch {state}/{name}", f"cd {state} && touch {name}", f"touch {link}/{name}",
+                              f'touch "$TMPDIR/{rel}/{name}"',
+                              f"echo x > {state}/../{os.path.basename(state)}/{name}")
+              if _run_at(command, state, str(work), str(tmpdir)) != BLOCK]
+    assert passed == [], passed
+    for command in (f"touch {work}/{GRANT_PREFIX}x.json", f"cd {state} && cat {GRANT_PREFIX}x.json",
+                    f'touch "$TMPDIR/{GRANT_PREFIX}x.json"'):
+        assert _run_at(command, state, str(work), str(tmpdir)) == ALLOW, command

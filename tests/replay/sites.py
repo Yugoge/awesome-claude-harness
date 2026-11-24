@@ -26,6 +26,8 @@ site. Consult, observe, witness and advise rules refuse nothing through the gate
 
 unaccounted() cross-checks the walk against a plain token scan of each registered hook's own file
 (and of each refusing rule file).
+A site is named by its key (name_sites: file, function, kind, longest message piece), not by its line, so
+the catalogue and the tables printed from it keep their names across an edit that only moves lines.
 Each Site keeps its file, line, function, the source of the conditions guarding it (enclosing tests,
 early returns), the string constants of its message (with those of a module-level name bound once to a
 string, or to a dict, tuple or list of strings, that the message reads: PyModule.named_text), and the
@@ -71,9 +73,11 @@ class Site:
     dynamic: bool = False  # the message interpolates a value (it can name the call it refuses)
     role: str = ""
     rules: list = field(default_factory=list)  # the gate rule files it is reached through (none: [])
+    key: str = ""        # the site's name across edits (Enumerator.sites, name_sites)
 
     @property
     def id(self) -> str:
+        """Where the site is now (file:line): it moves with every edit above it; `key` does not."""
         return f"{self.file}:{self.line}"
 
     def all_text(self) -> str:
@@ -160,7 +164,8 @@ def _flow_text(mod, func, call) -> list[str]:
             continue
         seen.add(name)
         for a in assigns:
-            if not any(isinstance(t, ast.Name) and t.id == name for t in getattr(a, "targets", None) or [a.target]):
+            if not any(isinstance(t, ast.Name) and t.id == name for t0 in getattr(a, "targets", None) or [a.target]
+                       for t in (t0.elts if isinstance(t0, ast.Tuple) else [t0])):  # `head, tail = _texts(...)` too
                 continue
             out += mod.text_of(a.value)
             for n in ast.walk(a.value):
@@ -281,6 +286,8 @@ class PyModule:
                 for a in node.names:
                     if node.level:
                         pkg = os.path.dirname(self.rel)
+                        for _ in range(node.level - 1):  # `from ..x import y`: one package up per extra dot
+                            pkg = os.path.dirname(pkg)
                         modname = node.module.split(".") if node.module else []
                         sub = os.path.join(pkg, *modname, a.name) + ".py"
                         mod = os.path.join(pkg, *modname) + ".py"
@@ -377,11 +384,19 @@ class PyModule:
                         isinstance(t, ast.Name) and t.id == node.id
                         for t in (st.targets if isinstance(st, ast.Assign) else [st.target])):
                     return self._tools(st.value)
+            mod, attr = self.imports.get(node.id, (None, None))
+            if mod and attr:  # a constant one library holds (lib/subagent.DISPATCH_TOOLS)
+                return PyModule(self.tree, mod)._tools(ast.Name(id=attr))
             return None
         if isinstance(node, ast.Call) and _call_name(node.func)[1] in ("frozenset", "set") and node.args:
             return self._tools(node.args[0])
         if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
-            return frozenset(e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+            out = frozenset(e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str))
+            for e in node.elts:
+                if isinstance(e, ast.Starred):
+                    more = self._tools(e.value)
+                    out = out | more if more is not None else out
+            return out
         return None
 
     def imported_files(self) -> list[str]:
@@ -517,6 +532,13 @@ class PyModule:
                 out = self.text_of(prev) + out
         for f in self._called_locals(stmts):
             out += self.text_of(f)
+        # A message a local name carries to the write (`found = reasons(data)` before the block, then
+        # `write("\n".join(found))`): the prose of the values it is assigned from, as a helper's are
+        # (_flow_text); a bare key it is read through (`data.get("session_id")`) names no message.
+        func = self.enclosing_func(st)
+        for n in (n for x in stmts for n in ast.walk(x)) if func is not None else ():
+            if isinstance(n, ast.Call):
+                out += [t for t in _flow_text(self, func, n) if t not in out and " " in t.strip()]
         return [s for s in out if len(s.strip()) >= 4]
 
     def _called_locals(self, stmts) -> list:
@@ -591,18 +613,35 @@ def _guard(mod: "PyModule", node, as_main: bool, argv: list) -> bool:
     return True
 
 
-def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
+def _imported_func(mod: PyModule, func) -> tuple[str, str] | None:
+    """(file, function) of another module a called name stands for (`refuse` from-imported, `lib_mod.refuse`)."""
+    if isinstance(func, ast.Name):
+        rel, attr = mod.imports.get(func.id, (None, None))
+        return (rel, attr) if rel and attr and rel != mod.rel else None
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        rel, attr = mod.imports.get(func.value.id, (None, None))
+        return (rel, func.attr) if rel and attr is None and rel != mod.rel else None
+    return None
+
+
+def _py_primitives(mod: PyModule, argv: list, extra: dict | None = None, cross: dict | None = None) -> list[_Prim]:
     """Every exit-2 / return-2 / decision node of one module (return-2 only in exit-reaching
-    functions), each with whether it is reachable as the hook's process and as an import."""
+    functions), each with whether it is reachable as the hook's process and as an import. `extra` names
+    this module's functions whose return value another module's exit reaches; `cross` collects, keyed
+    (file, function), those of other modules this one's exits reach."""
     prims: list[_Prim] = []
-    rc_funcs: dict[str, list] = {}
+    rc_funcs: dict[str, list] = {k: list(v) for k, v in (extra or {}).items()}
 
     def flags(node):
         return _guard(mod, node, True, argv), _guard(mod, node, False, argv)
 
-    def seed(name, fl):
+    def seed(name, fl, func=None):
         cur = rc_funcs.get(name, [False, False])
         rc_funcs[name] = [cur[0] or fl[0], cur[1] or fl[1]]
+        target = _imported_func(mod, func) if func is not None and cross is not None else None
+        if target:  # the other module runs it as an import: reached when this caller is, either way
+            cur = cross.get(target, [False, False])
+            cross[target] = [cur[0], cur[1] or fl[0] or fl[1]]
 
     def exit_arg(call):
         if isinstance(call, ast.Call):
@@ -621,7 +660,7 @@ def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
                 if mod.value_is(arg, 2, None):
                     prims.append(_Prim(node, "exit2", *fl))
                 elif isinstance(arg, ast.Call):
-                    seed(_call_name(arg.func)[1], fl)
+                    seed(_call_name(arg.func)[1], fl, arg.func)
                 elif isinstance(arg, ast.Name):
                     func = mod.enclosing_func(node)
                     for n in ast.walk(func or mod.ast):
@@ -630,7 +669,7 @@ def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
                             if mod.value_is(n.value, 2, func):
                                 prims.append(_Prim(n, "exit2", *fl))
                             elif isinstance(n.value, ast.Call):
-                                seed(_call_name(n.value.func)[1], fl)
+                                seed(_call_name(n.value.func)[1], fl, n.value.func)
                             elif isinstance(n.value, ast.IfExp):
                                 for b in (n.value.body, n.value.orelse):
                                     if mod.value_is(b, 2, func):
@@ -668,8 +707,10 @@ def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
                 for b in (v.body, v.orelse):
                     if mod.value_is(b, 2, f):
                         prims.append(_Prim(b, "return2", *fl))
+                    elif isinstance(b, ast.Call):  # `return refuse(why) if why else 0`
+                        seed(_call_name(b.func)[1], fl, b.func)
             elif isinstance(v, ast.Call):
-                seed(_call_name(v.func)[1], fl)
+                seed(_call_name(v.func)[1], fl, v.func)
             elif isinstance(v, ast.Name):
                 for a in ast.walk(f):
                     if not isinstance(a, ast.Assign):
@@ -679,7 +720,7 @@ def _py_primitives(mod: PyModule, argv: list) -> list[_Prim]:
                         if not any(isinstance(x, ast.Name) and x.id == v.id for x in names):
                             continue
                         if isinstance(a.value, ast.Call):
-                            seed(_call_name(a.value.func)[1], fl)
+                            seed(_call_name(a.value.func)[1], fl, a.value.func)
                         elif mod.value_is(a.value, 2, f):
                             prims.append(_Prim(a, "return2", *fl))
     uniq: dict[tuple, _Prim] = {}
@@ -1015,7 +1056,9 @@ class Enumerator:
 
     def _walk(self, start: str, role: str) -> dict[str, str]:
         """The files one process reaches from `start`: its children, imports, loads and sources. A gate
-        table's own rule files are no load of the gate: _closure follows them as rules."""
+        table's own rule files are no load of the gate: _closure follows them as rules. A file one of the
+        process's files starts as a process is a child even where another of its files imports or loads it
+        (the walk's order aside): its own code runs there as a process of its own."""
         roles = {start: role}
         todo = [start]
         while todo:
@@ -1029,7 +1072,7 @@ class Enumerator:
                 if roles[rel] in ("main", "child", "rule"):
                     self.children[rel] = procs
                     for f in procs:
-                        if f not in roles:
+                        if roles.get(f) in (None, "import"):
                             roles[f] = "child"
                             todo.append(f)
                 nxt = [f for f in m.imported_files() if f.startswith("hooks/")] + [f for f in loads if f not in table]
@@ -1038,7 +1081,7 @@ class Enumerator:
                     procs = m.run_files()
                     self.children[rel] = procs
                     for f in procs:
-                        if f not in roles:
+                        if roles.get(f) in (None, "import"):
                             roles[f] = "child"
                             todo.append(f)
                 nxt = m.sourced()
@@ -1050,9 +1093,12 @@ class Enumerator:
 
     def _closure(self, hook: str) -> dict[str, str]:
         """The hook's files with their role; a refusing rule of a gate table it holds (in its file or a
-        module it imports) runs as the gate's process (role `rule`), with what that rule file reaches."""
-        roles = self._walk(hook, "main")
-        rules = [r for rel in list(roles) if isinstance(self.module(rel), PyModule)
+        module it imports) runs as the gate's process (role `rule`), with what that rule file reaches.
+        An imported module's table counts only where code the hook can call names it (reachable())."""
+        roles = self.roles[hook] = self._walk(hook, "main")
+        held = [rel for rel in roles if isinstance(self.module(rel), PyModule) and self.module(rel).rule_table()]
+        reach = self.reachable(hook) if any(roles[rel] == "import" for rel in held) else set()
+        rules = [r for rel in held if roles[rel] != "import" or self._names_table(hook, rel, reach)
                  for r in self.module(rel).rule_table() if r.relays]
         self.rules[hook] = rules
         own, tools, via = set(roles), {}, {}
@@ -1066,6 +1112,23 @@ class Enumerator:
                     roles[f] = role
         self.tools[hook], self.via[hook] = tools, via
         return roles
+
+    def _names_table(self, hook: str, rel: str, reach: set) -> bool:
+        """Whether code the hook can call names the RULES of `rel`, a module it reaches as an import (by
+        import, or `rel`'s own code outside what its import skips). A file it only runs as a process (a
+        gate its library hands to an interpreter) holds no rule of the hook: the hook relays that exit."""
+        return (rel, "RULES") in reach or self._loads_name(hook, rel, {"RULES"}, reach)
+
+    def _loads_name(self, hook: str, rel: str, names: set, reach: set) -> bool:
+        """Whether a scope of `rel` the hook can call reads one of `names` (module code its import skips aside)."""
+        mod = self.py[rel]
+        for f, name in reach:
+            scope = mod.ast if name == "<module>" else mod.funcs.get(name)
+            if f == rel and scope is not None and any(
+                    isinstance(n, ast.Name) and n.id in names and isinstance(n.ctx, ast.Load)
+                    and _guard(mod, n, self.roles[hook].get(rel) != "import", [hook]) for n in _walk_scope(scope)):
+                return True
+        return False
 
     def _regs(self, hook: str, rel: str) -> list[tuple[str, str, str]]:
         """The registrations (hook, event, matcher) that reach `rel`: the hook's own, narrowed to the
@@ -1181,9 +1244,30 @@ class Enumerator:
                         unconditional=func is not None and mod.top_level(node, func))
 
         mods = {rel: self.py[rel] for rel in files if rel in self.py}
+        # a function another module's exit returns through (`return lib_mod.refuse(why)` under sys.exit(main()))
+        # is exit-reaching in its own module: carried across until nothing new is found
+        extra: dict[str, dict] = {rel: {} for rel in mods}
+        prims: dict[str, list] = {}
+        todo = set(mods)
+        while todo:
+            rel = todo.pop()
+            cross: dict = {}
+            prims[rel] = _py_primitives(mods[rel], argv, extra[rel], cross)
+            for (trel, name), fl in cross.items():
+                if trel in extra:
+                    cur = extra[trel].get(name, [False, False])
+                    new_fl = [cur[0] or fl[0], cur[1] or fl[1]]
+                    if new_fl != cur:
+                        extra[trel][name] = new_fl
+                        todo.add(trel)
         for rel, mod in mods.items():
-            for p in _py_primitives(mod, argv):
+            own = {(p.node.lineno, p.kind) for p in _py_primitives(mod, argv)} if extra[rel] else None
+            for p in prims[rel]:
                 s = as_site(mod, p.node, p.kind)
+                # found only through another module's exit: a site where it composes a refusal of its own; a
+                # return that relays the text its callers' rules wrote (a merged gate's runner) is theirs
+                if own is not None and (p.node.lineno, p.kind) not in own and not any(t.strip() for t in s.text):
+                    continue
                 func = mod.enclosing_func(p.node)
                 if s.unconditional and func is not None and func.name != "main" and p.kind != "return2":
                     helpers.setdefault((rel, func.name), []).append(s)
@@ -1346,7 +1430,21 @@ class Enumerator:
                     have.rules = sorted(set(have.rules) | set(s.rules))
                 else:
                     merged[s.id] = s
-        return sorted(merged.values(), key=lambda s: (s.file, s.line))
+        return name_sites(sorted(merged.values(), key=lambda s: (s.file, s.line)))
+
+
+def name_sites(found: list[Site]) -> list[Site]:
+    """Give each site its key: file, function, kind (and the helper a call site calls) and the longest piece
+    of its message, numbered #2, #3 ... in line order where those repeat. An edit that only moves lines, or
+    adds a site with a message of its own, names every other site as before; a new site is a new key."""
+    seen: dict[str, int] = {}
+    for s in found:
+        piece = max(fragments(s), key=lambda f: (len(f), f), default="")
+        base = f"{s.file} {s.func}() {s.kind}" + (f" -> {s.via}" if s.via else "") + \
+            (f" '{piece[:60]}'" if piece else "")
+        seen[base] = seen.get(base, 0) + 1
+        s.key = base + (f" #{seen[base]}" if seen[base] > 1 else "")
+    return found
 
 
 def sites(tree: str) -> list[Site]:
@@ -1393,9 +1491,14 @@ TOOLS = re.compile(r"[\"']([A-Z][A-Za-z]+)[\"']")
 OBLIGATION_TOOLS = {"TodoWrite", "Agent", "Task"}
 
 
-def _site_tools(s: Site) -> set[str] | None:
+CONST_NAME = re.compile(r"\b([A-Z][A-Z0-9_]+)\b")
+
+
+def _site_tools(s: Site, e: "Enumerator | None" = None) -> set[str] | None:
     """The tools a PreToolUse site can refuse: its hooks' matchers, narrowed by a tool-name test in its
-    guard; None when nothing narrows it (every tool)."""
+    guard; None when nothing narrows it (every tool). A test against a named constant
+    (`tool_name in DISPATCH_TOOLS`, held in the site's module or a library it imports) is read through
+    that constant's value."""
     tools: set[str] | None = set()
     for _, ev, m in s.regs:
         if ev != "PreToolUse":
@@ -1409,6 +1512,11 @@ def _site_tools(s: Site) -> set[str] | None:
             continue
         for mt in TOOL_TEST.finditer(c):
             named = set(TOOLS.findall(mt.group(1)))
+            if not named and e is not None:
+                m = e.module(s.file)
+                if isinstance(m, PyModule):
+                    for const in CONST_NAME.findall(mt.group(1)):
+                        named |= set(m._tools(ast.Name(id=const)) or ())
             if named:
                 tools = named if tools is None else (tools & named or named)
     return tools
@@ -1437,6 +1545,10 @@ def unreachable(e: "Enumerator", s: Site) -> str:
         if s.func not in ("<module>", "main") and s.func in m.funcs:
             named = any(isinstance(n, ast.Name) and n.id == s.func or isinstance(n, ast.Attribute) and n.attr == s.func
                         for n in ast.walk(m.ast))
+            # or a module that imports it calls it (`from switch_prompt import refuse`, `switch_prompt.refuse`)
+            named = named or any(_imported_func(o, n.func) == (s.file, s.func)
+                                 for o in list(e.py.values()) if isinstance(o, PyModule) and o.rel != s.file
+                                 for n in ast.walk(o.ast) if isinstance(n, ast.Call))
             if not named:
                 return f"nothing in {s.file} names {s.func}() (it is no entry point)"
     return ""
@@ -1466,7 +1578,7 @@ def classify(e: "Enumerator", s: Site) -> tuple[str, str]:
     if events <= {"PostToolUse", "PostToolUseFailure"}:
         return "G", "after the call ran: the block returns its text to the same actor, whose next call is the next round"
     if "PreToolUse" in events:
-        tools = _site_tools(s)
+        tools = _site_tools(s, e)
         if tools and tools <= OBLIGATION_TOOLS:
             return "G", f"refuses the actor's own {'/'.join(sorted(tools))} (its todo record or its dispatch); its next compliant call clears it"
         # a tool named as an event's matcher (`PreToolUse:Agent`, the event a hook runs on) is no call the
@@ -1514,6 +1626,32 @@ def relayed(tree: str, parent: str, child: str, event: str, work: str) -> bool:
         return p.returncode == 2
     finally:
         os.replace(orig, stub)
+
+
+def relayed_sites(e: "Enumerator", tree: str, work: str, event=None) -> tuple[list[Site], list[str]]:
+    """(the sites a block can come from, the child files no parent relays). A child process (Enumerator.children)
+    blocks only through a parent that relays its exit 2 (relayed()); a parent that does not (one answering by
+    JSON, as permissionrequest-answer.py does) gives the child's sites no registration of its own. So a child's
+    site keeps the registrations of the parents that relay it and is dropped only when none does: one parent
+    that does not relay never takes a child away from the parents that do. `event(parent)` names the event a
+    parent's relay is tried at (default: e.event)."""
+    quiet: dict[str, set] = {}  # child file -> the parents that do not relay it
+    relaying: dict[str, set] = {}
+    for parent, kids in e.children.items():
+        ev = event(parent) if event else e.event(parent)
+        for k in kids:
+            ok = relayed(tree, parent, k, ev, os.path.join(work, os.path.basename(k)))
+            (relaying if ok else quiet).setdefault(k, set()).add(parent)
+    out = []
+    for s in e.sites():
+        gone = quiet.get(s.file, set()) - relaying.get(s.file, set())
+        if not gone:
+            out.append(s)
+            continue
+        s.regs = [r for r in s.regs if r[0] not in gone]
+        if s.file in relaying and s.regs:
+            out.append(s)
+    return out, sorted(k for k in quiet if k not in relaying)
 
 
 _SPLIT = re.compile(r"\{[^{}]*\}|%[-#0-9.]*[sdrfix]|\$\{?\w+\}?|\\n|\n|\t")

@@ -103,9 +103,12 @@ def env(tmp_path, monkeypatch):
 
 
 def broken_resolver(env) -> None:
-    """The gate's harness is a copy whose resolver does not compile (the replay's break_resolver)."""
+    """The gate's harness is a copy whose resolver does not compile (the replay's break_resolver); the rest the
+    gate's disposition loads from it (the aggregate's rebuild check, with its shard patterns) is intact."""
     harness = env.tmp / "harness"
-    (harness / "scripts").mkdir(parents=True)
+    for rel in ("scripts/aggregate-dev-report.py", "hooks/lib/dev_report_shard_patterns.py"):
+        (harness / rel).parent.mkdir(parents=True, exist_ok=True)
+        (harness / rel).write_bytes((REPO / rel).read_bytes())
     source = (REPO / "scripts" / "resolve-dev-artifact-chain.py").read_text(encoding="utf-8")
     (harness / "scripts" / "resolve-dev-artifact-chain.py").write_text(source + "\n)(  # unimportable\n")
     env.monkeypatch.setattr(gate, "HARNESS", harness)

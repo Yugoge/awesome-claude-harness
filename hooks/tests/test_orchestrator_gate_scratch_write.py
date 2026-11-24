@@ -182,7 +182,7 @@ def _bad_targets(s: Session):
         ("scratch dir itself", h, None),
         ("state dir inside scratch", h / "notes.md", {"CLAUDE_STATE_DIR": str(h / "state")}),
         ("project inside scratch", c / "notes.md", {"CLAUDE_PROJECT_DIR": str(c / "proj")}),
-        ("grant dir is the scratch", h / "claude-allow-daemon-restart-x", {"CLAUDE_DAEMON_RESTART_GRANT_DIR": str(h)}),
+        ("grant dir is the scratch", h / "claude-allow-daemon-restart-x", {"CLAUDE_DAEMON_RESTART_SENTINEL_DIR": str(h)}),
     ]
 
 
@@ -252,3 +252,28 @@ def test_registered_pipeline(tmp_path):
         assert REFUSED not in p.stderr + p.stdout, (p.stdout, p.stderr)
     p = s.run("Write", "docs/dev/qa-report-1.json", hook=LAUNCH)
     assert REFUSED in p.stderr + p.stdout, (p.stdout, p.stderr)
+
+
+@pytest.mark.parametrize("cwd", ["project", "/", "/var"])
+def test_a_broad_cwd_does_not_take_the_scratch_exemption_away(tmp_path, cwd):
+    """g-loctriage U36: the same second scratch write passes whether the session runs in its project
+    or at / or /var (a broad root holds every scratch; it is not a directory the harness reads)."""
+    s = Session(tmp_path)
+    scratch = s.harness_scratch()
+    where = str(s.project) if cwd == "project" else cwd
+    s.spend("Write", cwd=where)
+    assert s.allowed("Write", scratch / "notes.md", cwd=where)
+    assert not s.allowed("Write", s.project / "docs" / "second.md", cwd=where)
+
+
+@pytest.mark.parametrize("tmpdir_is", ["the-root", "the-sessions-directory"])
+def test_a_tmpdir_that_is_the_sessions_own_directory_names_the_same_scratch(tmp_path, tmpdir_is):
+    """g-locfind1 F2: a process started from a session's shell inherits TMPDIR = <root>/<sid>; the main agent's
+    notes in that scratch pass uncounted whichever of the two TMPDIR holds, and the project write stays one."""
+    s = Session(tmp_path)
+    scratch = s.harness_scratch()
+    extra = {"env_extra": {"TMPDIR": str(scratch if tmpdir_is == "the-sessions-directory" else s.tmpdir)}}
+    assert s.allowed("Write", "docs/report.md", **extra)
+    assert s.allowed("Write", scratch / "notes.md", **extra)
+    assert s.allowed("Write", scratch / "more.md", **extra), "a second scratch write"
+    assert not s.allowed("Write", "docs/other.md", **extra), "the project write is still one per turn"

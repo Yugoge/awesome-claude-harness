@@ -5,7 +5,7 @@ hooks/prompt-workflow.py ``_clear_turn_state`` runs at every UserPromptSubmit: i
 ``claude-orchestrator-consent-<sid>.flag``, both in the hook state dir (CLAUDE_STATE_DIR,
 hooks/lib/harness_state_dir.py). The Stop-time clearers in hooks/stop-cleanup-allowlist.sh and
 the retired hooks/stop-do-report-gate.py are gone, so /do consent lasts exactly one turn: a Stop (blocked or
-not) and an AskUserQuestion answered inside the turn keep it, and the next UserPromptSubmit ends
+not) and an AskUserQuestion of a kept kind answered inside the turn keep it, and the next UserPromptSubmit ends
 it, whether the human typed it or the CLI fired it for a scheduled task or a task notification.
 
 Every hook runs as a subprocess with a UserPromptSubmit / PreToolUse / PostToolUse / Stop payload
@@ -58,6 +58,10 @@ ASK_INPUT = {"questions": [{
 }]}
 ASK_RESPONSE = {"questions": ASK_INPUT["questions"],
                 "answers": {"Which heading should be renamed?": "Title"}}
+# A kept kind (hooks/lib/requirement_round.py KEPT): the relay of a producer's question file; every other
+# AskUserQuestion is refused at PreToolUse and has no round trip.
+ASK_TASK = "20261119-120000"
+ASK_KEPT = {**ASK_INPUT, "metadata": {"source": f"producer-question:{ASK_TASK}:ba"}}
 
 
 def _now() -> str:
@@ -332,8 +336,16 @@ def test_ask_user_question_round_trip_keeps_the_flag(sess):
 
     sess.tool("TodoWrite", {"todos": todos}, {"oldTodos": [], "newTodos": todos},
               perform=cli_writes_its_todo_file, after_hook=flag_kept)
-    ran = sess.tool("AskUserQuestion", ASK_INPUT, ASK_RESPONSE, after_hook=flag_kept)
+    question = sess.project / "docs" / "dev" / f"producer-question-{ASK_TASK}-ba.json"
+    question.parent.mkdir(parents=True, exist_ok=True)
+    question.write_text("{}\n")
+    ran = sess.tool("AskUserQuestion", ASK_KEPT, ASK_RESPONSE, after_hook=flag_kept)
     assert {hook for _event, hook, _proc in ran} == hooks
+    # A kind no rule keeps is refused before it reaches the owner; the refusal keeps the flag too.
+    refused = sess.tool("AskUserQuestion", ASK_INPUT, ASK_RESPONSE)
+    gate = [proc for event, hook, proc in refused if hook == "pretool-write-gate.py"]
+    assert [p.returncode for p in gate] == [2] and "is no kind kept" in gate[0].stderr, gate
+    assert sess.flag().read_text() == "true"
     sess.assert_other_session_untouched()
 
 
@@ -429,8 +441,11 @@ def test_a_prompt_the_human_did_not_type_also_ends_the_turn_state(sess, kind):
                     sess.payload("UserPromptSubmit", prompt=text))
     sess.append(record)
     assert proc.returncode == 0, proc.stderr
-    assert not sess.flag().exists(), f"a {kind} UserPromptSubmit must end the /do turn's consent"
-    assert not sess.streak().exists(), f"a {kind} UserPromptSubmit must reset the streak"
+    # A wake by a returning background task is not the owner's turn (the owner's decision of 2026-11-21):
+    # it keeps the consent and the streak (test_background_dispatch.py, decision 3).
+    kept = kind == "task_notification"
+    assert sess.flag().exists() is kept, f"a {kind} UserPromptSubmit and the /do turn's consent"
+    assert sess.streak().exists() is kept, f"a {kind} UserPromptSubmit and the streak"
     sess.assert_other_session_untouched()
 
 

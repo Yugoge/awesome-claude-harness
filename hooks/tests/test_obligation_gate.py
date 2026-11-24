@@ -15,9 +15,9 @@ schemas/registry.json, allowing (advisory mode) or rejecting (block mode,
 CLAUDE_OBLIGATION_GATE=block) when it is not valid.
 
 P1 behaviour pinned here:
-  - a valid block carries a current dispatched_at (within 300 s of now) and
-    a role equal to the dispatch's subagent_type; otherwise role_mismatch,
-    dispatch_clock_out_of_bound or dispatch_clock_unverifiable;
+  - a valid block carries a role equal to the dispatch's subagent_type;
+    otherwise role_mismatch (a typed dispatched_at is never judged:
+    test_dispatch_time.py);
   - a dispatch without a block is a violation (missing_block) only inside
     the active human-typed span (hooks/lib/command_span.active_span on the
     payload's transcript_path) of a command whose templates declare an
@@ -26,7 +26,7 @@ P1 behaviour pinned here:
   - a malformed block, an unregistered schema id or a bad prompt is rejected
     only on a dispatch that span requires a block of; elsewhere the prompt
     only mentions the tag and carries no obligation (OB-L41), while a block
-    that parses is held to role and clock on every dispatch.
+    that parses is held to its role on every dispatch.
 
 Every assertion anchors on the subprocess exit code and/or stable tokens in
 stderr -- never solely on a full free-text sentence
@@ -124,9 +124,8 @@ def _unique_sid(label="gate"):
 
 
 def _written_logs(home):
-    """Files under the scratch home's logs/ directory: the gate writes none."""
-    logs = Path(home) / ".claude" / "logs"
-    return sorted(p.name for p in logs.rglob("*")) if logs.is_dir() else []
+    """Files under the scratch home's logs/ directories (the harness state root's): the gate writes none."""
+    return sorted(p.name for p in Path(home).glob(".local/state/claude-harness/*/logs/**/*"))
 
 
 # --------------------------------------------------------------------------
@@ -417,12 +416,12 @@ def test_AC_L1_09_internal_crash_still_exits_0(tmp_path):
 
 
 def test_AC_L1_10_settings_json_registration_additive_only():
-    """AC-L1-10: the matcher="Agent" PreToolUse group runs pretool-obligation-gate.py exactly once;
+    """AC-L1-10: the matcher="Agent|Task" (lib/subagent.DISPATCH_TOOLS) PreToolUse group runs pretool-obligation-gate.py exactly once;
     since P12 the group is the dispatch gate (hooks/pretool-dispatch-gate.py), which runs it as one
     refuse rule, beside the hooks that shared the group with it."""
     settings_path = Path(REPO_ROOT) / "settings.json"
     data = _expanded(json.loads(settings_path.read_text(encoding="utf-8")))
-    agent_groups = [g for g in data["hooks"]["PreToolUse"] if g.get("matcher") == "Agent"]
+    agent_groups = [g for g in data["hooks"]["PreToolUse"] if g.get("matcher") == "Agent|Task"]
     assert len(agent_groups) == 1
     commands = [h["command"] for h in agent_groups[0]["hooks"]]
     assert len(commands) == 1 and commands[0].rstrip('"').endswith("/hooks/pretool-dispatch-gate.py"), commands
@@ -530,10 +529,6 @@ def _two_hours_ago():
     return stamp.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _naive_now():
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
-
-
 def _dev_report_without_identity():
     return [{"kind": "json", "path": f"docs/dev/dev-report-{TASK_ID}.json", "schema": "dev-report.v2"}]
 
@@ -559,16 +554,6 @@ VIOLATION_CASES = {
         lambda: _span_records("dev"), "qa",
         lambda: "validate the BA output\n" + _ba_qa_report_block("ba-qa-report.v9"),
         "unregistered_schema"),
-    # d: dispatched_at outside the 300 s bound.
-    "d_dispatched_at_two_hours_old": (
-        lambda: _span_records("dev"), "dev",
-        lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_two_hours_ago())),
-        "dispatch_clock_out_of_bound"),
-    # d': a naive timestamp is uncomparable with the aware clock -> fails closed.
-    "d_dispatched_at_naive_unverifiable": (
-        lambda: _span_records("dev"), "dev",
-        lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_naive_now())),
-        "dispatch_clock_unverifiable"),
     # e: obligation role differs from the dispatch's subagent_type.
     "e_role_graphify_subagent_dev": (
         lambda: _span_records("dev"), "dev",
@@ -1210,16 +1195,12 @@ def test_OB_L41_malformed_block_where_one_is_required_is_refused(tmp_path):
 @pytest.mark.parametrize("subagent_type,prompt,reason", [
     ("Explore", lambda: "summarize this example\n" + _valid_block("dev"), "role_mismatch"),
     ("general-purpose", lambda: "do work\n" + _valid_block("dev"), "role_mismatch"),
-    ("dev", lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_two_hours_ago())),
-     "dispatch_clock_out_of_bound"),
-    ("dev", lambda: "do work\n" + _block(_obligation_doc(role="dev", dispatched_at=_naive_now())),
-     "dispatch_clock_unverifiable"),
-], ids=["explore_role_mismatch", "general_purpose_role_mismatch", "stale_clock", "naive_clock"])
-def test_OB_L41_a_block_that_parses_is_held_to_role_and_clock_on_any_dispatch(
+], ids=["explore_role_mismatch", "general_purpose_role_mismatch"])
+def test_OB_L41_a_block_that_parses_is_held_to_its_role_on_any_dispatch(
         tmp_path, records, subagent_type, prompt, reason):
     """OB-L41 must-still-refuse: a block that parses is a real obligation
     whatever the span: a role that differs from the dispatch's subagent_type
-    or a stale or unverifiable dispatched_at is refused, in or out of a span."""
+    is refused, in or out of a span."""
     home, project = _dirs(tmp_path)
     sid = _unique_sid("obl41parsed")
     payload = _dispatch_payload(project, sid, records(), subagent_type=subagent_type,
@@ -1227,3 +1208,49 @@ def test_OB_L41_a_block_that_parses_is_held_to_role_and_clock_on_any_dispatch(
     result = _run_hook(home, project, payload, switch="block")
     assert result.returncode == 2, result.stderr
     assert BLOCK_BANNER in result.stderr and f"reason={reason}" in result.stderr, result.stderr
+
+
+# --------------------------------------------------------------------------
+# R17 and a prohibition: panels dispatched side by side each name the others'
+# reports only to forbid reading them; that is no input, so no ordering holds.
+# --------------------------------------------------------------------------
+
+def _panel(angle, forbidden_lines, inputs=()):
+    """A BA panel dispatch as commands/dev.md writes one: its own report, a DO NOT list."""
+    report = f"docs/dev/ba-panel-{TASK_ID}-{angle}.md"
+    doc = _obligation_doc(role="ba", artifacts=[{"kind": "markdown", "path": report,
+                                                   "identity_anchor": TASK_ID}])
+    text = [f"Input file: {path}" for path in inputs]
+    text += ["Write your panel report only.", _block(doc), "", "DO NOT:",
+             "- modify, create or delete any file other than your own panel report;"]
+    text += [f"- {line};" for line in forbidden_lines]
+    return "ba", "\n".join(text)
+
+
+def _others(angle):
+    return [f"docs/dev/ba-panel-{TASK_ID}-{other}.md" for other in "ABC" if other != angle]
+
+
+def test_R17_panel_naming_the_running_panels_only_to_forbid_reading_them_passes(tmp_path):
+    home, project = _dirs(tmp_path)
+    steps = [("toolu_pa", _panel("A", [f"read {p}" for p in _others("A")]), False),
+             ("toolu_pb", _panel("B", [f"read {p}" for p in _others("B")]), False)]
+    result = _order_run(home, project, steps, _panel("C", [f"read {p}" for p in _others("C")]))
+    assert result.returncode == 0 and result.stderr == "", result.stderr
+
+
+def test_R17_a_path_named_as_input_stays_held_when_a_prohibition_names_it_too(tmp_path):
+    home, project = _dirs(tmp_path)
+    panel_a = f"docs/dev/ba-panel-{TASK_ID}-A.md"
+    steps = [("toolu_pa", _panel("A", []), False)]
+    result = _order_run(home, project, steps, _panel("C", [f"read {panel_a}"], inputs=[panel_a]))
+    assert result.returncode == ORDER_EXIT, result.stderr
+    assert f"reason=producer_not_stopped artifact={panel_a}" in result.stderr
+
+
+def test_R17_a_prohibition_to_modify_a_path_does_not_hide_the_dependency_on_it(tmp_path):
+    home, project = _dirs(tmp_path)
+    panel_a = f"docs/dev/ba-panel-{TASK_ID}-A.md"
+    steps = [("toolu_pa", _panel("A", []), False)]
+    result = _order_run(home, project, steps, _panel("C", [f"modify {panel_a}"]))
+    assert result.returncode == ORDER_EXIT, result.stderr

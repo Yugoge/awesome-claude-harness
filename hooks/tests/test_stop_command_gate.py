@@ -16,10 +16,12 @@ Run with: python3 -m pytest hooks/tests/test_stop_command_gate.py -q
 from __future__ import annotations
 
 import ast
+import errno
 import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import types
@@ -213,6 +215,7 @@ def env(tmp_path, monkeypatch):
     for name in ("disposition", "gap_line"):
         monkeypatch.setattr(resolver, name, getattr(fake, name), raising=False)
     monkeypatch.setitem(gate._SCRIPTS, "scripts/resolve-dev-artifact-chain.py", resolver)
+    monkeypatch.setattr(gate, "disposition", gate._disposition)  # the fake answers by test, no file says so
     monkeypatch.setattr(chain_obligation, "declaring_dispatch", lambda task, path, root, roots=None: None)
     ns = types.SimpleNamespace(project=project, state=state, fake=fake, tmp=tmp_path,
                                tx=TX(tmp_path / f"{SID}.jsonl"))
@@ -253,7 +256,7 @@ def test_a2_dev_at_one_step_blocks_naming_open_todos_and_the_missing_dispatch(en
     assert text.startswith("COMMAND_GATE /dev: not complete\n")
     assert f"- todo: not completed: {steps[1]['content']}" in text
     assert f"GAP artifact={qa} problem=MISSING_ARTIFACT: absent lane=- step=\"Step 9: QA validation\"" in text
-    assert "AskUserQuestion only for a real decision" in text
+    assert "What a rule refuses is reported as refused, with the hook's output; nobody is asked about it." in text
     for word in ("stop", "Stop", "AWAITING_INPUT", "owner"):
         assert word not in text.split("not complete\n", 1)[1].replace("COMMAND_GATE", ""), word
 
@@ -402,8 +405,8 @@ def usage_limit(env):
 
 @pytest.mark.parametrize("prompt", ["restart", "continue"])
 def test_a2_a_dev_cut_by_a_usage_limit_is_held_through_ten_text_only_stops(env, prompt):
-    steps = dev_span(env, done=10)  # Step 8: BA-QA iteration loop, in progress
-    assert steps[10]["content"].startswith("Step 8: ")
+    steps = dev_span(env, done=7)  # Step 8: BA-QA iteration loop, in progress
+    assert steps[7]["content"].startswith("Step 8: ")
     usage_limit(env)
     if prompt == "restart":
         env.tx.command("restart")
@@ -427,18 +430,16 @@ def test_a2_a_dev_cut_by_a_usage_limit_is_held_through_ten_text_only_stops(env, 
 
 
 def test_claude_md_answers_a_command_gate_block_with_work_not_a_pause(env):
-    """The Stop gate's block lists the work left and ends by saying to finish it, asking with
-    AskUserQuestion only for a real decision; CLAUDE.md's Hook Discipline #1 (PAUSE on a rejection)
-    says the same of that block: it is answered by working its gaps, not by pausing."""
+    """The Stop gate's block lists the work left and ends by saying to finish it, a refusal reported and asked
+    about by nobody; CLAUDE.md's Hook Discipline #1 says the same of that block: it is answered by working its gaps."""
     steps = dev_span(env, done=10)
     code, block = run(env)
     assert code == 2 and f"- todo: not completed: {steps[10]['content']}" in block
-    assert block.endswith("Finish the gaps above. Ask with AskUserQuestion only for a real decision the user must "
-                          "make.\n"), block
+    assert block.endswith("Finish the gaps above. What a rule refuses is reported as refused, with the hook's "
+                          "output; nobody is asked about it.\n"), block
     text = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
-    item = next(line for line in text.splitlines() if line.startswith("1. **PAUSE**"))
-    assert ("A Stop `COMMAND_GATE` block is answered by working the gaps it lists, not by pausing; "
-            "`AskUserQuestion` is only for a real owner decision.") in item
+    item = next(line for line in text.splitlines() if line.startswith("1. **STOP the operation, not the work.**"))
+    assert "A Stop `COMMAND_GATE` block is answered by working the gaps it lists." in item
 
 
 def test_a2_all_ticked_without_a_dispatch_is_no_pipeline_dispatched(env):
@@ -490,6 +491,8 @@ def test_a2_no_bound_counter_release_token_or_write():
     calls = {getattr(n.func, "attr", getattr(n.func, "id", "")) for n in ast.walk(tree) if isinstance(n, ast.Call)}
     assert not calls & {"write_text", "write_bytes", "unlink", "remove", "rename", "replace", "mkdir", "touch",
                         "open", "makedirs", "rmtree"}
+    # the one write: /close's probe, one byte to an unnamed temporary file (environment_refusal), and nothing else
+    assert source.count("TemporaryFile(") == 1 and source.count("fh.write(") == 1 and source.count("fsync(") == 1
     for word in ("stop_hook_active", "AWAITING_INPUT", "is_pause", "settings.machine", "private-literal",
                  "claude-do-task-", "terminal_status\")", "derive_state"):
         assert word not in source, word
@@ -608,10 +611,15 @@ def test_a4_a_do_whose_minted_line_cli_2_1_322_records_as_hook_success_can_end(e
 
 def test_a4_the_gate_creates_and_deletes_no_file(env):
     do_span(env)
-    before = sorted(p for p in env.tmp.rglob("*"))
+
+    def files():  # the gate keeps one thing, the index of what it read of the conversation (lib/transcript_index,
+        # its one writer, an entry in the inventory of control state); that folder is no file of the gate's own
+        return sorted(p for p in env.tmp.rglob("*") if "transcript-index" not in p.parts)
+
+    before = files()
     for mode in ("block", "advisory"):
         run(env, mode)
-    assert sorted(p for p in env.tmp.rglob("*")) == before
+    assert files() == before
 
 
 # R8: the do branch's write-set helper and Span.write_set, on the real readers
@@ -684,7 +692,7 @@ def test_r8_every_do_span_of_the_task_counts(env):
 
 
 def test_r8_a_versioned_report_failing_its_schema_is_a_gap(env):
-    """The do-report gate's schema case (stop-do-report-gate.py, a stub after P5), now the do branch's."""
+    """The do-report gate's schema case (stop-do-report-gate.py, retired with its file), now the do branch's."""
     do_span(env)
     path = do_report(env)
     record = json.loads(path.read_text())
@@ -794,6 +802,7 @@ def test_a6_merge_holds_once_the_default_branch_merged_the_source(env, repo, typ
     opener_now(env, "merge", "feature" if typed else "")
     assert run(env)[0] == 2  # unmerged
     git(repo, "checkout", "-q", "master")
+    write_grant(env, repo, "feature")  # Steps 2-4: approved at this tip
     git(repo, "merge", "-q", "--no-ff", "--no-edit", "feature")
     assert run(env) == (0, "")
     git(repo, "branch", "-q", "-D", "feature")  # the wrapper's cleanup
@@ -820,6 +829,7 @@ def test_a6_merge_no_commit_needs_merge_head_at_the_source(env, repo):
     commit(repo, "o.txt")
     git(repo, "checkout", "-q", "master")
     opener_now(env, "merge", "--no-commit feature")
+    write_grant(env, repo, "feature")
     git(repo, "merge", "-q", "--no-commit", "--no-ff", "other")
     assert run(env)[0] == 2
     git(repo, "merge", "--abort")
@@ -836,6 +846,7 @@ def test_a6_a7_an_analyst_prompt_naming_a_merged_tip_does_not_count_and_a_later_
     env.tx.tool("Agent", {"subagent_type": "merge-analyst", "prompt": f"SOURCE_TIP={merged_elsewhere}\n"
                           "DEFAULT_BRANCH=master\n"})
     assert run(env)[0] == 2
+    write_grant(env, repo, "feature")
     git(repo, "checkout", "-q", "master")
     git(repo, "merge", "-q", "--no-ff", "--no-edit", "feature")
     git(repo, "checkout", "-q", "feature")
@@ -979,10 +990,10 @@ def test_a6_a_grant_that_is_no_json_object_is_none_as_the_check_on_its_write_rem
     os.utime(grant, (stamp, stamp))
     git(repo, "checkout", "-q", "master")
     git(repo, "merge", "-q", "--no-ff", "--no-edit", "feature")
-    if on == "master":
-        code, text = run(env)
-        assert code == 2 and "no merge-analyst grant of this session since the opener names its source" in text
-        write_grant(env, repo, "feature")
+    code, text = run(env)  # on the source, git's pick names it; a landed merge then owes the approval
+    assert code == 2 and ("no merge-analyst grant of this session since the opener names its source" if on == "master"
+                          else "feature was merged into refs/heads/master after the /merge opener") in text, text
+    write_grant(env, repo, "feature")
     assert run(env) == (0, "")
 
 
@@ -990,6 +1001,7 @@ def test_a6_a_grant_that_is_no_json_object_is_none_as_the_check_on_its_write_rem
 def test_a6_merge_no_commit_finalized_or_aborted_decides_as_a_committed_merge(env, repo, finish):
     branches(repo, "feature")
     opener_now(env, "merge", "--no-commit feature")
+    write_grant(env, repo, "feature")
     git(repo, "merge", "-q", "--no-commit", "--no-ff", "feature")
     assert run(env) == (0, "")
     if finish == "commit":  # merge.sh's printed finalize
@@ -1051,7 +1063,7 @@ def test_a6_bare_merge_from_a_linked_worktree_holds_once_steps_pick_merged_also_
         env, linked, diverged, grant):
     """Bare /merge in the linked worktree: unmerged 2; merged by merge.sh (a fast-forward, or a merge
     commit when the default branch moved) and cleaned up (branch, its reflog and the overnight-state
-    record gone) 0; with or without the merge-analyst's grant of Step 2, which names the pick too."""
+    record gone) 0 with the merge-analyst's approval of Step 2, which names the pick too; without it 2."""
     if diverged:
         git(env.project, "checkout", "-q", "master")
         commit(env.project, "m.txt")
@@ -1065,7 +1077,8 @@ def test_a6_bare_merge_from_a_linked_worktree_holds_once_steps_pick_merged_also_
     merge_sh(linked, "overnight-x")
     assert git(linked, "rev-parse", "--verify", "-q", "refs/heads/overnight-x", check=False) == ""
     assert not list(Path(os.environ["CLAUDE_PROJECT_DIR"], ".claude").glob("overnight-state-*.json"))
-    assert run(env) == (0, "")
+    code, text = run(env)
+    assert (code, text) == (0, "") if grant else code == 2 and "overnight-x was merged into" in text, text
     assert pick in git(linked, "rev-list", "--parents", "-n", "1", "master").split()
 
 
@@ -1077,6 +1090,7 @@ def test_a6_bare_merge_from_a_linked_worktree_of_another_branch_than_steps_pick_
     code, text = run(env)
     assert code == 2 and "no merge of overnight-x into refs/heads/master" in text
     assert "checkout: moving from overnight-x to master" in git(linked, "reflog", "show", "--format=%gs", "HEAD")
+    write_grant(env, linked, "overnight-x")
     merge_sh(linked, "overnight-x")  # the pick merged too: the gap closes
     assert run(env) == (0, "")
 
@@ -1087,6 +1101,7 @@ def test_a6_bare_merge_no_commit_from_a_linked_worktree_needs_merge_head_at_step
     code, text = run(env)
     assert code == 2 and "MERGE_HEAD is" in text
     git(linked, "merge", "--abort")
+    write_grant(env, linked, "overnight-x")
     merge_sh(linked, "--no-commit", "overnight-x")
     assert run(env) == (0, "")
 
@@ -1181,25 +1196,22 @@ def test_a6_typed_push_counts_only_the_typed_remote(env, remotes):
 
 
 @pytest.mark.parametrize("typed", ["upstrem", "fork"])
-def test_m_a_typed_push_remote_that_is_no_remote_yields_to_the_remote_the_push_took(env, remotes, typed):
-    """P5 review M: the owner mistypes the /push remote (`upstrem`, no remote of the repository, which
-    push.sh refuses); the agent asks, the owner's answer names origin, and the branch is pushed there.
-    The Stop holds naming the typed name and the unpublished commit until a remote's ref takes HEAD
-    after the opener (git's reflog; the owner's answer is no fact, D23), then passes with the push-gate
-    token still naming HEAD. A typed remote that is one (fork) stays the target: origin does not
-    clear it."""
+def test_m_a_typed_push_remote_that_is_no_remote_ends_with_its_refusal(env, remotes, typed):
+    """P5 review M, 2026-11-19: the owner mistypes the /push remote (`upstrem`, no remote of the repository,
+    which push.sh refuses). Nobody is asked: the refusal is reported and the run ends, the gate's own reading
+    (git lists no such remote) releasing it. A typed remote that is one (fork) stays the target: the Stop
+    holds naming it until fork's ref takes HEAD, and origin does not clear it."""
     head = commit(remotes, "t2.txt")
     opener_now(env, "push", typed)
+    if typed == "upstrem":
+        assert run(env) == (0, "")
+        return
     code, text = run(env)
-    named = ("a remote since the /push opener; the typed name upstrem is no remote of this repository"
-             if typed == "upstrem" else "refs/remotes/fork/topic since the /push opener")
-    assert code == 2 and f"- push: topic at {head} is not published on {named}\n" in text, text
-    env.tx.ask("origin")
-    assert run(env)[0] == 2
+    assert code == 2 and f"- push: topic at {head} is not published on refs/remotes/fork/topic since the /push " \
+        "opener\n" in text, text
     git(remotes, "push", "-q", "origin", "topic")
-    if typed == "fork":
-        assert run(env)[0] == 2
-        git(remotes, "push", "-q", "fork", "topic")
+    assert run(env)[0] == 2
+    git(remotes, "push", "-q", "fork", "topic")
     assert run(env) == (0, "")
 
 
@@ -1579,7 +1591,7 @@ def test_a8_close_needs_the_rating_question_asked_where_required(env, monkeypatc
 @pytest.mark.parametrize("command", ["close", "commit"])
 def test_a8_auto_targets_come_from_the_lifecycle_function_never_a_tool_result(env, monkeypatch, command):
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
-    lifecycle = types.SimpleNamespace(calls=[])
+    lifecycle = types.SimpleNamespace(calls=[], read_frozen=lambda *_: None)  # no list fixed at the command
     lifecycle.auto_targets = lambda root, action, cutoff: lifecycle.calls.append((action, cutoff)) or [FAMILY]
     monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
     env.tx.command(command, "--auto")
@@ -1593,11 +1605,396 @@ def test_a8_auto_targets_come_from_the_lifecycle_function_never_a_tool_result(en
     assert {c[1] for c in env.fake.calls} == {FAMILY}
 
 
+LANDING = [{"kind": "response_block", "begin": "--- B ---", "end": "--- E ---", "format": "json",
+            "schema": "changelog-status.v1"}]
+
+
+def landing(env, task, status):
+    env.tx.dispatch(task, role="changelog-analyst", pipeline="commit", profile="commit-landing", artifacts=LANDING,
+                    result=f"--- B ---\n{json.dumps(status)}\n--- E ---")
+
+
+@pytest.mark.parametrize("auto", [True, False])
+@pytest.mark.parametrize("case", ["refused-reported", "refused-unreported", "other-failure", "line-names-another",
+                                  "landed-again"])
+def test_a_parent_a_hook_refused_and_reported_is_no_longer_owed(env, monkeypatch, auto, case):
+    """commit.md Step 7 and its --auto walk: a parent whose commit a hook refused, reported on a REFUSED: line
+    naming it, is no longer owed; the other parent still is, until it lands. Every other unlanded case holds:
+    the refusal not reported, another failure code, a line naming another task; a later landing dispatch of the
+    task whose block lands it replaces the refusal."""
+    if auto:
+        lifecycle = types.SimpleNamespace(read_frozen=lambda *_: None, auto_targets=lambda root, action, cutoff: [FAMILY, OTHER])
+        monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
+    env.tx.command("commit", "--auto" if auto else FAMILY)
+    task_file(env)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    env.fake.answers[(OTHER, "commit")] = trailer_gap(OTHER)
+    code = "grant_missing" if case == "other-failure" else "hook_blocked"
+    landing(env, FAMILY, {"commit_status": "failed", "failure_code": code, "failure_reason": "BLOCKED: x"})
+    if case == "landed-again":
+        landing(env, FAMILY, {"commit_status": "committed"})
+    if case != "refused-unreported":
+        named = OTHER if case == "line-names-another" else FAMILY
+        env.tx.say(f"REFUSED: pretool-bash-safety.sh refused `git commit` in /p (`git commit -F m`) for task {named}"
+                   "\n\nBLOCKED: unregistered-settings-filter")
+    if auto:
+        landing(env, OTHER, {"commit_status": "committed"})
+        env.tx.say(f"{FAMILY}: refused\n{OTHER}: committed")
+    code, text = run(env)
+    released = case == "refused-reported"
+    assert (f"Task-id: {FAMILY}" in text) is not released, (case, text)
+    assert (f"Task-id: {OTHER}" in text) is auto, (case, text)  # under --auto the other parent is still owed
+    assert code == (0 if released and not auto else 2), (case, text)
+    env.fake.answers[(OTHER, "commit")] = []  # the other parent lands
+    if case == "landed-again":
+        env.fake.answers[(FAMILY, "commit")] = []  # the later landing's commit
+    assert (run(env)[0] == 0) is (released or case == "landed-again"), case
+
+
+# ---------------------------------------------------------------- a gated step a hook refuses (2026-11-20)
+HOOK_REFUSED = ('PreToolUse:Agent hook error: [python3 "${CLAUDE_HOME:-$HOME/.claude}/hooks/pretool-launch.py"]: '
+                "\nOBLIGATION GATE ORDER (pretool-obligation-gate, R17):\n  reason=verdict_not_after_producer_stop")
+
+
+HOOK_DECISION = {"permissionDecision": {"decision": "reject", "source": "hook", "reasonType": "hook",
+                                         "reasonCode": "hook:PreToolUse"}}  # the CLI's record of it (2.1.322)
+
+
+def refused_dispatch(env, role="dev", result=HOOK_REFUSED, by_hook=True):
+    env.tx.tool("Agent", {"subagent_type": role, "description": role, "prompt": "work"}, ok=False, result=result,
+                extra=HOOK_DECISION if by_hook else None)
+
+
+def at_step(env, label="Step 10"):
+    steps = dev_span(env, done=0)
+    k = next(i for i, s in enumerate(steps) if s["content"].startswith(label + ":"))
+    env.tx.todos(steps, k)
+    return steps, k
+
+
+PLAIN = (" - refused by pretool-aggregate-check.py: a fan-out's aggregate report must be complete before its final "
+         "verification. Next: the agent re-dispatches the lane's dev, which rewrites the aggregate; this step stays open.")
+
+
+@pytest.mark.parametrize("case", ["released", "no-line", "line-names-another-step", "another-role", "ran-later",
+                                  "not-a-hook", "before-the-step", "said-since", "bare-line", "no-next"])
+def test_a_dev_step_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(env, case):
+    """The live 2026-11-19 shape (session 9dddc7ae, /dev Step 10): every dev dispatch refused by a hook, no question
+    allowed. The turn ends on a REFUSED: line naming the pending step, when the transcript records a hook's refusal of
+    that step's own dispatch made since it went in progress; every other unfinished case holds as before."""
+    steps, k = at_step(env, "Step 9" if case == "before-the-step" else "Step 10")
+    refused_dispatch(env, "test-writer" if case == "another-role" else "dev", by_hook=case != "not-a-hook")
+    if case == "before-the-step":
+        env.tx.todos(steps, k + 1)  # Step 10 set in progress after the refusal
+    if case == "ran-later":
+        env.tx.dispatch(FAMILY, role="dev")
+    if case != "no-line":
+        label = "Step 11" if case == "line-names-another-step" else "Step 10"
+        # the bare form the owner was shown on 2026-11-22 (what was refused, by which rule, what next: none said) holds
+        tail = {"bare-line": "", "no-next": PLAIN.split(" Next:")[0]}.get(case, PLAIN)
+        env.tx.say(f"REFUSED: {label}: Delegate to dev subagent (Agent dev){tail}\n"
+                   "OBLIGATION GATE ORDER (pretool-obligation-gate, R17)")
+    if case == "said-since":
+        env.tx.say("Still working.")
+    code, text = run(env)
+    if case == "released":
+        assert (code, text) == (0, "")
+        # the step stays open: the next prompt continues the span, and its turn holds until it ends the same way
+        env.tx.say("Picked the step up again.")
+        assert run(env)[0] == 2
+    else:
+        assert code == 2 and "todo: not completed: Step 10" in text, (case, text)
+
+
+@pytest.mark.parametrize("case", ["released", "owned", "no-line", "line-names-another", "other-gap-too"])
+def test_close_ends_on_a_no_owner_line_for_an_artifact_nobody_owes(env, monkeypatch, case):
+    """close.md Routes' last bullet (F8n): an artifact the reader (obligation.declaring_dispatch) names no owner for,
+    reported on a NO_OWNER: line, is no longer owed by this run; an owned artifact, no line, a line naming another
+    artifact, or another gap of the task, still holds."""
+    from lib import obligation
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    owner = {"source": "dispatch"} if case == "owned" else None
+    monkeypatch.setattr(obligation, "declaring_dispatch", lambda task, path, root, *a, **k: owner)
+    task_file(env)
+    ticket = f"docs/dev/ticket-{FAMILY}.md"
+    env.fake.answers[(FAMILY, "close")] = [gap(ticket, "MISSING_ARTIFACT", "absent")] + (
+        [gap(f"docs/dev/qa-report-{FAMILY}.json", "qa.status:fail", "fail")] if case == "other-gap-too" else [])
+    env.tx.command("close", FAMILY)
+    env.tx.todos(canonical("close", FAMILY), 0)  # Step 0 open: the step that would produce the ticket cannot run
+    if case != "no-line":
+        named = f"docs/dev/ticket-{OTHER}.md" if case == "line-names-another" else ticket
+        env.tx.say(f"Task {FAMILY}: no dispatch or request exists to re-run for {named}.\nNO_OWNER: {named}")
+    code, text = run(env)
+    if case == "released":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and "todo: not completed: Step 0" in text, (case, text)
+        assert (ticket in text) is (case != "other-gap-too"), (case, text)
+
+
+@pytest.mark.parametrize("command,args,line,released", [
+    ("dev", "", True, True), ("do", "", True, True), ("dev", "", False, False), ("do", "", False, False),
+    ("dev", "fix the build", True, False), ("do", "rename heading", True, False)])
+def test_an_empty_dev_or_do_ends_on_its_no_target_line(env, command, args, line, released):
+    """dev.md Step 1, do.md: typed with no text, the run ends on its NO_TARGET: line (nobody asked); with text, or
+    without the line, the Stop holds as before."""
+    env.tx.command(command, args)
+    if line:
+        env.tx.say(f"NO_TARGET: /{command} was given no text; /{command} <text> starts one")
+    assert (run(env)[0] == 0) is released
+
+
+@pytest.mark.parametrize("case", ["released", "owned", "no-line"])
+def test_commit_ends_on_a_no_owner_line_for_an_artifact_nobody_owes(env, monkeypatch, case):
+    from lib import obligation
+    monkeypatch.setattr(obligation, "declaring_dispatch",
+                        lambda *a, **k: {"source": "dispatch"} if case == "owned" else None)
+    task_file(env)
+    ticket = f"docs/dev/ticket-{FAMILY}.md"
+    env.fake.answers[(FAMILY, "commit")] = [gap(ticket, "MISSING_ARTIFACT", "absent")]
+    env.tx.command("commit", FAMILY)
+    if case != "no-line":
+        env.tx.say(f"NO_OWNER: {ticket}")
+    assert (run(env)[0] == 0) is (case == "released"), case
+
+
+def test_a_session_on_the_old_text_is_told_the_exit_line_and_can_end_on_it(env):
+    """(a) The session loaded a dev.md that never mentions REFUSED (the owner's sessions of 2026-11-19): its pending
+    step's own dispatch refused by a hook, the block names the exact line; a Stop whose last text starts with that
+    line is allowed, and the step is still open after it."""
+    old = "\n".join(line for line in (REPO / "commands" / "dev.md").read_text(encoding="utf-8").splitlines()
+                    if "REFUSED" not in line)
+    assert "REFUSED" not in old
+    steps = canonical("dev")
+    env.tx.command("dev", "fix the build", body=old,
+                   context=f"DEV_SESSION_ID pre-initialized by hook: {DEV_ID}\nTask id: {FAMILY}\n")
+    k = next(i for i, s in enumerate(steps) if s["content"].startswith("Step 10:"))
+    env.tx.todos(steps, k)
+    refused_dispatch(env)
+    env.tx.say("Every dev dispatch is refused.")
+    code, text = run(env)
+    line = (f"REFUSED: {steps[k]['content']} - refused by <the hook>: <the rule it applies, in plain words>. "
+            "Next: <who must do what, and what then happens>")
+    assert code == 2 and f'write the line "{line}", then the hook\'s own output; the step stays open' in text, text
+    env.tx.say(f"REFUSED: {steps[k]['content']}{PLAIN}\nOBLIGATION GATE ORDER (pretool-obligation-gate, R17)")
+    assert run(env) == (0, "")
+    assert command_span.active_span(env.tx.path).last_todos()[k]["status"] == "in_progress"  # still open
+
+
+@pytest.mark.parametrize("case", ["another-role", "not-a-hook", "nothing-refused"])
+def test_where_no_step_call_was_refused_the_block_text_is_unchanged(env, case):
+    """(b) Condition false: the block text is exactly _block_text's, as before."""
+    at_step(env)
+    if case != "nothing-refused":
+        refused_dispatch(env, "test-writer" if case == "another-role" else "dev", by_hook=case != "not-a-hook")
+    code, text = run(env)
+    gaps = [line[2:] for line in text.splitlines() if line.startswith("- ")]
+    assert code == 2 and text == gate._block_text("dev", gaps) and "REFUSED" not in text, (case, text)
+
+
+@pytest.mark.parametrize("command", ["dev", "redev", "dev-command", "do", "close"])
+def test_the_exit_line_the_block_prints_is_the_one_the_gate_accepts_for_every_step(command):
+    """(c) Every step name the todo scripts give: the printed line is one STEP_REFUSED_LINE reads as that step."""
+    tc = importlib.import_module("lib.todo_canonical")
+    steps = [t["content"] for t in tc.run_todo_script(command, "fix the build") or ()]
+    assert steps, command
+    for content in steps:
+        found = gate.STEP_REFUSED_LINE.search(f"REFUSED: {content}{PLAIN}")
+        assert found and found.group(1) == content.split(":", 1)[0], content
+        assert not gate.STEP_REFUSED_LINE.search(f"REFUSED: {content}"), content  # says no rule and no next step
+
+
+# ---------------------------------------------------------------- /close: the environment and --auto's refused parent
+def close_open(env, monkeypatch, args=FAMILY):
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    task_file(env)
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    env.tx.command("close", args)
+    env.tx.todos(canonical("close", args), 2)
+
+
+def failing_probe(monkeypatch, code):
+    def refuse(*a, **k):
+        raise OSError(code, os.strerror(code))
+    monkeypatch.setattr(gate.tempfile, "TemporaryFile", refuse)
+
+
+@pytest.mark.parametrize("case", ["released", "claim-only", "other-code", "other-errno", "other-directory", "no-line"])
+def test_close_ends_on_the_environment_line_only_when_the_gates_own_write_fails(env, monkeypatch, case):
+    """close.md Round-open: the gate probes only to verify a claim. An ENVIRONMENT: line naming docs/dev and the
+    gate's own write there failing with that code: released. The gate's write succeeding, another code, a failure
+    the rule does not name (ENOENT), a line naming another directory: held. No line: no probe at all, and the block
+    is any /close's block."""
+    close_open(env, monkeypatch)
+    folder = str(env.project / "docs" / "dev")
+    probes = []
+
+    def probe(*a, **k):
+        probes.append(k.get("dir"))
+        if case == "claim-only":
+            return real(*a, **k)
+        code = errno.ENOENT if case == "other-errno" else errno.ENOSPC
+        raise OSError(code, os.strerror(code))
+    real = gate.tempfile.TemporaryFile
+    monkeypatch.setattr(gate.tempfile, "TemporaryFile", probe)
+    code, text = run(env)
+    gaps = [line[2:] for line in text.splitlines() if line.startswith("- ")]
+    assert code == 2 and text == gate._block_text("close", gaps) and probes == [], (text, probes)
+    if case != "no-line":
+        named = str(env.tmp) if case == "other-directory" else folder
+        env.tx.say("No space left on the device holding docs/dev; free space, then /close again.\n"
+                   + f"ENVIRONMENT: {'EROFS' if case == 'other-code' else 'ENOSPC'} {named}")
+    assert (run(env) == (0, "")) is (case == "released"), case
+    assert probes == ([] if case in ("no-line", "other-directory") else [folder] * len(probes)) and (
+        bool(probes) is (case not in ("no-line", "other-directory"))), probes
+
+
+def test_close_environment_exit_on_a_real_unwritable_directory(env, monkeypatch):
+    """The same without a stand-in: docs/dev made unwritable for real. A non-root user: mode 0555 (EACCES). Root,
+    which mode bits do not stop: a read-only tmpfs over docs/dev, only inside a private mount namespace
+    (ns-pytest.sh), never on the host's own."""
+    folder = env.project / "docs" / "dev"
+    close_open(env, monkeypatch)  # the cycle's own files first, then the directory made unwritable
+    mounted = False
+    if os.geteuid() != 0:
+        folder.chmod(0o555)
+        want = "EACCES"
+    else:
+        if os.readlink("/proc/self/ns/mnt") == os.readlink("/proc/1/ns/mnt"):
+            pytest.skip("root outside a private mount namespace: no read-only mount is made here")
+        subprocess.run(["mount", "-t", "tmpfs", "-o", "ro,size=64k", "none", str(folder)], check=True)
+        mounted, want = True, "EROFS"
+    try:
+        assert run(env)[0] == 2
+        env.tx.say(f"ENVIRONMENT: {want} {folder}")
+        assert run(env) == (0, "")
+    finally:
+        if mounted:
+            subprocess.run(["umount", str(folder)], check=True)
+        else:
+            folder.chmod(0o755)
+
+
+def refused_parent_dispatch(env, task, role="qa"):
+    doc = {"task_id": task, "lane": None, "lane_set": None, "role": role, "pipeline": "close", "profile": "singular",
+           "dispatched_at": "2026-11-01T09:00:00Z", "artifacts": [{"kind": "json", "path": f"docs/dev/qa-report-{task}.json",
+                                                                 "schema": "qa-report.v2", "identity": {"task_id": task}}]}
+    env.tx.tool("Agent", {"subagent_type": role, "description": role,
+                          "prompt": f'<obligation v="1">{json.dumps(doc)}</obligation>\nwork'},
+                ok=False, result=HOOK_REFUSED, extra=HOOK_DECISION)
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "refused-not-named", "ran-later", "plain-close"])
+def test_close_auto_ends_when_each_parent_it_could_not_close_is_refused_and_named(env, monkeypatch, case):
+    """close.md --auto: a parent whose last dispatch a hook refused, named on a REFUSED: line, is owed no more; the
+    other parent's landing stands. A parent named with no refusal on record, refused but not named (the block names
+    the line), refused then dispatched again, or a plain /close: held."""
+    auto = case != "plain-close"
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py",
+                        types.SimpleNamespace(read_frozen=lambda *_: None, auto_targets=lambda root, action, cutoff: [FAMILY, OTHER]))
+    task_file(env)
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    args = "--auto" if auto else FAMILY
+    env.tx.command("close", args)
+    env.tx.todos(canonical("close", args), len(canonical("close", args)))
+    if case == "named-not-refused":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    else:
+        refused_parent_dispatch(env, FAMILY)
+    if case == "ran-later":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    env.tx.dispatch(OTHER, role="qa", pipeline="close")
+    if case != "refused-not-named":
+        env.tx.say(f"REFUSED: pretool-launch.py refused the close QA dispatch for task {FAMILY}\nOBLIGATION GATE ORDER")
+    code, text = run(env)
+    if case == "released":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and f"close-report-{FAMILY}.md" in text, (case, text)
+        hinted = f'"REFUSED: <hook> refused <the call> for task {FAMILY}"' in text
+        assert hinted is (case == "refused-not-named"), (case, text)
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "ran-later"])
+def test_a_plain_close_step_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(env, monkeypatch, case):
+    """Ruling 2026-11-20: /close gets /dev's exit. Step 2's QA dispatch refused by a hook and the step named on the
+    REFUSED: line: released, the step still open. Named with no refusal on record, or refused then run again: held."""
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake(False))
+    task_file(env)
+    env.fake.answers[(FAMILY, "close")] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    steps = canonical("close", FAMILY)
+    env.tx.command("close", FAMILY)
+    k = next(i for i, t in enumerate(steps) if t["content"].startswith("Step 2:"))
+    env.tx.todos(steps, k)
+    if case == "named-not-refused":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    else:
+        refused_dispatch(env, "qa")
+    if case == "ran-later":
+        env.tx.dispatch(FAMILY, role="qa", pipeline="close")
+    code, text = run(env)
+    assert code == 2 and (f'"REFUSED: {steps[k]["content"]} - refused by <the hook>' in text) is (
+        case == "released"), (case, text)
+    env.tx.say(f"REFUSED: {steps[k]['content']}{PLAIN}\nOBLIGATION GATE ORDER")
+    assert (run(env) == (0, "")) is (case == "released"), case
+    assert command_span.active_span(env.tx.path).last_todos()[k]["status"] == "in_progress"
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "refused-not-named"])
+def test_a_commit_whose_own_dispatch_a_hook_refused_ends_on_its_refused_line(env, case):
+    """commit.md Step 7: a task whose own dispatch a hook refused (no analyst ran, so no status block), named on a
+    REFUSED: line, is owed no more; named with no refusal, or refused and not named: held."""
+    task_file(env)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    env.tx.command("commit", FAMILY)
+    if case == "named-not-refused":
+        env.tx.dispatch(FAMILY, role="changelog-analyst", pipeline="commit", profile="commit-landing")
+    else:
+        refused_parent_dispatch(env, FAMILY, role="changelog-analyst")
+    if case != "refused-not-named":
+        env.tx.say(f"REFUSED: pretool-launch.py refused the changelog-analyst dispatch for task {FAMILY}")
+    assert (run(env)[0] == 0) is (case == "released"), case
+
+
+def test_a_refused_step_line_releases_no_other_gated_command(env, monkeypatch):
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
+    env.tx.command("close", FAMILY)
+    refused_dispatch(env, "qa")
+    env.tx.say("REFUSED: Step 2: the close QA dispatch was refused by a hook")
+    assert run(env)[0] == 2
+
+
 def test_a8_no_target_names_the_gap(env, monkeypatch):
     monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
     env.tx.command("close")
     code, text = run(env)
     assert code == 2 and "close: no target task resolved" in text
+
+
+TYPO_ID = "20261101-095958"
+
+
+@pytest.mark.parametrize("command,args", [("close", ""), ("commit", ""), ("close", TYPO_ID), ("commit", TYPO_ID),
+                                          ("close", f"--auto {TYPO_ID}"), ("commit", "--auto --bulk"),
+                                          ("close", "--late-repair --force x")])
+def test_no_target_ends_on_its_line_only_while_nothing_was_dispatched(env, monkeypatch, command, args):
+    """close.md's and commit.md's "Which task?" and refused flag combinations: nobody is asked; the run lists the
+    candidates in a NO_TARGET: line and ends. Without the line the Stop holds; with a dispatch that names a task the
+    line releases nothing (that task's gaps hold)."""
+    monkeypatch.setitem(sys.modules, "lib.close_rating", rating_fake())
+    env.tx.command(command, args)
+    if "--auto" not in args:
+        assert run(env)[0] == 2
+    env.tx.say(f"/{command}: no task given.")
+    if "--auto" not in args:
+        assert run(env)[0] == 2  # a statement without the NO_TARGET: line
+    env.tx.say(f"NO_TARGET: /{command} 20261101-100000")
+    assert run(env) == (0, "")
+    env.tx.dispatch(FAMILY, role="changelog-analyst" if command == "commit" else "style-inspector", pipeline=command)
+    env.fake.answers[(FAMILY, command)] = [gap(f"docs/dev/close-report-{FAMILY}.md", "MISSING_ARTIFACT", "absent")]
+    env.tx.say(f"NO_TARGET: /{command} 20261101-100000")
+    assert run(env)[0] == 2
 
 
 def test_a8_auto_targets_leave_out_a_task_registered_after_the_cut_off():
@@ -1811,7 +2208,7 @@ def test_p5_4_a_typed_commit_task_naming_a_task_stays_the_target(env, args, held
 def test_p5_4_commit_modes_keep_their_verdicts_beside_a_mistyped_id(env, monkeypatch, mode):
     """--dry-run asks nothing of the chain; --auto takes dev-lifecycle's target function's parents,
     never a typed word; --bulk reads its status block: a mistyped id typed beside them changes none."""
-    lifecycle = types.SimpleNamespace(auto_targets=lambda root, action, cutoff: [FAMILY])
+    lifecycle = types.SimpleNamespace(read_frozen=lambda *_: None, auto_targets=lambda root, action, cutoff: [FAMILY])
     monkeypatch.setitem(gate._SCRIPTS, "scripts/dev-lifecycle.py", lifecycle)
     env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
     env.fake.answers[(TYPO, "commit")] = trailer_gap(TYPO)
@@ -2496,7 +2893,7 @@ def test_a12_real_after_end_time_the_families_chain_at_the_working_root_and_the_
 
 
 # ---------------------------------------------------------------- P13-1 R7: a question asked in text (A8)
-QUESTION_GAP = "the turn ends with a question in text; ask it with AskUserQuestion, or end without it."
+QUESTION_GAP = "the turn ends with a question in text; end without it (the owner is asked only in a requirement round)."
 
 
 @pytest.mark.parametrize("ending", ["Shall I go on?", "要继续吗？", "Done.\n\nAnything else?  \n"])
@@ -2515,7 +2912,7 @@ def test_r7_spec_is_checked_for_the_text_question_only(env):
     env.tx.command("spec", "a new report", body="the spec text: its requirement-round is asked")
     env.tx.say("Which report did you mean?")
     assert run(env) == (2, f"COMMAND_GATE /spec: not complete\n- spec: {QUESTION_GAP}\nFinish the gaps above. "
-                           "Ask with AskUserQuestion only for a real decision the user must make.\n")
+                           "What a rule refuses is reported as refused, with the hook's output; nobody is asked about it.\n")
     env.tx.say("The spec is written.")
     assert run(env) == (0, "")
     assert "spec" not in command_span.GATED_COMMANDS
@@ -2817,28 +3214,15 @@ def test_r7_line_questions_gives_each_question_sentence_and_its_reported_form(te
     assert importlib.import_module("lib.requirement_round").line_questions(text) == forms
 
 
-# ---------------------------------------------------------------- A6-RC2: a refusal met again after the owner's answer
-# push.md's dispatch protocol and merge.md's Refusals: where a step refuses, ask ONE AskUserQuestion; act on the
-# answer; "a refusal met again after it is reported in the reply, not asked again". Step 5's call failing again with
-# no git or grant record (an unreachable remote; merge conflicts) is such an end, released only while the gate's own
-# reading of git still meets the refusal.
+# ---------------------------------------------------------------- A6-RC2: a refusal reported, never asked about
+# push.md's dispatch protocol and merge.md's Refusals: where a step refuses, the refusal is reported in the reply and
+# nobody is asked. Step 5's last call failing with no git or grant record (an unreachable remote; merge conflicts) is
+# such an end, released only while the gate's own reading of git still meets the refusal.
 PUSH_STEP5 = (f'python3 "{REPO}/scripts/execute-push.py" --repo-hash 0123456789abcdef --branch topic --remote origin '
               '--request-id 00000000000000000000000000000001 --repo-root /p')
 PUSH_FAILED = ("fatal: '/p/origin.git' does not appear to be a git repository\nfatal: Could not read from remote "
                "repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n"
                "Exit code 1")
-
-
-def refusal_asked(env, answer, ok=True, header="Push"):
-    """The one AskUserQuestion a refusal asks, and the owner's answer (``ok``) or the owner's rejection of it."""
-    question = "Step 5 refused: the call came back with an error."
-    env.tx.tool("AskUserQuestion", {"questions": [{"question": question, "header": header, "multiSelect": False,
-                                                   "options": [{"label": answer, "description": ""},
-                                                               {"label": "I give another instruction",
-                                                                "description": ""}]}]},
-                ok=ok, result=(f'User has answered your questions: "{question}"="{answer}". You can now continue.'
-                               if ok else "The user doesn't want to proceed with this tool use. The tool use was "
-                               "rejected. STOP what you are doing and wait for the user to tell you how to proceed."))
 
 
 def unreachable(env, *names):
@@ -2848,10 +3232,10 @@ def unreachable(env, *names):
 
 
 @pytest.mark.parametrize("typed", ["origin", ""])
-def test_rc2_a_push_failing_again_after_the_owners_answer_on_unreachable_remotes_ends(env, remotes, typed):
-    """push.sh exits 1 on an unreachable remote and leaves no git or grant record: the Stop held forever. Step 5's
-    call failed, the owner answered the one question, the call failed again: reported, not asked again. It ends
-    while every remote the Stop judges is one git ls-remote cannot read; one that lists again owes the push."""
+def test_rc2_a_push_refused_on_unreachable_remotes_ends_with_its_report(env, remotes, typed):
+    """push.sh exits 1 on an unreachable remote and leaves no git or grant record. Step 5's call failed: reported,
+    nobody asked. It ends while every remote the Stop judges is one git ls-remote cannot read; one that lists
+    again owes the push."""
     head = commit(remotes, "t2.txt")
     write_token(remotes)
     push_opener(env, typed)
@@ -2861,11 +3245,7 @@ def test_rc2_a_push_failing_again_after_the_owners_answer_on_unreachable_remotes
     assert "; origin: git ls-remote: fatal: '" in text and "does not appear to be a git repository" in text, text
     assert "git ls-remote: and the repository exists." not in text
     env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
-    assert run(env)[0] == 2
-    refusal_asked(env, "Retry the push (Recommended)")
-    assert run(env)[0] == 2
-    env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
-    env.tx.say("The push failed again: origin is unreachable; topic is not published.")
+    env.tx.say("The push was refused: origin is unreachable; topic is not published.")
     assert run(env) == (0, "")
     (env.tmp / "origin-gone.git").rename(env.tmp / "origin.git")  # the gate's own reading: origin lists again
     code, text = run(env)
@@ -2874,36 +3254,24 @@ def test_rc2_a_push_failing_again_after_the_owners_answer_on_unreachable_remotes
     assert run(env) == (0, "")
 
 
-@pytest.mark.parametrize("case", ["reachable", "not-now", "one-failure", "no-attempt-after-the-answer", "rejected",
-                                  "asked-before-the-refusal", "succeeded-after", "url-redirected",
+@pytest.mark.parametrize("case", ["reachable", "no-attempt", "succeeded-after", "url-redirected",
                                   "another-remote-lists"])
 def test_rc2_every_other_push_record_or_reading_holds(env, remotes, case):
-    """Released only on the full record (failed, answered, failed again, the last Step-5 call) and the gate's own
-    reading (every judged remote unreadable at the URL the opener recorded): a forged record over a remote git
-    lists, a single failure, no attempt after the answer, a rejected question (no answer: the CLI stops the turn
-    for the owner), a question asked before any refusal, a remote redirected after the opener, or another judged
-    remote that lists, all hold."""
+    """Released only on the record (Step 5's last call failed) and the gate's own reading (every judged remote
+    unreadable at the URL the opener recorded): a forged record over a remote git lists, no Step 5 call at all, a
+    later call that came back ok, a remote redirected after the opener, or another judged remote that lists, all
+    hold."""
     head = commit(remotes, "t2.txt")
     write_token(remotes)
     push_opener(env, "" if case == "another-remote-lists" else "origin")
     if case == "url-redirected":
         git(remotes, "remote", "set-url", "origin", str(env.tmp / "nowhere.git"))
-    elif case not in ("reachable", "not-now"):
+    elif case != "reachable":
         unreachable(env, "origin")
-    failed = lambda: env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)  # noqa: E731
-    if case == "not-now":
-        refusal_asked(env, "Not now, I will push after review tomorrow")
-    elif case == "asked-before-the-refusal":
-        refusal_asked(env, "Push now (Recommended)")
-        failed()
-    else:
-        failed()
-        if case != "one-failure":
-            refusal_asked(env, "Retry the push (Recommended)", ok=case != "rejected")
-            if case != "no-attempt-after-the-answer":
-                failed()
-            if case == "succeeded-after":
-                env.tx.tool("Bash", {"command": PUSH_STEP5}, result="push.sh: nothing to push")
+    if case != "no-attempt":
+        env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
+    if case == "succeeded-after":
+        env.tx.tool("Bash", {"command": PUSH_STEP5}, result="push.sh: nothing to push")
     code, text = run(env)
     assert code == 2 and f"- push: topic at {head} is not published" in text, (case, text)
 
@@ -2935,20 +3303,15 @@ def merge_step5(env, repo, ref="feature"):
     return code, output
 
 
-def test_rc2_merge_conflicts_met_again_after_the_owners_answer_end(env, repo):
-    """merge.sh exits non-zero on conflicts and leaves them for the owner (action "I resolve the conflicts myself,
-    then you continue"); on that answer Step 1 runs again and merge.sh refuses again: reported, not asked again.
-    It ends while git holds the merge of the source in conflict (MERGE_HEAD at its tip); aborted, the merge is
-    owed; committed by the owner, it is made."""
+def test_rc2_merge_conflicts_refused_end_with_their_report(env, repo):
+    """merge.sh exits non-zero on conflicts and leaves them for the owner: reported, nobody asked. It ends while
+    git holds the merge of the source in conflict (MERGE_HEAD at its tip); aborted, the merge is owed; committed by
+    the owner, it is made."""
     conflicting(repo, "feature")
     opener_now(env, "merge", "feature")
     code, output = merge_step5(env, repo)
     assert code != 0 and "likely conflicts" in output, output
-    assert run(env)[0] == 2
-    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
-    assert run(env)[0] == 2
-    assert merge_step5(env, repo)[0] != 0
-    env.tx.say("merge.sh refused again: the conflicts in base.txt are still unresolved; master is unchanged.")
+    env.tx.say("merge.sh refused: the conflicts in base.txt are unresolved; master is unchanged.")
     assert run(env) == (0, "")
     git(repo, "merge", "--abort")
     code, text = run(env)
@@ -2958,8 +3321,7 @@ def test_rc2_merge_conflicts_met_again_after_the_owners_answer_end(env, repo):
 def test_rc2_the_owner_resolving_the_conflicts_completes_the_merge(env, repo):
     conflicting(repo, "feature")
     opener_now(env, "merge", "feature")
-    merge_step5(env, repo)
-    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
+    write_grant(env, repo, "feature")
     merge_step5(env, repo)
     assert run(env) == (0, "")
     (Path(repo) / "base.txt").write_text("resolved\n")
@@ -2968,19 +3330,16 @@ def test_rc2_the_owner_resolving_the_conflicts_completes_the_merge(env, repo):
     assert run(env) == (0, "")
 
 
-@pytest.mark.parametrize("case", ["no-question", "rejected", "no-attempt-after-the-answer", "aborted",
-                                  "another-source-in-conflict"])
+@pytest.mark.parametrize("case", ["no-attempt", "aborted", "another-source-in-conflict"])
 def test_rc2_every_other_merge_record_or_reading_holds(env, repo, case):
-    """No question between the two refusals, a rejected question, no attempt after the answer, a conflict no longer
-    in git (aborted), or git in conflict over another source than the /merge's: the missing merge holds."""
+    """No Step 5 call on this source, a conflict no longer in git (aborted), or git in conflict over another source
+    than the /merge's: the missing merge holds."""
     conflicting(repo, "feature", "other")
     opener_now(env, "merge", "feature")
     ref = "other" if case == "another-source-in-conflict" else "feature"
-    merge_step5(env, repo, ref)
-    if case != "no-question":
-        refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", ok=case != "rejected",
-                      header="Conflicts")
-    if case != "no-attempt-after-the-answer":
+    if case == "no-attempt":
+        merge_wrapper(repo, ref)  # the conflict stands in git, with no Step 5 record
+    else:
         merge_step5(env, repo, ref)
     if case == "aborted":
         git(repo, "merge", "--abort")
@@ -2992,30 +3351,138 @@ def test_rc2_every_other_merge_record_or_reading_holds(env, repo, case):
 # setting an agent writes.
 @pytest.mark.parametrize("command", ["echo execute-push.py; false", f"python3 {REPO}/scripts/execute-push.py --help",
                                      PUSH_STEP5 + "; false", f"cat {REPO}/scripts/execute-push.py"])
-def test_rc2_a_command_that_only_mentions_step_5s_script_is_no_refusal_met_again(env, remotes, command):
+def test_rc2_a_command_that_only_mentions_step_5s_script_is_no_refusal(env, remotes, command):
     """A Bash that names execute-push.py without running Step 5's call (an echo, --help, a list, a read) records no
-    refusal: on an unreachable remote the forged fail, answer, fail sequence holds."""
+    refusal: on an unreachable remote the forged failure holds."""
     head = commit(remotes, "t2.txt")
     write_token(remotes)
     push_opener(env, "origin")
     unreachable(env, "origin")
-    env.tx.tool("Bash", {"command": command}, ok=False, result="Exit code 1")
-    refusal_asked(env, "Retry the push (Recommended)")
     env.tx.tool("Bash", {"command": command}, ok=False, result="Exit code 1")
     code, text = run(env)
     assert code == 2 and f"- push: topic at {head} is not published" in text, (command, text)
 
 
 @pytest.mark.parametrize("command", ["echo merge.sh; false", f"bash {HOOKS}/merge.sh --help"])
-def test_rc2_a_command_that_only_mentions_merge_sh_is_no_refusal_met_again(env, repo, command):
+def test_rc2_a_command_that_only_mentions_merge_sh_is_no_refusal(env, repo, command):
     conflicting(repo, "feature")
     opener_now(env, "merge", "feature")
     merge_wrapper(repo, "feature")  # the conflict stands in git
     env.tx.tool("Bash", {"command": command}, ok=False, result="Exit code 1")
-    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
-    env.tx.tool("Bash", {"command": command}, ok=False, result="Exit code 1")
     code, text = run(env)
     assert code == 2 and "no merge of feature into refs/heads/master" in text, (command, text)
+
+
+# Step 5 as the agent writes it from the command text: <HARNESS_ROOT> as ${CLAUDE_HOME:-$HOME/.claude}, the push
+# call over continued lines, exactly as commands/push.md and commands/merge.md fence it.
+SPELLED_HOME = "${CLAUDE_HOME:-$HOME/.claude}"
+
+
+def fenced(command: str, marker: str, values: dict) -> str:
+    """The first ```bash fence of commands/<command>.md holding ``marker``, its placeholders filled."""
+    text = (REPO / "commands" / f"{command}.md").read_text(encoding="utf-8")
+    block = next(b for b in re.findall(r"```bash\n(.*?)```", text, re.S) if marker in b)
+    block = block.split("\n\n")[0]  # push.md's first form: without --auto
+    block = "\n".join(line for line in block.splitlines() if not line.startswith("#"))
+    for key, value in {"<HARNESS_ROOT>": SPELLED_HOME, **values}.items():
+        block = block.replace(key, value)
+    return block.strip()
+
+
+PUSH_FENCE = {"<REPO_HASH>": "0123456789abcdef", "<BRANCH>": "topic", "<RESOLVED_REMOTE>": "origin",
+              "<REQUEST_ID>": "00000000000000000000000000000001", "<REPO_ROOT>": "/p"}
+
+
+def test_rc2_step_5_as_the_text_spells_it_is_step_5(monkeypatch):
+    """The real spelling: ${CLAUDE_HOME:-$HOME/.claude}, line continuations. Pointed at another home, it is not
+    this harness's script."""
+    push = fenced("push", "execute-push.py", PUSH_FENCE)
+    merge = fenced("merge", "merge.sh", {"<resolved-ref>": "feature"})
+    assert "\\\n" in push and SPELLED_HOME in push and SPELLED_HOME in merge
+    monkeypatch.setenv("CLAUDE_HOME", str(REPO))
+    assert gate.step5_call(push, gate.PUSH_CALL) and gate.step5_call(merge, gate.MERGE_CALL, "feature")
+    monkeypatch.setenv("CLAUDE_HOME", "/nonexistent-harness-home")
+    assert not gate.step5_call(push, gate.PUSH_CALL) and not gate.step5_call(merge, gate.MERGE_CALL)
+
+
+@pytest.mark.parametrize("case", ["refused", "not-run", "succeeded-after"])
+def test_rc2_a_push_refused_as_the_text_spells_step_5_ends(env, remotes, monkeypatch, case):
+    """Step 5 written as push.md writes it, refused on an unreachable remote: reported, the Stop passes. Not run,
+    or run again and succeeding, the gate holds as before."""
+    monkeypatch.setenv("CLAUDE_HOME", str(REPO))
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env, "origin")
+    unreachable(env, "origin")
+    step5 = fenced("push", "execute-push.py", PUSH_FENCE)
+    if case != "not-run":
+        env.tx.tool("Bash", {"command": step5}, ok=False, result=PUSH_FAILED)
+    if case == "succeeded-after":
+        env.tx.tool("Bash", {"command": step5}, result="push.sh: nothing to push")
+    env.tx.say("The push was refused: origin is unreachable; topic is not published.")
+    code, text = run(env)
+    if case == "refused":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and f"- push: topic at {head} is not published" in text, (case, text)
+
+
+@pytest.mark.parametrize("case", ["refused", "not-run"])
+def test_rc2_merge_conflicts_refused_as_the_text_spells_step_5_end(env, repo, monkeypatch, case):
+    monkeypatch.setenv("CLAUDE_HOME", str(REPO))
+    conflicting(repo, "feature")
+    opener_now(env, "merge", "feature")
+    code, output = merge_wrapper(repo, "feature")
+    assert code != 0
+    if case == "refused":
+        env.tx.tool("Bash", {"command": fenced("merge", "merge.sh", {"<resolved-ref>": "feature"})}, ok=False,
+                    result=output)
+    env.tx.say("merge.sh refused: the conflicts in base.txt are unresolved; master is unchanged.")
+    code, text = run(env)
+    if case == "refused":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and "no merge of feature into refs/heads/master" in text, text
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused", "ran-later", "not-named"])
+def test_a_push_whose_analyst_dispatch_a_hook_refused_ends_on_its_refused_line(env, remotes, case):
+    """push.md: a hook refused the push-analyst dispatch (its last), named on a REFUSED: line: the run ends, nothing
+    published. Named with no refusal on record, refused then dispatched again, or not named (the block names the
+    line): held."""
+    head = commit(remotes, "t2.txt")
+    write_token(remotes)
+    push_opener(env, "origin")
+    role = "push-analyst"
+    if case == "named-not-refused":
+        env.tx.tool("Agent", {"subagent_type": role, "description": role, "prompt": "analyse"})
+    else:
+        refused_dispatch(env, role)
+    if case == "ran-later":
+        env.tx.tool("Agent", {"subagent_type": role, "description": role, "prompt": "analyse"})
+    if case != "not-named":
+        env.tx.say(f"REFUSED: pretool-launch.py refused the {role} dispatch; nothing was published\nBLOCKED")
+    code, text = run(env)
+    if case == "released":
+        assert (code, text) == (0, "")
+    else:
+        assert code == 2 and f"- push: topic at {head} is not published" in text, (case, text)
+        assert (f'"REFUSED: <hook> refused the {role} dispatch; nothing was published"' in text) is (
+            case == "not-named"), (case, text)
+
+
+@pytest.mark.parametrize("case", ["released", "named-not-refused"])
+def test_a_merge_whose_analyst_dispatch_a_hook_refused_ends_on_its_refused_line(env, repo, case):
+    branches(repo, "feature")
+    opener_now(env, "merge", "feature")
+    role = "merge-analyst"
+    if case == "named-not-refused":
+        env.tx.tool("Agent", {"subagent_type": role, "description": role, "prompt": "analyse"})
+    else:
+        refused_dispatch(env, role)
+    env.tx.say(f"REFUSED: pretool-launch.py refused the {role} dispatch; nothing was merged")
+    code, text = run(env)
+    assert (code == 0) is (case == "released"), (case, text)
 
 
 def test_rc2_step_5s_call_is_a_real_invocation_of_the_script():
@@ -3035,7 +3502,7 @@ def test_rc2_step_5s_call_is_a_real_invocation_of_the_script():
 @pytest.mark.parametrize("forge", ["merge-head-file", "clean-no-commit-merge"])
 def test_rc2_a_merge_head_with_no_conflict_releases_nothing(env, repo, forge):
     """Verifier (a): a source that merges cleanly, MERGE_HEAD written at its tip (by a file write, or a clean
-    `git merge --no-commit`), and the fail, answer, fail record: no path is unmerged, so no conflict stands and the
+    `git merge --no-commit`), and the failed Step 5 record: no path is unmerged, so no conflict stands and the
     merge is owed."""
     branches(repo, "feature")
     opener_now(env, "merge", "feature")
@@ -3045,7 +3512,6 @@ def test_rc2_a_merge_head_with_no_conflict_releases_nothing(env, repo, forge):
         git(repo, "merge", "-q", "--no-commit", "--no-ff", "feature")
     step5 = f'bash "{HOOKS}/merge.sh" "feature"'
     env.tx.tool("Bash", {"command": step5}, ok=False, result="merge.sh: git merge exited 1")
-    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
     env.tx.tool("Bash", {"command": step5}, ok=False, result="merge.sh: git merge exited 1")
     code, text = run(env)
     assert code == 2 and "no merge of feature into refs/heads/master" in text, (forge, text)
@@ -3064,7 +3530,6 @@ def test_rc2_a_configuration_that_breaks_a_reachable_remote_releases_nothing(env
     git(env.tmp, "config", "--file", str(config), key, value)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
     env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
-    refusal_asked(env, "Retry the push (Recommended)")
     env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
     code, text = run(env)
     assert code == 2 and f"- push: topic at {head} is not published" in text, (setting, text)
@@ -3072,13 +3537,12 @@ def test_rc2_a_configuration_that_breaks_a_reachable_remote_releases_nothing(env
 
 def test_rc2_an_opener_without_remote_lines_releases_nothing(env, remotes):
     """Verifier (c): an opener with no remote lines pins no URL, so origin set to a dead path after it is no
-    unreachable remote of the opener's: the fail, answer, fail record holds."""
+    unreachable remote of the opener's: the failed Step 5 record holds."""
     head = commit(remotes, "t2.txt")
     write_token(remotes)
     push_opener(env, "origin", line=False)
     git(remotes, "remote", "set-url", "origin", str(env.tmp / "nowhere.git"))
     env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
-    refusal_asked(env, "Retry the push (Recommended)")
     env.tx.tool("Bash", {"command": PUSH_STEP5}, ok=False, result=PUSH_FAILED)
     code, text = run(env)
     assert code == 2 and f"- push: topic at {head} is not published" in text, text
@@ -3097,9 +3561,8 @@ def forge_conflict(repo):
 
 
 def merge_record(env, command):
-    """The fail, answer, fail record of Step 5 with ``command`` as its call."""
+    """The failed Step 5 record with ``command`` as its call."""
     env.tx.tool("Bash", {"command": command}, ok=False, result="merge.sh: git merge exited 1 - likely conflicts.")
-    refusal_asked(env, "I resolve the conflicts myself, then you continue (Recommended)", header="Conflicts")
     env.tx.tool("Bash", {"command": command}, ok=False, result="merge.sh: git merge exited 1 - likely conflicts.")
 
 
@@ -3115,7 +3578,7 @@ def test_rc2_forged_stage_entries_over_a_clean_merge_release_nothing(env, repo):
 @pytest.mark.parametrize("record", ["fake-script-path", "no-such-ref", "another-ref", "git-dir-prefix"])
 def test_rc2_a_step_5_record_that_is_not_this_merge_releases_nothing(env, repo, record):
     """The conflict stands in git; the record is another file named merge.sh, merge.sh on a ref that is not the
-    /merge's source, or merge.sh with GIT_DIR pointing elsewhere: no refusal of this merge was met again."""
+    /merge's source, or merge.sh with GIT_DIR pointing elsewhere: no refusal of this merge was met."""
     conflicting(repo, "feature")
     opener_now(env, "merge", "feature")
     merge_wrapper(repo, "feature")
@@ -3138,3 +3601,171 @@ def test_rc2_merge_sh_with_its_output_redirected_is_step_5s_call(env, repo):
     assert gate.step5_call(f"bash {HOOKS}/merge.sh feature 2>&1", gate.MERGE_CALL, "feature")
     assert gate.step5_call(f"bash {HOOKS}/merge.sh feature > /dev/null", gate.MERGE_CALL, "feature")
     assert not gate.step5_call(f"bash {HOOKS}/merge.sh other 2>&1", gate.MERGE_CALL, "feature")
+
+
+# The owner-only gap, from the recorded loop (neutral values): a /commit span open since an earlier turn, a later turn
+# the owner opened with /restart, the agent's grant call refused ("no live /commit user-intent sentinel"), and the
+# /commit Stop demanding the Task-id commit at every Stop of that turn. Only write-commit-grant.py's grant lands that
+# commit, and it mints only while the owner's /commit stands, so no agent action in that turn closes the gap.
+GRANT_REFUSED = ("Cannot write commit grant: no live /commit user-intent sentinel for session. A commit grant may "
+                 "only be minted from within an actual /commit (non-bulk) invocation. Invoke /commit from a fresh "
+                 "turn.")
+
+
+def later_turn(env, *extra):
+    """The recorded shape: /commit <task> typed, the cycle's other gaps ``extra``, then a /restart turn whose grant
+    call is refused and whose last text says the commit waits for the owner's /commit."""
+    task_file(env)
+    env.tx.command("commit", FAMILY)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY) + list(extra)
+    env.tx.say("Step 5 stopped: the grant was refused in an earlier turn.")
+    env.tx.command("restart", "back, carry on")
+    env.tx.tool("Bash", {"command": f"python3 scripts/write-commit-grant.py --task-id {FAMILY}"}, ok=False,
+                result=GRANT_REFUSED)
+    env.tx.say(f"The grant is refused in this turn; please type /commit {FAMILY}.")
+
+
+def owner_line(task=FAMILY):
+    return f"{gate.OWNER_ONLY}/commit {task}; GAP artifact=. problem=MISSING_TASK_TRAILER: no commit reachable " \
+           f"from HEAD carries Task-id: {task} lane=-"
+
+
+def test_owner_only_a_commit_only_the_owners_typed_commit_can_land_ends_the_turn_and_names_the_command(
+        env, monkeypatch, capsys):
+    """Behaviour 1: the turn ends; the owner reads what is still open and the exact command to type."""
+    later_turn(env)
+    assert run(env) == (0, f"COMMAND_GATE /commit: open for the owner\n- {owner_line()}\n")
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(json.dumps(env.payload)))
+    assert gate.main([]) == 0
+    assert json.loads(capsys.readouterr().out) == {"systemMessage": run(env)[1]}
+
+
+def test_owner_only_gaps_the_agent_can_close_are_still_demanded_and_the_commit_is_marked(env):
+    """Behaviour 2: another gap of the cycle holds the Stop as before; the Task-id line is marked as not demanded in
+    this turn, and once the agent closes the other gap the turn ends."""
+    later_turn(env, gap(f"docs/dev/close-report-{FAMILY}.md", "INVALID_CLOSE_VERDICT", "expected 'yes'"))
+    code, text = run(env)
+    assert code == 2 and f"- {owner_line()}\n" in text, text
+    assert f"- GAP artifact=docs/dev/close-report-{FAMILY}.md problem=INVALID_CLOSE_VERDICT" in text, text
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)  # the agent fixed the close report
+    assert run(env)[0] == 0
+
+
+@pytest.mark.parametrize("turn", ["typed-this-turn", "intent-live"])
+def test_owner_only_in_a_turn_the_grant_can_be_minted_the_commit_is_demanded_until_it_exists(env, turn):
+    """Behaviour 3: the owner typed /commit in this turn, or the grant writer's own check of the owner's /commit holds
+    for the session (its user-intent sentinel, fresh): the Task-id commit is demanded, unmarked, until it exists. The
+    agent's own words make no gap the owner's."""
+    task_file(env)
+    env.tx.command("commit", FAMILY)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    if turn == "intent-live":
+        env.tx.command("restart", "back")
+        (env.state / f"claude-commit-userintent-{SID}.flag").write_text("true")
+    env.tx.say(f"Only the owner can land this; please type /commit {FAMILY}.")
+    code, text = run(env)
+    assert code == 2 and gate.OWNER_ONLY not in text and "problem=MISSING_TASK_TRAILER" in text, text
+    env.fake.answers[(FAMILY, "commit")] = []  # the landed commit
+    assert run(env) == (0, "")
+
+
+def test_owner_only_an_intent_past_the_grant_writers_window_mints_nothing(env):
+    """The grant writer's window (its _USERINTENT_WINDOW_MINUTES) is the gate's: a sentinel older than that mints no
+    grant, so in a later turn the commit is the owner's again."""
+    later_turn(env)
+    flag = env.state / f"claude-commit-userintent-{SID}.flag"
+    flag.write_text("true")
+    assert run(env)[0] == 2
+    window = gate._script("scripts/write-commit-grant.py")._USERINTENT_WINDOW_MINUTES
+    old = datetime.now().timestamp() - 60 * (window + 1)
+    os.utime(flag, (old, old))
+    assert run(env)[0] == 0
+
+
+# /commit Step 6, the review rejected: an agent that obeys `COMMIT: REJECT` and makes no commit ends its turn; the
+# rejection and the review's reasons are named for the owner. The gate reads the review's own report, dated no
+# earlier than the span's last commit-qa dispatch for the task, which has stopped.
+REJECT = "COMMIT: REJECT - f.txt is not ready to land"
+
+
+def reviewed(env, line, mtime=None, review=True):
+    """/commit <task> typed, no Task-id commit yet, a commit-qa review dispatched (``review``) and its report."""
+    task_file(env)
+    env.tx.command("commit", FAMILY)
+    env.fake.answers[(FAMILY, "commit")] = trailer_gap(FAMILY)
+    if review:
+        env.tx.dispatch(FAMILY, role="qa", pipeline="commit", profile="commit-qa", artifacts=[
+            {"kind": "markdown", "path": f"docs/dev/commit-qa-report-{FAMILY}.md", "identity_anchor": FAMILY,
+             "terminal_line_regex": "^COMMIT: (APPROVE|REJECT)"}])
+    report = env.project / "docs" / "dev" / f"commit-qa-report-{FAMILY}.md"
+    report.write_text(f"# pre-commit QA\n\n- f.txt: reviewed\n\n{line}\n")
+    if mtime is not None:
+        os.utime(report, (mtime, mtime))
+    env.tx.say("The review rejected the landing; nothing was committed.")
+
+
+def test_review_rejected_and_no_commit_ends_the_turn_with_the_reasons(env):
+    reviewed(env, REJECT)
+    assert run(env) == (0, f"COMMAND_GATE /commit: open for the owner\n- {gate.OWNER_ONLY}/commit {FAMILY}; the "
+                           f"review rejected this landing and no commit was made (docs/dev/commit-qa-report-"
+                           f"{FAMILY}.md): {REJECT}\n")
+
+
+@pytest.mark.parametrize("case", ["approved", "no-review-dispatched", "earlier-attempt"])
+def test_review_rejected_only_this_rounds_reject_of_the_review_ends_it(env, case):
+    """An approval owes the commit; a report no review of the span wrote, or one older than the span's review
+    (an earlier attempt's), is no rejection of this round."""
+    reviewed(env, "COMMIT: APPROVE" if case == "approved" else REJECT, review=case != "no-review-dispatched",
+             mtime=(T0 - timedelta(hours=1)).timestamp() if case == "earlier-attempt" else None)
+    code, text = run(env)
+    assert code == 2 and "problem=MISSING_TASK_TRAILER" in text and "review rejected" not in text, (case, text)
+
+
+def test_review_rejected_other_gaps_of_the_cycle_still_hold(env):
+    reviewed(env, REJECT)
+    env.fake.answers[(FAMILY, "commit")] += [gap(f"docs/dev/close-report-{FAMILY}.md", "INVALID_CLOSE_VERDICT",
+                                                 "expected 'yes'")]
+    code, text = run(env)
+    assert code == 2 and "review rejected this landing" in text and "INVALID_CLOSE_VERDICT" in text, text
+
+
+STALE_TID = "20260101-120000"
+
+
+def _stale_shard(lane: str, status: str = "completed") -> dict:
+    return {"task_id": f"{STALE_TID}-{lane}", "baseline_head_sha": "abc123def456", "baseline_dirty_snapshot": "",
+            "lane": lane, "lane_set": ["l1", "l2"],
+            "dev": {"status": status, "tasks_completed": [], "scripts_created": [], "permissions_to_add": [],
+                    "files_modified": [f"src/{lane}.py"], "files_created": [], "observed_preexisting": []},
+            "blocking_issues": [], "recommendations": []}
+
+
+@pytest.mark.parametrize("case", ["refused", "cut off"])
+def test_a_stale_canonical_says_whether_the_aggregator_refused_its_lanes_or_its_rebuild_did_not_finish(
+        tmp_path, monkeypatch, case):
+    """A canonical left older than a lane report: the gap says which of the two happened. The aggregator ran on
+    the lane reports to its end and refused them (a lane's dev.status not completed), or the rebuild was cut off
+    (rebuild_if_stale's own timeout); never "did not finish" for a refusal."""
+    import functools
+    dev = tmp_path / "docs" / "dev"
+    dev.mkdir(parents=True)
+    for lane in ("l1", "l2"):
+        (dev / f"dev-report-{STALE_TID}-{lane}.json").write_text(json.dumps(_stale_shard(lane)))
+    agg = gate._script("scripts/aggregate-dev-report.py")
+    assert agg.rebuild_if_stale(tmp_path, STALE_TID) == []  # the canonical, current
+    lane = dev / f"dev-report-{STALE_TID}-l1.json"
+    lane.write_text(json.dumps(_stale_shard("l1", "blocked" if case == "refused" else "completed")))
+    stamp = (dev / f"dev-report-{STALE_TID}.json").stat().st_mtime_ns + 10**9
+    os.utime(lane, ns=(stamp, stamp))
+    if case == "cut off":
+        monkeypatch.setattr(agg, "rebuild_if_stale", functools.partial(agg.rebuild_if_stale, timeout=0.001))
+    monkeypatch.setattr(gate._script("scripts/resolve-dev-artifact-chain.py"), "disposition_lines",
+                        lambda root, task, stage: [])
+    lines = gate._disposition(tmp_path, STALE_TID, "dev")
+    assert len(lines) == 1 and "problem=stale_canonical" in lines[0], lines
+    assert f"lane report(s) dev-report-{STALE_TID}-l1.json;" in lines[0]
+    if case == "refused":
+        assert "the aggregator ran on them and refused them" in lines[0] and "did not finish" not in lines[0]
+        assert f"aggregate-dev-report.py --task-id {STALE_TID} --dry-run" in lines[0]
+    else:
+        assert "its rebuild did not finish" in lines[0] and "refused" not in lines[0]

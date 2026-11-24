@@ -172,13 +172,29 @@ def watched() -> bool:
     return any(f.watched for f in _STACK)
 
 
+def run_shell(path: str, payload: bytes, budget: float, deadline: float | None = None) -> RuleRun:
+    """A shell hook of a launcher's table as the CLI ran it: ``bash <file>``, the payload on stdin."""
+    import subprocess
+    start = time.monotonic()
+    wait = max((deadline - start) if deadline is not None else budget, 0.001)
+    try:
+        p = subprocess.run(["bash", path], input=payload, capture_output=True, timeout=wait)
+        return RuleRun(p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace"),
+                       seconds=time.monotonic() - start)
+    except subprocess.TimeoutExpired:
+        return RuleRun(1, "", "", error=f"ran past its {budget:g} s budget", overrun=True, seconds=time.monotonic() - start)
+
+
 def run_rule(path: str, payload: bytes, budget: float, *, fresh_modules: bool = False,
              on_stuck=None, grace: float = 2.0, watchdog: bool = True,
              deadline: float | None = None) -> RuleRun:
     """Run ``path`` as ``__main__`` with ``payload`` on stdin, within ``budget`` seconds (until
     ``deadline``, a ``time.monotonic()`` reading, when given). ``watchdog=False``: no thread;
-    the caller's process keeps the deadline and sends SIGUSR2 once it has passed."""
+    the caller's process keeps the deadline and sends SIGUSR2 once it has passed. A shell hook
+    (``.sh``) runs as ``bash <file>``, its own process, ended at the same budget."""
     path = os.path.abspath(path)
+    if path.endswith(".sh"):
+        return run_shell(path, payload, budget, deadline)
     saved_env = dict(os.environ)
     saved_cwd = os.getcwd()
     saved_umask = os.umask(0o022)

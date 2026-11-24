@@ -71,7 +71,9 @@ def test_step3_block_gets_the_same_decision_in_both_spellings():
 
 
 def test_other_dynamic_or_removal_operands_stay_refused():
-    evidence = '; echo "rm -rf test/"'
+    # The removal word sits among the words of the command whose script operand cannot be read: only there can
+    # it become something that runs (owner's rule, 2026-11-19); an echo's text elsewhere decides nothing.
+    evidence = ' "rm -rf test/"'
     for operand in (
         "${CLAUDE_HOME:-$HOME/.claude}/" + SCRIPT,       # unquoted
         CHANNEL + '../x.sh"',                             # leaves the harness home
@@ -100,7 +102,15 @@ def _test_md_calls() -> list[str]:
 
 def test_every_bash_call_in_test_md_is_allowed_by_the_analyzer_and_the_hook():
     calls = _test_md_calls()
-    assert len(calls) >= 11 and any("--full" in call for call in calls), calls
+    # counted a second way, line by line: a fence or span the scan above misses fails here
+    lines, in_bash, expected = (REPO_ROOT / "commands" / "test.md").read_text(encoding="utf-8").splitlines(), False, 0
+    for line in lines:
+        if line.startswith("```"):
+            in_bash = not in_bash and line.strip().startswith("```bash")
+        elif in_bash and line.strip():
+            expected += 1
+    expected += sum(line.count("`python3 ") for line in lines)
+    assert expected and len(calls) == expected and any("--full" in call for call in calls), calls
     for command in calls:
         result = eb.analyze(command)
         assert result["allowed"] is True, (command, result["verdict"], result.get("reason"))

@@ -34,7 +34,8 @@ PROVENANCE, UNTRUSTED = TT.PROVENANCE, TT.UNTRUSTED
 
 @pytest.fixture()
 def world(tmp_path):
-    return TT.World(tmp_path)
+    with TT.base.project_outside_temp() as project:
+        yield TT.World(tmp_path, project)
 
 
 def _main(world, command: str) -> None:
@@ -126,14 +127,14 @@ def test_a_fake_launch_made_in_an_earlier_call_does_not_own_the_forgery(world):
     _refused(world.gate(qa))
 
 
-def test_a_background_dispatch_the_launcher_refused_owns_nothing(world):
-    """The launcher refuses a background dispatch outside /do; tool-policy still records its launch.
-    No subagent of it ever calls a tool, so a change the main agent sees stays the main agent's,
-    the fake async_launched record and subagent transcript notwithstanding."""
+def test_a_background_dispatch_whose_child_calls_no_tool_owns_nothing(world):
+    """The launcher lets a background dispatch through (any role may run in the background) and
+    tool-policy records its launch. No subagent of it ever calls a tool, so a change the main agent
+    sees stays the main agent's, the fake async_launched record and subagent transcript notwithstanding."""
     prompt = world.obligation_prompt(Q)
     proc = world.launch("Agent", {"description": "qa", "prompt": prompt, "subagent_type": "qa",
                                   "run_in_background": True})
-    assert proc.returncode == 2, proc.stderr
+    assert proc.returncode == 0, proc.stderr
     agent = "afake" + uuid.uuid4().hex[:12]
     (world.scratch / "l.txt").write_text(_fake_launch_lines(agent, prompt))
     sub = world.store / world.sid / "subagents"

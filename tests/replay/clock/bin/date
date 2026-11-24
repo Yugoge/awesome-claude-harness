@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# The replay's clock for `date` (tests/replay/clock): with REPLAY_CLOCK_AT set (Replay.clock_env, a driver on
+# the modeled clock), a `date` that names no time of its own (no -d/--date, -r/--reference, -f/--file,
+# -s/--set) answers for the modeled now: REPLAY_CLOCK_AT plus the real time since the process was started
+# (REPLAY_CLOCK_REAL), or the offset a Python parent computed (REPLAY_CLOCK_OFF). Every other call, and
+# every call without REPLAY_CLOCK_AT, is the real date's, unchanged.
+real=
+for d in /usr/bin/date /bin/date; do [ -x "$d" ] && { real=$d; break; }; done
+[ -n "$real" ] || { echo "date: no real date program" >&2; exit 127; }
+[ -n "${REPLAY_CLOCK_AT:-}" ] || exec "$real" "$@"
+for a in "$@"; do
+  case "$a" in
+    -d*|--date*|-r*|--reference*|-f*|--file*|-s*|--set*) exec "$real" "$@";;
+  esac
+done
+now=$("$real" +%s.%N)
+if [ -n "${REPLAY_CLOCK_OFF:-}" ]; then
+  at=$(awk -v n="$now" -v o="$REPLAY_CLOCK_OFF" 'BEGIN { printf "%.9f", n + o }')
+else
+  at=$(awk -v n="$now" -v a="$REPLAY_CLOCK_AT" -v r="${REPLAY_CLOCK_REAL:-$now}" 'BEGIN { printf "%.9f", a + (n - r) }')
+fi
+exec "$real" -d "@$at" "$@"

@@ -3,7 +3,7 @@
 PreToolUse Hook: Block foreground Agent during an active /spec Interview.
 
 Activation conditions (ALL must be true to block):
-  1. tool_name == "Agent"
+  1. tool_name is a dispatch tool (lib/subagent.DISPATCH_TOOLS)
   2. tool_input.get("run_in_background") is not True
      (background Explore agents are explicitly allowed by spec.md
       Interview Rule 5)
@@ -14,12 +14,12 @@ Activation conditions (ALL must be true to block):
   5. Its checklist (the last ok TodoWrite, or the canonical list before the
      first) has at least one step where status != "completed"
   6. The span was not abandoned: no human-typed prompt followed the opener
-     while Steps 1-3a (the steps /spec runs inside the turn that opened it)
+     while Steps 1-3 (the steps /spec runs inside the turn that opened it)
      were still open, as the last ok TodoWrite before that prompt left them
      (CRITIQUE A3: an unfinished /spec no longer holds every later dispatch)
-  (4-6 are read from the transcript, lib.todo_canonical.live_spec_checklist,
-   the one reading pretool-block-background-tasks.py's Explore exemption
-   shares.)
+  (4-6 are read from the transcript, lib.todo_canonical.live_spec_checklist;
+   this hook is its one reader. A background dispatch of any role passes
+   every hook, so condition 2 is all that lets one through here.)
 
 Exit 0 = allow. Exit 2 = block (stderr message shown to user).
 
@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from lib.todo_canonical import live_spec_checklist  # noqa: E402
+from lib.subagent import DISPATCH_TOOLS  # noqa: E402
 
 
 def _spec_todo_progress(data: dict):
@@ -71,7 +72,7 @@ def _tool_is_exempt(data: dict) -> bool:
 
 def _should_block(data: dict) -> tuple[bool, int, int]:
     """Evaluate activation conditions. Returns (block, done_count, total_count)."""
-    if data.get("tool_name") != "Agent":
+    if data.get("tool_name") not in DISPATCH_TOOLS:
         return False, 0, 0
     if _tool_is_exempt(data):
         return False, 0, 0

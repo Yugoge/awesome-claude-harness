@@ -563,15 +563,21 @@ def test_background_and_orchestrator_gates_allow_all_runtime_eligible_resumes(re
         "session_id": recovery["sid"],
         "tool_input": {"to": "agent-missing", "message": "continue"},
     }
-    denied = _run_hook(background, bad, recovery["env"])
-    assert denied.returncode == 2
-    assert "exact restart-v1" in denied.stderr
+    # a target no Agent call of this session names is another session's: its own harness decides
+    assert _run_hook(background, bad, recovery["env"]).returncode == 0
     ordinary_background = _run_hook(background, {
         "tool_name": "Agent",
         "session_id": recovery["sid"],
         "tool_input": {"subagent_type": "dev", "run_in_background": True},
     }, recovery["env"])
-    assert ordinary_background.returncode == 2
+    # background dispatch is open for every role (H-014); a background Bash stays refused
+    assert ordinary_background.returncode == 0
+    background_bash = _run_hook(background, {
+        "tool_name": "Bash",
+        "session_id": recovery["sid"],
+        "tool_input": {"command": "true", "run_in_background": True},
+    }, recovery["env"])
+    assert background_bash.returncode == 2
     foreground = _run_hook(background, {
         "tool_name": "Agent",
         "session_id": recovery["sid"],
@@ -720,7 +726,7 @@ def test_command_and_settings_keep_restart_human_only_and_lossless() -> None:
     assert "## Why this preserves content" not in command
     config = json.loads((ROOT / "settings.json").read_text(encoding="utf-8"))
     assert config["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] == "1"
-    assert "Skill(restart)" in config["permissions"]["deny"]
+    assert "Skill(restart)" in json.loads((ROOT / "policies" / "cli-deny.v1.json").read_text(encoding="utf-8"))["deny"]
     hooks = _expanded(config)["hooks"]  # each launcher read as the hooks it runs
     pretool_commands = json.dumps(hooks["PreToolUse"])
     posttool_commands = json.dumps(hooks["PostToolUse"])
@@ -735,7 +741,7 @@ def test_bare_restart_with_nothing_to_resume_carries_on_with_the_gated_command(
     then a bare /restart, and the main agent stopped ("say if you want me to continue"). prepare
     finds 0 candidates and no guidance there: step 7's "No guidance" branch, which carries on with
     the gated command from its checklist step in progress (the rule of step 5 and of the overnight
-    wake), never stops there, and pauses only with AskUserQuestion."""
+    wake), never stops there, and asks nothing."""
     monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
     monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "states"))
     sid = str(uuid.uuid4())
@@ -769,7 +775,7 @@ def test_bare_restart_with_nothing_to_resume_carries_on_with_the_gated_command(
     assert "the rule of step 5 and of the overnight wake" in rule
     assert "The turn ends only when no gated command's checklist is open" in rule
     assert 'Never end it with an offer to continue ("say if you want me to continue")' in rule
-    assert "`AskUserQuestion` only" in rule and "`/stop` is the exit" in rule
+    assert "nothing is asked" in rule and "`/stop` is the exit" in rule
     # lesson 16 is untouched: the same agent_id is resumed and never replaced
     assert "Use its exact\n   `agent_id` as `to`" in command and "never dispatch a replacement" in command
     architecture = " ".join((ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8").split())
@@ -892,7 +898,9 @@ def test_restart_helper_channel_spelling_keeps_the_deadlock_exemption(tmp_path: 
     env = {**os.environ, "CLAUDE_PROJECT_DIR": str(project_dir)}
     command = (ROOT / "commands" / "restart.md").read_text(encoding="utf-8")
     lines = [line.strip() for line in command.splitlines() if "/scripts/restart-subagents.py\" " in line]
-    assert len(lines) == 3 and all(line.startswith("python3 " + CHANNEL) for line in lines), lines
+    assert len(lines) == 1 and lines[0].startswith("python3 " + CHANNEL), lines  # step 2's prepare
+    # the waiting and finalizing lines a session holding the older text may still run
+    lines += [lines[0].replace(" prepare", " status --wait-seconds 540"), lines[0].replace(" prepare", " finalize")]
 
     def decide(cmd: str) -> subprocess.CompletedProcess[str]:
         return _run_hook(gate, {"tool_name": "Bash", "session_id": str(uuid.uuid4()),
@@ -937,15 +945,17 @@ def _restart_roots_in_child(tmp_path: Path, accounts_root_env: str | None) -> di
 def test_accounts_root_has_no_default_and_own_roots_follow_config_dir(tmp_path: Path) -> None:
     """Unset or empty CLAUDE_RESTART_ACCOUNTS_ROOT means no sibling-account scan
     (an empty value must not become the current directory); the own projects
-    root and the restart-state root live under CLAUDE_CONFIG_DIR."""
+    root lives under CLAUDE_CONFIG_DIR, the restart-state root under the harness state root on disk."""
     own_projects = tmp_path / "config" / "projects"
     own_projects.mkdir(parents=True)
     (tmp_path / "acct-a" / "claude" / "projects").mkdir(parents=True)  # cwd decoy
+    state_home = os.path.join(os.environ["HOME"], ".local", "state", "claude-harness")
     for value in (None, ""):
         view = _restart_roots_in_child(tmp_path, value)
         assert view["accounts_root"] is None
         assert view["roots"] == [str(own_projects)]
-        assert view["state_dir"] == str(tmp_path / "config" / "restart-state")
+        assert Path(view["state_dir"]).parent.parent == Path(state_home)
+        assert Path(view["state_dir"]).name == "restart-state"
     accounts_root = tmp_path / "accounts"
     (accounts_root / "acct-b" / "claude" / "projects").mkdir(parents=True)
     view = _restart_roots_in_child(tmp_path, str(accounts_root))
@@ -2027,3 +2037,282 @@ def _expanded(settings: dict) -> dict:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.expand(settings, str(root))
+
+
+# ------------------------------------------- a typed /restart: the issuer prepares the recovery set
+
+AUTHORIZER = HOOKS / "userprompt-restart-authorize.py"
+HELPER = ROOT / "scripts" / "restart-subagents.py"
+
+
+def _authorizer():
+    spec = importlib.util.spec_from_file_location("restart_authorize_prepare", AUTHORIZER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _handed_over(stdout: str) -> str | None:
+    """The text the issuer printed between its two markers, or None when it printed no set."""
+    hook = _authorizer()
+    if hook.PREPARED_MARKER not in stdout:
+        return None
+    body = stdout.split(hook.PREPARED_MARKER + "\n", 1)[1]
+    assert hook.PREPARED_END in body, "an opened set is always closed"
+    return body.split("\n" + hook.PREPARED_END, 1)[0]
+
+
+def _helper_prepare(sid: str, env: dict, cwd: Path, *extra: str) -> str:
+    done = subprocess.run([sys.executable, str(HELPER), "prepare", "--session-id", sid, *extra],
+                          capture_output=True, text=True, env=env, cwd=str(cwd), check=False)
+    assert done.returncode == 0, done.stderr
+    return done.stdout.rstrip("\n")
+
+
+def test_typed_restart_hands_over_exactly_what_the_prepare_helper_prints(recovery: dict) -> None:
+    payload = {"session_id": recovery["sid"], "transcript_path": str(recovery["transcript"]),
+               "cwd": str(recovery["transcript"].parent), "prompt": "/restart carry on with X"}
+    issued = _run_hook(AUTHORIZER, payload, recovery["env"])
+    assert issued.returncode == 0, issued.stderr
+    assert "capability issued for parent session" in issued.stdout
+    block = _handed_over(issued.stdout)
+    assert block is not None, issued.stdout
+    # The same session state, the helper run as step 2's fallback would run it: the same bytes.
+    assert block == _helper_prepare(recovery["sid"], recovery["env"], recovery["transcript"].parent)
+    view = json.loads(block)
+    assert view["candidate_count"] == 2 and view["cross_account"] is False
+    assert view["operator_guidance"] == "carry on with X"
+    assert all(c["status"] == "pending" and c["resume_message"] == restart.build_resume_message(
+        recovery["sid"], c["agent_id"], "carry on with X") for c in view["candidates"])
+    assert "restart_grant" not in view, "the set is prepared under the capability just issued"
+
+
+def test_typed_restart_with_the_option_prepares_the_cross_account_set(recovery: dict, tmp_path: Path) -> None:
+    project = recovery["transcript"].parent
+    accounts = tmp_path / "accounts"
+    sibling = accounts / "other" / "claude" / "projects" / restart.project_slug(project) / "sibling.jsonl"
+    _write_jsonl(sibling, [
+        _record("assistant", [_tool_use("toolu_sib", "sibling cut")]),
+        _record("user", [_tool_result("toolu_sib", "You've hit your session limit · resets 2:40pm (UTC)\n"
+                                      "agentId: agent-sibling (use SendMessage to continue this agent)")]),
+    ])
+    _write_meta(sibling, "agent-sibling", "toolu_sib", "sibling cut")
+    env = {**recovery["env"], "CLAUDE_RESTART_ACCOUNTS_ROOT": str(accounts),
+           "CLAUDE_CONFIG_DIR": str(tmp_path / "config")}
+    env.pop("CLAUDE_PROJECT_DIR", None)  # the project is the session's cwd, as in the payload
+    payload = {"session_id": recovery["sid"], "transcript_path": str(recovery["transcript"]),
+               "cwd": str(project), "prompt": "/restart --cross-account go on"}
+    block = _handed_over(_run_hook(AUTHORIZER, payload, env).stdout)
+    assert block is not None
+    view = json.loads(block)
+    assert view["cross_account"] is True and "agent-sibling" in [c["agent_id"] for c in view["candidates"]]
+    assert view["operator_guidance"] == "--cross-account go on", "the argument stays verbatim"
+    assert block == _helper_prepare(recovery["sid"], env, project, "--cross-account")
+    for prompt in ("/restart", "/restart --cross-accounts", "/restart please --cross-account"):
+        plain = json.loads(_handed_over(_run_hook(AUTHORIZER, {**payload, "prompt": prompt}, env).stdout))
+        assert plain["cross_account"] is False, prompt
+        assert "agent-sibling" not in [c["agent_id"] for c in plain["candidates"]], prompt
+
+
+def test_typed_restart_with_no_candidate_hands_over_the_zero_set(tmp_path: Path) -> None:
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    _write_jsonl(transcript, [_record("user", [{"type": "text", "text": "hello"}])])
+    env = {**os.environ, "CLAUDE_RESTART_GRANT_DIR": str(tmp_path / "grants"),
+           "CLAUDE_RESTART_STATE_DIR": str(tmp_path / "states")}
+    issued = _run_hook(AUTHORIZER, {"session_id": sid, "transcript_path": str(transcript),
+                                    "cwd": str(tmp_path), "prompt": "/restart"}, env)
+    assert issued.returncode == 0, issued.stderr
+    block = _handed_over(issued.stdout)
+    assert block is not None, issued.stdout
+    view = json.loads(block)
+    assert view["candidate_count"] == 0 and view["candidates"] == [] and view["complete"] is True
+    assert view["operator_guidance"] is None
+    assert block == _helper_prepare(sid, env, tmp_path)
+    # The zero path's step 6: finalize consumes the capability on the state the hook wrote.
+    finalized = subprocess.run([sys.executable, str(HELPER), "finalize", "--session-id", sid],
+                               capture_output=True, text=True, env=env, check=False)
+    assert finalized.returncode == 0, finalized.stderr
+
+
+def test_restart_without_a_session_id_is_refused_and_prepares_nothing(tmp_path: Path) -> None:
+    transcript = tmp_path / "t.jsonl"
+    _write_jsonl(transcript, [])
+    env = {**os.environ, "CLAUDE_RESTART_GRANT_DIR": str(tmp_path / "grants"),
+           "CLAUDE_RESTART_STATE_DIR": str(tmp_path / "states")}
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    env.pop("CLAUDE_SESSION_ID", None)
+    refused = _run_hook(AUTHORIZER, {"transcript_path": str(transcript), "cwd": str(tmp_path),
+                                     "prompt": "/restart"}, env)
+    assert refused.returncode == 2 and "capability issue failed" in refused.stderr
+    hook = _authorizer()
+    assert hook.PREPARED_MARKER not in refused.stdout and hook.NOT_PREPARED_MARKER not in refused.stdout
+    assert not (tmp_path / "states").exists() or not list((tmp_path / "states").glob("*.json"))
+
+
+def test_a_failed_prepare_keeps_the_capability_and_says_run_the_helper(recovery: dict) -> None:
+    # The state record cannot be written (a directory stands at its path): the helper exits 2.
+    (recovery["state_dir"] / f"{recovery['sid']}.json").mkdir(parents=True)
+    payload = {"session_id": recovery["sid"], "transcript_path": str(recovery["transcript"]),
+               "cwd": str(recovery["transcript"].parent), "prompt": "/restart"}
+    issued = _run_hook(AUTHORIZER, payload, recovery["env"])
+    hook = _authorizer()
+    assert issued.returncode == 0, issued.stderr
+    assert "capability issued for parent session" in issued.stdout
+    assert restart.load_valid_grant(recovery["sid"])["issued_by"] == restart.GRANT_ISSUER
+    assert _handed_over(issued.stdout) is None
+    line = next(x for x in issued.stdout.splitlines() if x.startswith(hook.NOT_PREPARED_MARKER))
+    assert "exited 2" in line and "cannot persist restart state" in line and "prepare command" in line
+
+
+def test_prepare_past_the_budget_or_a_hook_failure_falls_back(recovery: dict, monkeypatch, capsys) -> None:
+    import io
+    hook = _authorizer()
+    payload = json.dumps({"session_id": recovery["sid"], "transcript_path": str(recovery["transcript"]),
+                          "cwd": str(recovery["transcript"].parent), "prompt": "/restart"})
+    monkeypatch.setattr(hook, "PREPARE_BUDGET_SECONDS", 0.0001)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    assert hook.main() == 0
+    out = capsys.readouterr().out
+    assert "capability issued for parent session" in out and hook.PREPARED_MARKER not in out
+    assert f"{hook.NOT_PREPARED_MARKER} preparing ran past this hook's 0.0001 s budget" in out
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(hook, "prepare_block", broken)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
+    assert hook.main() == 0
+    out = capsys.readouterr().out
+    assert "capability issued for parent session" in out
+    assert f"{hook.NOT_PREPARED_MARKER} the hook failed while preparing (RuntimeError: boom)" in out
+    assert restart.load_valid_grant(recovery["sid"])["issued_by"] == restart.GRANT_ISSUER
+
+
+def test_the_command_text_names_the_lines_the_issuer_prints() -> None:
+    hook = _authorizer()
+    command = (ROOT / "commands" / "restart.md").read_text(encoding="utf-8")
+    step2 = command.split("2. **", 1)[1].split("3. **", 1)[0]
+    for line in (hook.PREPARED_MARKER, hook.PREPARED_END, hook.NOT_PREPARED_MARKER):
+        assert f"`{line}`" in " ".join(step2.split()), line
+    assert hook.HELPER == HELPER and HELPER.is_file()
+    assert 'restart-subagents.py" prepare' in step2, "the helper stays step 2's fallback"
+
+
+# The recovery finishes itself: the hooks that see each send and each response wait and
+# finalize; the parent's next prompt is told the outcome in one line (commands/restart.md step 4).
+THREE = ("agent-one", "agent-two", "agent-three")
+
+
+@pytest.fixture()
+def three(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
+    monkeypatch.setenv("CLAUDE_RESTART_GRANT_DIR", str(tmp_path / "grants"))
+    monkeypatch.setenv("CLAUDE_RESTART_STATE_DIR", str(tmp_path / "states"))
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    records = []
+    for n, aid in enumerate(THREE):
+        tid = f"toolu_cut_{n}"
+        records += [_record("assistant", [_tool_use(tid, aid)]), _record("user", [_tool_result(
+            tid, f"You've hit your session limit · resets 2:40pm (UTC)\nagentId: {aid}")])]
+    _write_jsonl(transcript, records)
+    for n, aid in enumerate(THREE):
+        _write_meta(transcript, aid, f"toolu_cut_{n}", aid)
+    env = {**os.environ, "CLAUDE_RESTART_GRANT_DIR": str(tmp_path / "grants"),
+           "CLAUDE_RESTART_STATE_DIR": str(tmp_path / "states"), "CLAUDE_CODE_SESSION_ID": sid}
+    base = {"session_id": sid, "transcript_path": str(transcript), "cwd": str(tmp_path)}
+    issued = _run_hook(AUTHORIZER, {**base, "prompt": "/restart"}, env)
+    assert issued.returncode == 0, issued.stderr
+    view = json.loads(_handed_over(issued.stdout) or "{}")
+    assert sorted(c["agent_id"] for c in view["candidates"]) == sorted(THREE)
+    return {"sid": sid, "env": env, "base": base, "view": view}
+
+
+def _send_all(case: dict) -> None:
+    for c in case["view"]["candidates"]:
+        sent = _run_hook(HOOKS / "posttool-restart-sendmessage.py", {
+            "tool_name": "SendMessage", "session_id": case["sid"],
+            "tool_input": {"to": c["agent_id"], "message": c["resume_message"]},
+            "tool_response": {"status": "sent"}}, case["env"])
+        assert sent.returncode == 0 and "RESTART DISPATCH RECORDED" in sent.stdout, sent.stderr
+
+
+def _respond(case: dict, aid: str) -> None:
+    stopped = _run_hook(HOOKS / "subagentstop-restart-track.py", {
+        "session_id": case["sid"], "agent_id": aid, "stop_hook_active": False,
+        "last_assistant_message": "done\nRECOVERY_STATUS: completed"}, case["env"])
+    assert stopped.returncode == 0 and stopped.stdout == "", stopped.stdout
+
+
+def _prompt(case: dict, text: str) -> str:
+    done = _run_hook(AUTHORIZER, {**case["base"], "prompt": text}, case["env"])
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def _state(case: dict) -> dict:
+    return json.loads(restart.state_path(case["sid"]).read_text(encoding="utf-8"))
+
+
+def test_three_responses_finalize_the_recovery_with_no_command_of_the_agent(three: dict) -> None:
+    _send_all(three)
+    for aid in THREE[:2]:
+        _respond(three, aid)
+        assert "finalized_at" not in _state(three)
+    assert restart.grant_path(three["sid"]).is_file()
+    _respond(three, THREE[2])
+    assert _state(three)["finalized_at"], "the last response finalizes the recovery"
+    assert not restart.grant_path(three["sid"]).exists(), "the capability is consumed"
+    told = _prompt(three, f"<task-notification><task-id>{THREE[2]}</task-id>"
+                          "<status>completed</status></task-notification>")
+    lines = [line for line in told.splitlines() if "RECOVERY FINALIZED" in line]
+    assert len(lines) == 1 and all(aid in lines[0] for aid in THREE), told
+    assert "RECOVERY FINALIZED" not in _prompt(three, "go on"), "said once"
+
+
+def test_a_child_that_never_responds_is_named_at_the_next_prompt(three: dict) -> None:
+    _send_all(three)
+    for aid in THREE[:2]:
+        _respond(three, aid)
+    told = _prompt(three, "go on")
+    assert f"RESTART_INCOMPLETE: no response yet from {THREE[2]} (dispatched)" in told, told
+    assert THREE[0] not in told and "RECOVERY FINALIZED" not in told
+    assert "finalized_at" not in _state(three) and restart.grant_path(three["sid"]).is_file()
+    assert "RESTART_INCOMPLETE" not in _prompt(three, "and now?"), "told once per change"
+
+
+def test_no_candidates_leave_nothing_to_run(tmp_path: Path) -> None:
+    sid = str(uuid.uuid4())
+    transcript = tmp_path / f"{sid}.jsonl"
+    _write_jsonl(transcript, [_record("user", [{"type": "text", "text": "hello"}])])
+    env = {**os.environ, "CLAUDE_RESTART_GRANT_DIR": str(tmp_path / "grants"),
+           "CLAUDE_RESTART_STATE_DIR": str(tmp_path / "states")}
+    base = {"session_id": sid, "transcript_path": str(transcript), "cwd": str(tmp_path)}
+    issued = _run_hook(AUTHORIZER, {**base, "prompt": "/restart"}, env)
+    assert json.loads(_handed_over(issued.stdout) or "{}")["candidate_count"] == 0
+    nxt = _run_hook(AUTHORIZER, {**base, "prompt": "carry on"}, env)
+    assert "RECOVERY FINALIZED by the harness: 0 resumed agent(s)" in nxt.stdout, nxt.stdout
+    assert not (tmp_path / "grants" / restart.grant_path(sid).name).exists()
+    text = (ROOT / "commands" / "restart.md").read_text(encoding="utf-8")
+    steps = text.split("## Mandatory procedure", 1)[1].split("## Prohibitions", 1)[0]
+    assert "status --wait-seconds" not in steps and '" finalize' not in steps, "no command left to run"
+
+
+def test_the_old_manual_commands_still_answer_correctly(three: dict) -> None:
+    def helper(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([sys.executable, str(HELPER), *args, "--session-id", three["sid"]],
+                              capture_output=True, text=True, env=three["env"], check=False, timeout=60)
+    _send_all(three)
+    _respond(three, THREE[0])
+    waiting = helper("status", "--wait-seconds", "0")
+    assert waiting.returncode == 0 and json.loads(waiting.stdout)["incomplete_agent_ids"] == list(THREE[1:])
+    early = helper("finalize")
+    assert early.returncode == 2 and "remain incomplete" in early.stderr
+    for aid in THREE[1:]:
+        _respond(three, aid)
+    status = helper("status", "--wait-seconds", "540")  # complete: it returns at once
+    assert status.returncode == 0 and json.loads(status.stdout)["complete"] is True
+    final = helper("finalize")
+    assert final.returncode == 0, final.stderr
+    assert json.loads(final.stdout)["finalized_at"] == _state(three)["finalized_at"]
+    assert not restart.grant_path(three["sid"]).exists()

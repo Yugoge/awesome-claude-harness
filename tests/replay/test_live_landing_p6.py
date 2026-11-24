@@ -8,8 +8,10 @@ d64fa96): the one P6 landed on. Each replay is a live landing (tests/replay/land
 test_live_landing.py runs it): the sandbox is built from the base tree, the session loads the base's
 settings.json and plays the base's command text, and the harness home fast-forwards to the tree under
 test while one subagent of the base's cycle is running (drivers/_p6_landing.py names the moment per
-case). `master` keeps the base's settings.json for the whole session (D15); `base` reloads this tree's
-from the landing on (landing.py `hooklist=landed`, A17's "Repeat with your settings.json").
+case). `base` reloads this tree's settings.json from the landing on (landing.py `hooklist=landed`,
+A17's "Repeat with your settings.json"). `master`, the base's settings.json kept for the whole session
+(D15), is retired: that list names hook files this tree has retired, and no session holding a7d3a9f's
+list can still exist (policies/replay-hook-lists.v1.json).
 
 The cases (A17, the A6 resolutions it names):
 
@@ -57,9 +59,11 @@ import time
 import pytest
 
 from tests.replay import hookrun, landing, sites, suite
+from tests.replay.drivers.dev import S as DEV
+from tests.replay.drivers.overnight import N
 
 OLD = "a7d3a9fec736c0e64b5a822ba5da788d4f178bda"
-SETTINGS = ("master", "base")
+SETTINGS = ("base",)
 G2 = "hooks/subagentstop-artifact-contract-enforce.py"
 CODEX = "hooks/subagentstop-codex-enforce.py"
 E2E = "hooks/subagentstop-e2e-enforce.py"
@@ -73,15 +77,15 @@ COSTS = {"untracked": 100, "codex": 90, "qa": 110, "explore": 60, "overnight": 1
 # Each probe: (event, label, the n-th event with that label after the landing (1-based), the blocks it
 # must show as {hook: first-line regex}; {} for none). Every other event after the landing blocks nothing.
 PROBES = {
-    "untracked": [("SubagentStop", "Step 10 Agent(dev) stop", 1, {G2: r"^OBLIGATION_STOPGATE_BLOCKED: .*role=dev"}),
-                  ("SubagentStop", "Step 10 Agent(dev) stop", 2, {})],
-    "codex": [("SubagentStop", "Step 10 Agent(dev) stop", 1, {CODEX: r"^CODEX_ENFORCE_BLOCKED: .*\(type=dev\)"}),
+    "untracked": [("SubagentStop", f"Step {DEV.dev} Agent(dev) stop", 1, {G2: r"^OBLIGATION_STOPGATE_BLOCKED: .*role=dev"}),
+                  ("SubagentStop", f"Step {DEV.dev} Agent(dev) stop", 2, {})],
+    "codex": [("SubagentStop", f"Step {DEV.dev} Agent(dev) stop", 1, {CODEX: r"^CODEX_ENFORCE_BLOCKED: .*\(type=dev\)"}),
               ("PostToolUse", "agent:dev Skill(codex) (next round)", 1, {}),
-              ("SubagentStop", "Step 10 Agent(dev) stop", 2, {})],
-    "qa": [("SubagentStop", "Step 13 Agent(qa) stop", 1, {E2E: r"^E2E_ENFORCE_BLOCKED: .*\(type=qa\).*skipped_without_justification"}),
+              ("SubagentStop", f"Step {DEV.dev} Agent(dev) stop", 2, {})],
+    "qa": [("SubagentStop", f"Step {DEV.qa} Agent(qa) stop", 1, {E2E: r"^E2E_ENFORCE_BLOCKED: .*\(type=qa\).*skipped_without_justification"}),
            ("PostToolUse", "agent:qa Read dev.json (next round)", 1, {}),
-           ("SubagentStop", "Step 13 Agent(qa) stop", 2, {E2E: r"^E2E_ENFORCE_BLOCKED: .*\(type=qa\).*skipped_without_justification"}),
-           ("SubagentStop", "Step 13 Agent(qa) stop", 3, {})],
+           ("SubagentStop", f"Step {DEV.qa} Agent(qa) stop", 2, {E2E: r"^E2E_ENFORCE_BLOCKED: .*\(type=qa\).*skipped_without_justification"}),
+           ("SubagentStop", f"Step {DEV.qa} Agent(qa) stop", 3, {})],
     "explore": [("PreToolUse", "agent:Explore Grep", 1, {}), ("PreToolUse", "agent:Explore Glob", 1, {}),
                 ("PreToolUse", "agent:Explore Bash ls", 1, {}), ("SubagentStop", "main Agent(Explore) stop", 1, {}),
                 ("PreToolUse", "main Agent(demo-plugin:reviewer)", 1, {}),
@@ -91,10 +95,11 @@ PROBES = {
                 ("PreToolUse", "agent:demo-plugin:reviewer Write src/y.py", 1, {}),
                 ("SubagentStop", "main Agent(demo-plugin:reviewer) stop", 1, {}), ("Stop", "Stop", 1, {})],
     "overnight": [("PreToolUse", "agent:dev Write outside the working root", 1, {GUARD: r"WORKTREE"}),
-                  ("SubagentStop", "C1 Step 12 Agent(dev) pipeline 0 stop", 1, {})],
+                  ("SubagentStop", f"C1 Step {N.dev} Agent(dev) pipeline 0 stop", 1, {})],
     "grant": [("PreToolUse", "agent:changelog-analyst Write MSGFILE 0", 1, {}),
               ("PreToolUse", "agent:changelog-analyst Bash stage and commit 0", 1, {}),
               ("PreToolUse", "agent:changelog-analyst Bash push-gate token 0", 1, {}),
+              # the base framework's own driver plays this case, pinned at OLD: its label is that commit's
               ("SubagentStop", "/commit Step 7 Agent(changelog-analyst) stop", 1, {}), ("Stop", "/commit Stop", 1, {})],
 }
 
@@ -339,9 +344,8 @@ def test_inflight_subagent_meets_this_tree(request, tmp_path_factory, case, sett
 
 @pytest.mark.parametrize("case", [pytest.param(c, marks=pytest.mark.replay(f"P6 A17 {c}", COSTS[c])) for c in COSTS])
 def test_the_landed_settings_are_this_trees(request, tmp_path_factory, case):
-    """`base` runs every event after the landing with this tree's settings.json, `master` with the base's."""
+    """`base` runs every event after the landing with this tree's settings.json."""
     got = _results(request, tmp_path_factory, case)
     land = {s: _landing(got[s]) for s in SETTINGS}
     reload = (got["base"].fact("hooklist") or {}) if case == "grant" else land["base"]
     assert reload.get("hooklist") == "landed" and "CLAUDE_OBLIGATION_GATE" in reload.get("env_changed", []), reload
-    assert not land["master"].get("hooklist") and not got["master"].fact("hooklist"), land["master"]

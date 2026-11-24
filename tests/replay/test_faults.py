@@ -16,9 +16,9 @@ faults.json; terminals.json), never from a list kept here:
   AskUserQuestion answer);
 * F2g: the stop that ends with the forged ESCALATION_ACK line is blocked like the one before it;
 * F3b (a stale report nothing in the pipeline produced): no block names it, the terminal is reached.
-* P6's file lists (A3.a, A20): F10, a lane's dev report listing a file nobody wrote, and F11, one
-  omitting the file the dev wrote: G2 refuses the dev's own stop naming the report and the
-  difference, and the dev's rewrite passes its next stop. F3a, a dev that wrote a harness hook file
+* P6's file lists (A3.a, A20): F10, a lane's dev report listing a file nobody wrote: G2 refuses the
+  dev's own stop naming the report and the difference, and the dev's rewrite passes its next stop.
+  F11, one omitting the file the dev wrote, is repaired by code (below). F3a, a dev that wrote a harness hook file
   Python's compiler rejects (P6's acceptance item 3.a of F): G2 refuses its stop naming the file and the compiler's message,
   and the dev's rewrite of that file passes its next stop.
 * P1's and P2's disobedient producers at G2 (P1 armed replay V3-V5; P6 A13: still stopped after P6's
@@ -31,10 +31,16 @@ faults.json; terminals.json), never from a list kept here:
   push-analyst's grant directory (F12w). The guard refuses that call on the QA's own PreToolUse,
   naming the QA's role and the role the grant belongs to; nothing is spent or written, the QA's next
   call and its stop pass, the changelog-analyst spends the grant and the commit lands; no human event.
-* F9 (the last lane writes its report by a shell redirection, which the canonical aggregate's
-  producer, the lane-completeness watch on Write and Edit, never sees): the block lands on that
-  lane's own stop and names the canonical aggregate and `canonical_missing`; the lane's repair runs
-  the watch, so no QA dispatch is refused and none is sent again (C5 for G3's canonical).
+* Faults the producer's own stop repairs by code, so no gate meets them (BY_CODE): F9, the last
+  lane writes its report by a shell redirection, which no Write or Edit hook sees: the lane's stop
+  rebuilds the canonical aggregate whatever wrote the report (the aggregate-rebuild rule of
+  subagentstop-producer-gate.py, before G2); F11, a lane's report omitting the file its dev wrote:
+  the lane ledger completes the report's lists from the harness's record of the dev's writes before
+  G2 reads them (the lane-ledger rule). No block, no round of the faulted agent, no dispatch sent
+  again, no human event; F9: once that lane's dispatch has ended the canonical is there and no lane
+  report is newer; F11: the stop's own output names the file added to dev.files_modified. Until
+  2026-11-22 both were returned to the producer by G2 (canonical_missing; "written but not
+  declared"); that return is gone with the repair, so it is no longer checked here.
 
 Interrupted session and resume after a usage limit (F5, F5f, F6; tests/replay/recovery.py): the
 session is cut while the dev subagent runs, after its Edit; the owner's /restart (HX) resumes that
@@ -58,7 +64,7 @@ F8c's and F8r's commits land.
 What /close does where no agent can produce a gap's artifact (P4's review, findings 1 and 2): F8n, BA's
 ticket missing in a /close whose task's /dev session is gone from the store while an earlier /close's
 re-dispatch survives: the reader names no owner for it (never /close's own rating step, which runs no
-dispatch, D8), Routes asks the owner (header Request), and nothing writes BA's artifact; F8a, `/close
+dispatch, D8), Routes reports it on a NO_OWNER: line, nobody asked, the Stop passes, and nothing writes BA's artifact; F8a, `/close
 --auto` over the cycle and an old task docs/dev holds with no record of its dispatches: the discovery passes
 the old task over, its reason on stderr and in the batch line, and the cycle lands (D25).
 """
@@ -71,13 +77,17 @@ import re
 import pytest
 
 from tests.replay import recovery, routing, sites, suite
+from tests.replay.drivers.close import CL
+from tests.replay.drivers.commit import CM
+from tests.replay.drivers.dev import S as DEV
+from tests.replay.drivers.spec import SP
 
 FANOUT = next(s for s in suite.COMPLIANT if s.name == "/dev 2-lane fan-out")
 L1_DEV = "agent:dev Write docs/dev/dev-report-*-l1.json"
 L2_QA = "agent:qa Write docs/dev/qa-report-*-l2.json"
 L1_BA_QA = "agent:qa Write docs/dev/ba-qa-report-*-l1.json"
-L1_DEV_DISPATCH = "Step 10 [[]l1] Agent(dev)"
-L1_QA_DISPATCH = "Step 13 [[]l1] Agent(qa)"
+L1_DEV_DISPATCH = f"Step {DEV.dev} [[]l1] Agent(dev)"
+L1_QA_DISPATCH = f"Step {DEV.qa} [[]l1] Agent(qa)"
 
 # fault -> (what the replay injects, what kind of outcome the test asserts)
 FAULTS = {
@@ -89,9 +99,7 @@ FAULTS = {
     "F3b": f"plant@{L1_QA_DISPATCH}=docs/dev/qa-report-{{task}}.json:qa-report.v1",
     "F7": f"pretemplate@{L1_DEV_DISPATCH};invalid@{L1_DEV}=dev.status:needs_review",
     "F7b": f"noblock@{L1_DEV_DISPATCH};invalid@{L1_DEV}=dev.status:needs_review",
-    "F9": "bash@agent:dev Write docs/dev/dev-report-*-l2.json",
     "F10": f"invalid@{L1_DEV}=+dev.files_modified:README.md",
-    "F11": f"invalid@{L1_DEV}=dev.files_modified:[]",
     "F3a": "harness@agent:dev Edit toy/__init__.py=hooks/p6-f3a-probe.py",
     "F2i": f"invalid@{L1_BA_QA}=task_id:20250101-000000",  # P1's V5 (P6 A13)
 }
@@ -103,20 +111,27 @@ CHECK = {
     "F2": r"files_modified|'done'", "F2g": r"files_modified|'done'",
     "F2j": r"JSON|[Pp]ars|[Dd]ecod|Expecting|Unterminated",
     "F7": r"needs_review|required_values", "F7b": r"needs_review|missing_block",
-    "F9": r"canonical_missing",
     "F10": r"declared but not written by this dev: README\.md",
-    "F11": r"written but not declared: [^\n]*toy/__init__\.py",
     "F3a": r"harness_syntax_error",
     "F2i": r"identity_mismatch\n\s*identity\.task_id: obligation declares '[^']+', file has '20250101-000000'",
 }
 
+# faults the producer's own stop repairs by code: no gate meets them, no block names a check (FAULTS rows returned
+# by G2 until 2026-11-22; the lane-ledger and aggregate-rebuild rules of subagentstop-producer-gate.py)
+BY_CODE = {
+    "F9": "bash@agent:dev Write docs/dev/dev-report-*-l2.json",
+    "F11": f"invalid@{L1_DEV}=dev.files_modified:[]",
+}
+
 
 def key(fault: str, settings: str) -> str:
-    return suite.replay_key(FANOUT, settings, (("fault", FAULTS[fault]),))
+    return suite.replay_key(FANOUT, settings, (("fault", FAULTS.get(fault) or BY_CODE[fault]),))
 
 
 CASES = [pytest.param(fault, s, id=f"{fault}-{s}", marks=pytest.mark.replay(key(fault, s), FANOUT.cost))
          for fault in FAULTS for s in suite.SETTINGS]
+CODE_CASES = [pytest.param(fault, s, id=f"{fault}-{s}", marks=pytest.mark.replay(key(fault, s), FANOUT.cost))
+              for fault in BY_CODE for s in suite.SETTINGS]
 
 
 # ---------------------------------------------------------------- what the run's files say
@@ -228,6 +243,8 @@ def row(fault: str, settings: str, r) -> dict:
         named, receiver = refused["label"], all(b["agent"] is None for b in bl)  # the orchestrator's call
     elif f.get("kind") == "plant":  # nothing produced it: no producer, no block expected
         named, receiver = f.get("path"), "none (no block)" if not bl else False
+    elif fault in BY_CODE:  # the producer's stop repairs it by code: no block expected
+        named, receiver = f.get("path"), "none (repaired by code)" if not bl else False
     else:
         named = f.get("path") or "-"
         producers = declaring_agents(r, f.get("path", "")) or [a for _, a in writers(r, f.get("path", ""))][:1]
@@ -283,6 +300,37 @@ def _returned_and_repaired(fault: str, r) -> None:
     assert not human_events(r, injected), f"{fault}: human events after the injection: {human_events(r, injected)}"
 
 
+def stop_output(r, agent: str) -> str:
+    """Every hook's text (stdout and stderr) at the agent's SubagentStop events, in order."""
+    return "\n".join((h.get("stdout") or "") + (h.get("stderr") or "")
+                     for ev, inv in zip(r.hook_events(), invocations(r))
+                     if inv["event"] == "SubagentStop" and inv["payload"].get("agent_id") == agent
+                     for h in ev.get("hooks", []))
+
+
+def _repaired_by_code(fault: str, r) -> None:
+    """BY_CODE: the faulted agent's stop passes the first time and the code, not the agent, made it whole."""
+    f = next((f for f in fault_records(r) if f.get("path")), None)
+    assert f, f"{fault}: the fault was never injected (faults.json)\n" + r.explain()
+    assert not r.blocks, f"{fault}: a gate met a fault the producer's stop repairs by code:\n" + r.explain()
+    mine = stops(r, f["agent"])
+    assert mine and not any(s["blocked"] for s in mine), f"{fault}: the producer's stop was returned: {mine}"
+    assert not f["repaired"] and not f["rounds"], f"{fault}: the faulted agent repaired it itself: {f}"
+    again = [ev["label"] for ev in invocations(r) if ev["event"] == "PreToolUse"
+             and ev["payload"].get("tool_name") == "Agent" and "(next round)" in ev["label"]]
+    assert not again, f"{fault}: a dispatch was sent again: {again}"
+    assert not human_events(r, injected_at(r, f)), f"{fault}: human events after the injection"
+    if fault == "F9":
+        seen = f.get("canonical_at_stop") or {}
+        assert seen.get("path") == re.sub(r"-l2\.json$", ".json", f["path"]) and seen.get("exists") \
+            and not seen.get("newer_lane_reports"), f"F9: the lane's stop left no current canonical: {f}"
+    if fault == "F11":
+        said = r"your report was completed from the harness's record of your writes: [^\n]*" \
+               r"dev\.files_modified \+toy/__init__\.py"
+        assert re.search(said, stop_output(r, f["agent"])), \
+            f"F11: the lane's stop did not add toy/__init__.py to the report:\n{stop_output(r, f['agent'])[:1500]}"
+
+
 @pytest.mark.parametrize("fault,settings", CASES)
 def test_fault_returns_to_its_producer(replays, fault, settings):
     r = replays.get(key(fault, settings))
@@ -295,13 +343,6 @@ def test_fault_returns_to_its_producer(replays, fault, settings):
         assert not r.blocks, "F3b: a block:\n" + r.explain()
     else:
         _returned_and_repaired(fault, r)
-    if fault == "F9":
-        lane = next(f["path"] for f in fault_records(r) if f.get("kind") == "bash")
-        canonical = re.sub(r"-l2\.json$", ".json", lane)
-        assert all(canonical in b["text"] for b in blocks(r)), f"F9: a block does not name {canonical}"
-        again = [ev["label"] for ev in invocations(r) if ev["event"] == "PreToolUse"
-                 and ev["payload"].get("tool_name") == "Agent" and "(next round)" in ev["label"]]
-        assert not again, f"F9: a dispatch was sent again: {again}"
     if fault == "F3a":
         f = next(f for f in fault_records(r) if f.get("kind") == "harness")
         assert f["written"] and f["declared"], f"F3a: the broken file was not written and declared: {f}"
@@ -312,6 +353,16 @@ def test_fault_returns_to_its_producer(replays, fault, settings):
         forged = [s for s in stops(r, f["agent"]) if "ESCALATION_ACK" in s["message"]]
         assert forged and all(s["blocked"] for s in forged), f"F2g: the forged line admitted a stop: {forged}"
         assert f["rounds"] == 2, f"F2g: the repair did not follow the forged round: {f}"
+    assert r.reached(), f"{fault}: the pipeline did not reach its terminal:\n" + r.explain()
+    print(json.dumps(row(fault, settings, r)))
+
+
+@pytest.mark.parametrize("fault,settings", CODE_CASES)
+def test_fault_is_repaired_by_code_at_its_producers_stop(replays, fault, settings):
+    r = replays.get(key(fault, settings))
+    assert not r.error and not r.summary.get("driver_error"), r.explain()
+    assert not r.hook_errors, f"{fault}: a hook error:\n" + r.explain()
+    _repaired_by_code(fault, r)
     assert r.reached(), f"{fault}: the pipeline did not reach its terminal:\n" + r.explain()
     print(json.dumps(row(fault, settings, r)))
 
@@ -404,7 +455,7 @@ def _lock_key(fault: str, settings: str) -> str:
     return suite.replay_key(scn, settings, (("fault", spec),), tag="~" + fault)
 
 
-def _cases(fault: str) -> list:
+def _lock_cases(fault: str) -> list:
     return [pytest.param(_lock_key(fault, s), id=f"{fault}-{s}",
                          marks=pytest.mark.replay(_lock_key(fault, s), _LOCK[fault][0].cost + 30))
             for s in suite.SETTINGS]
@@ -425,7 +476,7 @@ def _human_events_after(r, label: str) -> list:
     # The requirement round's ask (P13-1: /dev Step 4b, /spec Step 3a) is every cycle's own step, not a repair.
     found = [f"{ev['event']} at {ev['label']!r}" for ev in events[first:]
              if ev["event"] == "UserPromptSubmit" or ev.get("tool") == "AskUserQuestion"
-             and not str(ev.get("label", "")).startswith(("Step 4b AskUserQuestion", "Step 3a AskUserQuestion"))]
+             and not str(ev.get("label", "")).startswith(("Step 4b AskUserQuestion", f"Step {SP.write}a AskUserQuestion"))]
     with open(os.path.join(r.run_dir, "markers.jsonl")) as fh:
         marks = [json.loads(line) for line in fh]
     start = next(m["seq"] for m in marks if m["kind"] == "step" and m["value"] == label)
@@ -448,7 +499,7 @@ def _completed(r, rec: dict) -> None:
     assert _human_events_after(r, rec["label"]) == []
 
 
-@pytest.mark.parametrize("key", _cases("F4"))
+@pytest.mark.parametrize("key", _lock_cases("F4"))
 def test_f4_lock_held_through_dev(replays, key):
     """F4: index.lock held by a live process through a /dev cycle's checkpoints and its Stop: 0 blocks,
     the checkpoint ref advances, and the holder's own release finds its lock (nothing removed it)."""
@@ -459,7 +510,7 @@ def test_f4_lock_held_through_dev(replays, key):
     assert rec["checkpoint_after"] and rec["checkpoint_after"] != rec["checkpoint_before"], rec
 
 
-@pytest.mark.parametrize("key", _cases("F4c"))
+@pytest.mark.parametrize("key", _lock_cases("F4c"))
 def test_f4c_live_lock_at_commit(replays, key):
     """F4c: a live holder from before /commit's commit until 20 s after the shared-index sync starts:
     the sync waits (its wait line names the holder), removes nothing, and completes after the release."""
@@ -472,7 +523,7 @@ def test_f4c_live_lock_at_commit(replays, key):
     assert rec["sync_reports"] and rec["sync_reports"][-1]["synced"], rec
 
 
-@pytest.mark.parametrize("key", _cases("F4s"))
+@pytest.mark.parametrize("key", _lock_cases("F4s"))
 def test_f4s_stale_lock_at_commit(replays, key):
     """F4s: a stale index.lock at /commit (no process, older than the sync): the sync removes it once,
     says so on stdout, and completes; no lock is left."""
@@ -493,7 +544,7 @@ F8 = suite.Scenario("F8", "close", (("variant", "route"), ("cycle_variant", "fan
 F8P = suite.Scenario("F8p", "close", (("variant", "break"), ("cycle_variant", "fanout")), ("dev", "close"), 420)
 CHAIN_CALL = "resolve-dev-artifact-chain.py"  # the disposition call: /close's Step 0, /commit's Step 3
 F8Q = suite.Scenario("F8q", "close", (("cycle_variant", "fanout"),), ("close",), 420)
-F8Q_CUT = (("fault", "cut@Step 13 [[]l2] Agent(qa)"),)
+F8Q_CUT = (("fault", f"cut@Step {DEV.qa} [[]l2] Agent(qa)"),)
 F8C = suite.Scenario("F8c", "commit", (("variant", "commit-route"), ("cycle_variant", "fanout")),
                      ("dev", "close", "commit"), 500)
 
@@ -558,7 +609,7 @@ def test_f8r_late_repair_qa_report_removed_then_commit(replays, key):
     f = routing.assert_routed(r, typed="commit", source="dispatch", check=CHAIN_CALL,
                               path=f"docs/dev/qa-report-{tid}.json")
     assert f["chain"][-1]["disposition"] == "chain_pass", f["chain"]
-    plans = [p["value"] for p in r.facts if p["key"] == "commit Step 5"]
+    plans = [p["value"] for p in r.facts if p["key"] == f"commit Step {CM.grant}"]
     assert plans and plans[-1]["ok"] and plans[-1]["late_repair_state"] != "invalid", plans
     assert plans[-1]["late_repair_state"] == "none", plans
     assert r.fact("commit")["commit_status"] == "committed", r.fact("commit")
@@ -630,21 +681,25 @@ def test_f6o_usage_limit_after_end_time_before_the_summary_resumed_by_the_wake(r
     assert got["terminal"]["end_time"] < got["cut"]["at"] <= got["terminal"]["stopped_at"], got
 
 
-# ---------------------------------------------------------------- X8's refusals of the widened exception
+# ---------------------------------------------------------------- X8's two sends outside the widened exception
+# Since the owner's ruling of 2026-11-21 (a send to an own subagent is judged as its dispatch, lib/send_policy.py; the
+# /restart-candidate refusal retired) only the exact resume message passes as a resume: another message to the cut
+# agent is new work, judged as a dispatch of its role (resume-message ruling), so the dispatch gate refuses it for
+# the cut pm, whose dispatch needs its mode; a send to an id that is no subagent of the session is the receiving
+# session's to decide (not refused). The run then resumes the cut agent with the exact message as before.
 
 @pytest.mark.parametrize("key", _cases(STOP_WAKE, REFUSALS["bad-message"], "bad-message-")
                          + _cases(STOP_WAKE, REFUSALS["bad-id"], "bad-id-"))
-def test_the_wakes_capability_refuses_any_other_message_or_id(replays, key):
+def test_the_wakes_other_message_or_id_is_not_refused_and_the_cut_agent_still_resumes(replays, key):
     r = replays.get(key)
     assert not r.error and not r.summary.get("driver_error") and r.rc == 0, r.explain()
     assert not r.hook_errors, r.explain()
-    refusal = r.fact("wake refusal")
-    assert refusal and refusal["refused"], refusal
-    want = {"bad-message": "does not begin with the exact restart-v1 recovery message",
-            "bad-id": "not a recoverable interrupted subagent"}[refusal["case"]]
-    bl = blocks(r)
-    assert bl and all(b["step"] == f"/restart SendMessage ({refusal['case']})" for b in bl), r.explain()
-    assert any(want in b["text"] for b in bl), r.explain()
+    sent = r.fact("wake refusal")
+    other = sent and sent["case"] == "bad-message"  # new work for the cut pm: a dispatch without its mode
+    assert sent and sent["refused"] is bool(other), sent
+    assert not other or "is a dispatch of pm" in sent["text"], sent
+    assert not [b for b in blocks(r) if b["step"].startswith("/restart SendMessage")
+                and b["step"] != "/restart SendMessage (bad-message)"], r.explain()
     f = recovery.facts(r)  # the compliant SendMessage after it resumed the cut agent
     assert all(a["resumed"] and a["written_after_resume"] == a["declared"] for a in f["agents"].values()), f
 
@@ -672,12 +727,13 @@ def test_f8n_a_ticket_nobody_owes_goes_to_the_owner_never_to_the_rating_step(rep
     assert not r.blocks and not r.hook_errors, r.explain()
     tid = r.terminal("close")["task"]
     ticket = f"docs/dev/ticket-{tid}.md"
-    gaps = [g for f in r.facts if f["key"] == "close Step 0" for g in f["value"].get("gaps") or []]
+    gaps = [g for f in r.facts if f["key"] == f"close Step {CL.disposition}" for g in f["value"].get("gaps") or []]
     assert [ticket, "MISSING_ARTIFACT"] in gaps, gaps
     owing = [f["value"] for f in r.facts if f["key"] == "owing dispatch" and f["value"]["path"] == ticket]
     assert owing and all(o["answer"] is None for o in owing), owing
-    asked = [f["value"] for f in r.facts if f["key"] == "close Request question"]
-    assert asked == [{"artifact": "docs/dev/ticket-<task>.md", "header": "Request", "ok": True, "blocked": False}], asked
+    reported = [f["value"] for f in r.facts if f["key"] == "close Request report"]
+    assert reported == [{"artifact": "docs/dev/ticket-<task>.md"}], reported  # reported, nobody asked
+    assert r.fact("close Request stop") == {"still_blocked": False}, r.explain()  # the Stop passes on the report
     assert not [p for _sid, p in routing.main_writes(r.run_dir) if p.endswith("/" + ticket)], \
         "the /close orchestrator wrote BA's ticket"
 

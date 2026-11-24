@@ -355,19 +355,34 @@ def test_gitignored_in_repo_file_named_by_command_is_still_captured(tmp_path, mo
 
 
 def test_measured_overhead_reported(tmp_path, monkeypatch, capsys):
-    import time
+    """The shell measurement costs a fixed number of git runs, not one per dirty file (the per-file
+    run dominated the naive cost). The work is counted, no clock: 50 dirty files take as many git
+    runs as 5, and that number is small."""
     _env(tmp_path, monkeypatch)
     repo = _repo(tmp_path)
-    for i in range(50):
-        (repo / f"f{i}.txt").write_text(str(i))
     pl = {"tool_name": "Bash", "tool_input": {"command": "true"}, "session_id": "s", "tool_use_id": "t", "cwd": str(repo)}
-    t0 = time.perf_counter()
-    aj.record_pre(pl)
-    t1 = time.perf_counter()
-    aj.record_post(pl)
-    t2 = time.perf_counter()
-    print(f"overhead pre={1000*(t1-t0):.0f}ms post={1000*(t2-t1):.0f}ms (50 dirty files)")
-    assert (t2 - t0) < 5
+    real_run, calls = subprocess.run, []
+
+    def counting(cmd, *a, **k):
+        calls.append(cmd)
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(subprocess, "run", counting)
+
+    def git_runs():
+        del calls[:]
+        aj.record_pre(pl)
+        aj.record_post(pl)
+        return len(calls)
+
+    for i in range(5):
+        (repo / f"f{i}.txt").write_text(str(i))
+    few = git_runs()
+    for i in range(5, 50):
+        (repo / f"f{i}.txt").write_text(str(i))
+    many = git_runs()
+    print(f"git runs per pre+post: {few} (5 dirty files), {many} (50 dirty files)")
+    assert few == many and many <= 8
 
 
 def _dup(sid, seq, pre, post, ts, agent=None):
@@ -455,6 +470,46 @@ def test_autoseal_forced_repeat_is_idempotent_and_logs_both_attempts(tmp_path, m
     assert second["result"]["blobs_added"] == 0 and second["result"]["journals_copied"] == 0
     lines = seal.evidence_log_path(dest).read_text().strip().splitlines()
     assert len(lines) == 2 and all(json.loads(l)["status"] == "ok" for l in lines)
+
+
+def test_reseal_checks_held_blobs_in_one_git_call_not_one_per_blob(tmp_path, monkeypatch):
+    """The seal runs inside the 30 s post hook: a `git cat-file -e` per referenced blob took ~26 s
+    at the 11,551 blobs of 2026-11-18, so every due call ran past its timeout. A re-seal of N
+    already-held blobs starts a constant number of git processes, and still adds the new one."""
+    _env(tmp_path, monkeypatch)
+    paths = [tmp_path / f"b{i}.txt" for i in range(60)]
+    for i, p in enumerate(paths):
+        p.write_text("a%d" % i)
+    for i, p in enumerate(paths):
+        _run("Edit", {"file_path": str(p)}, "s1", str(i), lambda p=p, i=i: p.write_text("b%d" % i), tmp_path)
+    dest = tmp_path / "seal"
+    assert seal.seal(dest, allow_volatile=True)["blobs_added"] == 120
+    paths[0].write_text("new")
+    _run("Edit", {"file_path": str(paths[0])}, "s1", "x", lambda: paths[0].write_text("newer"), tmp_path)
+    calls = []
+    real = seal._git
+    monkeypatch.setattr(seal, "_git", lambda *a, **k: calls.append(a) or real(*a, **k))
+    res = seal.seal(dest, allow_volatile=True)
+    assert res["blobs_referenced"] == 122 and res["blobs_added"] == 2 and not res["blobs_missing_in_source"]
+    assert len(calls) <= 5, len(calls)          # 1 batch check + 2 per new blob; was 1 per held blob
+
+
+def test_autoseal_skips_while_another_seal_holds_the_lock(tmp_path, monkeypatch):
+    """Concurrent post hooks of one account must not each start a seal (the evidence entry is only
+    written at the end, so every call during a running seal saw it due): one seals, the rest skip."""
+    import fcntl
+    _env(tmp_path, monkeypatch)
+    dest = _autoseal_env(tmp_path, monkeypatch)
+    f = tmp_path / "a.txt"
+    f.write_text("1")
+    _run("Edit", {"file_path": str(f)}, "s1", "1", lambda: f.write_text("2"), tmp_path)
+    dest.mkdir(parents=True)
+    with open(dest / "seal.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert seal.autoseal_if_due(dest, interval=0, allow_volatile=True) is None
+        assert not seal.evidence_log_path(dest).exists() and not (dest / "objects.git").exists()
+    entry = seal.autoseal_if_due(dest, interval=0, allow_volatile=True)   # lock released: it seals
+    assert entry["status"] == "ok" and entry["result"]["blobs_added"] == 2
 
 
 def test_autoseal_refuses_volatile_dest_records_error_evidence(tmp_path, monkeypatch):

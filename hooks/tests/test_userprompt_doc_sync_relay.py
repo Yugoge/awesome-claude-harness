@@ -96,6 +96,8 @@ def build_home(root, readme_text=None):
     shutil.copy(CHILD_HOOK, hooks_dir / 'posttool-doc-sync.py')
     shutil.copytree(DOC_SYNC_PACKAGE, hooks_dir / 'doc_sync',
                     ignore=shutil.ignore_patterns('__pycache__', 'README.md', 'INDEX.md'))
+    # doc_sync asks lib/locations where a repository's top is; in every real install hooks/lib lies beside hooks/doc_sync
+    shutil.copytree(REPO_ROOT / 'hooks' / 'lib', hooks_dir / 'lib', ignore=shutil.ignore_patterns('__pycache__'))
     (commands / 'keep.py').write_text('"""Keep."""\n')
     if readme_text is not None:
         (commands / 'README.md').write_text(readme_text)

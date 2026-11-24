@@ -93,8 +93,8 @@ def _emit_block(agent_type: str, session_id: str, cycle_id: int, errors: list[st
     )
     for item in errors:
         sys.stderr.write(f'    - {item}\n')
-    sys.stderr.write(f'  Dispatch {agent_type} again with the same obligation template and a fresh '
-                     'dispatched_at; it writes each artifact above as its obligation declares.\n\n')
+    sys.stderr.write(f'  Dispatch {agent_type} again with the same obligation template; it writes each '
+                     'artifact above as its obligation declares.\n\n')
 
 
 def _run_check(data: dict) -> int:
@@ -125,7 +125,8 @@ def _run_check(data: dict) -> int:
     if entry is None:
         return 0
     # G2's one rule: a fresh producer question stands in for every declared artifact when valid.
-    question = contract_runtime.producer_question(root, parsed.obligation)
+    question = contract_runtime.producer_question(
+        root, obligation.recorded_dispatch(parsed.obligation, data.get('transcript_path'), data.get('tool_use_id')))
     errors = [f"{question['path']}: {e}" for e in question['errors']] if isinstance(question, dict) else []
     errors += [error for artifact in (artifacts if question != 'valid' else [])
                for error in _artifact_errors(artifact, root)]

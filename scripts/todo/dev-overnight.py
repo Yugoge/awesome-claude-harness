@@ -51,11 +51,12 @@ _STEPS = [
         "QA validating BA conclusions",
         {"subagent_call": {"agent": "qa", "subagent_type": "qa"}},
     ),
-    ("11", "BA-QA iteration loop (if QA rejects BA)", "Iterating BA analysis based on QA objections", None),
+    # Step 11 holds the graphify Dev-dispatch precondition (an older list's Step 11g): every Dev
+    # dispatch, at Steps 12, 13 and 17, returns to it first.
     (
-        "11g",
-        "Graphify Dev-dispatch precondition (enrich before every Dev dispatch)",
-        "Running graphify enrichment before Dev dispatch",
+        "11",
+        "BA-QA iteration loop (if QA rejects BA); graphify Dev-dispatch precondition (enrich before every Dev dispatch)",
+        "Iterating BA analysis based on QA objections; running graphify enrichment before Dev dispatch",
         {"subagent_call": {"agent": "graphify", "subagent_type": "graphify"}},
     ),
     (
@@ -111,10 +112,8 @@ def _build_step(label, desc, active, meta):
 
 
 def get_todos():
-    """Return todo items for the dev-overnight workflow (Step 0, the wake, 21
-    integer steps and the letter-suffix Step 11g graphify Dev-dispatch
-    precondition; Step 0 and the letter-suffix avoid cascading the integer Steps
-    and their contract step-ids)."""
+    """Return todo items for the dev-overnight workflow (Step 0, the wake, and
+    Steps 1-21; Step 0 avoids cascading the Steps and their contract step-ids)."""
     return [
         _build_step(label, desc, active, meta)
         for label, desc, active, meta in _STEPS

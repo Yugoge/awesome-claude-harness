@@ -261,6 +261,7 @@ def _score_header(cyc, step: int, agent: str) -> None:
     """Step <step>'s score header where the text played still has one (the base's: run score-inject.sh,
     its stdout is <AGENT>_SCORE_HEADER, which the dispatch binds); since P13-3 drivers/dev.py has no
     score_header, as this tree's text names none."""
+    # OLDER_TEXT: "score-inject.sh" -- named by a base text's step only; today's text names none, the call is skipped
     if "score-inject.sh" not in cyc.o.section(f"Step {step}"):
         return
     cmd = cyc.o.inline(f"Step {step}", "score-inject.sh", startswith="bash ")

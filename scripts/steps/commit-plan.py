@@ -28,13 +28,36 @@ attribution_log   scripts/verify-attribution-chain.py --json over the plan's own
                   object {"results": [], "no_events": [], "discarded_lines": []} when the plan owns
                   no path or the verifier printed nothing (exit 2, no journaled event, is no failure).
 session_id        $CLAUDE_CODE_SESSION_ID, else $CLAUDE_SESSION_ID ("" when neither is set).
-manifest_path     the dispatch-snapshot manifest's path (hooks/lib/commit_pipeline.manifest_path);
-                  null without a session id.
+manifest_path     where a session holding the old Step 5 text writes the manifest by hand
+                  (hooks/lib/commit_pipeline.manifest_path; still accepted); null without a session id.
 files_at_dispatch every plan entry's repo_root -> its `git status --porcelain=v1` lines.
+nothing_to_commit the record resolve-dev-artifact-chain.py's record_nothing_to_commit wrote at
+                  docs/dev/nothing-to-commit-<task>.json beside the reports ({"task_id", "state",
+                  "reason", "repositories"}) when every path the plan owns is in its repository's
+                  HEAD as the work tree holds it or is ignored, or, for a plan that owns no path,
+                  when unclaimed.paths is empty and /close's no-files facts hold over every
+                  session of the project
+                  (hooks/lib/close_exit.nothing_to_land); else null, and an earlier record is
+                  removed. The Stop gate verifies it again at the stop.
+
+With a session id the call also writes the dispatch-snapshot manifest the grant writer mints from
+(hooks/lib/commit_pipeline.planned_manifest_path): {"session_id", "task_id", "repository_plan",
+"files_at_dispatch"} and "unclaimed" when present, as printed; the agent writes nothing for it.
+unclaimed         present only when the plan owns no path (a cycle that declares no file): the
+                  control checkout's changed paths that no open cycle claims, which this /commit
+                  lands. {"repo_root", "paths", "claimed_by_open_cycles" (path -> the open task ids
+                  whose dev or do report in docs/dev lists it: left for them),
+                  "claimed_by_open_commands" (path -> the other sessions whose open command the
+                  attribution journal credits with an edit to it, report or none: left for them),
+                  "left" (the --leave-unclaimed paths), "unreadable_reports", "unresolved_sessions"
+                  (journaled sessions with no transcript found: all their edits claimed)}. An open
+                  cycle is one with no `Task-id:` line of its own reachable from HEAD; docs/dev is
+                  never swept.
 """
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -43,7 +66,6 @@ from pathlib import Path
 
 HARNESS_ROOT = Path(__file__).resolve().parents[2]
 EMPTY_ATTRIBUTION = {"results": [], "no_events": [], "discarded_lines": []}
-
 
 def run(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
     try:
@@ -55,8 +77,9 @@ def run(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
 
 
 def git_top(directory: str | None = None) -> str:
-    code, out, _ = run(["git", "rev-parse", "--show-toplevel"], cwd=directory)
-    return out.strip() if code == 0 else ""
+    sys.path.insert(0, str(HARNESS_ROOT / "hooks"))
+    from lib import locations  # noqa: E402  (the filesystem root is no repository top)
+    return locations.repo_top(directory or os.getcwd()) or ""
 
 
 def as_json(text: str):
@@ -90,9 +113,100 @@ def choose_report(docs_root: Path, task_id: str, late: dict | None) -> str:
     return str(dev if dev.is_file() or not do.is_file() else do)
 
 
-def attribution_log(plan: dict | None) -> dict:
+def listed_paths(doc: dict) -> list[str]:
+    """Every path a report lists: its owned_edits keys and each section's files_modified/files_created."""
+    listed = list(doc["owned_edits"]) if isinstance(doc.get("owned_edits"), dict) else []
+    for section in (value for value in doc.values() if isinstance(value, dict)):
+        for field in ("files_modified", "files_created"):
+            values = section.get(field)
+            listed += [p for p in values if isinstance(p, str)] if isinstance(values, list) else []
+    return listed
+
+
+def landed_ids(control_root: str) -> set[str]:
+    _code, out, _ = run(["git", "-C", control_root, "log", "HEAD", "--format=%B"])
+    return {line.strip()[8:].strip() for line in out.splitlines() if line.strip().startswith("Task-id:")}
+
+
+def command_claims(control_root: str, landed: set[str], own_session: str) -> tuple[dict[str, list[str]], list[str]]:
+    """Repo-relative path -> the other sessions whose open command the attribution journal (the edits the hooks
+    record per session) credits with an edit to it, report or none; and the sessions no configuration directory
+    holds a transcript of, whose edits are all claimed. A session's open command is its last cycle command
+    (else its last harness command) whose minted task id has no `Task-id:` line in HEAD; it claims the
+    session's edits from its opener's time on. A session with no harness command open claims nothing."""
+    sys.path.insert(0, str(HARNESS_ROOT / "hooks"))
+    from lib import attribution_journal, close_exit, command_span, subagent_restart  # noqa: E402
+    root, edits = Path(control_root), {}
+    for event in attribution_journal.read_all_journals()[0]:
+        path, session = Path(str(event["path"])), str(event["session_id"])
+        if session != own_session and path.is_absolute() and path.is_relative_to(root):
+            edits.setdefault(session, []).append((event["ts"], os.path.normpath(path.relative_to(root))))
+    claims: dict[str, list[str]] = {}
+    unresolved: list[str] = []
+    for session, done in sorted(edits.items()):
+        transcript = next((t for d in subagent_restart.config_projects() for t in d.glob(f"*/{session}.jsonl")), None)
+        unresolved += [session] if transcript is None else []
+        span = None if transcript is None else next(
+            (s for s in open_spans(command_span, close_exit.CYCLE_COMMANDS, transcript)
+             if s.minted_id() not in landed), False)
+        since = span.opened_at() if span else None
+        for ts, path in done if span is not False else []:
+            if since is None or not isinstance(ts, (int, float)) or ts >= since:
+                claims.setdefault(path, []).append(session)
+    return claims, unresolved
+
+
+def open_spans(command_span, cycle_commands: tuple, transcript: Path) -> list:
+    """The session's last cycle command's span, then its last harness command's (the active one)."""
+    found = command_span.openers(transcript)
+    return [command_span.Span(c, a, line, str(transcript))
+            for line, c, a in [o for o in found if o[1] in cycle_commands][-1:] + found[-1:]]
+
+
+def open_claims(docs_root: Path, control_root: str, task_id: str) -> tuple[dict[str, list[str]], list[str]]:
+    """Repo-relative path -> the open tasks whose dev or do report lists it, and the unreadable reports."""
+    landed = landed_ids(control_root)
+    claims: dict[str, list[str]] = {}
+    unreadable: list[str] = []
+    for report in sorted([*docs_root.glob("dev-report-*.json"), *docs_root.glob("do-report-*.json")]):
+        doc = as_json(report.read_text(encoding="utf-8", errors="replace")) if report.is_file() else None
+        owner = doc.get("task_id") if isinstance(doc, dict) else None
+        if not isinstance(owner, str) or not owner:
+            unreadable.append(report.name)
+            continue
+        if owner == task_id or any(owner == t or owner.startswith(t + "-") for t in landed):
+            continue
+        for raw in listed_paths(doc):
+            path = Path(raw)
+            path = path.relative_to(control_root) if path.is_absolute() and path.is_relative_to(control_root) else path
+            if not path.is_absolute():
+                claims.setdefault(os.path.normpath(path), []).append(owner)
+    return claims, unreadable
+
+
+def unclaimed(control_root: str, docs_root: Path, task_id: str, leave: list[str], session_id: str) -> dict:
+    """The control checkout's changed paths (renames: both sides) outside docs/dev that no open cycle claims."""
+    _code, out, _err = run(["git", "-C", control_root, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
+    records, changed = out.split("\0"), []
+    while records:
+        record = records.pop(0)
+        if len(record) > 3:
+            changed.append(record[3:])
+            if record[0] in "RC" and records:
+                changed.append(records.pop(0))
+    claims, unreadable = open_claims(docs_root, control_root, task_id)
+    working, unresolved = command_claims(control_root, landed_ids(control_root), session_id)
+    candidates = sorted({p for p in changed if not p.endswith("/") and not p.startswith("docs/dev/")})
+    return {"repo_root": control_root,
+            "paths": [p for p in candidates if p not in claims and p not in working and p not in leave],
+            "claimed_by_open_cycles": {p: sorted(set(claims[p])) for p in candidates if p in claims},
+            "claimed_by_open_commands": {p: sorted(set(working[p])) for p in candidates if p in working},
+            "left": sorted(set(leave)), "unreadable_reports": unreadable, "unresolved_sessions": unresolved}
+
+
+def attribution_log(plan: dict | None, extra: list[str] = ()) -> dict:
     files = [f"{entry['repo_root']}/{path}" for entry in (plan or {}).get("repositories") or []
-             for path in entry.get("owned_paths") or []]
+             for path in entry.get("owned_paths") or []] + list(extra)
     if not files:  # no --file would make the verifier read the whole journal
         return dict(EMPTY_ATTRIBUTION)
     cmd = [sys.executable, helper("verify-attribution-chain.py"), "--json"]
@@ -105,6 +219,8 @@ def attribution_log(plan: dict | None) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--task-id", required=True)
+    parser.add_argument("--leave-unclaimed", action="append", default=[], metavar="PATH",
+                        help="an unclaimed path commit QA rejected: left in the tree, not swept (repeatable)")
     args = parser.parse_args(argv)
     task_id = args.task_id
 
@@ -133,15 +249,24 @@ def main(argv: list[str] | None = None) -> int:
     plan_error = None if plan is not None else (err.strip() or f"resolve-commit-repos.py exited {code}")
 
     session_id = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID") or ""
-    manifest = None
-    if session_id:
-        sys.path.insert(0, str(HARNESS_ROOT / "hooks" / "lib"))
-        from commit_pipeline import manifest_path  # noqa: E402
-        manifest = manifest_path(session_id)
+    sys.path.insert(0, str(HARNESS_ROOT / "hooks" / "lib"))
+    import commit_pipeline  # noqa: E402
     status = {}
     for entry in (plan or {}).get("repositories") or []:
         _code, out, _err = run(["git", "-C", entry["repo_root"], "status", "--porcelain=v1"])
         status[entry["repo_root"]] = out.splitlines()
+    owns_none = plan is not None and not any(e.get("owned_paths") for e in plan.get("repositories") or [])
+    sweep = unclaimed(control_root, docs_root, task_id, args.leave_unclaimed, session_id) if owns_none else None
+    extra = {"unclaimed": sweep} if sweep is not None else {}
+    if session_id:  # the dispatch-snapshot manifest scripts/write-commit-grant.py mints from
+        commit_pipeline.write_planned_manifest(session_id, {"session_id": session_id, "task_id": task_id,
+                                                            "repository_plan": plan, "files_at_dispatch": status,
+                                                            **extra})
+    spec = importlib.util.spec_from_file_location("commit_plan_chain", helper("resolve-dev-artifact-chain.py"))
+    chain = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(chain)
+    # unclaimed paths still to land: this /commit has something to commit, so no record
+    nothing = chain.record_nothing_to_commit(docs_root, task_id, None if (sweep or {}).get("paths") else plan)
 
     print(json.dumps({
         "task_id": task_id,
@@ -152,10 +277,12 @@ def main(argv: list[str] | None = None) -> int:
         "task_report": task_report,
         "plan_error": plan_error,
         "repository_plan": plan,
-        "attribution_log": attribution_log(plan),
+        "attribution_log": attribution_log(plan, [f"{control_root}/{p}" for p in (sweep or {}).get("paths", [])]),
         "session_id": session_id,
-        "manifest_path": manifest,
+        "manifest_path": commit_pipeline.manifest_path(session_id) if session_id else None,
         "files_at_dispatch": status,
+        "nothing_to_commit": nothing,
+        **extra,
     }, indent=2, ensure_ascii=False))
     return 0
 

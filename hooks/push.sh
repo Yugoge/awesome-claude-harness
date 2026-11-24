@@ -31,9 +31,9 @@
 # repo-hash) instead of the author literal /root on a fresh non-root clone.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/claude_home.sh"
 _CLAUDE_HOME_FALLBACK="$(claude_home_resolve || echo "$HOME")"
-# Hook runtime-state root (CLAUDE_STATE_DIR; default /tmp). Fail-soft fallback.
+# Hook runtime-state root (lib/harness_state_dir.sh: CLAUDE_STATE_DIR, else on disk); none, no push.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib/harness_state_dir.sh" 2>/dev/null \
-  || harness_state_dir() { printf '%s\n' /tmp; }
+  || { echo "push.sh: hooks/lib/harness_state_dir.sh is missing" >&2; exit 1; }
 
 # Colors
 GREEN='\033[0;32m'
@@ -102,7 +102,7 @@ echo ""
 # and unlinks it. Missing sentinel ⇒ abort. Stale (mtime > 60s) ⇒ abort.
 # FAIL sentinel ⇒ abort. All three abort branches use `exit 1` BEFORE any
 # `git push` invocation downstream — see Step 9.
-_CHAIN_B_REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || echo "$_CLAUDE_HOME_FALLBACK")}').encode()).hexdigest()[:16])" 2>/dev/null)"
+_CHAIN_B_REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT:-$(claude_repo_top . || echo "$_CLAUDE_HOME_FALLBACK")}').encode()).hexdigest()[:16])" 2>/dev/null)"
 _CHAIN_B_BRANCH_RAW="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 _CHAIN_B_BRANCH="$(python3 -c "print('${_CHAIN_B_BRANCH_RAW}'.replace('/', '__'))")"
 _CHAIN_B_REQUEST_ID="${CLAUDE_PUSH_REQUEST_ID:-${CLAUDE_TASK_ID:-${CLAUDE_SESSION_ID:-default}}}"
@@ -201,7 +201,7 @@ esac
 trap 'rm -f "$_CHAIN_B_SENTINEL_PATH" 2>/dev/null' EXIT INT TERM
 
 # --- Push-gate: verify SOME valid commit token exists (any session, any HEAD ancestor) ---
-_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo "$_CLAUDE_HOME_FALLBACK")"
+_REPO_ROOT="$(claude_repo_top . || echo "$_CLAUDE_HOME_FALLBACK")"
 _REPO_HASH="$(python3 -c "import hashlib,os; print(hashlib.sha256(os.path.realpath('${_REPO_ROOT}').encode()).hexdigest()[:16])")"
 _BRANCH_RAW="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 _BRANCH="$(python3 -c "print('${_BRANCH_RAW}'.replace('/', '__'))")"
@@ -363,36 +363,6 @@ if [ "$STAGED_COUNT" = "0" ]; then
   fi
 fi
 
-# Step 8.5: Write Scheme 6 grant manifest for guard validation
-# The privilege-guard (pretool-git-privilege-guard.py) is always-on and rejects
-# every agent-issued `git push`. This wrapper emits a single-use grant file
-# (binding branch+expected_head+remote+sid+ppid+nonce) and exports the
-# wrapper-set env-var so the guard admits exactly THIS push and no other.
-# Inline-env injection (e.g., `CLAUDE_PUSH_COMMAND_ACTIVE=1 git push ...` typed
-# by the agent on a single Bash call) is rejected by the guard's literal-
-# substring defense — only env-vars set by a parent process (this wrapper) are
-# admitted.
-SID="${CLAUDE_SESSION_ID:-default}"
-NONCE=$(python3 -c "import secrets; print(secrets.token_hex(16))")
-GRANT_PATH="$(harness_state_dir)/claude-push-grant-${SID}-${NONCE}.json"
-CURRENT_HEAD=$(git rev-parse HEAD)
-CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-python3 - <<PYEOF
-import json
-data = {
-    "branch": "$BRANCH",
-    "expected_head": "$CURRENT_HEAD",
-    "remote": "$REMOTE",
-    "nonce": "$NONCE",
-    "sid": "$SID",
-    "ppid": $$,
-    "created_at": "$CREATED_AT",
-}
-with open("$GRANT_PATH", "w") as f:
-    json.dump(data, f, indent=2)
-PYEOF
-
 # Step 8.6: Export env-var so guard sees the authorized context
 export CLAUDE_PUSH_COMMAND_ACTIVE=1
 
@@ -428,13 +398,8 @@ if [ $PUSH_STATUS -ne 0 ]; then
   echo "  • Pull first: git pull --rebase"
   echo "  • Check network connection"
   echo "  • Verify remote access: git remote -v"
-  # AC-iter2-9: leave the grant in place on failure — operator may retry, and
-  # the grant is nonce-bound so retries are safe.
   exit 1
 fi
-
-# AC-iter2-9: wrapper unlinks grant on success path (guard never fires on subprocess)
-rm -f "$GRANT_PATH"
 
 # Delete push-gate token after successful push
 rm -f "$_TOKEN_PATH"

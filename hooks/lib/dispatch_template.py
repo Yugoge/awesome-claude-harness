@@ -12,8 +12,7 @@ to the dispatch's own values. A placeholder takes its value from the dispatch
 prompt's line that the template line holding it matches; a placeholder no
 prompt line binds stays unbound, and an entry that keeps one outside its
 identity is left out. G2 reads the /spec split rule this way for a spec
-subagent dispatched from the base's /spec template; the codex gate reads
-whether that template asks for codex.
+subagent dispatched from the base's /spec template.
 """
 from __future__ import annotations
 
@@ -22,9 +21,9 @@ import re
 from pathlib import Path
 
 try:  # imported as hooks.lib.dispatch_template (tests) or lib.dispatch_template (hooks)
-    from . import stop_contract
+    from . import command_span, stop_contract, subagent_restart
 except ImportError:  # hooks/lib placed directly on sys.path
-    import stop_contract  # type: ignore[no-redef]
+    import command_span, stop_contract, subagent_restart  # type: ignore[no-redef]  # noqa: E401
 
 DEFAULT_SUBAGENT_TYPE = "general-purpose"  # the CLI's type for an Agent call that names none
 _FENCE_RE = re.compile(r"^[ \t]*```[^\n]*\n(.*?)^[ \t]*```", re.M | re.S)
@@ -46,8 +45,7 @@ def dispatch_of(agent_transcript: str | Path) -> tuple[str, str, str] | None:
     span it lies in. None when any of these cannot be read."""
     agent = Path(agent_transcript)
     try:
-        meta = json.loads(agent.with_name(agent.stem + ".meta.json").read_text(encoding="utf-8"))
-        tool_use_id = meta["toolUseId"]
+        tool_use_id = subagent_restart.read_meta(agent.with_name(agent.stem + ".meta.json"))["tool_use_id"]
         session_dir = agent.parent.parent
         parent = session_dir.parent / f"{session_dir.name}.jsonl"
         commands, command = stop_contract.harness_commands(), None
@@ -60,10 +58,8 @@ def dispatch_of(agent_transcript: str | Path) -> tuple[str, str, str] | None:
                 opener = stop_contract.span_opener(record, commands)
                 if opener:
                     command = opener[0]
-                message = record.get("message") if isinstance(record, dict) else None
-                content = message.get("content") if isinstance(message, dict) else None
-                for block in content if isinstance(content, list) else ():
-                    if (isinstance(block, dict) and block.get("type") == "tool_use"
+                for block in command_span._blocks(record, sidechain=True):
+                    if (block.get("type") == "tool_use"
                             and block.get("id") == tool_use_id and isinstance(block.get("input"), dict)):
                         if command is None:
                             return None
@@ -246,15 +242,6 @@ def _kept(entry: dict) -> dict | None:
     if _unbound(entry.get("identity_anchor")):
         entry = {k: v for k, v in entry.items() if k != "identity_anchor"}
     return None if _unbound(entry) else entry
-
-
-def template_of(command: str, subagent_type: str, prompt: str,
-                commands_dir: str | Path | None = None) -> str | None:
-    """The text of the dispatch template in the current commands/<command>.md
-    that a dispatch of `subagent_type` with this prompt was made from
-    (_template); None when none was."""
-    found = _template(command, subagent_type, prompt, commands_dir)
-    return found[0] if found else None
 
 
 def _json_object(text: str) -> bool:

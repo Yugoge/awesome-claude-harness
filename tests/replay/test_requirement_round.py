@@ -11,23 +11,26 @@ from __future__ import annotations
 import pytest
 
 from tests.replay import suite
+from tests.replay.drivers.dev import S
+from tests.replay.drivers.spec import SP
 
 # (driver, variant, the steps the variant is expected to block at: label prefixes, in order)
 CASES = [
     ("dev", "round", []),                                                      # A2
     ("dev", "round-unasked", ["Step 4c Agent(ba) before round 1 is asked"]),   # A3
-    ("dev", "round-paraphrase", ["Step 4c Agent(ba) after a paraphrased round 1"]),
+    # a paraphrased round is refused at the tool (2026-11-19: requirement_round.question_refusal), and BA after it
+    ("dev", "round-paraphrase", ["Step 4b AskUserQuestion r1 paraphrased", "Step 4c Agent(ba) after a paraphrased round 1"]),
     ("dev", "round-broken", []),  # a malformed round 1 left by an interrupted run: its re-dispatch is not refused
     ("dev", "round-skip", []),                                                 # A4
     ("dev", "round-decline", []),
     ("dev", "round-afk", []),
-    ("dev", "devquestion", ["Step 5 Agent(ba) before question 1", "Step 5 Agent(ba) before question 2"]),  # A5
+    ("dev", "devquestion", [f"Step {S.clarify} Agent(ba) before question 1", f"Step {S.clarify} Agent(ba) before question 2"]),  # A5
     ("dev", "spec-round", []),                                                 # A6: /dev after /spec
     ("dev", "round-many", ["Step 4c Agent(ba) round r3 repeating an answered question"]),  # A7
     ("dev", "text-question", ["Stop with a question in text"]),                # A8
     ("dev", "panel-disagree", []),                                             # D32
     ("dev", "panel-refuted", ["Step 4a Agent(qa) panel QA offering a refuted option"]),
-    ("spec", "round", ["Step 6 Agent(spec) before round 1 is asked"]),         # A6
+    ("spec", "round", [f"Step {SP.finalize} Agent(spec) before round 1 is asked"]),         # A6
     ("spec", "text-question", ["Stop with a question in text"]),               # A8
 ]
 SCENARIOS = {(d, v): suite.Scenario(f"P13-1 {d} {v}", d, (("variant", v),), (d,), 110) for d, v, _ in CASES}

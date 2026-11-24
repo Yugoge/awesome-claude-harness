@@ -1,9 +1,9 @@
 """The git-privilege guard's one local refusal of force, delete and tag-delete pushes.
 
-A push that forces, deletes or mirrors a ref is refused for every agent, before an
-/allow grant or /do consent is consulted; any other push is refused unless /allow
-grants it. So each case runs under an /allow grant for `git push`: a push the grant
-lets through is one the force/delete rule does not read as a rewrite.
+A push that forces, deletes or mirrors a ref is refused for every agent with the
+rewrite refusal; any other push is refused as an agent push. The guard reads no
+/allow grant: the owner's /allow releases a refused call in the launcher
+(test_allow_releases_anything.py), so these cases judge the guard's own reading.
 
 git accepts any unambiguous prefix of a long option and refuses an ambiguous one,
 so a prefix of a rewrite option is read as that option.
@@ -154,10 +154,11 @@ def test_without_a_grant_the_rewrite_rule_names_the_refusal(box, command):
 
 
 @pytest.mark.parametrize("command", ALLOWED)
-def test_an_allow_grant_lets_an_ordinary_push_through(box, command):
-    box.grant_push()
+def test_an_ordinary_push_is_not_read_as_a_rewrite(box, command):
+    # The guard reads no /allow grant (the launcher releases a refused call), so the
+    # rule's own reading is what it says: never the rewrite refusal for these.
     proc = box.run(command, agent_id="agent-1")
-    assert proc.returncode == 0, (command, proc.stderr)
+    assert REWRITE not in proc.stderr, (command, proc.stderr)
 
 
 # A dry run moves no ref, so without a grant it is not refused as a push
@@ -186,5 +187,4 @@ def test_the_variable_written_on_the_command_line_is_judged_as_any_push(box):
     command = "CLAUDE_PUSH_COMMAND_ACTIVE=1 git push origin feat"
     proc = box.run(command, agent_id="agent-1")
     assert proc.returncode == 2 and DEFAULT_DENY in proc.stderr, proc.stderr
-    box.grant_push()
-    assert box.run(command, agent_id="agent-1").returncode == 0
+    assert REWRITE not in proc.stderr, proc.stderr

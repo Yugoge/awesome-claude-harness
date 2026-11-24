@@ -5,6 +5,16 @@
 # current-tree secret scan, a shell-syntax pass (bash -n), a Python
 # parse/compile pass over hooks/ and scripts/, and grep assertions for this
 # repo's cleanup invariants.
+#
+# Time limits (the one place that states the rule, for every workflow in this directory): each job's
+# timeout-minutes is 2 x the longest time that job took in the runs recorded so far, rounded up to 5 minutes,
+# and never under 20 (the setup alone). A hung job then ends in about twice its usual time and not at the hosting
+# service's default of six hours. Longest recorded, in minutes: baseline checks 87; artifact check plan 1;
+# artifact check shard 41; run to run 3; artifact check (traced replays) 15; replay suite 90; red then green 41;
+# diff mutation 46; pair-check plan, publish and release: none recorded, so the floor; pair-check run: none
+# recorded, so the 40 it had. Every step that runs the test runner passes -o faulthandler_timeout=600: a test that
+# runs longer than 10 minutes puts its name and stack in the log and the run goes on (the runner prints no test
+# names in its quiet mode). tests/test_ci_visibility_gate.py fails a job without a limit and a step without it.
 name: baseline
 
 on:
@@ -52,6 +62,7 @@ jobs:
     # Supported OS: ubuntu-latest (the declared, tested platform). macOS/Windows
     # are not part of the supported matrix.
     runs-on: ubuntu-latest
+    timeout-minutes: 175
     strategy:
       fail-fast: false
       matrix:
@@ -94,6 +105,14 @@ jobs:
         # list private-literals.txt is in the index: both are personal, never tracked.
         # The gates below read this tracked file as-is; nothing is rendered here.
         run: python3 scripts/install/render-settings check --staged
+
+      - name: Install bubblewrap
+        # The unit tests of the /dev-overnight write boundary run a real bwrap and skip where none
+        # is installed (as in the jobs replay-suite and artifact-graph-shard).
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
 
       - name: Install Python dependencies
         # Hash-verified install from the lockfile matching THIS matrix leg.
@@ -158,6 +177,15 @@ jobs:
         # doc-sync region the writer refuses. Runs before the tests, on the clean checkout.
         run: python3 scripts/regen-folder-docs.py --check
 
+      - name: Definition register (tests.defs_registry --stale)
+        # One fact, one definition. The module exits 1 on an uncovered group or a file it cannot parse and 2 on an
+        # invalid register, but 0 with stale entries (register definitions the tree no longer has), which it only
+        # lists; the grep makes the summary line itself the verdict: 0 uncovered groups and 0 not found.
+        run: |
+          set -o pipefail
+          python3 -m tests.defs_registry --stale | tee "$RUNNER_TEMP/defs-register.out"
+          grep -Eq "^uncovered groups: 0 \(0 definitions\); definitions scanned: [0-9]+; register definitions not found: 0$" "$RUNNER_TEMP/defs-register.out"
+
       - name: Run tests
         # tests/test_artifact_graph.py replays every pipeline traced in a sandbox;
         # the artifact-graph jobs below run it: shards with strace and a mount
@@ -167,8 +195,13 @@ jobs:
         # artifact-graph-run-to-run its test_run_to_run.py).
         # In parallel (pytest-xdist): one worker per CPU, each test file whole on one worker
         # (--dist loadfile), so a file's module-level fixtures and ordering stay as they were.
+        # -rs: every skipped test's reason is printed, so a skip CI should not take is visible in the log.
+        # --max-worker-restart=0: a worker that dies mid-run (a test, the memory limit, a signal) is not
+        # replaced; without it the run, with files still queued for that worker, waits until the job's
+        # time limit and prints nothing. With it the run ends at once, failed, with the line
+        # "worker 'gwN' crashed while running '<test>'".
         run: >-
-          python3 -m pytest hooks/tests tests -q -n auto --dist loadfile
+          python3 -m pytest hooks/tests tests -q -n auto --dist loadfile -rs -o faulthandler_timeout=600 --max-worker-restart=0
           --ignore=tests/generated --ignore=tests/test_artifact_graph.py
           --ignore=tests/artifact_graph/test_mutations.py --ignore=tests/replay
 
@@ -232,7 +265,7 @@ jobs:
         # writers. `python3 -m tests.lint` prints the findings locally.
         env:
           HARNESS_LINT: "1"
-        run: python3 -m pytest tests/lint -q -p no:cacheprovider
+        run: python3 -m pytest tests/lint -q -p no:cacheprovider -o faulthandler_timeout=600
 
       - name: Cleanup invariant assertions (zero-hit grep)
         run: |
@@ -291,7 +324,7 @@ jobs:
         # pytest run (Run tests above, a read-only checkout) leaves the tree clean.
         env:
           ENFORCEMENT_RUN_MANIFEST: hooks/tests/.enforcement-run-manifest.json
-        run: python3 -m pytest hooks/tests/test_blackbox_integration.py -q
+        run: python3 -m pytest hooks/tests/test_blackbox_integration.py -q -o faulthandler_timeout=600
 
       - name: Upload enforcement-evidence manifest
         # if: always() so the evidence survives a failing suite -- an artifact
@@ -333,7 +366,7 @@ jobs:
     # marking it ready runs everything.
     if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     outputs:
       count: ${{ steps.plan.outputs.count }}
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -370,7 +403,7 @@ jobs:
     # D30 visibility gate (see the baseline job).
     if: ${{ github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 85
     strategy:
       fail-fast: false
       matrix:
@@ -433,7 +466,7 @@ jobs:
     # marking it ready runs everything.
     if: ${{ (github.event_name == 'workflow_dispatch' || toJSON(github.event.repository.private) == 'false') && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -460,7 +493,7 @@ jobs:
       - name: Two replays of one variant, compared
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 -m pytest tests/replay/test_run_to_run.py -q -p no:cacheprovider --durations=0
+        run: python3 -m pytest tests/replay/test_run_to_run.py -q -p no:cacheprovider --durations=0 -o faulthandler_timeout=600
 
   artifact-graph:
     # The check over every shard's replays: the job keeps the name of the
@@ -507,7 +540,7 @@ jobs:
           # differential (-s prints the same lines as the check runs).
           ARTIFACT_GRAPH_WORK: ${{ runner.temp }}/artifact-graph
           ARTIFACT_GRAPH_REUSE: "1"
-        run: python3 -m pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s
+        run: python3 -m pytest tests/test_artifact_graph.py -q -p no:cacheprovider -s -o faulthandler_timeout=600
 
       - name: Mutation tests (acceptance 3)
         # Each test adds one file to a scratch copy of this tree (a second writer,
@@ -530,7 +563,7 @@ jobs:
           ARTIFACT_GRAPH_JOBS: "2"
         run: |
           free -m
-          python3 -m pytest tests/artifact_graph/test_mutations.py -q -p no:cacheprovider -s
+          python3 -m pytest tests/artifact_graph/test_mutations.py -q -p no:cacheprovider -s -o faulthandler_timeout=600
 
       - name: Upload the check's timing and violations
         # if: always(): a failing check's timing is the one the budget question needs.
@@ -565,7 +598,9 @@ jobs:
     # Each untraced replay also runs the launch differential (tests/replay/launchdiff.py): every
     # launcher event's hooks once more on the old path, each as its own process. With it the
     # heaviest shards took 58-59 min on a 4-CPU hosted runner and one ran past 60.
-    timeout-minutes: 90
+    # 180 = 2 x 90 (the rule at the top of this file): on pull request 64 a shard ran 1h29m55s (2026-11-20); the same
+    # shard took 1h21m an hour earlier, so the difference is the runner. A shard cut off at its limit reports nothing.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -597,7 +632,7 @@ jobs:
           REPLAY_SHARD: ${{ matrix.shard }}/6
           REPLAY_WORK: ${{ runner.temp }}/replay
         run: >-
-          python3 -m pytest tests/replay -q -p no:cacheprovider -rfE --durations=0
+          python3 -m pytest tests/replay -q -p no:cacheprovider -rfE --durations=0 -o faulthandler_timeout=600
           --ignore=tests/replay/test_run_to_run.py
 
       - name: Upload this shard's replays
@@ -626,7 +661,10 @@ jobs:
     runs-on: ubuntu-latest
     # Train A (4d1b5458..87731833, 13 merges, 447 ids red then green) took 25 min on 4 CPUs; still
     # inside the replay shards' critical path (about 58 min), so it adds nothing to the run.
-    timeout-minutes: 60
+    # --budget 2400 below: a pull request that changes a tests/replay file (hours when run whole,
+    # twice) never finished inside the limit. Once some id is red then green, which fixes the
+    # job's result, no run goes past minute 40 and the summary names what was left unrun.
+    timeout-minutes: 85
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -657,7 +695,7 @@ jobs:
           printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
           echo "merge base: $(git merge-base "$BASE_SHA" "$HEAD_SHA")"
           python3 scripts/ci/red-green.py --base "$BASE_SHA" --head "$HEAD_SHA" \
-            --body-file "$RUNNER_TEMP/pr-body.md" --summary "$GITHUB_STEP_SUMMARY"
+            --body-file "$RUNNER_TEMP/pr-body.md" --summary "$GITHUB_STEP_SUMMARY" --budget 2400
 
   diff-mutate:
     # P15 decision (b), lane L13: diff-scoped mutation (scripts/ci/diff-mutate.py). Mutates only the
@@ -675,7 +713,7 @@ jobs:
     runs-on: ubuntu-latest
     # The mutation run is bounded below (MUTATE_BUDGET) so the job ends inside the replay shards'
     # critical path and still posts what it found; this is the backstop.
-    timeout-minutes: 60
+    timeout-minutes: 95
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

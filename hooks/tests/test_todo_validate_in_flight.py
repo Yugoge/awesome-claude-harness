@@ -13,6 +13,8 @@ either span a step whose call never came back is refused.
 """
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -42,7 +44,7 @@ def _at(steps, n):
 
 
 def _i(steps, label):
-    """The position of the step labelled ``label`` (``Step 9``, ``Step 4c``) in ``steps``."""
+    """The position of the step labelled ``label`` (``Step 9``, ``Step 4``) in ``steps``."""
     return next(i for i, s in enumerate(steps) if s["content"].startswith(f"{label}:"))
 
 
@@ -116,7 +118,7 @@ class _Session:
         return pre
 
     def agent(self, subagent_type, returned=True):
-        tid = self.use("Agent", {"subagent_type": subagent_type, "prompt": "x", "description": "x"})
+        tid = self.use("Agent", {"subagent_type": subagent_type, "prompt": "Mode: analysis", "description": "x"})
         if returned:
             self.result(tid)
 
@@ -126,7 +128,7 @@ class _Session:
         assert self.todo(_at(self.steps, 0)).returncode == 0
         for n in range(upto):
             if n in calls:
-                self.agent(self.steps[n]["subagent_call"]["subagent_type"])
+                self.agent(_required_role(self.steps[n]))
             pre = self.todo(_done(self.steps, n))
             assert pre.returncode == 0, pre.stderr
 
@@ -186,7 +188,7 @@ def test_the_in_flight_dev_step_9_refusal_is_origin_masters(s):
     the step without that call is refused with origin/master's text, which the base kit shows."""
     s.command("dev", "fix the bug", OLD_TEXT.format(command="dev", args="fix the bug"))
     nine = _i(s.steps, "Step 9")
-    s.walk(nine, calls=tuple(_i(s.steps, label) for label in ("Step 4", "Step 4c", "Step 7")))  # BA, BA, QA
+    s.walk(nine, calls=tuple(_i(s.steps, label) for label in ("Step 4", "Step 7")))  # BA, QA
     pre = s.todo(_done(s.steps, nine))
     assert pre.returncode == 2
     assert pre.stderr == (f'\nBLOCKED: Cannot complete Step {nine} ("Step 9: Graphify enrichment: dispatch graphify '
@@ -198,7 +200,7 @@ def test_an_in_flight_call_counts_for_one_step_of_its_window_only(s):
     """In flight, a call counts for one step: QA's call for Step 7 does not complete Step 13 too, and a
     BA call made more than two steps before Step 4 does not count for it."""
     s.command("dev", "fix the bug", OLD_TEXT.format(command="dev", args="fix the bug"))
-    i = {label: _i(s.steps, label) for label in ("Step 4", "Step 4c", "Step 5", "Step 7", "Step 8", "Step 9",
+    i = {label: _i(s.steps, label) for label in ("Step 4", "Step 5", "Step 7", "Step 8", "Step 9",
                                                    "Step 10", "Step 13")}
     s.walk(0)
     s.agent("ba")  # Step 1 in progress: Step 4 lies outside the window 1..3
@@ -207,11 +209,6 @@ def test_an_in_flight_call_counts_for_one_step_of_its_window_only(s):
     assert s.todo(_done(s.steps, i["Step 4"])).returncode == 2  # Step 4 (BA)
     s.agent("ba")
     assert s.todo(_done(s.steps, i["Step 4"])).returncode == 0
-    for n in range(i["Step 4"] + 1, i["Step 4c"]):  # Steps 4a and 4b: no subagent of their own
-        assert s.todo(_done(s.steps, n)).returncode == 0
-    assert s.todo(_done(s.steps, i["Step 4c"])).returncode == 2  # Step 4c (BA): Step 4's call is spent
-    s.agent("ba")
-    assert s.todo(_done(s.steps, i["Step 4c"])).returncode == 0
     for n in range(i["Step 5"], i["Step 7"]):
         assert s.todo(_done(s.steps, n)).returncode == 0
     s.agent("qa")  # Step 7 in progress
@@ -226,3 +223,77 @@ def test_an_in_flight_call_counts_for_one_step_of_its_window_only(s):
     assert pre.returncode == 2 and f'Cannot complete Step {i["Step 13"]} ("Step 13: Delegate to QA subagent")' in pre.stderr
     s.agent("qa")
     assert s.todo(_done(s.steps, i["Step 13"])).returncode == 0
+
+
+BA = {"subagent_call": {"agent": "ba", "subagent_type": "ba"}}
+# /dev's and /dev-command's round as a list written before it folded into one integer Step 4.
+LETTERED = [("Step 4: Requirement round: BA intake, or the BA panel without a spec",
+             "Step 4: Dispatching BA for the requirement round", BA),
+            ("Step 4a: Panel QA writes round 1 (without a spec)", "Step 4a: Panel QA writing round 1", {}),
+            ("Step 4b: Ask each round with AskUserQuestion", "Step 4b: Asking the round with AskUserQuestion", {}),
+            ("Step 4c: BA analysis (the final BA context)", "Step 4c: Delegating to BA for analysis", BA)]
+
+
+@pytest.mark.parametrize("command", ["dev", "dev-command"])
+def test_a_list_written_with_steps_4a_to_4c_validates_and_completes(s, monkeypatch, command):
+    """In flight: a session whose list the validator of its time admitted with Steps 4a, 4b and 4c keeps
+    it. Every later TodoWrite of it is accepted, each step's call made while it is in progress, and the
+    Stop gate's checklist predicate finds no gap once it is all completed."""
+    s.command(command, "fix the bug", OLD_TEXT.format(command=command, args="fix the bug"))
+    k = _i(s.steps, "Step 4")
+    s.steps[k:k + 1] = [dict(content=c, activeForm=a, status="pending", **meta) for c, a, meta in LETTERED]
+    s.result(s.use("TodoWrite", {"todos": _at(s.steps, 0)}))  # admitted when it was the canonical list
+    for n, step in enumerate(s.steps):
+        if step.get("subagent_call"):
+            s.agent(_required_role(step))
+        pre = s.todo(_done(s.steps, n))
+        assert pre.returncode == 0, (step["content"], pre.stderr)
+    monkeypatch.setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
+    monkeypatch.setenv("CLAUDE_CODE_ENABLE_TASKS", "false")
+    monkeypatch.setenv("HOME", str(s.home))
+    sys.path.insert(0, str(HOOKS))
+    gate = importlib.util.module_from_spec(spec := importlib.util.spec_from_file_location(
+        "stop_gate_lettered", HOOKS / "stop-command-gate.py"))
+    spec.loader.exec_module(gate)
+    assert gate.todo_gaps(importlib.import_module("lib.command_span").active_span(str(s.path))) == []
+
+
+GRAPHIFY = {"subagent_call": {"agent": "graphify", "subagent_type": "graphify"}}
+# /dev-overnight's Steps 11 and 11g as a list written before 11g folded into Step 11.
+LETTERED_11G = [("Step 11: BA-QA iteration loop (if QA rejects BA)",
+                 "Step 11: Iterating BA analysis based on QA objections", {}),
+                ("Step 11g: Graphify Dev-dispatch precondition (enrich before every Dev dispatch)",
+                 "Step 11g: Running graphify enrichment before Dev dispatch", GRAPHIFY)]
+
+
+def test_an_overnight_list_written_with_step_11g_validates_and_completes(s, monkeypatch):
+    """In flight: an overnight session whose list the validator of its time admitted with Step 11g
+    keeps it. Every later TodoWrite of it is accepted, Step 11g's graphify call made while it is in
+    progress, and the Stop gate's checklist predicate finds no gap once it is all completed."""
+    from lib.overnight import WAKE_PROMPT
+    s.command("dev-overnight", "2h", OLD_TEXT.format(command="dev-overnight", args="2h"))
+    k = _i(s.steps, "Step 11")
+    assert "graphify" in s.steps[k]["content"]
+    s.steps[k:k + 1] = [dict(content=c, activeForm=a, status="pending", **meta) for c, a, meta in LETTERED_11G]
+    s.result(s.use("TodoWrite", {"todos": _at(s.steps, 0)}))  # admitted when it was the canonical list
+    s.result(s.use("CronCreate", {"cron": "*/7 * * * *", "prompt": WAKE_PROMPT, "recurring": True}))
+    for n, step in enumerate(s.steps):
+        if step.get("subagent_call"):
+            s.agent(_required_role(step))
+        pre = s.todo(_done(s.steps, n))
+        assert pre.returncode == 0, (step["content"], pre.stderr)
+    monkeypatch.setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
+    monkeypatch.setenv("CLAUDE_CODE_ENABLE_TASKS", "false")
+    monkeypatch.setenv("HOME", str(s.home))
+    gate = importlib.util.module_from_spec(spec := importlib.util.spec_from_file_location(
+        "stop_gate_lettered_11g", HOOKS / "stop-command-gate.py"))
+    spec.loader.exec_module(gate)
+    assert gate.todo_gaps(importlib.import_module("lib.command_span").active_span(str(s.path))) == []
+
+
+def _required_role(step):
+    """The subagent type of the call a canonical step requires (a list states every call of the step, the
+    requirement round's included: scripts/todo/dev.py ROUND_CALLS; its optional entries are not required)."""
+    call = step.get("subagent_call")
+    return next((c.get("subagent_type") for c in (call if isinstance(call, list) else [call])
+                 if isinstance(c, dict) and not c.get("optional")), None)

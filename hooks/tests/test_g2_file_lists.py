@@ -574,6 +574,25 @@ def test_written_then_deleted_tracked_file_is_declared(tmp_path, warning):
     _warned(c.stop(d, [], [], warning), *args)
 
 
+def test_declared_path_neither_on_disk_nor_deleted_holds_the_stop(tmp_path):
+    """The Stop gate's ABSENT_DECLARED_PATH predicate at the lane's own end: a
+    file dev wrote, declared and then removed (never tracked) holds its stop,
+    the path named; a tracked file it deleted (in the working tree) does not."""
+    c = Cycle(tmp_path)
+    calls = [("Write", {"file_path": c.path("src/new.py"), "content": "y = 1\n"}, True),
+             ("Edit", {"file_path": c.path("src/app.py"), "old_string": "1", "new_string": "2"}, True),
+             ("Bash", {"command": "rm src/app.py"}, True)]
+    d = c.dispatch("session-gone", "agent-gonedev", calls)
+    (c.project / "src" / "app.py").unlink()
+    proc = c.stop(d, ["src/app.py"], ["src/new.py"])
+    assert proc.returncode == 2, proc.stderr
+    assert f"  - {d['report']}: absent_declared_path" in proc.stderr, proc.stderr
+    assert "neither on disk nor deleted since baseline_head_sha: src/new.py;" in proc.stderr, proc.stderr
+    assert "file_lists_differ" not in proc.stderr, proc.stderr
+    base._write(c.project / "src" / "new.py", "y = 1\n")
+    _clean(c.stop(d, ["src/app.py"], ["src/new.py"]))
+
+
 def test_write_leaving_bytes_identical_needs_no_declaration(tmp_path, warning):
     """A Write whose bytes equal HEAD leaves git nothing to land: it need not
     be declared, and declaring it passes too (it was written)."""

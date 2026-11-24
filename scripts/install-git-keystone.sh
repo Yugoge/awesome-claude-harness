@@ -20,6 +20,7 @@
 # Exit: 0 = installed/already-installed; 1 = error.
 
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks/lib" && pwd)/claude_home.sh"
 
 PROJECT_DIR=""
 KEYSTONE_SRC="$(cd "$(dirname "$0")/.." && pwd)/hooks/git-keystone"
@@ -32,6 +33,11 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$PROJECT_DIR" ]] || PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
+if [[ "$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null)" ]] \
+   && claude_is_fs_root "$(git -C "$PROJECT_DIR" rev-parse --show-toplevel)"; then  # the filesystem root is no repository top
+    echo "Error: the filesystem root is no repository top: nothing is installed below it ($PROJECT_DIR)" >&2
+    exit 1
+fi
 GIT_COMMON_DIR="$(git -C "$PROJECT_DIR" rev-parse --git-common-dir 2>/dev/null)"
 [[ -n "$GIT_COMMON_DIR" ]] || { echo "Error: not a git repo: $PROJECT_DIR" >&2; exit 1; }
 # Normalize to absolute

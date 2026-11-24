@@ -1,13 +1,13 @@
 """The /spec window ends when its span is abandoned (CRITIQUE A3).
 
 pretool-spec-block-foreground-agent.py refuses a foreground dispatch while a
-/spec interview runs, and pretool-block-background-tasks.py lets only a
-background Explore agent through in that window. Both read the window from
-lib.todo_canonical.live_spec_checklist: the active span is /spec, its
+/spec interview runs (a background one passes it, and pretool-block-background-tasks.py
+passes every background dispatch, the owner's decision of 2026-11-21). It reads the
+window from lib.todo_canonical.live_spec_checklist: the active span is /spec, its
 checklist has an open step, and the span was not abandoned. It is abandoned
 when a human-typed prompt followed the opener while the checklist, as the last
 ok TodoWrite before that prompt left it, still had an open step among Steps
-1-3a, the steps /spec runs inside the turn that opened it (its questions are
+1-3, the steps /spec runs inside the turn that opened it (its questions are
 AskUserQuestion results, not prompts). The Step 4 loop that later prompts
 continue stays live.
 
@@ -32,6 +32,11 @@ SESSION_ID = "5be0a6f1-7c42-4d1e-9a3b-0c2d8e4f6a17"
 SPEC_FG = HOOKS / "pretool-spec-block-foreground-agent.py"
 BACKGROUND = HOOKS / "pretool-block-background-tasks.py"
 LAUNCH = HOOKS / "pretool-launch.py"
+
+
+def _spec_steps():
+    """The number of steps of /spec's canonical list, as scripts/todo/spec.py prints it."""
+    return len(todo_canonical.run_todo_script("spec"))
 
 
 class _Transcript:
@@ -141,8 +146,8 @@ def _opening_turn(tmp_path):
     return tx.write(tmp_path / "opening.jsonl")
 
 
-def _loop(tmp_path, done=4):
-    """/spec past Steps 1-3a in its opening turn, then a follow-up requirement (Step 4's loop)."""
+def _loop(tmp_path, done=3):
+    """/spec past Steps 1-3 in its opening turn, then a follow-up requirement (Step 4's loop)."""
     tx = _Transcript()
     tx.command("spec", "add a retry cap")
     tx.todos(0)
@@ -167,9 +172,8 @@ def test_abandoned_spec_foreground_dispatch_passes_the_registered_launcher(tmp_p
 
 
 def test_abandoned_spec_background_form_is_judged_as_outside_spec(tmp_path, env):
-    """The background form: no /spec hold is left. A background general-purpose agent is refused by the
-    ordinary background rule exactly as with no /spec span at all (never by the /spec window), and the
-    Explore-only exception, which belongs to a live interview, no longer applies."""
+    """The background form: no /spec hold is left. A background agent of any role is judged by the
+    background rule exactly as with no /spec span at all, which admits it (never refused by the /spec window)."""
     abandoned = _abandoned(tmp_path)
     plain = _Transcript()
     plain.typed("hello")
@@ -178,7 +182,7 @@ def test_abandoned_spec_background_form_is_judged_as_outside_spec(tmp_path, env)
         assert _run(SPEC_FG, _payload(abandoned, tool_input), env) == (0, "")
         assert _run(BACKGROUND, _payload(abandoned, tool_input), env) == _run(BACKGROUND, _payload(outside, tool_input), env)
         code, err = _run(LAUNCH, _payload(abandoned, tool_input), env)
-        assert code == 2 and "SPEC INTERVIEW IN PROGRESS" not in err and "runs in the background by default" in err
+        assert code == 0 and "SPEC INTERVIEW IN PROGRESS" not in err, err
 
 
 def test_abandoned_spec_without_any_todowrite(tmp_path, env):
@@ -191,8 +195,8 @@ def test_abandoned_spec_without_any_todowrite(tmp_path, env):
 
 
 def test_abandoned_spec_mid_requirement_round(tmp_path, env):
-    """Steps 1-3 done, Step 3a still open when the human typed the next prompt."""
-    payload = _payload(_loop(tmp_path, done=3), FOREGROUND)
+    """Steps 1-2 done, Step 3 (the requirement round) still open when the human typed the next prompt."""
+    payload = _payload(_loop(tmp_path, done=2), FOREGROUND)
     assert _run(SPEC_FG, payload, env) == (0, "")
 
 
@@ -201,26 +205,26 @@ def test_abandoned_spec_mid_requirement_round(tmp_path, env):
 def test_opening_turn_still_refuses_a_foreground_dispatch(tmp_path, env):
     payload = _payload(_opening_turn(tmp_path), FOREGROUND)
     code, err = _run(SPEC_FG, payload, env)
-    assert code == 2 and "SPEC INTERVIEW IN PROGRESS" in err and "(0/8 steps complete)" in err
+    assert code == 2 and "SPEC INTERVIEW IN PROGRESS" in err and f"(0/{_spec_steps()} steps complete)" in err
     code, err = _run(LAUNCH, payload, env)
     assert code == 2 and "SPEC INTERVIEW IN PROGRESS" in err
 
 
-def test_opening_turn_keeps_the_explore_only_background_exception(tmp_path, env):
+def test_opening_turn_lets_every_background_dispatch_through(tmp_path, env):
     transcript = _opening_turn(tmp_path)
     assert _run(BACKGROUND, _payload(transcript, BACKGROUND_EXPLORE), env)[0] == 0
     assert _run(SPEC_FG, _payload(transcript, BACKGROUND_EXPLORE), env)[0] == 0
-    assert _run(BACKGROUND, _payload(transcript, BACKGROUND_GENERAL), env)[0] == 2
+    assert _run(BACKGROUND, _payload(transcript, BACKGROUND_GENERAL), env)[0] == 0
 
 
 def test_step4_loop_after_a_follow_up_prompt_stays_live(tmp_path, env):
     """A later prompt continues the interview once its opening turn reached Step 4."""
     transcript = _loop(tmp_path)
     code, err = _run(SPEC_FG, _payload(transcript, FOREGROUND), env)
-    assert code == 2 and "(4/8 steps complete)" in err
+    assert code == 2 and f"(3/{_spec_steps()} steps complete)" in err
     assert _run(LAUNCH, _payload(transcript, FOREGROUND), env)[0] == 2
     assert _run(BACKGROUND, _payload(transcript, BACKGROUND_EXPLORE), env)[0] == 0
-    assert _run(BACKGROUND, _payload(transcript, BACKGROUND_GENERAL), env)[0] == 2
+    assert _run(BACKGROUND, _payload(transcript, BACKGROUND_GENERAL), env)[0] == 0
 
 
 def test_spec_qa_ba_stay_exempt_in_a_live_interview(tmp_path, env):
@@ -233,7 +237,7 @@ def test_a_step_set_back_after_the_prompt_does_not_make_a_live_loop_stale(tmp_pa
     """Staleness is read as of the first later prompt, so a TodoWrite after it cannot forge it."""
     tx = _Transcript()
     tx.command("spec", "add a retry cap")
-    for step in range(0, 5):
+    for step in range(0, 4):
         tx.todos(step)
     tx.typed("also cap the backoff at 30s")
     tx.todos(1)  # Steps 2.. set back to pending (if the validator ever let it through)
@@ -270,6 +274,24 @@ def test_a_new_spec_after_an_abandoned_one_is_live_again(tmp_path, env):
     tx.todos(0)
     payload = _payload(tx.write(tmp_path / "t.jsonl"), FOREGROUND)
     assert _run(SPEC_FG, payload, env)[0] == 2
+
+
+@pytest.mark.parametrize("done, live", [(3, False), (4, True)])
+def test_a_list_written_with_step_3a_keeps_its_opening_turn(tmp_path, env, done, live):
+    """In flight: a session that wrote /spec's list before the round folded into Step 3 holds Step 3 and
+    Step 3a; a prompt while its Step 3a is open abandons it, one after its Step 4 loop began does not."""
+    old = todo_canonical.run_todo_script("spec")
+    old[2:3] = [{"content": "Step 3: Write first spec and dispatch exploration",
+                 "activeForm": "Step 3: Writing spec and dispatching exploration"},
+                {"content": "Step 3a: Requirement round: BA panel, panel QA, ask, copy the answers",
+                 "activeForm": "Step 3a: Running the requirement round"}]
+    tx = _Transcript()
+    tx.command("spec", "add a retry cap")
+    for step in range(done + 1):
+        tx.tool("TodoWrite", {"todos": [dict(t, status="completed" if i < step else "in_progress" if i == step
+                                             else "pending") for i, t in enumerate(old)]})
+    tx.typed("also cap the backoff at 30s")
+    assert _run(SPEC_FG, _payload(tx.write(tmp_path / "t.jsonl"), FOREGROUND), env)[0] == (2 if live else 0)
 
 
 def test_live_spec_checklist_reading(tmp_path):

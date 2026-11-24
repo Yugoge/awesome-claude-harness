@@ -14,7 +14,7 @@ The ruling assumed a dry-run never touches the index at all. Measured otherwise:
 
 ## Scope at the time
 
-Check 2 only. Checks 1, 3 and 4, the `CLOSE_REPORT` binding, Step 6's QA gate, and every permission, hook and admission gate were unchanged. Check 3 was later demoted to advisory for all invocations (2026-09-26), independently of this ruling. `--force` was not loosened in any form.
+Check 2 only. Checks 1, 3 and 4, the `CLOSE_REPORT` binding, Step 6's QA gate, and every permission, hook and admission gate were unchanged. Check 3 was later demoted to advisory for all invocations (2026-09-26) and removed (2026-11-20), independently of this ruling. `--force` was not loosened in any form.
 
 ## Disclosed widening
 

@@ -38,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import json
+import mmap
 import os
 import re
 from datetime import datetime, timezone
@@ -45,24 +46,31 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 try:  # imported as hooks.lib.obligation (tests) or lib.obligation (hooks)
-    from . import roster
+    from . import locations, roster
     from .subagent_restart import (
         AGENT_RE,
         SESSION_RE,
         RestartError,
+        _fold_parent_line,
         _read_parent_calls,
         account_project_roots,
+        is_resume_message,
         project_slug,
+        read_meta,
     )
 except ImportError:  # hooks/lib placed directly on sys.path
+    import locations  # type: ignore[no-redef]
     import roster  # type: ignore[no-redef]
     from subagent_restart import (  # type: ignore[no-redef]
         AGENT_RE,
         SESSION_RE,
         RestartError,
+        _fold_parent_line,
         _read_parent_calls,
         account_project_roots,
+        is_resume_message,
         project_slug,
+        read_meta,
     )
 
 
@@ -145,7 +153,7 @@ TOP_LEVEL_FIELDS = frozenset({
     "dispatched_at", "artifacts", "consistency", "expected_absent",
 })
 REQUIRED_TOP_LEVEL_FIELDS = frozenset({
-    "task_id", "role", "pipeline", "profile", "dispatched_at", "artifacts",
+    "task_id", "role", "pipeline", "profile", "artifacts",
 })
 IDENTITY_KEYS = frozenset({"task_id", "request_id"})  # design :98
 
@@ -214,8 +222,6 @@ CONDITIONAL_NULL_TASK_ID_PROFILE = "commit-qa"
 NULL_TASK_ID_PROFILES = _null_task_id_profiles() - {CONDITIONAL_NULL_TASK_ID_PROFILE}
 UNDISCHARGED_TASK_ID_NULL = "task_id_null_requires_bulk_context"
 
-# Dispatch-clock bound (design §1.3-G1 check 2: |dispatched_at - now| <= 300s).
-DISPATCH_CLOCK_BOUND_SECONDS = 300
 # File-kind freshness slack (design §1.2 freshness: mtime >= dispatched_at - 2s
 # covers filesystem timestamp granularity only; response kinds carry none --
 # inherently produced by this run). A file kind is one whose fields require a
@@ -556,8 +562,6 @@ def validate_obligation(
             return Rejection(reason="lane_missing_with_lane_set", field="lane")
         if lane not in lane_set:
             return Rejection(reason="lane_not_in_lane_set", field="lane")
-    if parse_iso8601(doc["dispatched_at"]) is None:
-        return Rejection(reason="bad_timestamp", field="dispatched_at")
     artifacts = doc["artifacts"]
     if not isinstance(artifacts, list):
         return Rejection(reason="bad_artifacts", field="artifacts")
@@ -612,7 +616,7 @@ def serialize_obligation(doc: Mapping[str, Any]) -> str:
 
 
 # --------------------------------------------------------------------------
-# Pure clock / freshness helpers (design §1.2 freshness, §1.3-G1 check 2)
+# Clock / freshness helpers (design §1.2 freshness); a dispatch's time
 # --------------------------------------------------------------------------
 
 def parse_iso8601(value: Any) -> datetime | None:
@@ -629,25 +633,18 @@ def parse_iso8601(value: Any) -> datetime | None:
         return None
 
 
-def dispatch_clock_within_bound(
-    dispatched_at: Any,
-    now: Any,
-    bound_seconds: int = DISPATCH_CLOCK_BOUND_SECONDS,
-) -> bool | None:
-    """G1 check 2 predicate: ``|dispatched_at - now| <= bound_seconds``.
+def dispatch_time(doc: Mapping[str, Any], recorded: Any) -> Mapping[str, Any]:
+    """The obligation as every reader of a dispatch's time takes it: dispatched_at is ``recorded``, the CLI's
+    timestamp on the record of the dispatch's tool use (the event the dispatch gate handled), never a typed one
+    (a copied block carries an earlier dispatch's); a typed one stands only where a record carries none."""
+    return {**doc, "dispatched_at": recorded} if parse_iso8601(recorded) is not None else doc
 
-    ``now`` is caller-supplied (never read here). Returns None when either
-    timestamp is unparseable or the aware/naive mix is uncomparable --
-    fail-closed disposition is the caller's."""
-    dispatched = parse_iso8601(dispatched_at)
-    current = parse_iso8601(now)
-    if dispatched is None or current is None:
-        return None
-    try:
-        delta = abs((current - dispatched).total_seconds())
-    except TypeError:
-        return None
-    return delta <= bound_seconds
+
+def recorded_dispatch(doc: Mapping[str, Any], transcript_path: Any, tool_use_id: Any) -> Mapping[str, Any]:
+    """dispatch_time for a hook handed the dispatch's event (its tool_use_id) and its prompt."""
+    if not transcript_path or not isinstance(tool_use_id, str) or not tool_use_id:
+        return doc
+    return dispatch_time(doc, _lib_module("command_span").transcript_span(transcript_path).recorded_at(tool_use_id))
 
 
 def artifact_freshness_satisfied(
@@ -744,7 +741,7 @@ def registry_dir_named(project_dir: str | Path, name: Any) -> Path | None:
     today, but the artifact check reads the two spellings as two artifacts:
     the writer at ``dev-<ts>``, its readers at the name. None for a name that
     is not one plain path component."""
-    if not isinstance(name, str) or name in ("", ".", "..") or Path(name).name != name:
+    if not isinstance(name, str) or name in locations.NAMELESS_PARTS or Path(name).name != name:
         return None
     return _registry_root(project_dir) / name
 
@@ -790,7 +787,7 @@ def _first_line_record(path):
         candidate = json.loads(line.decode("utf-8", "replace"))
     except ValueError:
         return None
-    if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+    if isinstance(candidate, dict) and candidate.get("type") in _lib_module("command_span").TURN_RECORD_TYPES:
         return candidate
     return _READ_ON
 
@@ -824,7 +821,8 @@ def read_first_record_prompt(transcript_path: str | Path) -> str | None:
                         candidate = json.loads(line)
                     except ValueError:
                         return None
-                    if isinstance(candidate, dict) and candidate.get("type") in ("user", "assistant"):
+                    turns = _lib_module("command_span").TURN_RECORD_TYPES
+                    if isinstance(candidate, dict) and candidate.get("type") in turns:
                         record = candidate
                         break
     except OSError:
@@ -845,40 +843,13 @@ def read_first_record_prompt(transcript_path: str | Path) -> str | None:
     return None
 
 
-def candidate_transcript_paths(
-    session_id: str,
-    agent_id: str,
-    project_dir: str | Path,
-    roots: Iterable[str | Path] | None = None,
-) -> list[Path]:
-    """Session-scoped candidate paths across every account root (design
-    §1.3-G2 L1): ``<root>/<slug>/<session_id>/subagents/agent-<agent_id>.jsonl``.
-
-    Reuses ``project_slug`` / ``account_project_roots``
-    (subagent_restart.py:551-577). Session scoping kills the observed
-    cross-session agent-id reuse (agent_resolver.py:23-29). Multi-root copies
-    are split views of the SAME child (design :196-199)."""
-    resolved_roots = list(roots) if roots is not None else account_project_roots()
-    slug = project_slug(project_dir)
-    return [
-        Path(root) / slug / session_id / "subagents" / f"agent-{agent_id}.jsonl"
-        for root in resolved_roots
-    ]
-
-
 def _meta_path(transcript_path: Path) -> Path:
     return transcript_path.with_name(transcript_path.stem + ".meta.json")
 
 
 def _read_meta_tool_use_id(transcript_path: Path) -> str | None:
-    try:
-        meta = json.loads(_meta_path(transcript_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    tool_use_id = meta.get("toolUseId") if isinstance(meta, dict) else None
-    if isinstance(tool_use_id, str) and tool_use_id:
-        return tool_use_id
-    return None
+    meta = read_meta(_meta_path(transcript_path))  # subagent_restart's, the one reader of the CLI's record
+    return meta["tool_use_id"] if meta else None
 
 
 def _parent_transcript_for(transcript_path: Path) -> Path:
@@ -896,27 +867,143 @@ def _cross_check_against_parent(
     ``meta.json`` toolUseId must map to an Agent/Task tool_use block in the
     parent transcript whose ``input.prompt`` equals the first-record prompt.
 
-    Returns ``(status, failure_reason)``. Per the design, the cross-check runs
+    Returns ``(status, failure_reason, the parent record's time)``. Per the design, the cross-check runs
     "when the parent transcript is readable"; an unreadable parent yields the
     explicit skipped status, never a silent pass-as-checked."""
     tool_use_id = _read_meta_tool_use_id(transcript_path)
     if tool_use_id is None:
-        return "failed", "meta_not_found"
+        return "failed", "meta_not_found", None
     parent = _parent_transcript_for(transcript_path)
     if not parent.is_file():
-        return CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, ""
+        return CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, "", None
     try:
         calls, _results, _notifications = _read_parent_calls(parent)
     except RestartError:
-        return CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, ""
+        return CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, "", None
     call = calls.get(tool_use_id)
     if call is None:
-        return "failed", "meta_tool_use_mismatch"
+        return "failed", "meta_tool_use_mismatch", None
     tool_input = call.get("input")
     parent_prompt = tool_input.get("prompt") if isinstance(tool_input, dict) else None
     if parent_prompt != prompt:
-        return "failed", "prompt_mismatch"
-    return CROSS_CHECK_OK, ""
+        return "failed", "prompt_mismatch", None
+    return CROSS_CHECK_OK, "", call.get("timestamp")
+
+
+# How the CLI hands a subagent a SendMessage (CLI 2.1.3xx, the records of 2026-11-18..21): a resumed
+# run starts with a user record of origin kind "coordinator" holding this text around the message; a
+# running child gets a queued_command attachment, origin kind "coordinator", whose prompt is the message.
+_SEND_DELIVERY_RE = re.compile(r"\AThe coordinator sent a message while you were working:\n(.*?)"
+                               r"(?:\n\nAddress this before completing your current task\.)?\Z", re.S)
+
+
+def _from_coordinator(origin: Any) -> bool:
+    return isinstance(origin, dict) and origin.get("kind") == "coordinator"
+
+
+def _record_at(raw: bytes) -> dict | None:
+    """One transcript line as a record (decoded as a text reader decodes it), None when it is none."""
+    try:
+        record = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _delivers(record: dict) -> bool:
+    """Whether a record hands the subagent its coordinator's dispatch or message (the two shapes above)."""
+    attachment = record.get("attachment")
+    if record.get("type") == "user":
+        return _from_coordinator(record.get("origin"))
+    return record.get("type") == "attachment" and isinstance(attachment, dict) \
+        and attachment.get("type") == "queued_command" and _from_coordinator(attachment.get("origin")) \
+        and isinstance(attachment.get("prompt"), str)
+
+
+def _deliveries(transcript_path: str | Path):
+    """A subagent's own transcript, read for latest_delivery: its first record (None when that line is no
+    record), then the records that deliver its coordinator's dispatch or message, latest first. A reverse
+    search from the end for the origin's literal (in a text it is escaped): a reader that stops at the
+    latest delivery costs the lines after it. Nothing for an empty file; OSError when it cannot be read."""
+    with open(transcript_path, "rb") as handle:
+        if not os.fstat(handle.fileno()).st_size:
+            return
+        with mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            cut = data.find(b"\n")
+            end = len(data)
+            yield _record_at(data[:cut if cut >= 0 else len(data)])
+            while (pos := data.rfind(b'"coordinator"', 0, end)) >= 0:
+                end, stop = data.rfind(b"\n", 0, pos) + 1, data.find(b"\n", pos)
+                record = _record_at(data[end:stop if stop >= 0 else len(data)])
+                if record is not None and _delivers(record):
+                    yield record
+
+
+def latest_delivery(transcript_path: str | Path) -> tuple[dict | None, dict | None]:
+    """(first, latest) of a subagent's own transcript: its first record (its dispatch; None when that line
+    is no record) and the last record that delivers its coordinator's dispatch or message (None when there
+    is none). The one reader of "the coordinator's latest word to this subagent, and when" (the time
+    limit, latest_send). OSError when it cannot be read."""
+    scan = _deliveries(transcript_path)
+    try:
+        return next(scan, None), next(scan, None)
+    finally:
+        scan.close()
+
+
+def _sent_text(record: dict) -> str:
+    if record.get("type") != "user":
+        return record["attachment"]["prompt"]
+    content = (record.get("message") or {}).get("content")
+    text = content if isinstance(content, str) else "".join(
+        b.get("text", "") for b in content or () if isinstance(b, dict) and b.get("type") == "text")
+    found = _SEND_DELIVERY_RE.match(text)
+    return found.group(1) if found else text
+
+
+def latest_send(transcript_path: str | Path, skip: Any = None) -> str | None:
+    """The message of the last SendMessage a subagent's transcript shows it received, passing over each
+    for which ``skip(message)`` holds, else None. A send to an own subagent is a dispatch (lib/send_policy),
+    so the latest one is the declaration its next stop is judged by; a resume is skipped (_after_sends)."""
+    scan = _deliveries(transcript_path)
+    try:
+        next(scan, None)
+        return next((text for text in map(_sent_text, scan) if not (skip and skip(text))), None)
+    except (OSError, ValueError):
+        return None
+    finally:
+        scan.close()
+
+
+def _after_sends(transcript_path: Path, prompt: str, status: str, at: Any, session_id: str,
+                 agent_id: str) -> tuple:
+    """(prompt, status, failure, time) of the agent's latest dispatch: its first record's, or the last
+    send it received that is no resume, which the parent transcript must hold as a SendMessage with that
+    message. A resume (subagent_restart.is_resume_message, the one definition the send rule reads too)
+    adds no work, so the stop after it is judged by the dispatch it resumes, block repeated or not."""
+    child = {"agent_id": agent_id, "prompt": prompt}
+    sent = latest_send(transcript_path, lambda text: is_resume_message(session_id, child, text))
+    if sent is None:
+        return prompt, status, "", at
+    parent = _parent_transcript_for(transcript_path)
+    try:
+        handle = open(parent, "r", encoding="utf-8", errors="replace")
+    except OSError:
+        return sent, CROSS_CHECK_SKIPPED_PARENT_UNREADABLE, "", None
+    with handle:
+        for line in handle:
+            if '"SendMessage"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            content = (record.get("message") or {}).get("content") if isinstance(record, dict) else None
+            for block in content if isinstance(content, list) else ():
+                if isinstance(block, dict) and block.get("name") == "SendMessage" \
+                        and isinstance(block.get("input"), dict) and block["input"].get("message") == sent:
+                    return sent, CROSS_CHECK_OK, "", record.get("timestamp")
+    return sent, "failed", "send_not_in_parent", None
 
 
 def _finish_resolution(
@@ -926,6 +1013,7 @@ def _finish_resolution(
     cross_check: str,
     expected_role: str | None,
     known_schema_ids: Iterable[str] | None,
+    recorded: Any = None,
 ) -> Resolved | NoObligationInPrompt | Unresolvable:
     parsed = parse_obligation(prompt, known_schema_ids=known_schema_ids)
     if isinstance(parsed, NoBlock):
@@ -943,7 +1031,7 @@ def _finish_resolution(
             reason="role_mismatch", detail=repr(parsed.obligation.get("role")), prompt=prompt
         )
     return Resolved(
-        obligation=parsed.obligation,
+        obligation=dispatch_time(parsed.obligation, recorded),
         rung=rung,
         prompt=prompt,
         transcript_path=str(transcript_path),
@@ -990,13 +1078,16 @@ def resolve_own_obligation(
             prompt = read_first_record_prompt(l0_path)
             if prompt is not None:
                 if _meta_path(l0_path).is_file():
-                    status, failure = _cross_check_against_parent(l0_path, prompt)
+                    status, failure, at = _cross_check_against_parent(l0_path, prompt)
                     if status == "failed":
                         return Unresolvable(reason=failure, detail=str(l0_path))
                 else:
-                    status = CROSS_CHECK_SKIPPED_NO_META
+                    status, at = CROSS_CHECK_SKIPPED_NO_META, None
+                prompt, status, failure, at = _after_sends(l0_path, prompt, status, at, session_id, agent_id)
+                if status == "failed":
+                    return Unresolvable(reason=failure, detail=str(l0_path))
                 return _finish_resolution(
-                    prompt, "L0", l0_path, status, expected_role, known_schema_ids
+                    prompt, "L0", l0_path, status, expected_role, known_schema_ids, at
                 )
         # L0 unreadable: degrade to L1 (design ladder order).
 
@@ -1015,13 +1106,17 @@ def resolve_own_obligation(
         if prompt is None:
             last_failure = ("unreadable_first_record", str(candidate))
             continue
-        status, failure = _cross_check_against_parent(candidate, prompt)
+        status, failure, at = _cross_check_against_parent(candidate, prompt)
         if status == "failed":
             # Another root may hold a healthy copy of the SAME child.
             last_failure = (failure, str(candidate))
             continue
+        prompt, status, failure, at = _after_sends(candidate, prompt, status, at, session_id, agent_id)
+        if status == "failed":
+            last_failure = (failure, str(candidate))
+            continue
         return _finish_resolution(
-            prompt, "L1", candidate, status, expected_role, known_schema_ids
+            prompt, "L1", candidate, status, expected_role, known_schema_ids, at
         )
     if last_failure is not None:
         return Unresolvable(reason=last_failure[0], detail=last_failure[1])
@@ -1051,13 +1146,43 @@ def dispatch_obligations(
     at the next dispatch, G3). Read-only; never raises: an unreadable
     transcript, or a dispatch whose prompt carries no well-formed block,
     contributes nothing.
+
+    Inside a scan that keeps its readings (the Stop gate's) the records come from the kept reading of the
+    transcript, once for the scan, whoever asks (_transcript_dispatches): what was added since the last stop is read.
     """
+    if known_schema_ids is None and _SCAN is not None and _SCAN.keep is not None:
+        try:
+            commands = _lib_module("stop_contract").harness_commands()
+            return list(_scan_memo(("dispatches", str(transcript_path), commands),
+                                   lambda: _transcript_dispatches(Path(transcript_path), commands))[1])
+        except Exception:  # the whole read decides
+            pass
+    return _whole_dispatch_obligations(transcript_path, known_schema_ids)
+
+
+def _whole_dispatch_obligations(transcript_path: str | Path, known_schema_ids=None) -> list[dict]:
+    """dispatch_obligations by one whole read of the transcript."""
     try:
-        calls, _results, _notifications = _read_parent_calls(Path(transcript_path))
+        calls, results, _notifications = _read_parent_calls(Path(transcript_path))
+        refused = _refused_in(results)
+    except Exception:
+        return []
+    return _obligation_records(Path(transcript_path), calls, refused, known_schema_ids)
+
+
+def _refused_in(results: dict) -> set:
+    """The tool_use ids a hook refused, by their results."""
+    return {i for i, found in results.items() if any(r.get("_hook_refused") for r in found)}
+
+
+def _obligation_records(transcript: Path, calls: dict, refused: set, known_schema_ids=None) -> list[dict]:
+    """dispatch_obligations of a transcript whose dispatch calls and ids refused in its results are known."""
+    try:
+        refused = refused | _lib_module("command_span").recorded_refusals(transcript.stem)  # a call a hook refused never ran
     except Exception:
         return []
     found: list[dict] = []
-    for call in sorted(calls.values(), key=lambda c: c.get("line", 0)):
+    for call in sorted((c for c in calls.values() if c.get("tool_use_id") not in refused), key=lambda c: c.get("line", 0)):
         tool_input = call.get("input")
         prompt = tool_input.get("prompt") if isinstance(tool_input, Mapping) else None
         if not isinstance(prompt, str) or not prompt:
@@ -1068,7 +1193,7 @@ def dispatch_obligations(
                 "tool_use_id": call.get("tool_use_id"),
                 "line": call.get("line"),
                 "subagent_type": tool_input.get("subagent_type"),
-                "obligation": parsed.obligation,
+                "obligation": dispatch_time(parsed.obligation, call.get("timestamp")),
                 "prompt": prompt,
             })
     return found
@@ -1103,7 +1228,7 @@ def _lib_module(name: str):
 
 def _session_transcripts(project_dir: str | Path, roots: Iterable[str | Path] | None) -> list[Path]:
     """Every top-level session transcript the CLI keeps for the project, in
-    every account root (the store candidate_transcript_paths walks)."""
+    every account root."""
     slug = project_slug(project_dir)
     found: list[Path] = []
     for root in (list(roots) if roots is not None else account_project_roots()):
@@ -1129,6 +1254,10 @@ def _span_openers(transcript: Path, commands: frozenset) -> list[tuple[int, str,
 # open scan every call reads the store afresh, as before.
 # --------------------------------------------------------------------------
 
+# A scan opened with a folder to keep in (the Stop gate's) keeps what each transcript was made of
+# (lib/transcript_index): the next scan reads only the lines a transcript gained since, and a file that is no
+# continuation of what was kept (shorter, or changed before the offset) is read whole.
+
 # Every task id this module keys on is made of these characters (TASK_ID_RE)
 # and holds a minted stamp, so a family occurs in a transcript's bytes exactly
 # when it occurs in one of the transcript's runs of these characters that hold
@@ -1142,27 +1271,29 @@ _INDEXABLE_FAMILY_RE = re.compile(r"[A-Za-z0-9._-]*[0-9]{8}-[0-9]{6}[A-Za-z0-9._
 class TranscriptScan:
     """An open scan: ``memo`` (each answer, by its question), ``transcripts``
     and ``bytes`` (what it has read of the store so far) and ``on_read``
-    (called with the scan after each transcript read: a caller's progress)."""
+    (called with the scan after each transcript read: a caller's progress). ``keep`` (a folder) keeps what each
+    reading made of a transcript (lib/transcript_index): a later scan reads only what was added since."""
 
-    def __init__(self, on_read=None) -> None:
+    def __init__(self, on_read=None, keep=None) -> None:
         self.memo: dict = {}
         self.transcripts = 0
         self.bytes = 0
         self.on_read = on_read
+        self.keep = keep
 
 
 _SCAN: TranscriptScan | None = None
 
 
 @contextlib.contextmanager
-def transcript_scan(on_read=None):
+def transcript_scan(on_read=None, keep=None):
     """Open a scan for the duration of the block (see above) and yield it; a
-    call inside an open scan joins it, ``on_read`` left as it was."""
+    call inside an open scan joins it, ``on_read`` and ``keep`` left as they were."""
     global _SCAN
     if _SCAN is not None:
         yield _SCAN
         return
-    _SCAN = TranscriptScan(on_read)
+    _SCAN = TranscriptScan(on_read, keep)
     try:
         yield _SCAN
     finally:
@@ -1198,6 +1329,37 @@ def _id_runs(data: bytes) -> frozenset:
     return frozenset(runs)
 
 
+def _counted(read: int) -> None:
+    """The open scan has read ``read`` more bytes of a transcript."""
+    _SCAN.transcripts += 1
+    _SCAN.bytes += read
+    if _SCAN.on_read is not None:
+        _SCAN.on_read(_SCAN)
+
+
+def _more_id_runs(runs: list, data: bytes, _first: int) -> list:
+    return sorted(set(runs) | {run.decode() for run in _id_runs(data)})
+
+
+def _kept_id_runs(transcript: Path) -> frozenset | None:
+    """The id runs of a transcript from the open scan's kept reading; None to read it whole."""
+    try:
+        kept = _kept_reading(transcript, "runs", "", list, _more_id_runs)
+        return None if kept is None else frozenset(run.encode() for run in kept)
+    except Exception:  # a kept entry that does not fit, or a transcript that cannot be read: the whole read decides
+        return None
+
+
+def _kept_reading(transcript: Path, kind: str, salt: str, empty, step):
+    """The open scan's kept reading of a transcript (lib/transcript_index.extend), counted by the bytes it took;
+    None when there is none to be had (no folder, a carriage return in the bytes: the caller reads it whole)."""
+    got = _lib_module("transcript_index").extend(_SCAN.keep, transcript, kind, salt, empty, step)
+    if got is None:
+        return None
+    _counted(got[1])
+    return got[0]
+
+
 def _mentions(transcript: Path, family: str) -> bool:
     """Whether the transcript's bytes hold ``family``; OSError when it cannot
     be read. Inside an open scan the transcript is read once, for every family
@@ -1207,15 +1369,13 @@ def _mentions(transcript: Path, family: str) -> bool:
     key = ("id_runs", str(transcript))
     if key not in _SCAN.memo:
         try:
-            data = transcript.read_bytes()
+            _SCAN.memo[key] = _kept_id_runs(transcript) if _SCAN.keep is not None else None
+            if _SCAN.memo[key] is None:
+                data = transcript.read_bytes()
+                _SCAN.memo[key] = _id_runs(data)
+                _counted(len(data))
         except OSError:
             _SCAN.memo[key] = None
-        else:
-            _SCAN.memo[key] = _id_runs(data)
-            _SCAN.transcripts += 1
-            _SCAN.bytes += len(data)
-            if _SCAN.on_read is not None:
-                _SCAN.on_read(_SCAN)
     runs = _SCAN.memo[key]
     if runs is None:
         raise OSError(f"cannot read {transcript}")
@@ -1239,12 +1399,61 @@ def _task_records(task_id: str, project_dir: str | Path,
         return _family_records(family, project_dir, roots)
     roots = None if roots is None else tuple(roots)
     key = ("records", family, project_slug(project_dir), roots)
-    return copy.deepcopy(_scan_memo(key, lambda: _family_records(family, project_dir, roots)))
+    if key not in _SCAN.memo:
+        used: list[Path] = []
+        _SCAN.memo[key] = (_family_records(family, project_dir, roots, used), used)
+    records, used = _SCAN.memo[key]
+    # A reader that watches what the answer was made from (lib/fact_cache) sees it on every ask, not on the first
+    # alone: the store's listing and each transcript's stat, and the refusals of each session the answer read.
+    for transcript in _session_transcripts(project_dir, roots):
+        with contextlib.suppress(OSError):
+            transcript.stat()
+    for transcript in used:
+        _lib_module("command_span").recorded_refusals(transcript.stem)
+    return copy.deepcopy(records)
+
+
+def _transcript_dispatches(transcript: Path, commands: frozenset) -> tuple[list, list]:
+    """(the human-typed commands, the dispatch records) of a transcript: inside a scan that keeps its readings,
+    what was added since the last one is all that is read."""
+    if _SCAN is not None and _SCAN.keep is not None:
+        try:
+            kept = _kept_reading(transcript, "dispatches", _digest_of(commands), _no_dispatches, _more_dispatches(commands))
+            if kept is not None:
+                return ([tuple(o) for o in kept["openers"]],
+                        _obligation_records(transcript, kept["calls"], set(kept["refused"])))
+        except Exception:  # a kept entry that does not fit, or a transcript that cannot be read: the whole read decides
+            pass
+    return _span_openers(transcript, commands), _whole_dispatch_obligations(transcript)
+
+
+def _digest_of(commands: frozenset) -> str:
+    import hashlib  # first use: loading this module (every hook's start) does not import it
+    return hashlib.sha256("\0".join(sorted(commands)).encode()).hexdigest()
+
+
+def _no_dispatches() -> dict:
+    return {"calls": {}, "refused": [], "openers": []}
+
+
+def _more_dispatches(commands: frozenset):
+    """The step of the kept reading of dispatches: the calls of the dispatch tools, the ids a hook refused in
+    their results, and the typed commands, over ``data`` (whole lines or an unfinished one)."""
+    def step(state: dict, data: bytes, first: int) -> dict:
+        parts = data.decode("utf-8", "replace").split("\n")
+        lines = [part + "\n" for part in parts[:-1]] + ([parts[-1]] if parts[-1] else [])
+        calls, results = dict(state["calls"]), {}
+        for number, line in enumerate(lines, first):
+            _fold_parent_line(line, number, calls, results, {})
+        opened = _lib_module("command_span").openers_in(lines, first, commands)
+        return {"calls": calls, "refused": sorted(set(state["refused"]) | _refused_in(results)),
+                "openers": state["openers"] + [list(o) for o in opened]}
+    return step
 
 
 def _family_records(family: str, project_dir: str | Path,
-                    roots: Iterable[str | Path] | None) -> list[dict]:
-    """_task_records of a task of ``family``."""
+                    roots: Iterable[str | Path] | None, used: list | None = None) -> list[dict]:
+    """_task_records of a task of ``family``; ``used`` (a list) takes each transcript that named it."""
     commands = _lib_module("stop_contract").harness_commands()
     # A dispatch of the task is appended to its transcript after the task id
     # was minted, so a transcript last written a day or more before the id's
@@ -1264,8 +1473,11 @@ def _family_records(family: str, project_dir: str | Path,
                 continue
         except OSError:
             continue
-        openers = _scan_memo(("openers", str(transcript), commands), lambda: _span_openers(transcript, commands))
-        for record in _scan_memo(("dispatches", str(transcript)), lambda: dispatch_obligations(transcript)):
+        if used is not None:
+            used.append(transcript)
+        openers, dispatches = _scan_memo(("dispatches", str(transcript), commands),
+                                         lambda: _transcript_dispatches(transcript, commands))
+        for record in dispatches:
             if task_family(record["obligation"].get("task_id")) != family:
                 continue
             key = (transcript.stem, str(record["tool_use_id"]))
@@ -1428,6 +1640,14 @@ def _step_label(step: Mapping) -> str | None:
     return match.group(1) if match else None
 
 
+def _call_roles(step: Mapping) -> set:
+    """The roles a canonical step's subagent_call names: one entry, or each of a list's (the requirement
+    round states every call of its step, optional ones included: scripts/todo/dev.py ROUND_CALLS)."""
+    call = step.get("subagent_call")
+    return {e.get("subagent_type") for e in (call if isinstance(call, list) else [call])
+            if isinstance(e, Mapping) and e.get("subagent_type")}
+
+
 def _canonical_step(family: str, path: str, spans: list[tuple[str, str]],
                     template_sources: list[str]) -> dict | None:
     """The canonical todo step of a command the task ran that owes ``path``:
@@ -1456,10 +1676,9 @@ def _canonical_step(family: str, path: str, spans: list[tuple[str, str]],
                         continue
                     owner = next((s for s in steps if source == command
                                   and _step_label(s) == template["step"]), None)
-                    call = owner.get("subagent_call") if owner else None
-                    if owner is None or (call and call.get("subagent_type") != template["role"]):
-                        owner = next((s for s in steps if (s.get("subagent_call") or {}).get("subagent_type")
-                                      == template["role"]), owner)
+                    roles = _call_roles(owner) if owner else set()
+                    if owner is None or (roles and template["role"] not in roles):
+                        owner = next((s for s in steps if template["role"] in _call_roles(s)), owner)
                     if owner is None:
                         continue
                     return {"source": "todo_step", "command": command, "arguments": args,
@@ -1521,7 +1740,7 @@ def declaring_dispatch(
     task_id: str,
     path: str | Path,
     project_dir: str | Path,
-    roots: Iterable[str | Path] | None = None,
+    roots: Iterable[str | Path] | None = None, writer: bool = True,
 ) -> dict | None:
     """Who owes ``path`` for the task ``task_id``, read from the task's
     dispatch records in every session the project's transcript store holds
@@ -1541,20 +1760,20 @@ def declaring_dispatch(
       main agent's own step) and the template that declares the path, bound
       to its values (None when the step declares the path itself);
     - ``{"source": "writer", ...}``: a file no declaration names (a product
-      file): the dispatch whose own tool calls wrote it;
+      file): the dispatch whose own tool calls wrote it (not sought with writer=False);
     - None: nothing names an owner.
 
     Read-only; judges nothing on disk. Inside an open transcript_scan each
     answer is read once (each caller gets its own copy)."""
     if _SCAN is None or not isinstance(task_id, str):
-        return _declaring_dispatch(task_id, path, project_dir, roots)
+        return _declaring_dispatch(task_id, path, project_dir, roots, writer)
     roots = None if roots is None else tuple(roots)
-    key = ("owner", task_id, str(path), str(Path(project_dir).resolve()), roots)
-    return copy.deepcopy(_scan_memo(key, lambda: _declaring_dispatch(task_id, path, project_dir, roots)))
+    key = ("owner", task_id, str(path), str(Path(project_dir).resolve()), roots, writer)
+    return copy.deepcopy(_scan_memo(key, lambda: _declaring_dispatch(task_id, path, project_dir, roots, writer)))
 
 
 def _declaring_dispatch(task_id: str, path: str | Path, project_dir: str | Path,
-                        roots: Iterable[str | Path] | None) -> dict | None:
+                        roots: Iterable[str | Path] | None, writer: bool = True) -> dict | None:
     """declaring_dispatch's answer, read from the store."""
     root = Path(project_dir)
     rel = Path(path)
@@ -1581,7 +1800,7 @@ def _declaring_dispatch(task_id: str, path: str | Path, project_dir: str | Path,
     step = _canonical_step(family, wanted, spans, pipelines) if family else None
     if step is not None:
         return step
-    return _writer(records, wanted, project_dir)
+    return _writer(records, wanted, project_dir) if writer else None
 
 
 def first_declared_at(

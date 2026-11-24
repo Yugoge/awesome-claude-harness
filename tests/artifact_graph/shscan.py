@@ -29,7 +29,24 @@ from .values import Unk, Str, Num, Lst
 ROOT_SHELL_FUNCTIONS = {
     ("hooks/lib/harness_state_dir.sh", "harness_state_dir"): "state",
     ("hooks/lib/claude_home.sh", "claude_home_resolve"): "harness",
+    # Reading of code shape, not of behaviour: the state root's own text is a crc32 in bash arithmetic and a printf
+    # format the evaluator cannot run (it read `<home>/.local/state/claude-harness/lib-%08x`), so its logs/ files
+    # matched no shown path. What it prints is HOME's fixed part and the install's name and crc, as the Python twin
+    # (harness_state_dir.py state_root) reads.
+    ("hooks/lib/harness_state_dir.sh", "harness_state_root"):
+        P.tok("home") + "/.local/state/claude-harness/" + P.tok("*") + "-" + P.tok("*"),
 }
+# A tree program run with these arguments prints one Python definition's value, which the shell then uses as a
+# path (`ROOT=$(python3 .../scratch_owner.py --root)`): the substitution is read as that function's static value,
+# the key its Python readers get, instead of an unknown stdout. (program, arguments) -> (module, function).
+PRINTED_DEFINITIONS = {
+    ("hooks/lib/scratch_owner.py", ("--root",)): ("hooks/lib/locations.py", "session_scratch_root"),
+}
+
+
+def _root_value(root: str) -> V.Val:
+    """A root token by name, or the template a resolver prints (one with a token in it)."""
+    return V.s(root if P.L in root else P.tok(root))
 
 _PREFIX_CMDS = {"command", "builtin", "exec", "nohup", "nice", "sudo", "time", "stdbuf", "setsid", "flock"}
 _DECL = {"local", "declare", "typeset", "export", "readonly"}
@@ -300,6 +317,7 @@ class ShWalk:
         self.chain: list = []          # (node, captured var or None, cond)
         self.printed: list = []
         self.captured_stack: list = []
+        self.made: set = set()         # path templates an earlier `mkdir` of the same && / || list made
 
     # ---------------------------------------------------------- evaluation
     def word(self, w: S.Word | None, at) -> V.Val:
@@ -702,15 +720,18 @@ class ShWalk:
         args = words[1:]
         if name is None:
             return Unk("assembled:stdout")
+        printed = self._printed_definition(name, args, n)
+        if printed is not None:
+            return printed
         root = self._root_function(name)
         if root:
-            return V.s(P.tok(root))
+            return _root_value(root)
         fr = self.an.find_func(self.f, name)
         if fr is not None:
             g, fd = fr
             root = ROOT_SHELL_FUNCTIONS.get((g.component, name))
             if root:
-                return V.s(P.tok(root))
+                return _root_value(root)
             s = self.an.summary(g, fd)
             b = self._binding(args, n)
             return V.subst_val(s.printed, b) if not isinstance(s.printed, Unk) else s.printed
@@ -798,6 +819,19 @@ class ShWalk:
             hint = "session_id" if "session_id" in code else None
             return Unk("assembled:stdout", hint=hint)
         return Unk("assembled:stdout")
+
+    def _printed_definition(self, name: str, args, n) -> V.Val | None:
+        """`python3 <tree program> <args>` that PRINTED_DEFINITIONS names: the named function's static value."""
+        if not _PY.search(name) or not args:
+            return None
+        lits = tuple(w.literal() for w in args[1:])
+        for t in V.as_templates(self.word(args[0], n)):
+            where = PRINTED_DEFINITIONS.get((pyscan.tree_target(t, self.an.file_set), lits))
+            mod = self.an.py.module(where[0]) if where else None
+            fi = mod.funcs.get(where[1]) if mod is not None else None
+            if fi is not None:
+                return self.an.py.summary(fi).ret
+        return None
 
     def _root_function(self, name: str) -> str | None:
         """A root resolver the file sources: it wins over an inline fallback
@@ -941,9 +975,14 @@ class ShWalk:
         if isinstance(n, S.Simple):
             self.simple(n, cond)
         elif isinstance(n, S.AndOr):
+            outer = self.made
+            self.made = set(outer)
             self.node(n.first, True)
             for i, (op, x) in enumerate(n.rest):
+                if op == "&&":
+                    self._note_made(n.first if i == 0 else n.rest[i - 1][1])
                 self.node(x, i < len(n.rest) - 1)
+            self.made = outer
         elif isinstance(n, S.Pipeline):
             for x in n.cmds:
                 self.node(x, cond)
@@ -979,6 +1018,17 @@ class ShWalk:
             self.test(n.words, n)
         elif isinstance(n, S.FuncDef):
             pass
+
+    def _note_made(self, x) -> None:
+        """`mkdir -p DIR && [[ -w DIR ]]`: the test after the creation asks whether it worked, and names
+        the directory the list just made, which no writer left: the tested path is not read as an
+        artifact (the files under it are the artifacts)."""
+        if not isinstance(x, S.Simple):
+            return
+        words = self._strip_prefix(x.words)
+        if words and self._cmd_name_words(words) == "mkdir":
+            for w in self._operands(words[1:], {"-m", "--mode"}):
+                self.made.update(V.as_templates(self.word(w, x)))
 
     def _cwd(self, line: int, n=None) -> V.Val | None:
         """The directory a `cd` before `line` moved the script to: the latest one before it in
@@ -1157,7 +1207,9 @@ class ShWalk:
         for i, lit in enumerate(lits):
             nxt = lits[i + 1] if i + 1 < len(lits) else None
             if lit in _TEST_UNARY and i + 1 < len(words) and not (nxt or "x").startswith("-") and nxt not in ("]", "]]"):
-                self.emit("read", self.word(words[i + 1], n), "name", "test " + lit, n)
+                tested = self.word(words[i + 1], n)
+                if not (self.made and set(V.as_templates(tested)) <= self.made):
+                    self.emit("read", tested, "name", "test " + lit, n)
             if lit in ("-nt", "-ot", "-ef") and 0 < i < len(words) - 1:
                 self.emit("read", self.word(words[i - 1], n), "name", "test " + lit, n)
                 self.emit("read", self.word(words[i + 1], n), "name", "test " + lit, n)

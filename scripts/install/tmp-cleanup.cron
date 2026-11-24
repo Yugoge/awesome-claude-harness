@@ -1,0 +1,9 @@
+# /etc/cron.d/tmp-cleanup
+# Hourly run of scripts/install/tmp-cleanup-install.sh, installed as /usr/local/sbin/tmp-cleanup.sh: its
+# short-space rule reacts to a full volume within the hour, its age rules are those of the daily run it replaces.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# The temp roots of the shipped settings.json env: the program acts on these roots only.
+TMPDIR=/var/tmp/claude-scratch
+CLAUDE_CODE_TMPDIR=/var/tmp/claude-scratch
+17 * * * * root /usr/local/sbin/tmp-cleanup.sh

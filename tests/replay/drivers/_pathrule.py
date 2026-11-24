@@ -22,11 +22,14 @@ pushgrant  A main-agent `git push -u origin <branch>` with CLAUDE_PUSH_COMMAND_A
            session's id as CLAUDE_SESSION_ID and the branch and remote push.sh resolves for the toy.
 preflight  /commit's Step 6 and Step 7 changelog-analyst dispatches through the Agent PreToolUse hooks. The
            harness home holds a singular /dev cycle's dev report of a task (no gitignore_waiver, one
-           files_created path the harness's .gitignore matches, under tests/generated/) and its close-report,
+           files_created path the harness's .gitignore matches, a __pycache__/ file: no tests/generated/ path,
+           which the rule does not count as a deliverable) and its close-report,
            as that cycle and its /close left them. The owner types `/commit <task>` (the user-intent sentinel);
-           the main agent runs Step 5 as the text spells its pieces: the repository plan
-           (resolve-commit-repos.py, the harness home as control root and supported repository), the
-           dispatch-snapshot manifest Written at the state dir Bash resolves, and the text's grant-writer
+           the main agent runs Step 5 as the text spells its pieces: the plan call (scripts/steps/commit-plan.py,
+           run in the harness home, the session's control checkout and supported repository), which writes the
+           dispatch-snapshot manifest at the state dir it resolves (a text that still says "Write the
+           dispatch-snapshot manifest", a session in flight before 2026-11-22, has the main agent Write it at
+           the plan call's printed manifest_path), and the text's grant-writer
            block (row 7's M3 respelling where the text activates a venv): the kit's write-commit-grant.py
            writes the grant where it writes it and prints its path. Then, for each text (`texts=own` or
            `texts=own,<path>`: another tree's commands/commit.md, a path under the sandbox root, for
@@ -63,7 +66,7 @@ import time
 from contextlib import contextmanager
 
 from .. import cmdtext, hookrun
-from ..pipeline import Orchestrator, utc_now
+from ..pipeline import Orchestrator
 from ..replay import MODEL
 from . import close as closedrv
 from .commit import RESPELLINGS as COMMIT_RESPELLINGS
@@ -225,7 +228,7 @@ def pushgrant(rp) -> None:
     with rp.acting("driver"):
         with open(os.path.join(lay.harness, "hooks", "push.sh"), encoding="utf-8") as fh:
             text = fh.read()
-    block = text[text.index("# Step 8.5"):text.index("# Step 8.6")]
+    block = text[text.index("# Step 8.5"):text.index("# Step 8.6")] if "# Step 8.5" in text else ""  # S21: removed
     script = (". ~/.claude/hooks/lib/harness_state_dir.sh\n"
               f"BRANCH={shlex.quote(branch)}\nREMOTE=origin\n" + block + 'printf "%s\\n" "$GRANT_PATH"\n')
     rp.step("script", "push.sh Step 8.5", {})
@@ -282,11 +285,11 @@ def preflight(rp) -> None:
     h = lay.harness
     tid = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     rp.task(tid)
-    report_rel, created = f"docs/dev/dev-report-{tid}.json", f"tests/generated/{tid}/test_path_rule.py"
+    report_rel, created = f"docs/dev/dev-report-{tid}.json", f"scripts/__pycache__/path_rule_{tid}.cpython-312.pyc"
     with rp.acting("driver"):  # the harness home as the task's singular /dev cycle and its /close left it
         for rel, body in ((report_rel, json.dumps(_report(tid, created), indent=2) + "\n"),
                           (f"docs/dev/close-report-{tid}.md", f"# Close report {tid}\n\nCLOSE: YES\n"),
-                          (created, "def test_path_rule():\n    assert True\n")):
+                          (created, "")):
             os.makedirs(os.path.dirname(os.path.join(h, rel)), exist_ok=True)
             with open(os.path.join(h, rel), "w") as fh:
                 fh.write(body)
@@ -299,28 +302,35 @@ def preflight(rp) -> None:
     o = Orchestrator(rp, "commit", session=s, respellings=COMMIT_RESPELLINGS)
     ev = o.slash(tid, label="/commit")
     closedrv.fact(rp, "/commit", {"event": "UserPromptSubmit", "hooks": verdicts(rp, ev)})
-    # Step 5: the plan, the manifest, the grant.
-    cmd = ("python3 ~/.claude/scripts/resolve-commit-repos.py --task-id {t} --control-root ~/.claude "
-           "--report ~/.claude/{r} --supported-repo ~/.claude").format(t=tid, r=report_rel)
-    c = o.run(cmd, "Step 5: the repository plan", "/commit Step 5 Bash resolve-commit-repos.py")
-    plan = json.loads(c.response.get("stdout", "")) if c.ok else {}
-    c = o.run(". ~/.claude/hooks/lib/harness_state_dir.sh\nharness_state_dir\n"
-              'echo "${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}"\n'
-              f"git -C {shlex.quote(h)} status --porcelain=v1",
-              "State dir, session id and status per plan entry", "/commit Step 5 Bash manifest inputs")
-    out = (c.response.get("stdout") or "").split("\n") if c.ok else []
-    state, sid = (out + ["", ""])[:2]
-    doc = {"session_id": sid, "task_id": tid, "dispatched_at": utc_now(), "repository_plan": plan,
-           "artifact_chain": None, "files_at_dispatch": {h: [l[3:] for l in out[2:] if l.strip()]}}
-    s.write(os.path.join(state, f"claude-commit-manifest-{sid}.json"), json.dumps(doc, indent=2) + "\n",
-            label="/commit Step 5 Write manifest")
+    # Step 5: the plan call, run in the session's control checkout (the harness home), writes the manifest; the grant.
+    o.values.update(TASK_ID=tid)
+    c = o.run_text("cd ~/.claude\n" + o.block("Step 5", anchor="steps/commit-plan.py"), "/commit Step 5 Bash plan",
+                   "Step 5: the repository plan and the manifest")
+    try:
+        facts = json.loads(c.response.get("stdout") or "") if c.ok else {}
+    except ValueError:
+        facts = {}
+    plan = facts.get("repository_plan") or {}
+    manifest = facts.get("manifest_path") or ""
+    # OLDER_TEXT: "Write the dispatch-snapshot manifest" (a session in flight on the text before 2026-11-22 writes it
+    # by hand at the path the plan call printed; the minter still accepts it)
+    hand = "Write the dispatch-snapshot manifest" in o.section("Step 5")
+    if hand and manifest:
+        doc = {k: facts[k] for k in ("session_id", "task_id", "repository_plan", "files_at_dispatch", "unclaimed")
+               if k in facts}
+        s.write(manifest, json.dumps(doc, indent=2) + "\n", label="/commit Step 5 Write manifest")
+    elif manifest:
+        manifest = re.sub(r"\.json$", "-plan.json", manifest)  # commit_pipeline.planned_manifest_path
     writer = next(b.text for b in cmdtext.blocks(o.section("Step 5"), None, "bash")
                   if "write-commit-grant.py" in b.text and "PLANNED_REPO_ROOT" in b.text)
     o.values.update(TASK_ID=tid, PLANNED_REPO_ROOT=(plan.get("repositories") or [{}])[0].get("repo_root", h))
     c = o.run_text(writer, "/commit Step 5 Bash mint 0", "Mint the repository's commit grant")
     grant = (c.response.get("stdout") or "").strip().split("\n")[-1] if c.ok else ""
+    with rp.acting("driver"):
+        written = bool(manifest) and os.path.isfile(manifest)
     closedrv.fact(rp, "Step 5", {"plan admits": [e.get("repo_root") for e in plan.get("repositories") or []],
-                                 "manifest": rp.norm_text(os.path.join(state, f"claude-commit-manifest-{sid}.json")),
+                                 "manifest": rp.norm_text(manifest), "manifest by": "hand" if hand else "plan call",
+                                 "manifest written": written,
                                  "mint ok": c.ok, "grant": rp.norm_text(grant),
                                  "mint error": rp.norm_text(c.error)[:400]})
     texts = [("own", o.text)]

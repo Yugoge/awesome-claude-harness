@@ -12,16 +12,19 @@ the CLI's own (measured by the audit), not documented.
 
 The change is prose only: tests/lint/cd_read.py finds a `cd <dir> && <read command>` in the
 prompt corpus and skills, and requires CLAUDE.md to state the convention while a Read() deny
-rule exists. The settings keep that intent, checked below without pinning the list (other lanes
-own its entries): a Read() deny rule exists, so `cd config && cat .env` keeps the guard, and
-`cat .env` stays denied under the documented matching model (the guard is the CLI's; it is
-modelled here by "a Read() deny rule exists", not measured).
+rule exists. Since the deny list moved out of settings.json into policies/cli-deny.v1.json
+(decided by hooks/pretool-deny-list.py), the CLI holds no Read() entry and its cd guard is off;
+the rule keeps what the guard protected: a relative read after a `cd` is decided in the directory
+the cd goes to, and after a cd whose directory is not known before the command runs, by the name
+read. Checked below without pinning the list (other lanes own its entries): `cat .env` stays
+denied under the documented matching model, and the rule refuses the cd forms of a denied read.
 """
 from __future__ import annotations
 
 import fnmatch
 import json
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -138,29 +141,66 @@ def _read_denied(path: str, rules: list[str]) -> bool:
     return False
 
 
+def _list_read_denies() -> list[str]:
+    """The Read() entries of the whole deny list (the policy plus settings.json), as the rule reads them."""
+    sys.path.insert(0, str(REPO / "hooks"))
+    from lib.deny_list import entries
+    return [e for e, _ in entries() if e.startswith("Read(")]
+
+
+def _rule_refuses(cmd: str, cwd: str) -> bool:
+    from lib.deny_list import Policy
+    return Policy().refusal({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": cwd}) is not None
+
+
+def test_settings_json_holds_no_read_deny_so_the_cli_cd_guard_is_off():
+    # The fact the guard depended on is gone; the rule below takes its place.
+    assert read_denies(Tree(REPO)) == []
+
+
 @pytest.mark.parametrize("path, denied", [
     (".env", True),                 # `cat .env`: denied
     ("config/.env", True),          # `cd config && cat .env` resolves here: denied once resolved
     ("src/app.py", False),          # `grep -rn TODO src` reads an ordinary file
 ])
 def test_must_still_refuse_reads_stay_denied(path, denied):
-    rules = read_denies(Tree(REPO))
+    rules = _list_read_denies()
     assert _read_denied(path, rules) is denied
-    # Any Read() deny keeps the CLI's cd guard armed, so `cd config && cat .env` still asks.
-    assert rules
+    # The rule decides it after a cd too, in the directory the cd goes to.
+    head, _, name = path.rpartition("/")
+    assert _rule_refuses(f"cd {head or '.'} && cat {name}", str(REPO)) is denied
+
+
+@pytest.mark.parametrize("cmd, refused", [
+    ("cat ~/.ssh/id_rsa", True),
+    ("cd ~/.ssh && cat id_rsa", True),           # the cd is followed
+    ("cd && head .ssh/id_rsa", True),            # a bare cd goes home
+    ("cd $HOME/.ssh; grep -n x id_rsa", True),
+    ("(cd ~/.kube && cat config)", True),
+    ("cd ~/.ssh && echo x > id_rsa", True),      # a write target after a cd
+    ('cd "$D" && cat id_rsa', True),             # directory unknown: decided by the name read
+    ("cd - && cat id_rsa", True),
+    ('cd "$D" && cat README.md', False),
+    ("cd ~/.ssh && cat known_hosts", False),
+    ("cd sub && cd .ssh && cat id_rsa", False),  # followed to a directory that is not home's .ssh
+    ("cd src && grep -rn TODO .", False),
+    ("grep -rn TODO src", False),
+])
+def test_the_rule_keeps_what_the_cd_guard_protected(cmd, refused, tmp_path):
+    assert _rule_refuses(cmd, str(tmp_path)) is refused
 
 
 def _check_read_deny_intent(rules: list[str]) -> None:
-    # Any Read() deny keeps the CLI's cd guard armed; `cat .env` must stay denied. No entry is pinned.
-    assert rules, "settings.json has no Read() deny rule: the CLI's cd guard is disarmed"
+    # `cat .env` must stay denied by the deny list. No entry is pinned.
+    assert rules, "the deny list has no Read() entry"
     assert _read_denied(".env", rules), "`cat .env` is no longer denied by a Read() deny rule"
 
 
 def test_read_deny_entries_are_unchanged():
     """The Read() deny intent holds on this tree, and the check fails when that intent is broken."""
-    rules = read_denies(Tree(REPO))
+    rules = _list_read_denies()
     _check_read_deny_intent(rules)
-    with pytest.raises(AssertionError, match="no Read\\(\\) deny rule"):
+    with pytest.raises(AssertionError, match="no Read\\(\\) entry"):
         _check_read_deny_intent([])
     without_env = [r for r in rules if not _read_denied(".env", [r])]
     assert without_env, "the mutation must leave other Read() denies in place"

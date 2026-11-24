@@ -68,8 +68,10 @@ AGENT_ID_TEXT_RE = re.compile(r"agentId:\s*([A-Za-z0-9._-]+)")
 # measurement and the three evidence tiers.
 try:  # package import (hooks.lib.subagent_restart)
     from . import interruption_signals as signals
+    from .subagent import DISPATCH_TOOLS
 except ImportError:  # direct sys.path import (lib/ on path)
     import interruption_signals as signals  # type: ignore[no-redef]
+    from subagent import DISPATCH_TOOLS  # type: ignore[no-redef]
 
 
 def _is_quota_text(value: Any) -> bool:
@@ -99,7 +101,7 @@ NOTIFICATION_CLOSE = "</task-notification>"
 # dispatched and the authorization hook refused the redispatch (2026-09-28,
 # agent a8ab56bdd1870882d).
 TASK_NOTIFICATION_RE = re.compile(
-    r"<task-id>([^<]+)</task-id>.*?<status>(completed|failed|stopped)</status>(.*)",
+    r"<task-id>([^<]+)</task-id>.*?<status>(completed|failed|stopped|killed)</status>(.*)",
     re.IGNORECASE | re.DOTALL,
 )
 # The fixed resume message instructs every resumed agent to end with an explicit
@@ -124,12 +126,14 @@ RECOVERY_STATUS_RE = re.compile(r"RECOVERY_STATUS:\s*(completed|quota_interrupte
 # running. Enforcing the pairing here too would duplicate that authority in
 # a second place that could drift from it.
 _HARNESS_HOME = str(Path(os.path.abspath(__file__)).parents[2])  # install location
+# The subcommands of scripts/restart-subagents.py (its parser reads this tuple).
+HELPER_SUBCOMMANDS = ("prepare", "status", "finalize")
 _RESTART_HELPER_COMMAND_RE = re.compile(  # the venv form, or commands/restart.md's quoted CLAUDE_HOME channel
     r'^(?:(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
     r'/venv/bin/python3?\s+'
     r'(?:(?:\$HOME|~|' + re.escape(str(Path.home())) + r')/\.claude|' + re.escape(_HARNESS_HOME) + r')'
     r'/scripts/restart-subagents\.py|python3\s+"\$\{CLAUDE_HOME:-\$HOME/\.claude\}/scripts/restart-subagents\.py")\s+'
-    r'(?:prepare|status|finalize)'
+    r'(?:' + '|'.join(HELPER_SUBCOMMANDS) + r')'
     r'(?:\s+--cross-account)?'
     r'(?:\s+--wait-seconds\s+\d+)?'
     r'\s*$'
@@ -202,7 +206,11 @@ def state_dir() -> Path:
     override = os.environ.get("CLAUDE_RESTART_STATE_DIR")
     if override:
         return Path(override)
-    return config_dir() / "restart-state"
+    try:  # one record per install, on disk, whichever configuration directory runs the session
+        from .harness_state_dir import state_root
+    except ImportError:
+        from harness_state_dir import state_root  # type: ignore[no-redef]
+    return Path(state_root(), "restart-state")
 
 
 def grant_path(session_id: str) -> Path:
@@ -401,6 +409,7 @@ def _parse_time(raw: Any) -> datetime | None:
 
 
 GRANT_ORIGINS = ("restart", "overnight-wake")
+GRANT_TTL_MIN, GRANT_TTL_MAX = 60, 86400  # seconds
 
 
 def mint_grant(
@@ -422,8 +431,17 @@ def mint_grant(
         ttl = ttl_seconds or int(os.environ.get("CLAUDE_RESTART_GRANT_TTL_SECONDS", "7200"))
     except (TypeError, ValueError) as exc:
         raise RestartError("restart grant TTL is not an integer") from exc
-    if ttl < 60 or ttl > 86400:
-        raise RestartError("restart grant TTL must be between 60 and 86400 seconds")
+    # Out of bounds is no refusal (the owner's ruling of 2026-11-20): the nearest bound is
+    # used, and the returned grant's ttl_warning, which the issuer prints, says so. Safe
+    # either way: the grant is session- and transcript-bound and finalize consumes it, so
+    # its lifetime only bounds a recovery that never finalizes, and that stays within
+    # [GRANT_TTL_MIN, GRANT_TTL_MAX] as before.
+    used = min(max(ttl, GRANT_TTL_MIN), GRANT_TTL_MAX)
+    warning = (
+        f"warning: restart grant TTL {ttl} s is outside {GRANT_TTL_MIN}-{GRANT_TTL_MAX} s; "
+        f"{used} s is used" if used != ttl else None
+    )
+    ttl = used
     now = _utcnow()
     grant = {
         "schema_version": SCHEMA_VERSION,
@@ -435,7 +453,7 @@ def mint_grant(
         "origin": origin,
     }
     _atomic_write_json(grant_path(sid), grant)
-    return grant
+    return dict(grant, ttl_warning=warning) if warning else grant
 
 
 def revoke_wake_grant(session_id: str) -> bool:
@@ -491,28 +509,6 @@ def _textify(value: Any) -> str:
     return ""
 
 
-def _extract_agent_id(value: Any) -> str:
-    if isinstance(value, dict):
-        for key in ("agentId", "agent_id"):
-            candidate = value.get(key)
-            if isinstance(candidate, str) and AGENT_RE.fullmatch(candidate):
-                return candidate
-        for item in value.values():
-            found = _extract_agent_id(item)
-            if found:
-                return found
-    elif isinstance(value, list):
-        for item in value:
-            found = _extract_agent_id(item)
-            if found:
-                return found
-    elif isinstance(value, str):
-        match = AGENT_ID_TEXT_RE.search(value)
-        if match:
-            return match.group(1)
-    return ""
-
-
 def _iter_notification_blocks(line: str) -> Iterator[str]:
     """Yield each complete task-notification body found on one JSONL line.
 
@@ -540,6 +536,58 @@ def _iter_notification_blocks(line: str) -> Iterator[str]:
         pos = end + len(NOTIFICATION_CLOSE)
 
 
+def _fold_parent_line(line: str, line_no: int, calls: dict, results: dict, latest_notifications: dict) -> None:
+    """One transcript line of _read_parent_calls, folded into its three answers."""
+    try:  # the one reading of calls; at the call, since a harness tree without command sets imports this module
+        from . import command_span
+    except ImportError:
+        import command_span  # type: ignore[no-redef]
+    try:
+        record = json.loads(line)
+    except ValueError:
+        record = None
+    # Notifications can appear as top-level queue-operation content,
+    # message.content, or attachment.prompt. Scan the complete JSONL line
+    # so all three persisted forms count; a record of another kind (the
+    # CLI's api-request-blob copy of a message) delivered nothing.
+    copy = isinstance(record, dict) and record.get("type") not in ("user", "attachment", "queue-operation")
+    for block in () if copy else _iter_notification_blocks(line):
+        match = TASK_NOTIFICATION_RE.search(block)
+        if not match:
+            continue
+        agent_id = match.group(1).strip()
+        if AGENT_RE.fullmatch(agent_id):
+            # <status> precedes <summary>, so the post-status tail covers
+            # the failure summary that carries the quota banner.
+            tail = match.group(3)
+            latest_notifications[agent_id] = {
+                "line": line_no,
+                "status": match.group(2).lower(),
+                "quota_interrupted": signals.is_quota_text(tail),
+            }
+    for block in command_span._blocks(record, sidechain=True):
+        if block.get("type") == "tool_use" and block.get("name") in DISPATCH_TOOLS:
+            tool_id = block.get("id")
+            if isinstance(tool_id, str) and tool_id:
+                tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+                calls[tool_id] = {
+                    "tool_use_id": tool_id,
+                    "tool_name": block.get("name"),
+                    "line": line_no,
+                    "input": tool_input,
+                    "timestamp": record.get("timestamp"),  # the dispatch's time (obligation.dispatch_time)
+                }
+        elif block.get("type") == "tool_result":
+            tool_id = block.get("tool_use_id")
+            if isinstance(tool_id, str) and tool_id:
+                result = dict(block)
+                result["_parent_line"] = line_no
+                result["_tool_use_result"] = record.get("toolUseResult")  # the CLI's own, not the report's
+                if tool_id in command_span.hook_refused(record):  # a call a hook refused: it never ran
+                    result["_hook_refused"] = True
+                results.setdefault(tool_id, []).append(result)
+
+
 def _read_parent_calls(
     transcript: Path,
 ) -> tuple[
@@ -556,54 +604,22 @@ def _read_parent_calls(
         raise RestartError(f"cannot read parent transcript: {exc}") from exc
     with lines:
         for line_no, line in enumerate(lines, 1):
-            # Notifications can appear as top-level queue-operation content,
-            # message.content, or attachment.prompt. Scan the complete JSONL line
-            # before walking message blocks so all three persisted forms count.
-            for block in _iter_notification_blocks(line):
-                match = TASK_NOTIFICATION_RE.search(block)
-                if not match:
-                    continue
-                agent_id = match.group(1).strip()
-                if AGENT_RE.fullmatch(agent_id):
-                    # <status> precedes <summary>, so the post-status tail covers
-                    # the failure summary that carries the quota banner.
-                    tail = match.group(3)
-                    latest_notifications[agent_id] = {
-                        "line": line_no,
-                        "status": match.group(2).lower(),
-                        "quota_interrupted": signals.is_quota_text(tail),
-                    }
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            message = record.get("message") if isinstance(record, dict) else None
-            content = message.get("content") if isinstance(message, dict) else None
-            if isinstance(content, str):
-                continue
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                if block.get("type") == "tool_use" and block.get("name") in {"Agent", "Task"}:
-                    tool_id = block.get("id")
-                    if isinstance(tool_id, str) and tool_id:
-                        tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
-                        calls[tool_id] = {
-                            "tool_use_id": tool_id,
-                            "tool_name": block.get("name"),
-                            "line": line_no,
-                            "input": tool_input,
-                        }
-                elif block.get("type") == "tool_result":
-                    tool_id = block.get("tool_use_id")
-                    if isinstance(tool_id, str) and tool_id:
-                        result = dict(block)
-                        result["_parent_line"] = line_no
-                        results.setdefault(tool_id, []).append(result)
+            _fold_parent_line(line, line_no, calls, results, latest_notifications)
 
     return calls, results, latest_notifications
+
+
+def read_meta(meta_path: str | Path) -> dict[str, str] | None:
+    """The CLI's record about one subagent (<session>/subagents/agent-<id>.meta.json), read in this one
+    place for every decider: {tool_use_id, agent_type ('' when it names none), description} when the file
+    is a JSON object naming its call (a non-empty toolUseId string), else None (missing, unreadable, none)."""
+    meta = _load_json(Path(meta_path))
+    tool_id = meta.get("toolUseId") if meta else None
+    if not isinstance(tool_id, str) or not tool_id:
+        return None
+    kind, text = meta.get("agentType"), meta.get("description")
+    return {"tool_use_id": tool_id, "agent_type": kind if isinstance(kind, str) else "",
+            "description": text if isinstance(text, str) else ""}
 
 
 def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
@@ -614,26 +630,110 @@ def _metadata_by_tool_use(transcript: Path) -> dict[str, dict[str, Any]]:
     except OSError:
         return result
     for meta_path in files:
-        meta = _load_json(meta_path)
-        if not meta:
+        agent_id = meta_path.name[len("agent-") : -len(".meta.json")]
+        meta = read_meta(meta_path) if AGENT_RE.fullmatch(agent_id) else None
+        if meta is None:
             continue
-        tool_id = meta.get("toolUseId")
-        if not isinstance(tool_id, str) or not tool_id:
-            continue
-        name = meta_path.name
-        agent_id = name[len("agent-") : -len(".meta.json")]
-        if not AGENT_RE.fullmatch(agent_id):
-            continue
-        result[tool_id] = {
-            "agent_id": agent_id,
-            "agent_type": meta.get("agentType") if isinstance(meta.get("agentType"), str) else "",
-            "description": meta.get("description") if isinstance(meta.get("description"), str) else "",
+        result[meta["tool_use_id"]] = {
+            "agent_id": agent_id, "agent_type": meta["agent_type"], "description": meta["description"],
             "agent_transcript_path": str(subagent_dir / f"agent-{agent_id}.jsonl"),
         }
     return result
 
 
-def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
+def _lane_key(prompt: Any) -> tuple | None:
+    """(task_id, lane, role) of a gated command's dispatch: its obligation block's lane, else None."""
+    try:
+        from . import obligation
+    except ImportError:
+        import obligation  # type: ignore[no-redef]
+    block = obligation.extract_obligation_block(prompt) if isinstance(prompt, str) else None
+    try:
+        doc = json.loads(block.body) if isinstance(block, obligation.ExtractedBlock) else None
+    except ValueError:
+        doc = None
+    return (doc.get("task_id"), doc["lane"], doc.get("role")) if isinstance(doc, dict) and doc.get("lane") else None
+
+
+def _messages(transcript: Path, results: dict[str, list[Any]]) -> list[dict[str, Any]]:
+    """The SendMessage calls of the transcript that delivered (a result that is no error and no hook
+    refusal): {to, line, timestamp}. Each starts a new run of the child it names."""
+    try:
+        from . import command_span
+    except ImportError:
+        import command_span  # type: ignore[no-redef]
+    sent: list[dict[str, Any]] = []
+    with transcript.open("r", encoding="utf-8", errors="replace") as lines:
+        for line_no, line in enumerate(lines, 1):
+            if '"SendMessage"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            for block in command_span._blocks(record, sidechain=True):
+                tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+                answers = results.get(block.get("id"), []) if isinstance(block.get("id"), str) else []
+                if block.get("type") == "tool_use" and block.get("name") == "SendMessage" and answers \
+                        and not any(r.get("_hook_refused") or r.get("is_error") is True for r in answers):
+                    sent.append({"to": tool_input.get("to"), "line": line_no, "timestamp": record.get("timestamp")})
+    return sent
+
+
+def own_children(transcript_path: str | Path, parsed: tuple | None = None) -> list[dict[str, Any]]:
+    """This session's own subagents: the one definition (send_policy.children, discover_candidates).
+
+    One entry per Agent/Task call of the transcript that ran (no hook refused it) whose child the CLI
+    names: by its structured result (toolUseResult.agentId), else the result text's trailing
+    "agentId: <id>" (the CLI appends it last, after the report), else, for a child whose call returned
+    no result naming it (a foreground dispatch cut by the owner's interrupt), by the CLI's
+    <session>/subagents/agent-<id>.meta.json whose toolUseId is that call. Only the CLI's records
+    decide: a message, a report's prose or a file in an agent's own scratch names no call of this
+    transcript, so nothing an agent writes makes a foreign agent own.
+    Entry: agent_id, tool_use_id, name, subagent_type, description, prompt, line, background,
+    returned (a result named the child), results, agent_transcript_path, replaced (a later call that
+    ran carries the same prompt or the same gated-command lane), run_line and run_started_at (the
+    child's LATEST run: the parent line and time of the latest message delivered to it by agent id or
+    name, else its dispatch's line and None)."""
+    transcript = Path(transcript_path)
+    calls, results, _notes = parsed if parsed is not None else _read_parent_calls(transcript)
+    metadata = _metadata_by_tool_use(transcript)
+    sent = _messages(transcript, results)
+    ran = sorted((c for c in calls.values() if not any(r.get("_hook_refused") for r in results.get(c["tool_use_id"], []))),
+                 key=lambda c: c["line"])
+    keys = [(c["input"].get("prompt"), _lane_key(c["input"].get("prompt"))) for c in ran]
+    own: list[dict[str, Any]] = []
+    for index, call in enumerate(ran):
+        tool_id, tool_input = call["tool_use_id"], call["input"]
+        blocks = results.get(tool_id, [])
+        named = [a for a in [r["_tool_use_result"].get("agentId") for r in blocks if isinstance(r.get("_tool_use_result"), dict)]
+                 + [m[-1] for m in (AGENT_ID_TEXT_RE.findall(_textify(r.get("content"))) for r in blocks) if m]
+                 if isinstance(a, str) and AGENT_RE.fullmatch(a)]
+        meta = metadata.get(tool_id, {})
+        agent = named[0] if named else meta.get("agent_id")
+        if agent is None:
+            continue
+        path = meta.get("agent_transcript_path") or str(transcript.with_suffix("") / "subagents" / f"agent-{agent}.jsonl")
+        prompt, lane = keys[index]
+        name = tool_input.get("name") if isinstance(tool_input.get("name"), str) and tool_input.get("name") else None
+        runs = [m for m in sent if m["line"] > call["line"] and m["to"] in (agent, name)]
+        own.append({
+            "agent_id": agent, "tool_use_id": tool_id, "tool_name": call.get("tool_name", "Agent"),
+            "name": tool_input.get("name") if isinstance(tool_input.get("name"), str) else None,
+            "subagent_type": meta.get("agent_type") or (tool_input.get("subagent_type")
+                                                         if isinstance(tool_input.get("subagent_type"), str) else None),
+            "description": meta.get("description") or tool_input.get("description") or "",
+            "prompt": prompt, "line": call["line"], "background": tool_input.get("run_in_background") is True,
+            "returned": bool(named), "results": blocks, "agent_transcript_path": path,
+            "replaced": any((isinstance(prompt, str) and p == prompt) or (lane is not None and k == lane)
+                            for p, k in keys[index + 1:]),
+            "run_line": runs[-1]["line"] if runs else call["line"],
+            "run_started_at": runs[-1]["timestamp"] if runs else None,
+        })
+    return own
+
+
+def _scan_child_transcript(agent_transcript_path: str | Path, since: Any = None) -> dict[str, Any]:
     """One pass over ONE COPY of a child transcript for the verdicts it holds.
 
     Callers want the verdict for a CHILD, not for a copy, and must go through
@@ -648,8 +748,9 @@ def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
         True iff the child emitted a terminal end_turn report. ``stop_reason``
         is written by the harness, never by report prose, so an assistant record
         carrying ``stop_reason == "end_turn"`` proves the child reached a natural
-        stopping point — including the completed-then-rewoken shape where a later
-        resume turn was itself cut off after the report already landed.
+        stopping point. Read with ``since``, only an end_turn of the latest run counts:
+        a child that finished, was given new work by a message and was cut in that
+        run is cut, whatever its first run's report says.
         Synthetic quota-abort records carry ``stop_sequence`` (plus
         ``isApiErrorMessage``) and can never satisfy this test. None when the
         transcript is missing or unreadable: liveness is then unknowable and the
@@ -666,8 +767,12 @@ def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
 
     Both verdicts come from one read because the caller needs them together and
     child transcripts are large.
+
+    ``since`` (the start time of the child's latest run, own_children's run_started_at) limits both
+    verdicts to that run: a record stamped before it, or with no stamp, belongs to an earlier run.
     """
     path = Path(agent_transcript_path)
+    start = _parse_time(since)
     verdict: dict[str, Any] = {"end_turn": None, "api_error": None, "api_error_line": None}
     try:
         handle = path.open("r", encoding="utf-8", errors="replace")
@@ -687,6 +792,9 @@ def _scan_child_transcript(agent_transcript_path: str | Path) -> dict[str, Any]:
             except ValueError:
                 continue
             if not isinstance(record, dict):
+                continue
+            stamp = _parse_time(record.get("timestamp")) if start is not None else None
+            if start is not None and (stamp is None or stamp < start):
                 continue
             if has_api_error:
                 signal = signals.classify_record(record)
@@ -730,7 +838,7 @@ def _child_transcript_copies(agent_transcript_path: str | Path) -> list[Path]:
     ]
 
 
-def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, Any]:
+def _child_transcript_signals(agent_transcript_path: str | Path, since: Any = None) -> dict[str, Any]:
     """Resolve a child's structural verdicts across EVERY copy of its transcript.
 
     Completion evidence is POSITIVE and MONOTONE: an end_turn record in any one
@@ -746,7 +854,7 @@ def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, An
     """
     merged: dict[str, Any] = {"end_turn": None, "api_error": None, "api_error_line": None}
     for copy in _child_transcript_copies(agent_transcript_path):
-        verdict = _scan_child_transcript(copy)
+        verdict = _scan_child_transcript(copy, since)
         if verdict["end_turn"] is None:
             continue  # this copy is absent/unreadable; it contributes no evidence
         merged["end_turn"] = bool(merged["end_turn"]) or verdict["end_turn"]
@@ -757,26 +865,26 @@ def _child_transcript_signals(agent_transcript_path: str | Path) -> dict[str, An
     return merged
 
 
-def _child_reported_end_turn(agent_transcript_path: str | Path) -> bool | None:
+def _child_reported_end_turn(agent_transcript_path: str | Path, since: Any = None) -> bool | None:
     """Back-compat wrapper: only the end_turn verdict of the combined scan."""
-    return _child_transcript_signals(agent_transcript_path)["end_turn"]
+    return _child_transcript_signals(agent_transcript_path, since)["end_turn"]
 
 
 def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
     """Return every recoverable interrupted/quota Agent call in parent order."""
     transcript = Path(transcript_path).expanduser().resolve()
-    calls, results, latest_notifications = _read_parent_calls(transcript)
-    metadata = _metadata_by_tool_use(transcript)
+    parsed = _read_parent_calls(transcript)
+    latest_notifications = parsed[2]
     candidates: list[dict[str, Any]] = []
-    for tool_id, call in sorted(calls.items(), key=lambda item: item[1]["line"]):
-        result_blocks = results.get(tool_id, [])
+    for call in own_children(transcript, parsed):
+        if call["replaced"]:  # its task was dispatched again later: that dispatch is the one to recover
+            continue
+        tool_id, agent_id, result_blocks = call["tool_use_id"], call["agent_id"], call["results"]
         result_text = _textify(result_blocks)
-        meta = metadata.get(tool_id, {})
-        agent_id = meta.get("agent_id") or _extract_agent_id(result_blocks)
-        notification = latest_notifications.get(agent_id, {}) if isinstance(agent_id, str) else {}
-        notification_after_call = (
+        notification = latest_notifications.get(agent_id, {})
+        notification_after_call = (  # a notification of the child's latest run (own_children's run_line)
             isinstance(notification.get("line"), int)
-            and notification["line"] > call["line"]
+            and notification["line"] > call["run_line"]
         )
         # A post-call status=completed notification is authoritative evidence
         # that this exact child already came to rest successfully, including
@@ -802,11 +910,14 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             continue
         evidence: list[str] = []
         interruption_lines: list[int] = []
-        tool_input = call.get("input") if isinstance(call.get("input"), dict) else {}
-        is_background = tool_input.get("run_in_background") is True
-        if not result_blocks and not is_background:
+        if not result_blocks and not call["background"]:
             evidence.append("missing_parent_tool_result")
             interruption_lines.append(call["line"])
+        elif not call["returned"] and not call["background"]:
+            # A foreground call whose result names no child returned no report: the owner's interrupt
+            # ("stopped while running"), whatever the CLI's wording. Structural, not a phrase.
+            evidence.append("dispatch_returned_no_report")
+            interruption_lines.extend(b["_parent_line"] for b in result_blocks if isinstance(b.get("_parent_line"), int))
         if (result_text and _is_quota_text(result_text)) or (
             notification_after_call and notification.get("quota_interrupted")
         ):
@@ -817,11 +928,11 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             )
             if notification_after_call and notification.get("quota_interrupted"):
                 interruption_lines.append(notification["line"])
-        if notification_after_call and notification.get("status") == "stopped":
-            # Host-process teardown left this child with no completion record;
-            # the notification line itself is the interruption point that lets
-            # prepare_state re-derive a dispatched candidate back to pending.
-            evidence.append("session_teardown_stop")
+        if notification_after_call and notification.get("status") in ("stopped", "killed"):
+            # Host-process teardown (stopped) or the orchestrator's TaskStop (killed) left this child
+            # with no completion record; the notification line itself is the interruption point that
+            # lets prepare_state re-derive a dispatched candidate back to pending.
+            evidence.append("session_teardown_stop" if notification["status"] == "stopped" else "stopped_by_orchestrator")
             interruption_lines.append(notification["line"])
         # Real Agent/Task tool_results set is_error present-only-when-true
         # (never explicit False) on genuine transport/hook errors -- see
@@ -840,17 +951,11 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
                 block["_parent_line"] for block in interrupted_blocks
                 if isinstance(block.get("_parent_line"), int)
             )
-        # Child identity and the child's OWN structural record are resolved
-        # BEFORE the evidence-sufficiency test, because that record is often the
-        # only evidence in existence. A hook-rejected Agent call has no child
-        # identity and must never be replaced with a fresh agent: it is not a
-        # resumable invocation.
-        if not isinstance(agent_id, str) or not AGENT_RE.fullmatch(agent_id):
-            continue
-        agent_transcript_path = meta.get("agent_transcript_path") or str(
-            transcript.with_suffix("") / "subagents" / f"agent-{agent_id}.jsonl"
-        )
-        child = _child_transcript_signals(agent_transcript_path)
+        # The child's OWN structural record is read BEFORE the evidence-sufficiency
+        # test, because that record is often the only evidence in existence. A
+        # hook-rejected Agent call is no own child (own_children): never resumed.
+        agent_transcript_path = call["agent_transcript_path"]
+        child = _child_transcript_signals(agent_transcript_path, call["run_started_at"])  # its latest run
         # Structural liveness gate. The parent's Agent tool_result IS the
         # child's own report whenever the child completed, so the textual
         # evidence above cannot distinguish "was quota-interrupted" from
@@ -887,8 +992,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             ))
         if not evidence:
             continue
-        description = meta.get("description") or tool_input.get("description") or ""
-        agent_type = meta.get("agent_type") or tool_input.get("subagent_type") or ""
+        description, agent_type = call["description"], call["subagent_type"] or ""
         candidates.append({
             "parent_session_id": transcript.stem,
             "origin_transcript_path": str(transcript),
@@ -900,6 +1004,7 @@ def discover_candidates(transcript_path: str | Path) -> list[dict[str, Any]]:
             "parent_line": call.get("line"),
             "interruption_line": max(interruption_lines or [call["line"]]),
             "agent_transcript_path": agent_transcript_path,
+            "run_started_at": call["run_started_at"],
             "evidence": evidence,
         })
     return candidates
@@ -945,6 +1050,16 @@ def account_project_roots() -> list[Path]:
     return roots
 
 
+def config_projects() -> list[Path]:
+    """projects/ of this session's configuration directory, then of each directory CLAUDE_CONFIG_DIRS
+    names (os.pathsep-separated; an optional machine-local setting, absent by default: then only the
+    session's own). A lookup by session id reads these, the only directories it knows of."""
+    named = (os.environ.get("CLAUDE_CONFIG_DIRS")
+             or _settings_env("CLAUDE_CONFIG_DIRS").get("CLAUDE_CONFIG_DIRS") or "")
+    dirs = dict.fromkeys([config_dir()] + [Path(p) for p in named.split(os.pathsep) if os.path.isabs(p)])
+    return [d / "projects" for d in dirs if (d / "projects").is_dir()]
+
+
 DEFAULT_SIBLING_WINDOW_SECONDS = 86400
 
 
@@ -957,8 +1072,25 @@ def sibling_window_seconds() -> int:
         return DEFAULT_SIBLING_WINDOW_SECONDS
 
 
-def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Path]:
-    """Other RECENT sessions' top-level transcripts for this project, any account.
+DEFAULT_SIBLING_MAX_BYTES = 256 << 20
+
+
+def sibling_max_bytes() -> int:
+    """Bytes of other sessions' transcripts one prepare reads at most (CLAUDE_RESTART_SIBLING_MAX_BYTES)."""
+    try:
+        return max(0, int(os.environ.get("CLAUDE_RESTART_SIBLING_MAX_BYTES", str(DEFAULT_SIBLING_MAX_BYTES))))
+    except (TypeError, ValueError):
+        return DEFAULT_SIBLING_MAX_BYTES
+
+
+def sibling_transcripts(
+    project_dir: str | Path, exclude: str | Path,
+) -> list[tuple[Path, float, bool]]:
+    """Other sessions' top-level transcripts for this project, any account, newest first.
+
+    Each entry is ``(path, seconds since it was last written, older)``: ``older``
+    when that is more than sibling_window_seconds(). A copy of the invoking
+    session itself (its session id under another account root) is never older.
 
     Consulted ONLY when the operator explicitly opted into cross-account
     discovery (``prepare --cross-account``). Default discovery never leaves the
@@ -994,14 +1126,30 @@ def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Pa
     what "even after switching accounts" actually means in practice. The
     current session's own transcript is never subject to this window: it is
     read unconditionally by the caller before sibling_transcripts runs.
+
+    The owner's ruling of 2026-11-20 ("没有一个允许禁止！都改成警告但是由agent
+    自行处理": no time window may refuse or silently leave out) replaced that
+    cut-off. The window no longer decides who is read; it separates two lists.
+    A copy of the invoking session under another root is always read, whatever
+    its age (every copy is read, since each holds its own partial view). Every
+    other session is read too; the children found in one last written more than
+    the window ago are listed apart by prepare_state (``older_candidates``, each
+    with that age, and a warning), and commands/restart.md has the agent resume
+    them only when the operator's guidance asks for them. What the window used
+    to prevent, the months of abandoned work resumed in one wave, is now
+    prevented by that rule instead of by not looking. The cost of looking is
+    bounded by sibling_max_bytes(): transcripts are read newest first, and those
+    past the bound are named in the output as not read, never dropped silently.
     """
     slug = project_slug(project_dir)
     try:
         exclude_resolved = Path(exclude).resolve()
     except OSError:
         exclude_resolved = Path(exclude)
-    cutoff = time.time() - sibling_window_seconds()
-    seen: dict[str, Path] = {}
+    now = time.time()
+    window = sibling_window_seconds()
+    seen: dict[str, tuple[Path, float]] = {}
+    copies: list[tuple[Path, float]] = []
     for root in account_project_roots():
         candidate_dir = root / slug
         if not candidate_dir.is_dir():
@@ -1021,12 +1169,24 @@ def sibling_transcripts(project_dir: str | Path, exclude: str | Path) -> list[Pa
             if not SESSION_RE.fullmatch(sid):
                 continue
             try:
-                if entry.stat().st_mtime < cutoff:
-                    continue
+                age = max(0.0, now - entry.stat().st_mtime)
             except OSError:
                 continue
-            seen.setdefault(sid, resolved)
-    return list(seen.values())
+            if sid == exclude_resolved.stem:
+                copies.append((resolved, age))
+            else:
+                seen.setdefault(sid, (resolved, age))
+    others = sorted(seen.values(), key=lambda item: item[1])
+    return [(p, a, False) for p, a in copies] + [(p, a, a > window) for p, a in others]
+
+
+def _span(seconds: float) -> str:
+    days, rest = divmod(int(seconds), 86400)
+    return f"{days} d {rest // 3600} h" if days else f"{rest // 3600} h {rest % 3600 // 60} min"
+
+
+def _ago(seconds: float) -> str:
+    return _span(seconds) + " ago"
 
 
 def build_resume_message(
@@ -1063,8 +1223,33 @@ def build_resume_message(
     ])
 
 
+def is_resume_message(session_id: str, child: dict[str, Any], message: Any) -> bool:
+    """``message`` is this recovery's resume message for ``child`` (an own_children entry): the text
+    build_resume_message makes for this session and agent, or the one the restart state holds for it
+    (with the owner's guidance), followed by nothing or by an exact copy of the child's original
+    <obligation> block (commands/restart.md step 3). Its text is fixed by the session, the agent id and
+    the owner's guidance, so it adds no work; anything else in it, or another agent's id, is not one."""
+    if not isinstance(message, str):
+        return False
+    try:
+        sid, aid = _safe_session_id(session_id), _safe_agent_id(str(child.get("agent_id") or ""))
+    except RestartError:
+        return False
+    exact = {build_resume_message(sid, aid)} | {
+        item["resume_message"] for item in (_read_state(sid) or {}).get("candidates", [])
+        if isinstance(item, dict) and item.get("agent_id") == aid and isinstance(item.get("resume_message"), str)}
+    try:
+        from . import obligation
+    except ImportError:
+        import obligation  # type: ignore[no-redef]
+    prompt = child.get("prompt") if isinstance(child.get("prompt"), str) else ""
+    start, end = prompt.find(obligation.OBLIGATION_OPEN_TOKEN), prompt.find(obligation.OBLIGATION_CLOSE_TAG)
+    tails = {""} | ({prompt[start:end + len(obligation.OBLIGATION_CLOSE_TAG)]} if 0 <= start < end else set())
+    return any(message.startswith(text) and message[len(text):].strip() in tails for text in exact)
+
+
 NO_GRANT_NOTICE = (
-    "no valid restart grant: every resume send will be refused until /restart mints one"
+    "no valid restart grant: the resume sends are judged as dispatches all the same (lesson 16)"
 )
 
 
@@ -1127,9 +1312,30 @@ def prepare_state(
     # (see guidance_path).
     guidance = load_guidance(sid, grant) if grant is not None else None
     discovered = discover_candidates(own_transcript)
+    not_read: list[tuple[Path, float]] = []
     if cross_account and project_dir is not None:
-        for sibling in sibling_transcripts(project_dir, exclude=own_transcript):
-            discovered.extend(discover_candidates(sibling))
+        budget = sibling_max_bytes()
+        for sibling, age, older in sibling_transcripts(project_dir, exclude=own_transcript):
+            try:
+                size = sibling.stat().st_size
+            except OSError:
+                size = 0
+            copy = sibling.stem == sid  # a copy of this session: read whatever its age or size
+            if size > budget and not copy:  # newest first: what is left out is the oldest, and it is named
+                not_read.append((sibling, age))
+                budget = 0
+                continue
+            budget -= 0 if copy else size
+            for candidate in discover_candidates(sibling):
+                if older:
+                    candidate["older"] = True
+                    candidate["session_last_written_seconds_ago"] = int(age)
+                    candidate["session_last_written"] = _ago(age)
+                discovered.append(candidate)
+    first: dict[str, dict[str, Any]] = {}  # one entry per agent: copies of one session hold the same calls
+    for candidate in discovered:
+        first.setdefault(candidate["agent_id"], candidate)
+    discovered = list(first.values())
     with _state_lock(sid):
         old = _read_state(sid) or {}
         old_items = {
@@ -1169,6 +1375,9 @@ def prepare_state(
             "grant_issued_at": grant.get("issued_at") if grant is not None else None,
             "cross_account": bool(cross_account),
             "operator_guidance": guidance,
+            "siblings_not_read": [
+                {"transcript": str(path), "session_last_written": _ago(age)} for path, age in not_read
+            ],
             "created_at": old.get("created_at") or _iso(),
             "updated_at": _iso(),
             "candidates": items,
@@ -1196,16 +1405,17 @@ def _read_state(sid: str) -> dict[str, Any] | None:
 def completed_resumes(session_id: str) -> dict[str, str]:
     """{agent_id: tool_use_id of its original Agent call} of the agents this
     session's recovery resumed and saw come back: the journal complete, every
-    response observed (what finalize requires). The capability is not read:
-    load_valid_grant is its one deciding rule; that the recovery was finalized
-    is its finalize call's own ok result in the transcript."""
+    response observed. That state is finalized by the hook that records the last
+    response (observe_subagent_stop), so no finalize call of the agent is needed.
+    The capability is not read: load_valid_grant is its one deciding rule."""
     try:
         state = _read_state(session_id)
     except RestartError:
         return {}
     if state is None or not status_view(state)["complete"]:
         return {}
-    return {c["agent_id"]: str(c.get("tool_use_id")) for c in state.get("candidates", []) if isinstance(c, dict)}
+    return {c["agent_id"]: str(c.get("tool_use_id")) for c in state.get("candidates", [])
+            if isinstance(c, dict) and not _older_open(c)}
 
 
 def _load_state(session_id: str) -> dict[str, Any]:
@@ -1216,19 +1426,66 @@ def _load_state(session_id: str) -> dict[str, Any]:
     return state
 
 
+OLDER_WARNING = (
+    "WARNING: {count} interrupted child(ren) in older_candidates were found in sessions last "
+    "written more than {window} ago (each lists session_last_written). They are not in "
+    "candidates: resume them only when the operator's guidance asks for them; otherwise report "
+    "them in one line and leave them (commands/restart.md step 2)."
+)
+NOT_READ_WARNING = (
+    "WARNING: {count} older transcript(s) of other sessions of this project were not read: this "
+    "prepare reads at most {limit} bytes of them (CLAUDE_RESTART_SIBLING_MAX_BYTES), newest first; "
+    "the state file's siblings_not_read names each. Report this in one line (commands/restart.md step 2)."
+)
+
+
+def _older_open(item: dict[str, Any]) -> bool:
+    """An older-session candidate nobody resumed: it holds back no finalize."""
+    return item.get("older") is True and item.get("status") == "pending"
+
+
 def status_view(state: dict[str, Any]) -> dict[str, Any]:
     candidates = state.get("candidates") if isinstance(state.get("candidates"), list) else []
     public: list[dict[str, Any]] = []
+    older: list[dict[str, Any]] = []
+    incomplete: list[str] = []
     for item in candidates:
         if not isinstance(item, dict):
             continue
-        public.append({key: item.get(key) for key in (
+        entry = {key: item.get(key) for key in (
             "agent_id", "parent_session_id", "origin_transcript_path", "agent_type",
             "description", "tool_use_id",
             "agent_transcript_path", "evidence", "interruption_line", "status",
             "attempts", "resume_message",
-        )})
-    incomplete = [item["agent_id"] for item in public if item.get("status") != "response_observed"]
+        )}
+        if item.get("older") is True:
+            entry["session_last_written"] = item.get("session_last_written")
+            entry["session_last_written_seconds_ago"] = item.get("session_last_written_seconds_ago")
+            older.append(entry)
+        else:
+            public.append(entry)
+        if entry.get("status") != "response_observed" and not _older_open(item):
+            incomplete.append(entry["agent_id"])
+    not_read = state.get("siblings_not_read") if isinstance(state.get("siblings_not_read"), list) else []
+    warnings = []
+    if older:
+        warnings.append(OLDER_WARNING.format(count=len(older), window=_span(sibling_window_seconds())))
+    if not_read:
+        warnings.append(NOT_READ_WARNING.format(count=len(not_read), limit=sibling_max_bytes()))
+    view_extra: dict[str, Any] = {}
+    if warnings:
+        view_extra = {
+            "warnings": warnings,
+            "older_candidate_count": len(older),
+            "older_candidates": older,
+            # Named in full in the state file; the view says how many and which ages.
+            "siblings_not_read": {
+                "count": len(not_read),
+                "newest": not_read[0].get("session_last_written") if not_read else None,
+                "oldest": not_read[-1].get("session_last_written") if not_read else None,
+                "listed_in": str(state_path(str(state.get("parent_session_id")))),
+            },
+        }
     return {
         "schema_version": SCHEMA_VERSION,
         "parent_session_id": state.get("parent_session_id"),
@@ -1242,6 +1499,7 @@ def status_view(state: dict[str, Any]) -> dict[str, Any]:
         "complete": not incomplete,
         "incomplete_agent_ids": incomplete,
         "candidates": public,
+        **view_extra,
     }
 
 
@@ -1325,7 +1583,7 @@ def authorize_send_message(payload: dict[str, Any]) -> tuple[bool, str]:
         # legacy-state candidate never structurally screened) must not be
         # resumed. Only an unreadable transcript (None) stays dispatchable —
         # the same fail-toward-recovery rule discovery applies.
-        if _child_reported_end_turn(str(item.get("agent_transcript_path") or "")) is True:
+        if _child_reported_end_turn(str(item.get("agent_transcript_path") or ""), item.get("run_started_at")) is True:
             raise RestartError(
                 "target's child transcript already contains its terminal end_turn "
                 "report; completed agents are never resumed"
@@ -1406,20 +1664,71 @@ def observe_subagent_stop(payload: dict[str, Any]) -> dict[str, Any] | None:
             if isinstance(agent_transcript, str) and agent_transcript:
                 item["agent_transcript_path"] = agent_transcript
             state["updated_at"] = _iso()
+            view = status_view(state)
+            if view["complete"]:  # the last response is in: the recovery finalizes here, by code
+                _consume(sid, state)
             _atomic_write_json(state_path(sid), state)
             return status_view(state)
     return None
 
 
+def _consume(sid: str, state: dict[str, Any], *, any_epoch: bool = False) -> None:
+    """Finalize a complete recovery (called under the state lock; the caller writes ``state``):
+    the capability it was prepared under is consumed and the state records when. A grant minted
+    by a later /restart is not this recovery's and stays (``any_epoch``: the helper's old finalize
+    command, which consumed whatever grant there was)."""
+    path = grant_path(sid)
+    grant = _load_json(path)
+    if any_epoch or (grant and grant.get("issued_at") == state.get("grant_issued_at")):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise RestartError(f"cannot consume restart grant: {exc}") from exc
+    state.setdefault("finalized_at", _iso())
+
+
 def finalize(session_id: str) -> dict[str, Any]:
+    """The helper's finalize command, kept for a session that still holds the older text of
+    commands/restart.md: the hooks finalize a complete recovery themselves (observe_subagent_stop,
+    settle), so on such a state this only confirms it."""
     sid = _safe_session_id(session_id)
-    view = get_status(sid)
-    if not view["complete"]:
-        raise RestartError("cannot finalize while recovered agents remain incomplete")
+    with _state_lock(sid):
+        state = _load_state(sid)
+        view = status_view(state)
+        if not view["complete"]:
+            raise RestartError("cannot finalize while recovered agents remain incomplete")
+        _consume(sid, state, any_epoch=True)
+        _atomic_write_json(state_path(sid), state)
+    return {**view, "finalized_at": state["finalized_at"]}
+
+
+def settle(session_id: str) -> str:
+    """At a prompt of the parent session (a resumed child's task-notification or the owner's next
+    prompt): finalize a recovery that is complete (the zero-candidate set included) and return
+    the one line that says how this session's recovery stands, once per change of the state;
+    '' when there is nothing new to say."""
     try:
-        grant_path(sid).unlink()
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        raise RestartError(f"cannot consume restart grant: {exc}") from exc
-    return view
+        sid = _safe_session_id(session_id)
+        with _state_lock(sid):
+            state = _read_state(sid)
+            if state is None or state.get("reported_for") == state.get("updated_at"):
+                return ""
+            view = status_view(state)
+            if view["complete"]:
+                _consume(sid, state)
+                ids = [c["agent_id"] for c in view["candidates"] if c.get("status") == "response_observed"]
+                line = (f"[/restart] RECOVERY FINALIZED by the harness: {len(ids)} resumed agent(s) "
+                        f"responded ({', '.join(ids) or 'none to resume'}); nothing to run. "
+                        "Carry on from the checklist step in progress (commands/restart.md step 4).")
+            else:
+                missing = [f"{c['agent_id']} ({c.get('status')})" for c in view["candidates"]
+                           if c["agent_id"] in view["incomplete_agent_ids"]]
+                line = (f"[/restart] RESTART_INCOMPLETE: no response yet from {', '.join(missing)}; "
+                        "a later /restart retries them (commands/restart.md step 4).")
+            state["reported_for"] = state.get("updated_at")
+            _atomic_write_json(state_path(sid), state)
+            return line
+    except (RestartError, OSError):
+        return ""
