@@ -341,3 +341,16 @@ def test_the_last_text_decodes_the_newest_records_not_the_history(tmp_path, monk
     monkeypatch.setattr(command_span, "_decode", lambda raw: decoded.append(1) or real(raw))
     assert span.last_text() == f"text {history - 1}"
     assert len(decoded) == 1  # the same at 100 and 1000 records
+
+
+def test_a_path_read_through_pathlib_is_a_fact_on_every_interpreter_and_the_patch_is_undone(tmp_path):
+    (tmp_path / "a.txt").write_text("1")
+    (tmp_path / "b.txt").write_text("2")
+    before = (Path.stat, Path.open, Path.iterdir, Path.read_text)
+    with fact_cache.watch() as reads:
+        (tmp_path / "a.txt").read_text()
+        (tmp_path / "b.txt").stat()
+        list(tmp_path.iterdir())
+        (tmp_path / "gone.txt").exists()
+    assert {str(tmp_path / n) for n in ("a.txt", "b.txt", "gone.txt")} | {str(tmp_path)} <= reads.paths
+    assert (Path.stat, Path.open, Path.iterdir, Path.read_text) == before

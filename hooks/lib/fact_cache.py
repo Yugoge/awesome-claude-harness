@@ -22,6 +22,7 @@ import importlib
 import io
 import json
 import os
+import pathlib
 import re
 import stat as stat_mod
 import subprocess
@@ -199,6 +200,13 @@ def watch():
 
     real_refusals = [module.recorded_refusals for module in refused]
     real_tasks = [module._task_records for module in answers]
+    # CPython 3.10's Path keeps the functions it called at import in its accessor, which the patch below does not reach
+    # (3.11 and later call os.stat and io.open by name): a path read through Path would be no fact there
+    accessor = getattr(pathlib, "_NormalAccessor", None)
+    pinned = {"stat": stat, "open": opener, "listdir": listdir, "scandir": scandir} if accessor else {}
+    held = {name: vars(accessor)[name] for name in pinned if name in vars(accessor)}
+    for name in held:
+        setattr(accessor, name, staticmethod(pinned[name]))
     builtins.open, io.open = opener, opener
     os.stat, os.lstat, os.scandir, os.listdir = stat, lstat, scandir, listdir
     subprocess.Popen = Watched
@@ -213,6 +221,8 @@ def watch():
             module.recorded_refusals = original
         for module, original in zip(answers, real_tasks):
             module._task_records = original
+        for name, original in held.items():
+            setattr(accessor, name, original)
         builtins.open, io.open = real["open"], real["io_open"]
         os.stat, os.lstat, os.scandir, os.listdir = real["stat"], real["lstat"], real["scandir"], real["listdir"]
         subprocess.Popen = real["popen"]

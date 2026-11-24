@@ -26,6 +26,13 @@ def unshare_argv(way: str, env: dict, argv: list[str]) -> list[str]:
             "unshare", *flags, "--propagation", "private", *argv]
 
 
+def unshare_plain(way: str, argv: list[str]) -> list[str]:
+    """argv in a private mount namespace made `way`, with no env program: the caller gives the environment of the
+    non-sudo ways to subprocess.run (sudo resets it), and what a command needs it sets for itself."""
+    return [*(["sudo", "-n"] if way == "sudo" else []), "unshare", "-rm" if way == "user" else "-m",
+            "--propagation", "private", *argv]
+
+
 @functools.lru_cache(maxsize=None)
 def way() -> tuple[str | None, str]:
     """The first way to a namespace that can mount a tmpfs over /tmp, or None and what each way answered."""
@@ -33,7 +40,7 @@ def way() -> tuple[str | None, str]:
     why = []
     for w in ways:
         try:
-            p = subprocess.run(unshare_argv(w, dict(os.environ), ["bash", "-c", "mount -t tmpfs none /tmp"]),
+            p = subprocess.run(unshare_plain(w, ["bash", "-c", "mount -t tmpfs none /tmp"]),
                                capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.TimeoutExpired) as e:
             why.append(f"{w}: {e}")
