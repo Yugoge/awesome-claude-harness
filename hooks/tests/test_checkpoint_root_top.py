@@ -4,7 +4,7 @@ Once a repository lay at the filesystem root by accident, and the snapshot of a 
 found it and committed the machine into it. hooks/lib/checkpoint-core.sh (checkpoint_project_top) now refuses a
 repository whose top is "/", for a session below it or at it, and says so once in checkpoints' log.
 
-The root is simulated: a private user and mount namespace of this test process alone chroots into a made-up
+The root is simulated: a private mount namespace (hooks/tests/_private_ns.py: root, a user namespace or sudo) chroots into a made-up
 directory that holds the repository, so the code under test sees that directory as "/". The real root is not touched.
 """
 
@@ -13,24 +13,18 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _private_ns  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 BOUND = ("usr", "etc", "dev", "proc")  # the programs and their libraries, read only, and ignored by the made-up root's repository
 LINKED = ("bin", "sbin", "lib", "lib64")
 BOUND_EXTRA: list[str] = []  # LINKED names that are directories here
-
-
-def _namespace_available() -> bool:
-    try:
-        return subprocess.run(["unshare", "-rm", "true"], capture_output=True, timeout=20).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-pytestmark = pytest.mark.skipif(not _namespace_available(), reason="no private user and mount namespace here")
 
 
 def _git(env: dict, repo: Path, *args: str) -> str:
@@ -89,8 +83,10 @@ def _in_root(fr: Path, cwd: str, *argv: str) -> subprocess.CompletedProcess:
               f'CHECKPOINT_NO_PUSH=1 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/gitconfig CLAUDE_PROJECT_DIR={cwd} '
               'GIT_AUTHOR_NAME=T GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=T '
               'GIT_COMMITTER_EMAIL=t@example.invalid /usr/bin/bash -c \'cd "$0" && exec "$@"\' ' + cwd + ' "$@"')
-    return subprocess.run(["unshare", "-rm", "bash", "-c", script, "_", str(fr), *argv], text=True,
-                          capture_output=True, timeout=90)
+    way = _private_ns.require("the made-up root's cases")  # one route for the folder: root, user namespace or sudo
+    return subprocess.run(_private_ns.unshare_argv(way, {"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+                                                   ["bash", "-c", script, "_", str(fr), *argv]),
+                          text=True, capture_output=True, timeout=90)
 
 
 def _stop_hook(fr: Path, cwd: str) -> subprocess.CompletedProcess:

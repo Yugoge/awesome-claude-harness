@@ -27,6 +27,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 HOOK = REPO / "hooks" / "pretool-bash-safety.sh"
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 sys.path.insert(0, str(REPO / "hooks"))
 from lib.runtime_guard.config import REQUIRED_KEYS  # noqa: E402
 
@@ -61,7 +62,7 @@ def hook(env, command, **extra):
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command},
                           "session_id": "hard-ban-noexec-test"})
     return subprocess.run(["bash", str(HOOK)], input=payload, text=True, capture_output=True,
-                          env={**env, **extra}, timeout=120)
+                          env={**env, **extra}, timeout=HANG_GUARD)
 
 
 @pytest.mark.parametrize("command", (

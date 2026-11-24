@@ -2,7 +2,7 @@
 
 <!-- AUTO:readme-stats -->
 ## Overview
-- **Total files**: 340
+- **Total files**: 341
 - **Subdirectories**: 1
 - **Naming convention**: lower
 
@@ -10,6 +10,7 @@
 - `_fixtures_obligation_terminal.py` - hooks/tests/test_posttool_overnight_loop_terminal_gate.py (which pins that
 - `_private_ns.py` - Ways, probed in order: "root" (already root: ``unshare -m``); else "user" (``unshare -rm``, an un...
 - `allowed_by_design.py` - The hook suites assert through the real hook that each of these runs (test_removal_policy_own_scr...
+- `conftest.py` - mask or the subreaper setting of its process changed fails by name."""
 - `pol_replay_harness.py` - ZERO-EXECUTION CONTRACT (LANE-POL AC-R02-06). Every ``command`` string in the
 - `pol_sweep_generators.py` - WHY THIS FILE IS THE DELIVERABLE, NOT ITS OUTPUT (AC-R02-13). Two consecutive
 - `retired_hooks.py` - A test that compares a merged rule with the hook it replaced (the write gate's overwrite rule with

@@ -2,7 +2,7 @@
 
 hooks/tests/test_checkpoint_root_top.py closed the checkpoint; this closes the writers that resolve a top and write
 below it, and shows the shared answer to "which repository am I in" for a directory below a repository at the root.
-The root is simulated as that test does: a private user and mount namespace of the test process alone chroots into a
+The root is simulated as that test does: a private mount namespace (hooks/tests/_private_ns.py) of the test process alone chroots into a
 made-up directory that holds a repository at its top. ROOT_TOP_TREE names another copy of hooks/ and scripts/ to run
 (the red run uses the tree as it was before this change).
 """
@@ -21,7 +21,6 @@ _HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("_root_top_sim", _HERE / "test_checkpoint_root_top.py")
 sim = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sim)
-pytestmark = sim.pytestmark
 TREE = Path(os.environ.get("ROOT_TOP_TREE") or sim.ROOT)
 SCRIPTS = ("create-worktree.sh", "install-git-keystone.sh", "apply-permissions.sh", "create-overnight-state.sh",
            "spec-check.py", "write-commit-grant.py", "write-push-gate-token.py")

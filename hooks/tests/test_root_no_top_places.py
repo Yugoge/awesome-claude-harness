@@ -2,7 +2,7 @@
 the filesystem root is no top, so each decides below a repository at the root as in a directory in no repository, and a
 writer writes nothing.
 
-Simulation as in test_root_no_top.py: a private user and mount namespace chroots into a made-up directory that holds a
+Simulation as in test_root_no_top.py: a private mount namespace (hooks/tests/_private_ns.py) chroots into a made-up directory that holds a
 repository at its top; the code under test sees it as "/" and a session sits in "/sub". ROOT_TOP_TREE names another copy
 of hooks/ and scripts/ to run (the red run uses the tree as commit 999a89eb6 has it).
 """
@@ -21,7 +21,6 @@ _HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("_root_top_sim", _HERE / "test_checkpoint_root_top.py")
 sim = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sim)
-pytestmark = sim.pytestmark
 TREE = Path(os.environ.get("ROOT_TOP_TREE") or sim.ROOT)
 sim.ROOT = TREE
 fake_root = sim.fake_root

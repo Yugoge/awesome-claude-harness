@@ -17,12 +17,10 @@ hook runs use a throwaway HOME and global git config. No command is ever execute
 """
 import json
 import os
-import resource
 import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -41,6 +39,7 @@ R.HOOKS, R.LIB = HOOKS_DIR, os.path.join(HOOKS_DIR, "lib")
 from shell_parse import WRAPPERS  # noqa: E402
 
 DEGRADED = "removal-policy FAIL-CLOSED"
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 MODES = {"timeout": {"CLAUDE_HOOK_BOUNDARY_TIMEOUT": "0.001s"}, "memory": {"CLAUDE_HOOK_BOUNDARY_MEM_KB": "4096"}}
 
 # Everyday commands ending on an ordinary option, none naming a removal or an assembly channel: allowed before the
@@ -279,7 +278,7 @@ SENSITIVE_LINES = [
 ]
 
 
-# 100 KB commands: read in bounded time.
+# 100 KB commands: read with bounded work.
 ADVERSARIAL_LONG = {  # name: (head, repeated unit, count, tail); the line is head + unit * count + tail
     "read_handler_words": ("ls ", "find ", 250, "-q\nr''m -rf /dev/shm/v/s"),
     "read_handler_words_100kb": ("ls ", "find git ssh ", 8000, "-q\nr''m -rf /dev/shm/v/s"),
@@ -425,10 +424,39 @@ def holds_removal_word(command):
     return R.grep(_rmref(), command)
 
 
-def child_cpu():
-    """CPU seconds of every finished child process: what a hook run costs, apart from how busy the runner is."""
-    r = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return r.ru_utime + r.ru_stime
+# Work is counted, never timed: a busy or slow runner changes how long a run takes, not how many steps it takes.
+
+
+def hook_work(command, hook=None, **env_extra):
+    """(exit code, stderr, steps): the Python call and return events of every Python process one run of the hook
+    starts, counted by a sitecustomize that the run's PYTHONPATH puts first (each process writes its count at exit)."""
+    with tempfile.TemporaryDirectory(prefix="work-counter-") as counter:
+        with open(os.path.join(counter, "sitecustomize.py"), "w", encoding="utf-8") as fh:
+            fh.write("import atexit, os, sys\n_n = [0]\n"
+                     "def _prof(frame, event, arg):\n    _n[0] += 1\n"
+                     "def _dump():\n    sys.setprofile(None)\n"
+                     "    with open(os.path.join(os.environ['WORK_COUNT_DIR'], str(os.getpid())), 'w') as fh:\n"
+                     "        fh.write(str(_n[0]))\n"
+                     "sys.setprofile(_prof)\natexit.register(_dump)\n")
+        out = os.path.join(counter, "out")
+        os.mkdir(out)
+        code, err = run_hook(command, hook=hook, timeout=HANG_GUARD, PYTHONPATH=counter, WORK_COUNT_DIR=out, **env_extra)
+        steps = 0
+        for name in os.listdir(out):
+            with open(os.path.join(out, name), encoding="utf-8") as fh:
+                steps += int(fh.read())
+    return code, err, steps
+
+
+def bounded_work(pattern):
+    """The most characters one match attempt of pattern can read (None: unbounded, a repeat that has no end). A
+    search tries each start of a line once, so a bounded pattern costs at most len(line) * this: linear."""
+    try:
+        from re import _parser as parser
+    except ImportError:  # Python 3.10
+        import sre_parse as parser
+    low, high = parser.parse(pattern).getwidth()
+    return None if high >= parser.MAXREPEAT else high
 
 
 def run_hook(command, hook=None, timeout=None, **env_extra):
@@ -617,28 +645,17 @@ def test_over_the_generated_corpus_the_two_paths_agree_on_every_unproven_command
 
 @pytest.mark.parametrize("name", sorted(ADVERSARIAL_LONG))
 def test_adversarial_long_lines_are_read_in_bounded_time(monkeypatch, name):
+    """With no analyzer, the degraded path asks one question of the text: the removal-word pattern, line by line.
+    It is read in linear time when the pattern is bounded: one attempt reads at most a fixed number of characters,
+    so a line of n characters costs at most n times that, however slow or busy the runner (a clock would only
+    measure the runner). Before the owner's rule of 2026-11-19 the path read each word as a command (exponential,
+    then quadratic); the pattern below is what it reads now."""
     command = adversarial_long(name)
     no_analyzer(monkeypatch)
-
-    def cost(line):
-        """(refused, CPU seconds): the least CPU of up to nine readings of line, until one CPU second is spent."""
-        best, spent = None, 0.0
-        for _ in range(9):
-            started = time.process_time()  # CPU time: a busy runner slows the wall clock, not the work
-            refused = answer(line)[0]
-            took = time.process_time() - started
-            best, spent = (took if best is None else min(best, took)), spent + took
-            if spent > 1.0:
-                break
-        return refused, best
-
-    # Bounded: twice the line costs well under four times as much (a reading that walks the line again from each
-    # word grows with its square). Two measured readings are compared with each other: no fixed bound holds on
-    # every runner.
-    refused, large = cost(command)
-    _, small = cost(adversarial_long(name, ADVERSARIAL_LONG[name][2] // 2))
-    assert large < 3 * small, (name, small, large)
-    assert refused is False and not holds_removal_word(command), name
+    reach = bounded_work(_rmref())
+    assert reach is not None and reach <= 32, reach  # the longest word of the list, with one character each side
+    assert bounded_work("(^|[^a-z])(r+)+m") is None and bounded_work("(a|ab)*c") is None  # the check bites
+    assert answer(command)[0] is False and not holds_removal_word(command), name
     assert answer(command + "\nrm -rf /dev/shm/v/s")[0] is True
 
 
@@ -648,21 +665,24 @@ def test_adversarial_long_line_is_answered_through_the_hook_in_bounded_time(mode
         # No `find` word: the runtime guard's own find scan is slow on 100 KB of them on the base branch too.
         quoted = "ls " + "git ssh hash kubectl " * words + "-q\nr''m -rf /dev/shm/v/s"
         named = "ls " + "git ssh hash kubectl " * words + "-q\nrm -rf /dev/shm/v/s"
-        started = child_cpu()
-        code, err = run_hook(quoted, timeout=240, **MODES[mode])
+        code, err, steps_quoted = hook_work(quoted, **MODES[mode])
         assert code == 0 and "removal-policy" not in err, err[:300]
-        code, err = run_hook(named, timeout=240, **MODES[mode])
+        code, err, steps_named = hook_work(named, **MODES[mode])
         assert code == 2 and DEGRADED in err
-        return child_cpu() - started, len(quoted)
+        return steps_quoted + steps_named, len(quoted)
 
-    (fixed, _), (half, _), (full, size) = cost(1), cost(2500), cost(5000)
-    assert size > 100_000
-    # Bounded, not fast: the whole PreToolUse pipeline reads the line twice per pair. Above the pipeline's fixed cost
-    # (every hook's own start) the cost grows with the line's length: twice the line costs about twice as much, never
-    # four times. The pairs are compared with each other, in CPU seconds, because no fixed bound holds on every
-    # runner: the 100 KB pair took about 15 s here and 31 s on the slowest CI runner (2026-11-20). Each run also
-    # ends within its own 240 s.
-    assert full - fixed < 3 * (half - fixed), (fixed, half, full)
+    (fixed, _), (half, _), (full, size) = cost(1), cost(1000), cost(2000)
+    assert size > 40_000
+    # Bounded, not fast: counted in Python steps over every process of the hook run, which a busy runner does not
+    # change. Above the pipeline's fixed cost (every hook's own start), twice the line costs about twice as many
+    # steps (a reading that walks the line again from each word: four times, or more).
+    assert full - fixed < 2.5 * (half - fixed), (fixed, half, full)
+    # The whole 100 KB line, not counted (the profiler slows a run): the answers are the same.
+    long_line = "ls " + "git ssh hash kubectl " * 5000
+    code, err = run_hook(long_line + "-q\nr''m -rf /dev/shm/v/s", timeout=HANG_GUARD, **MODES[mode])
+    assert code == 0 and "removal-policy" not in err, err[:300]
+    code, err = run_hook(long_line + "-q\nrm -rf /dev/shm/v/s", timeout=HANG_GUARD, **MODES[mode])
+    assert code == 2 and DEGRADED in err
 
 
 def test_analyzer_timeout_default_leaves_headroom_under_load():

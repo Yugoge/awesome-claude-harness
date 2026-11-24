@@ -899,7 +899,9 @@ _SHELL_SYNTAX = re.compile(r"[;&|<>`$\\()#'\"\n]")
 _PYTEST = (["python3", "-m", "pytest"], ["python", "-m", "pytest"], ["pytest"])
 _FLAG = re.compile(r"-q+|-v+|-s|-x|-r[a-zA-Z]+")
 _PATH = r"\w[\w.-]*(?:/[\w.-]+)*"
-_VALUE = {"-p": r"no:[\w-]+", "-n": r"\w+", "--dist": r"\w+", "--durations": r"\d+", "--tb": r"\w+", "--ignore": _PATH}
+_VALUE = {"-p": r"no:[\w-]+", "-n": r"\w+", "--dist": r"\w+", "--durations": r"\d+", "--tb": r"\w+", "--ignore": _PATH,
+          "-o": r"faulthandler_timeout=\d+",  # the one ini value that only makes a stuck test speak
+          "--max-worker-restart": r"0"}  # a dead worker fails the run (no narrowing)
 
 
 def _expression(value) -> str:

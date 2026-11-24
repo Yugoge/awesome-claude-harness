@@ -29,7 +29,8 @@ No child outlives the run that keeps its deadlines: when ``run_at_once`` ends ea
 SIGHUP, whose default action ends this process: the CLI ending the hook; an overrun of the run
 around it, a merged gate's in a launcher's fork; a fault), each child still running is sent
 SIGTERM, and SIGKILL ``ENDING`` seconds later, each alone, before the run ends (by that signal,
-as this process ended before it forked). A run nested in a child of another run (a merged gate
+as this process ended before it forked); those signals are held back from before each fork until the child
+is noted, so one arriving in between ends that child too. A run nested in a child of another run (a merged gate
 in a launcher's fork) gives its own children half the wait of the run around it (``ending_wait``),
 so it has killed and reaped them before that run kills it: a fork that ignores SIGTERM never
 outlives both as an orphan. A child closes the pipe its own parent's result goes back on, so a
@@ -127,14 +128,18 @@ def _write_all(fd: int, data: bytes) -> None:
         data = data[os.write(fd, data):]
 
 
-def _child(job: Job, deadline: float, wfd: int, inherited, mark, dispositions=None) -> None:
-    """In the forked child: run the file, hand back its result, end. Never returns."""
+def _child(job: Job, deadline: float, wfd: int, inherited, mark, dispositions=None, held=None) -> None:
+    """In the forked child: run the file, hand back its result, end. Never returns. ``held``: the signal
+    mask of the parent before the fork held the ending signals back; the child has it again once the
+    parent's dispositions are back, so a signal that came in between meets them."""
     global _HAND_BACK, _DEPTH
     me = os.getpid()
     try:
         try:
             for sig, handler in (dispositions or {}).items():  # the parent's, from before its run
                 signal.signal(sig, handler)
+            if held is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, held)
             for fd in inherited:  # the other children's pipes, and the one this process's parent
                 os.close(fd)      # hands back on (a merged gate run as a job): they end with their own
             _HAND_BACK = wfd
@@ -297,9 +302,14 @@ def run_at_once(jobs, *, fallback=None, mark=None, grace: float = GRACE, finishe
                 pass
         begun = time.monotonic()
         deadline = begun + max(job.budget, 0.001)
+        # The ending signals are held from before the child exists until it is in ``running``: one that
+        # arrives between would end this run with the child in no list ``_end_all`` reads, and it would
+        # outlive the run. Held, it is acted on right after, with the child noted.
+        held = signal.pthread_sigmask(signal.SIG_BLOCK, ENDING_SIGNALS)
         try:
             pid = os.fork()
         except OSError:
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)
             os.close(rfd)
             os.close(wfd)
             finish(i, other(i))
@@ -308,11 +318,14 @@ def run_at_once(jobs, *, fallback=None, mark=None, grace: float = GRACE, finishe
             os.close(rfd)
             _child(job, deadline, wfd, [r.rfd for r in running if r.rfd is not None]
                    + ([_HAND_BACK] if _HAND_BACK is not None else []),
-                   None if mark is None else (lambda on: mark(i, on)), dispositions)
-        os.close(wfd)
-        os.set_blocking(rfd, False)
-        running.append(_Running(i, pid, rfd, begun, deadline))
-        poller.register(rfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+                   None if mark is None else (lambda on: mark(i, on)), dispositions, held)
+        try:
+            os.close(wfd)
+            os.set_blocking(rfd, False)
+            running.append(_Running(i, pid, rfd, begun, deadline))
+            poller.register(rfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, held)  # a held signal is handled here: the child is noted
 
     def start_ready():
         moved = True

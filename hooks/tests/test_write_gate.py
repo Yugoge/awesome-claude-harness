@@ -740,3 +740,60 @@ def test_the_gate_answers_the_corpus_byte_for_byte_as_one_after_another(lab):
         assert at_once == in_order, raw
         seen.add(at_once[0])
     assert {0, 2} <= seen, seen
+
+
+FORK_WINDOW = """
+import os, signal, sys
+sys.path.insert(0, {hooks!r})
+from lib import rule_fork
+real = os.fork
+def fork():  # the signal arrives in the parent right after the fork returns: before the run notes the child
+    pid = real()
+    if pid and {signal_in_window!r}:
+        open({pidfile!r}, "w").write(str(pid))
+        os.kill(os.getpid(), signal.SIGTERM)
+    return pid
+os.fork = fork
+assert rule_fork.can_fork()
+rule_fork.run_at_once([rule_fork.Job({hook!r}, b"{{}}", 1800.0)])
+"""
+
+
+def test_a_signal_between_a_fork_and_the_run_noting_it_still_ends_that_fork(tmp_path):
+    """No child outlives a run that ends by SIGTERM, whichever instant the signal arrives at: one that arrives
+    after the fork returned and before the run has noted the child is held back until it has, then acted on.
+    The child itself starts with no signal held back (the mask of the fork is the one before it)."""
+    import signal
+    seen, pidfile = tmp_path / "seen", tmp_path / "pid"
+    hook = _rule_file(tmp_path, "hook", "import signal\nopen(%r, 'w').write(repr(sorted(signal.pthread_sigmask("
+                      "signal.SIG_BLOCK, []))))\nimport time; time.sleep(1800)\n" % str(seen))
+    forks = []
+    try:
+        for in_window in (False, True):
+            script = tmp_path / f"window-{in_window}.py"
+            script.write_text(FORK_WINDOW.format(hooks=str(HOOKS), hook=hook, pidfile=str(pidfile),
+                                                 signal_in_window=in_window))
+            if not in_window:  # no signal: the child runs; its own mask is read, then the test ends the run
+                p = subprocess.Popen([sys.executable, str(script)])
+                deadline = time.monotonic() + 120
+                while not seen.exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                p.send_signal(signal.SIGTERM)
+                p.wait(timeout=120)
+                assert seen.read_text() == "[]", "the child started with signals held back: " + seen.read_text()
+                continue
+            p = subprocess.run([sys.executable, str(script)], timeout=120)
+            assert p.returncode == -signal.SIGTERM, p.returncode  # it ended as that signal ends it
+            pid = int(pidfile.read_text())
+            forks.append(pid)
+            try:
+                state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            except OSError:
+                state = "gone"
+            assert state in ("gone", "Z"), f"the fork {pid} outlived its launcher (state {state})"
+    finally:
+        for pid in forks:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass

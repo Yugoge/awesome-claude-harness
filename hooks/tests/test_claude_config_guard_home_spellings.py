@@ -27,6 +27,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOK = ROOT / "hooks" / "pretool-claude-config-guard.py"
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 BLOCK = "BLOCKED: claude config guard: agent Bash write to .claude/{}/"
 
 # The spellings of the harness home that the base let through, then those it already refused
@@ -85,7 +86,7 @@ def _run(scratch, command: str, actor=None, extra_env=None):
                PYTHONDONTWRITEBYTECODE="1")
     env.update(extra_env or {})
     return subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload), capture_output=True,
-                          text=True, cwd=str(project), env=env, timeout=30)
+                          text=True, cwd=str(project), env=env, timeout=HANG_GUARD)
 
 
 def _command(scratch, spelling: str, form: str, folder: str) -> str:

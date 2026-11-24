@@ -7,8 +7,8 @@ the unit was "reproduced False" and never measured (the merge-analyst's grant, u
 The re-run that cuts the transcripts back to the event now also removes that file; a file that existed
 before the event (no create of it by that event) stays, so the same hook still refuses there.
 
-It needs a mount namespace (root, as tests/replay/test_run_to_run.py); without one it fails with the
-reason, never skips.
+It needs a mount namespace the way the replays get theirs (root, or passwordless sudo: sandbox._priv,
+suite.preconditions); without one it fails with the reason, never skips.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import sys
 import pytest
 
 from tests.replay import differential as D
+from tests.replay import suite
 
 HOOK = '''import json, os, sys
 p = json.load(sys.stdin)["tool_input"]["file_path"]
@@ -28,9 +29,9 @@ sys.exit(2 if os.path.exists(p) else 0)
 
 
 def _require():
-    p = subprocess.run(["unshare", "--mount", "--pid", "--fork", "true"], capture_output=True, text=True)
-    if p.returncode != 0:
-        pytest.fail("the differential needs a mount namespace: " + p.stderr.strip(), pytrace=False)
+    missing = suite.preconditions()  # the replay folder's own check (its runner fixture, tests/replay/conftest.py)
+    if missing:
+        pytest.fail("the differential cannot run here: " + "; ".join(missing), pytrace=False)
 
 
 def _work(tmp, created_by_the_event: bool) -> str:
@@ -68,7 +69,7 @@ def _work(tmp, created_by_the_event: bool) -> str:
 
 
 def _result(units_path: str) -> dict:
-    assert D._inner(units_path) == 0
+    assert D.run_inner(units_path) == 0
     with open(os.path.join(os.path.dirname(units_path), "results.json")) as fh:
         return json.load(fh)["units"][0]
 

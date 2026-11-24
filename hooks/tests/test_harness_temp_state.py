@@ -327,6 +327,7 @@ def test_whole_directory_overrides(roots, tmp_path, monkeypatch):
         ("CLAUDE_GIT_BLESSED_GRANT_DIR", "t.grant", "git-blessed-grants"),
         ("CLAUDE_CAPABILITY_STATE_DIR", "s.json", "capability-state"),
         ("CLAUDE_GRAPHIFY_CACHE_ROOT", "repo/graph.json", "graphify-cache"),
+        ("CODEX_OUT_DIR", "codex-output-1-2.txt", "codex-outputs"),
     ):
         directory = tmp_path / var.lower()
         directory.mkdir()

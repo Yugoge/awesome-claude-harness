@@ -334,17 +334,26 @@ def runs(tmp_path_factory) -> dict:
     return triggered
 
 
-def _become_subreaper() -> None:
-    """Linux: a process whose parent has ended is handed to this process, not to init, whatever its working
-    directory, session or name. Set when this module is imported, before any trigger runs."""
+@pytest.fixture(scope="module", autouse=True)
+def subreaper():
+    """Linux: for the tests of this module (and of the modules that import this fixture), a process whose parent has
+    ended is handed to the test process, not to init, whatever its working directory, session or name: the wait
+    below (wait_until_quiet) finds what a trigger left behind that way. Set when the module's first test starts,
+    put back to what the process had when its last test ends. Never at import: a worker imports every module,
+    and one that adopts the orphans of every other test breaks those that reason about parents and orphans."""
     try:
         import ctypes
-        ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
+        libc = ctypes.CDLL(None, use_errno=True)
+        before = ctypes.c_int(0)
+        libc.prctl(37, ctypes.byref(before), 0, 0, 0)  # PR_GET_CHILD_SUBREAPER
+        libc.prctl(36, 1, 0, 0, 0)  # PR_SET_CHILD_SUBREAPER
     except (OSError, AttributeError):
-        pass
-
-
-_become_subreaper()
+        yield
+        return
+    try:
+        yield
+    finally:
+        libc.prctl(36, before.value, 0, 0, 0)
 
 
 def _still_running(roots) -> list:
@@ -368,7 +377,7 @@ def _still_running(roots) -> list:
 
 def wait_until_quiet(*dirs) -> None:
     """Return when no leftover of a trigger is running: a trigger has returned by then, and what it left behind (a
-    detached push) was handed to this process when its parent ended (_become_subreaper), wherever it works. A
+    detached push) was handed to this process when its parent ended (the subreaper fixture), wherever it works. A
     process with its working directory under ``dirs`` also counts (where the hand-over is not available). Whatever
     the machine's speed, a push still on its way is seen here."""
     roots = [os.path.realpath(str(d)) for d in dirs]

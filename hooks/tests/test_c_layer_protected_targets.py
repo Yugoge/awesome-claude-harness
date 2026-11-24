@@ -48,6 +48,7 @@ sys.path.insert(0, str(ROOT))
 from tests.replay import sites  # noqa: E402
 
 PRIVILEGE = "pretool-git-privilege-guard.py"
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 SAFETY = "pretool-bash-safety.sh"
 POLICY = "pretool-tool-policy.py"
 CONFIG_GUARD = "pretool-claude-config-guard.py"
@@ -204,7 +205,7 @@ def _hook(sandbox, hook, command, subagent, n):
         payload.update(agent_id="agent-c-layer-test", agent_type="dev")
     argv = ["bash" if hook.endswith(".sh") else sys.executable, str(sandbox["hooks_dir"] / hook)]
     proc = subprocess.run(argv, input=json.dumps(payload), capture_output=True, text=True,
-                          env=sandbox["env"], cwd=sandbox["repo"], timeout=300)
+                          env=sandbox["env"], cwd=sandbox["repo"], timeout=HANG_GUARD)
     return proc.returncode, proc.stderr if hook == SAFETY else ""
 
 

@@ -57,6 +57,7 @@ jobs:
     if: toJSON(github.event.repository.private) == 'false'
     needs: hygiene
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write        # create the release and upload assets
       id-token: write        # keyless signing for build provenance

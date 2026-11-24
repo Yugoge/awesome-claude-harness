@@ -35,7 +35,7 @@ overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`) and the tool policy's
   the cwd (the `cwd=` argument, else the process cwd), as a hook using it would, and `/` is kept:
   `TMPDIR=/` makes `/claude-git-blessed/<tok>.grant` state without making `/` temp.
 - **Whole-directory overrides**: `CLAUDE_GIT_BLESSED_GRANT_DIR`, `CLAUDE_CAPABILITY_STATE_DIR`,
-  `$XDG_RUNTIME_DIR/claude-capability`, `CLAUDE_GRAPHIFY_CACHE_ROOT` (relative values joined to
+  `$XDG_RUNTIME_DIR/claude-capability`, `CLAUDE_GRAPHIFY_CACHE_ROOT`, `CODEX_OUT_DIR` (relative values joined to
   the cwd likewise).
 
 ## Control state (a hook trusts it)
@@ -83,7 +83,7 @@ overwrite rule (`hooks/lib/write_gate/overwrite_scope.py`) and the tool policy's
 | Location | Path | Created / read at |
 |---|---|---|
 | claude-scratch | `/var/tmp/claude-scratch/<sid>/` (session scratch), `<sid>/<role>/` in it (a role's drafts, `<session root>/<role>/`; before policy_version 10 `/tmp/claude-scratch/<role>/`, which the tmpfiles rule ages out; there, and in the old `/tmp/agentic-commit/locks/`, a flow begun before only overwrites an existing single-link file whose path holds no link, under the role's deny prefixes, until 24 hours after the policy file reached the install; the changelog-analyst of a session whose `.owner` dates from before that arrival also creates a new `commit-msg-*.txt` there and takes its `${REPO_HASH}.lock`: `hooks/lib/policy_registry.py` `in_flight`), `<sid>/<role>/<agent id>/` in it (a subagent's own scratch) | `policies/tool-policy.v1.json:170`, `hooks/session-scratch-init.sh:27`, `hooks/subagentstart-scratch.py`, `hooks/sessionend-scratch-sweep.sh:27`, `scripts/install/tmpfiles-claude-scratch.conf:42` |
-| codex-outputs | `/var/tmp/codex-outputs/` | `scripts/steps/codex-run.py:40`, `policies/tool-policy.v1.json:39` |
+| codex-outputs | `/var/tmp/codex-outputs/`, or `CODEX_OUT_DIR` when it is an absolute path | `scripts/steps/codex-run.py:45`, `policies/tool-policy.v1.json:39` |
 | graphify-cache | `/var/tmp/claude-graphify/` | `scripts/graphify_lib.py:138` |
 | runtime-guard-err | `runtime-guard-XXXXXX` in `CLAUDE_TMPDIR` | none since 73fe2909d (the bash-safety shell stopped creating it); still classified for what an older install left |
 | grepguard-probe | `grepguard-probe-*` (mkdtemp) | `hooks/pretool-grep-backtrack-guard.py:542` |

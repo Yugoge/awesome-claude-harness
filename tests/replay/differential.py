@@ -31,6 +31,17 @@ from how long the replay and the differential took), and, for a PreToolUse Write
 the file that Write itself created (the trace's first event on its target is its own create,
 relation-events.tsv: an overwrite rule would refuse a target the event never saw), and that
 measures it when it gives the recorded decision.
+What a unit changes follows from what the unit is, never from how names sort or from chance. An
+artifact pattern may cover one file per instance (the CLI's record of each subagent, one file per
+subagent, named by an id the replays draw at random). A hook run of a subagent (its payload carries
+an agent_id) that read that subagent's own file (the path names the id) measures that file: whether
+the run's verdict depends on the record of the agent it serves. A run with no instance of its own
+(the main agent's, or a subagent that read only other agents' files) measures every file of the
+pattern it read, each in a run of its own, since its verdict may depend on any one of them and a
+change of all at once would hide which. So two replays of one driver that differ only in the ids
+give the same units, runs and verdicts, and a run count that grows with the instances read, not
+with a draw. Which hook runs of a pattern are measured stays chronological: the first and the last
+(candidates()).
 A run's decision is (exit code, verdict, how) as hookrun.interpret reads a
 hook's output; for a Bash call, its exit code. Results go to
 <run>/differential.json, sorted by event and artifact.
@@ -39,6 +50,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -150,9 +162,20 @@ def _match_value(inv: dict) -> str:
     return str(p.get("tool_name") or p.get("agent_type") or p.get("source") or p.get("reason") or "")
 
 
+def _owns(raw: str, agent_id) -> bool:
+    """The raw path names the subagent `agent_id` as a whole token (the CLI's record of it,
+    `subagents/agent-<id>.meta.json`, or its transcript): that subagent's own instance."""
+    return isinstance(agent_id, str) and len(agent_id) > 2 and re.search(
+        r"(?<![0-9A-Za-z])" + re.escape(agent_id) + r"(?![0-9A-Za-z])", raw) is not None
+
+
 def candidates(run_dir: str) -> list[dict]:
-    """Units to re-run: per (reader, pattern, event, match value) the first and the last event
-    that read it, grouped by (origin, event)."""
+    """Units to re-run: per (reader, pattern, event, match value) the first and the last hook run
+    (event number) that read it, grouped by (origin, event). Which of the files the pattern covers
+    are changed follows from the unit, never from how their names sort: a hook run of a subagent (its
+    payload carries an agent_id) that read that subagent's own record changes that record only; any
+    other run (the main agent's, or a subagent that read only other agents' files) changes every file
+    of the pattern it read, each in a run of its own."""
     events = load_events(run_dir)
     invs = load_invocations(run_dir)
     written = written_patterns(events)
@@ -168,8 +191,13 @@ def candidates(run_dir: str) -> list[dict]:
         picks.setdefault(key, []).append(e)
     units: dict[tuple, dict] = {}
     for key in sorted(picks):
-        evs = sorted(picks[key], key=lambda e: (e["event"], e["raw"]))
-        for e in {id(x): x for x in (evs[0], evs[-1])}.values():
+        seqs = sorted({e["event"] for e in picks[key]})
+        chosen = []
+        for seq in dict.fromkeys((seqs[0], seqs[-1])):
+            at = [e for e in picks[key] if e["event"] == seq]
+            aid = invs[seq]["payload"].get("agent_id")
+            chosen += [e for e in at if _owns(e["raw"], aid)] or at
+        for e in chosen:
             origin = e["origin"] or e["comp"]
             inv = invs[e["event"]]
             hooks = [h for h in inv["hooks"] if norm_comp(hookrun.hook_name(h["command"])) == origin]
@@ -239,6 +267,18 @@ def execute(sb: str, run_dir: str, units: list[dict], schemas: dict | None = Non
     with open(os.path.join(run_dir, "differential.json"), "w") as fh:
         json.dump(res, fh, indent=1, sort_keys=True)
     return res
+
+
+def run_inner(units_path: str) -> int:
+    """The inner side on a units.json, in the one way the replays enter a mount namespace: as root, directly
+    or through passwordless sudo (sandbox._priv), for the unshare each run makes needs root; returns its exit code.
+    For a test that builds a units.json and measures it without a replay (suite.preconditions() says whether
+    this host can)."""
+    pre, _ = sandbox._priv()
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    argv = pre + ["env", "-i", f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}", "PYTHONDONTWRITEBYTECODE=1",
+                  f"PYTHONPATH={repo}", sys.executable, "-m", f"{__package__}.differential", units_path]
+    return subprocess.run(argv, cwd=repo).returncode
 
 
 # ---------------------------------------------------------------- inner side (in the sandbox)

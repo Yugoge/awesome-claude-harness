@@ -40,6 +40,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 HOOKS = ROOT / "hooks"
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 sys.path.insert(0, str(HOOKS / "lib"))
 
 import git_command_classifier  # noqa: E402
@@ -283,7 +284,7 @@ def _hook(sandbox, hook, command, subagent=False, env=None):
         payload.update(agent_id="agent-shell-c-test", agent_type="dev")
     argv = ["bash" if hook.endswith(".sh") else sys.executable, str(HOOKS / hook)]
     return subprocess.run(argv, input=json.dumps(payload), capture_output=True, text=True,
-                          env=dict(sandbox["env"], **(env or {})), cwd=sandbox["repo"], timeout=120)
+                          env=dict(sandbox["env"], **(env or {})), cwd=sandbox["repo"], timeout=HANG_GUARD)
 
 
 def _run(sandbox, hook, command, subagent=False):

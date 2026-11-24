@@ -10,10 +10,9 @@ git config and a valid empty protected-runtime file. No command is ever executed
 """
 import json
 import os
-import resource
 import subprocess
 import sys
-import time
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -22,6 +21,8 @@ REPO = Path(__file__).resolve().parents[2]
 HOOKS = REPO / "hooks"
 sys.path.insert(0, str(HOOKS))
 from lib.runtime_guard.config import REQUIRED_KEYS  # noqa: E402
+
+HANG_GUARD = 900  # seconds: a bound only a hung child reaches; a slow machine must never read as a failure
 
 
 @pytest.fixture(scope="module")
@@ -40,17 +41,33 @@ def sandbox(tmp_path_factory):
     return {"env": env, "repo": str(repo)}
 
 
-def child_cpu():
-    """CPU seconds of every finished child process: what a hook run costs, apart from how busy the runner is."""
-    r = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return r.ru_utime + r.ru_stime
+def run_counted(sandbox, command):
+    """(result, steps): one run of the hook, and the Python call and return events of every Python process it starts,
+    counted by a sitecustomize that the run's PYTHONPATH puts first (each process writes its count at exit). Work is
+    counted, never timed: a busy runner changes how long a run takes, not how many steps it takes."""
+    with tempfile.TemporaryDirectory(prefix="work-counter-") as counter:
+        with open(os.path.join(counter, "sitecustomize.py"), "w", encoding="utf-8") as fh:
+            fh.write("import atexit, os, sys\n_n = [0]\n"
+                     "def _prof(frame, event, arg):\n    _n[0] += 1\n"
+                     "def _dump():\n    sys.setprofile(None)\n"
+                     "    with open(os.path.join(os.environ['WORK_COUNT_DIR'], str(os.getpid())), 'w') as fh:\n"
+                     "        fh.write(str(_n[0]))\n"
+                     "sys.setprofile(_prof)\natexit.register(_dump)\n")
+        out = os.path.join(counter, "out")
+        os.mkdir(out)
+        r = run({**sandbox, "env": {**sandbox["env"], "PYTHONPATH": counter, "WORK_COUNT_DIR": out}}, command)
+        steps = 0
+        for name in os.listdir(out):
+            with open(os.path.join(out, name), encoding="utf-8") as fh:
+                steps += int(fh.read())
+    return r, steps
 
 
 def run(sandbox, command):
     payload = {"tool_name": "Bash", "tool_input": {"command": command}, "session_id": "worktree-git-view",
                "cwd": sandbox["repo"], "hook_event_name": "PreToolUse"}
     return subprocess.run(["bash", str(HOOKS / "pretool-bash-safety.sh")], input=json.dumps(payload),
-                          capture_output=True, text=True, env=sandbox["env"], cwd=sandbox["repo"], timeout=120)
+                          capture_output=True, text=True, env=sandbox["env"], cwd=sandbox["repo"], timeout=HANG_GUARD)
 
 
 # Data that names a git subcommand: refused before, passes now.
@@ -263,31 +280,25 @@ def test_a_running_git_working_tree_change_is_refused(sandbox, command, marker):
 
 # The quote-neutralised pass scans git global options only from a `git` that starts a word, never again from a `git`
 # inside an option run it already walked: a long run of option words holding `git` (-Pgit, a=bgit) costs linear time.
-# Twice the run must cost well under four times as much, the two compared with each other in CPU seconds (as below).
+# Twice the run must cost well under four times as much, the two compared with each other in steps counted (as below).
 @pytest.mark.parametrize("option,count,tail", [(" -Pgit", 10000, " !"), (" -c a=bgit", 5000, "")],
                          ids=["Pgit-x10000", "c-abgit-x5000"])
 def test_quote_neutralised_option_scan_is_linear(option, count, tail):
-    _, large = _option_scan_cpu("git" + option * count + tail)
-    _, small = _option_scan_cpu("git" + option * (count // 2) + tail)
-    assert large < 3 * small, (small, large)
+    _, large = _option_scan_work("git" + option * count + tail)
+    _, small = _option_scan_work("git" + option * (count // 2) + tail)
+    assert large < 2.5 * small, (small, large)
 
 
 def test_shell_payload_with_long_option_run_is_fast(sandbox):
-    """Through the real hook: above the hook's fixed cost (a one-option payload), 6000 options cost well under
-    sixteen times what 1500 do (linear: four times; a scan that walks the run again from every option: sixteen).
-    Measured runs compared with each other, in child CPU seconds: no fixed bound holds on every runner."""
-    def cost(count):
-        best = None
-        for _ in range(2):  # the least of two runs
-            start = child_cpu()
-            r = run(sandbox, "fish -c 'git" + " -Pgit" * count + "'")
-            took = child_cpu() - start
-            assert r.returncode in (0, 2), r.stderr
-            best = took if best is None else min(best, took)
-        return best
+    """Through the real hook: above the hook's fixed work (a one-option payload), 6000 options take well under
+    sixteen times the steps 1500 do (linear: four times; a scan that walks the run again from every option: sixteen)."""
+    def work(count):
+        r, steps = run_counted(sandbox, "fish -c 'git" + " -Pgit" * count + "'")
+        assert r.returncode in (0, 2), r.stderr
+        return steps
 
-    fixed, quarter, full = cost(1), cost(1500), cost(6000)
-    assert full - fixed < 8 * max(quarter - fixed, 0.01), (fixed, quarter, full)
+    fixed, quarter, full = work(1), work(1500), work(6000)
+    assert full - fixed < 8 * max(quarter - fixed, 1), (fixed, quarter, full)
 
 
 # The option run between git and the subcommand has no length cap: a stash behind any number of global options in a
@@ -323,43 +334,43 @@ def test_long_global_option_run_before_a_safe_or_no_subcommand_passes(sandbox, c
     assert r.returncode == 0, r.stderr[-300:]
 
 
-def _option_scan_cpu(command):
-    """(result, CPU seconds) of one quote-neutralised scan of command, the least CPU of two runs."""
+def _option_scan_work(command):
+    """(result, steps) of one quote-neutralised scan of command: the Python calls and returns it makes, counted, not
+    timed (a busy runner changes how long a scan takes, never how many steps)."""
     from lib.bash_safety_rules import _worktree_raw_fallback
-    best, spent = None, 0.0
-    for _ in range(9):  # the least of up to nine runs (a few ms each when linear), until one CPU second is spent
-        start = time.process_time()
+    steps = [0]
+
+    def count(frame, event, arg):
+        steps[0] += 1
+    before = sys.getprofile()
+    sys.setprofile(count)
+    try:
         got = _worktree_raw_fallback(command.replace("'", " "), globals_=True)
-        took = time.process_time() - start
-        best, spent = (took if best is None else min(best, took)), spent + took
-        if spent > 1.0:
-            break
-    return got, best
+    finally:
+        sys.setprofile(before)
+    return got, steps[0]
 
 
 # Twice the options must cost well under four times as much (a scan that walks the run again from every option grows
-# with its square). The two runs are compared with each other, in CPU seconds: no fixed bound holds on every runner.
+# with its square). The two scans are compared with each other, in steps counted: a clock would only measure the runner.
 @pytest.mark.parametrize("head,option,count,tail,hit", [("git", " -C git", 10000, "", None),
                                                         ("fish -c 'git", " -C git", 10000, "'", None),
                                                         ("git", " -P", 20000, " stash", "bare"),
                                                         ("fish -c 'git", " -P", 20000, " stash'", "bare")],
                          ids=["C-git-x10000", "fish-C-git-x10000", "P-x20000-stash", "fish-P-x20000-stash"])
 def test_uncapped_option_scan_is_linear(head, option, count, tail, hit):
-    got, large = _option_scan_cpu(head + option * count + tail)
-    _, small = _option_scan_cpu(head + option * (count // 2) + tail)
-    assert large < 3 * small, (small, large)
+    got, large = _option_scan_work(head + option * count + tail)
+    _, small = _option_scan_work(head + option * (count // 2) + tail)
+    assert large < 2.5 * small, (small, large)
     assert [k for k, v in got.items() if v] == ([hit] if hit else [])
 
 
 def test_shell_payload_with_a_very_long_option_run_is_refused_fast(sandbox):
-    elapsed = {}
+    steps = {}
     for options in (10000, 20000):
-        start = child_cpu()
-        r = run(sandbox, "fish -c 'git" + " -P" * options + " stash'")
-        elapsed[options] = child_cpu() - start
+        r, steps[options] = run_counted(sandbox, "fish -c 'git" + " -P" * options + " stash'")
         assert r.returncode == 2 and STASH in r.stderr, r.stderr[-300:]
     # The re-lex this guards against grew with the square of the run (10.6 s for 20,000 options, N6); resolved, the
-    # cost grows with its length (about 2.5 s). Twice the options must cost well under four times as much. The two
-    # runs are compared with each other, in the hook's CPU seconds, because no fixed bound holds on every runner:
-    # 5.04 s of wall time under xdist (2026-11-18), 5.995 CPU seconds on a slow Python 3.10 runner (2026-11-20).
-    assert elapsed[20000] < 3 * elapsed[10000], elapsed
+    # work grows with its length. Twice the options must take well under four times the steps (linear: twice). The two
+    # runs are compared with each other, in steps counted: no clock holds on every runner.
+    assert steps[20000] < 3 * steps[10000], steps

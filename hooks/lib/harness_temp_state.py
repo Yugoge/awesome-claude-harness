@@ -25,7 +25,7 @@ Names are matched under every name root (the state dir, every temp root, and the
 override directories that hold state names), so a state name is state whatever
 CLAUDE_STATE_DIR another process resolved. Whole-directory overrides
 (CLAUDE_GIT_BLESSED_GRANT_DIR, CLAUDE_CAPABILITY_STATE_DIR, $XDG_RUNTIME_DIR/
-claude-capability, CLAUDE_GRAPHIFY_CACHE_ROOT) count from the directory down.
+claude-capability, CLAUDE_GRAPHIFY_CACHE_ROOT, CODEX_OUT_DIR) count from the directory down.
 
 Kinds: "control" is state a hook trusts (forging it changes a decision);
 "scratch" is harness-managed scratch output (role scratch, codex outputs, the
@@ -152,7 +152,7 @@ LOCATIONS: Tuple[Location, ...] = (
               _p("claude-scratch", "*", ".doc-sync-notices-*.tmp"))),
     # Harness-managed scratch.
     Location("claude-scratch", SCRATCH, (_p("claude-scratch", "*"),), tree=True),
-    Location("codex-outputs", SCRATCH, (_p("codex-outputs"),), tree=True),
+    Location("codex-outputs", SCRATCH, (_p("codex-outputs"),), tree=True, tree_vars=("CODEX_OUT_DIR",)),
     Location("graphify-cache", SCRATCH, (_p("claude-graphify"),), tree=True,
              tree_vars=("CLAUDE_GRAPHIFY_CACHE_ROOT",)),
     Location("runtime-guard-err", SCRATCH, (_p("runtime-guard-*"),)),

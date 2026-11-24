@@ -41,6 +41,12 @@
   {
    "artifact": "<harness>/projects/<slug>/<sid>/subagents/agent-<agent>.meta.json",
    "event": "PreToolUse",
+   "tool": "Bash",
+   "reason": "A subagent's own Bash call that moves or edits a file is judged by who that subagent is and by the call that dispatched it, which only the CLI's record about it names (subagent_restart.read_meta, the one reader; the cleaner's own move of a command file is the case that runs). pretool-tool-policy.py's _check_clean_writes takes clean_grant, which takes the record's toolUseId through _clean_dispatch to hold the cleaner to the move its /clean's owner approved for that dispatch (role, call and prompt), and refuses a write of a path a /clean producer holds to every caller that is not that producer; pretool-claude-config-guard.py's _clean_approved_bash takes the same clean_grant to let a move of a protected command file pass only when each of its paths is one the caller's own dispatch holds. Without the read no dispatch is named, the grant is empty and the move stays refused; with another call's record it would be held to that call's moves. The record is written when the CLI starts the child, after the parent's Agent call (G1) has passed, so G1's read of it cannot answer for this call: it is read again at the call it identifies."
+  },
+  {
+   "artifact": "<harness>/projects/<slug>/<sid>/subagents/agent-<agent>.meta.json",
+   "event": "PreToolUse",
    "tool": "Edit",
    "reason": "A subagent's own Edit is judged by who that subagent is and by the call that dispatched it, which only the CLI's record about it names (subagent_restart.read_meta, the one reader; obligation._read_meta_tool_use_id). pretool-tool-policy.py's _own_from_tail takes the record's toolUseId to find the dispatch whose declared paths cover the file the Edit writes (without it the Edit is held to every other dispatch's declarations), _clean_dispatch binds a /clean cleaner's edit to its approved dispatch, and pretool-claude-config-guard.py's _dev_command_product_file takes it to tell /dev-command's own dev from any other writer of a command file. The record is the child's, written when the CLI starts it after the parent's Agent call (G1) has passed, so G1's read of it (its own children, for SendMessage) cannot answer for this call: it is read again at the call it identifies."
   },

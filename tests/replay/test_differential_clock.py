@@ -7,8 +7,8 @@ intact run blocked, and the unit was "reproduced False" and never measured. Here
 before the differential: the unit is measured all the same (its intact run gives the recorded decision,
 the grant's removal changes it), whatever the time between the replay and the differential.
 
-It needs a mount namespace (root, as tests/replay/test_run_to_run.py); without one it fails with the
-reason, never skips.
+It needs a mount namespace the way the replays get theirs (root, or passwordless sudo: sandbox._priv,
+suite.preconditions); without one it fails with the reason, never skips.
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ import time
 import pytest
 
 from tests.replay import differential as D
+from tests.replay import suite
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOOK = '''import json, sys
@@ -36,9 +37,9 @@ sys.exit(2 if exp <= datetime.now(timezone.utc) else 0)
 
 
 def _require():
-    p = subprocess.run(["unshare", "--mount", "--pid", "--fork", "true"], capture_output=True, text=True)
-    if p.returncode != 0:
-        pytest.fail("the differential needs a mount namespace: " + p.stderr.strip(), pytrace=False)
+    missing = suite.preconditions()  # the replay folder's own check (its runner fixture, tests/replay/conftest.py)
+    if missing:
+        pytest.fail("the differential cannot run here: " + "; ".join(missing), pytrace=False)
 
 
 def _iso(t: float) -> str:
@@ -78,7 +79,7 @@ def _work(tmp, at: float | None) -> str:
 
 
 def _result(units_path: str) -> dict:
-    assert D._inner(units_path) == 0
+    assert D.run_inner(units_path) == 0
     with open(os.path.join(os.path.dirname(units_path), "results.json")) as fh:
         return json.load(fh)["units"][0]
 

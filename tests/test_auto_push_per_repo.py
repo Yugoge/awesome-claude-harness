@@ -48,7 +48,7 @@ from tests.test_git_auto_push_opt_in import (AUTO_PUSH_LIB, BRANCH, CHECKPOINT_C
                                              PROJECT_NAME, SKIP_MARKER, Run, _combined_hook_body,
                                              _fswatch_functions, _fswatch_log_dir, _git, _install_post_commit,
                                              _new_repo, _origin_refs, _run,
-                                             _run_session_git_init, _scratch_env, wait_until_quiet)
+                                             _run_session_git_init, _scratch_env, subreaper, wait_until_quiet)  # noqa: F401 (subreaper: module-wide fixture)
 from tests.test_landing import env  # noqa: F401  (the landing tests' scratch-home fixture)
 from tests.test_landing import REPO, assert_landed, git, land, landing_log, make_home
 
